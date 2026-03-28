@@ -17,6 +17,8 @@ import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat, Clock, Plus, X, Paperclip } from 'lucide-react';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportJobs, ExportFormat } from '@/lib/export';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
@@ -732,10 +734,16 @@ export default function JobsPage() {
               <h1 className="text-3xl font-bold">Jobs</h1>
               <p className="text-muted-foreground">Inspect queues, job health, and recent activity</p>
             </div>
-            <Button variant="outline" onClick={loadData} disabled={loading}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportJobs(jobs, format)}
+                disabled={jobs.length === 0}
+              />
+              <Button variant="outline" onClick={loadData} disabled={loading}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
           </div>
 
           {error && (

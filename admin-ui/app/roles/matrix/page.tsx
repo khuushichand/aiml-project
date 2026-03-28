@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ArrowLeft, RefreshCw, Shield, Save, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { TableSkeleton } from '@/components/ui/skeleton';
 import { Role, Permission } from '@/types';
 
 type RolePermissionMap = Record<number, Set<number>>;
@@ -292,7 +293,7 @@ export default function PermissionMatrixPage() {
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground py-8">Loading...</div>
+                  <TableSkeleton rows={5} columns={5} />
                 ) : roles.length === 0 || permissions.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     {roles.length === 0 ? 'No roles found. ' : ''}

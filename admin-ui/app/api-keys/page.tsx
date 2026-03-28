@@ -26,6 +26,8 @@ import { api } from '@/lib/api-client';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 import type { UserWithKeyCount } from '@/types';
 import { Key, RotateCw, Search } from 'lucide-react';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportApiKeys, ExportFormat } from '@/lib/export';
 
 const USER_PAGE_LIMIT = 100;
 
@@ -258,9 +260,15 @@ function ApiKeysPageContent() {
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold">API Keys</h1>
-            <p className="text-muted-foreground">Unified API key inventory across all users</p>
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">API Keys</h1>
+              <p className="text-muted-foreground">Unified API key inventory across all users</p>
+            </div>
+            <ExportMenu
+              onExport={(format: ExportFormat) => exportApiKeys(filteredRows, format)}
+              disabled={filteredRows.length === 0}
+            />
           </div>
 
           {error && (

@@ -221,7 +221,9 @@ describe('MonitoringPage', () => {
     render(<MonitoringPage />);
 
     expect(screen.getByText('Loading metrics...')).toBeTruthy();
-    expect(screen.getAllByText('Loading...').length).toBeGreaterThan(0);
+    // Skeleton loading placeholders replace bare "Loading..." text
+    const skeletons = document.querySelectorAll('.animate-pulse');
+    expect(skeletons.length).toBeGreaterThan(0);
 
     metricsDeferred.resolve({});
     watchlistsDeferred.resolve([]);

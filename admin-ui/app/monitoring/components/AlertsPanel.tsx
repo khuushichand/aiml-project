@@ -11,6 +11,7 @@ import {
   isAlertSnoozed,
   sortAlertHistoryEntries,
 } from '@/lib/monitoring-alerts';
+import { CardSkeleton } from '@/components/ui/skeleton';
 import type {
   AlertAssignableUser,
   AlertHistoryEntry,
@@ -108,7 +109,7 @@ export default function AlertsPanel({
       </CardHeader>
       <CardContent>
         {loading ? (
-          <div className="text-center text-muted-foreground py-8">Loading...</div>
+          <div className="space-y-3"><CardSkeleton /><CardSkeleton /><CardSkeleton /></div>
         ) : visibleAlerts.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             <CheckCircle className="h-12 w-12 mx-auto mb-2 text-green-500" />

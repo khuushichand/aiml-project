@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
@@ -191,7 +191,7 @@ const getFlagId = (flag: FeatureFlagItem) =>
   `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
 
 export default function FlagsPage() {
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError, warning } = useToast();
 
   const [maintenance, setMaintenance] = useState<MaintenanceState | null>(null);
@@ -285,15 +285,15 @@ export default function FlagsPage() {
     if (!maintenance) return;
     const changed = maintenanceEnabled !== maintenance.enabled;
     if (changed) {
-      const confirmed = await confirm({
+      const result = await promptPrivilegedAction({
         title: maintenanceEnabled ? 'Enable maintenance mode?' : 'Disable maintenance mode?',
         message: maintenanceEnabled
           ? 'This will block non-allowlisted users.'
           : 'Service traffic will resume for all users.',
         confirmText: maintenanceEnabled ? 'Enable' : 'Disable',
-        variant: 'danger',
+        requirePassword: false,
       });
-      if (!confirmed) return;
+      if (!result) return;
     }
     try {
       setMaintenanceSaving(true);
@@ -404,13 +404,13 @@ export default function FlagsPage() {
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
     const flagId = getFlagId(flag);
     if (deletingFlagId === flagId) return;
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: `Delete flag ${flag.key}?`,
       message: 'This removes the flag override for the selected scope.',
       confirmText: 'Delete',
-      variant: 'danger',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!result) return;
     try {
       setDeletingFlagId(flagId);
       const params: Record<string, string> = { scope: flag.scope };

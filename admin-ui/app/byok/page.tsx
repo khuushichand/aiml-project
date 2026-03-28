@@ -14,7 +14,7 @@ import { ApiError, api } from '@/lib/api-client';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { KeyRound, RefreshCw, Plus, Trash2, Send, Server, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import type { AuditLog, ByokValidationRunItem } from '@/types';
@@ -186,7 +186,7 @@ const PROVIDER_OPTIONS = [
 
 export default function ByokDashboardPage() {
   const { selectedOrg } = useOrgContext();
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
@@ -596,14 +596,13 @@ export default function ByokDashboardPage() {
   };
 
   const handleDisconnectOpenAIOAuth = async () => {
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: 'Disconnect OpenAI OAuth',
       message: 'Disconnect OAuth credentials for OpenAI?',
       confirmText: 'Disconnect',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setOpenAIOAuthAction('disconnect');
@@ -652,14 +651,13 @@ export default function ByokDashboardPage() {
 
   const handleDeleteSharedKey = async (key: SharedProviderKey) => {
     const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: 'Delete Shared Key',
       message: `Delete the shared key for "${key.provider}"? Users and orgs will fall back to their own keys.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setDeletingKey(keyId);

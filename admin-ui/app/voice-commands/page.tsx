@@ -25,7 +25,7 @@ import { parseVoiceCommandInputs } from '@/lib/voice-commands';
 import type { VoiceCommand, VoiceActionType, VoiceAnalyticsSummary } from '@/types';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
 import { UsageTrendsChart, TopCommandsChart, ActiveSessionsPanel } from './components';
@@ -51,7 +51,7 @@ type CreateCommandFormInput = z.input<typeof createCommandSchema>;
 type CreateCommandFormData = z.output<typeof createCommandSchema>;
 
 function VoiceCommandsPageContent() {
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const [commands, setCommands] = useState<VoiceCommand[]>([]);
   const [analytics, setAnalytics] = useState<VoiceAnalyticsSummary | null>(null);
@@ -212,14 +212,13 @@ function VoiceCommandsPageContent() {
 
   const handleDeleteCommand = async (command: VoiceCommand) => {
     if (deletingCommandId === command.id) return;
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: 'Delete Voice Command',
       message: `Delete "${command.name}"? This cannot be undone.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setDeletingCommandId(command.id);

@@ -19,7 +19,7 @@ import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useUrlMultiState } from '@/lib/use-url-state';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
 
@@ -504,7 +504,7 @@ const renderBudgetCaps = (item: OrgBudgetItem) => {
 };
 
 function BudgetsPageContent() {
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
   const defaultPage = 1;
@@ -675,14 +675,13 @@ function BudgetsPageContent() {
 
     const hardModeChanges = summarizeHardModeChanges(editingBudget.budgets || {}, editForm);
     if (hardModeChanges.length > 0) {
-      const confirmed = await confirm({
+      const result = await promptPrivilegedAction({
         title: 'Enable hard enforcement?',
         message: `Hard enforcement can block requests when budgets are reached for: ${hardModeChanges.join(', ')}.`,
         confirmText: 'Enable hard enforcement',
-        variant: 'danger',
-        icon: 'warning',
+        requirePassword: false,
       });
-      if (!confirmed) return;
+      if (!result) return;
     }
 
     try {

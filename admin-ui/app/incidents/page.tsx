@@ -33,6 +33,8 @@ import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
 import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportIncidents, ExportFormat } from '@/lib/export';
 
 const STATUSES = ['open', 'investigating', 'mitigating', 'resolved'] as const;
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
@@ -353,16 +355,22 @@ function IncidentsPageContent() {
               <h1 className="text-2xl font-bold">Incidents</h1>
               <p className="text-muted-foreground">Track operational events and updates.</p>
             </div>
-            <Button
-              variant="outline"
-              onClick={() => {
-                void reload();
-              }}
-              disabled={loading}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportIncidents(incidents, format)}
+                disabled={incidents.length === 0}
+              />
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void reload();
+                }}
+                disabled={loading}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
           </div>
 
           <Card>

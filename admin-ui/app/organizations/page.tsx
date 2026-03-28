@@ -24,6 +24,8 @@ import { Form, FormField } from '@/components/ui/form';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
 import type { Organization, PlanTier, Subscription } from '@/types';
 import { api } from '@/lib/api-client';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportOrganizations, ExportFormat } from '@/lib/export';
 import {
   EMPTY_BILLING_CELL_PLACEHOLDER,
   isBillingEnabled,
@@ -363,10 +365,16 @@ function OrganizationsPageContent() {
                 <h1 className="text-3xl font-bold">Organizations</h1>
                 <p className="text-muted-foreground">Manage organizations and their members</p>
               </div>
-              <Button onClick={() => setShowCreateForm(!showCreateForm)}>
-                <Plus className="mr-2 h-4 w-4" />
-                New Organization
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <ExportMenu
+                  onExport={(format: ExportFormat) => exportOrganizations(organizations, format)}
+                  disabled={organizations.length === 0}
+                />
+                <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Organization
+                </Button>
+              </div>
             </div>
 
             {showCreateForm && (

@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
+import { PageHeaderSkeleton, TableSkeleton } from '@/components/ui/skeleton';
 
 type VirtualApiKey = {
   id: string;
@@ -247,7 +248,8 @@ export default function UserApiKeysPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <PageHeaderSkeleton />
+            <TableSkeleton rows={3} columns={4} />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>
@@ -460,9 +462,7 @@ export default function UserApiKeysPage() {
 
                 {/* Virtual Keys List */}
                 {virtualKeysLoading ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    Loading virtual keys...
-                  </div>
+                  <TableSkeleton rows={3} columns={5} />
                 ) : virtualKeys.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     <KeyRound className="h-12 w-12 mx-auto mb-2 opacity-50" />
