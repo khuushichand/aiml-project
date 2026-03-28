@@ -26,6 +26,7 @@ import { useToast } from '@/components/ui/toast';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
+import { logger } from '@/lib/logger';
 
 type AuditFilters = {
   user: string;
@@ -407,7 +408,7 @@ function AuditPageContent() {
       setLogs(items);
       setTotalItems(Number(data.total ?? items.length ?? 0));
     } catch (err: unknown) {
-      console.error('Failed to load audit logs:', err);
+      logger.error('Failed to load audit logs', { component: 'AuditPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to load audit logs');
       setLogs([]);
       setTotalItems(0);
@@ -674,7 +675,7 @@ function AuditPageContent() {
         `${COMPLIANCE_REPORT_TYPE_LABELS[reportType]} exported with ${entries.length} events.`
       );
     } catch (err: unknown) {
-      console.error('Failed to generate compliance report:', err);
+      logger.error('Failed to generate compliance report', { component: 'AuditPage', error: err instanceof Error ? err.message : String(err) });
       showError(
         'Compliance report generation failed',
         err instanceof Error && err.message ? err.message : 'Unable to build compliance report.'
@@ -704,7 +705,7 @@ function AuditPageContent() {
       await navigator.clipboard.writeText(JSON.stringify(rawPayload, null, 2));
       success('Copied audit event');
     } catch (err) {
-      console.error('Failed to copy audit log:', err);
+      logger.error('Failed to copy audit log', { component: 'AuditPage', error: err instanceof Error ? err.message : String(err) });
       showError('Copy failed', 'Unable to copy audit event details.');
     }
   };

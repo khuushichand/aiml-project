@@ -28,6 +28,7 @@ import type { UserWithKeyCount } from '@/types';
 import { Key, RotateCw, Search } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportApiKeys, ExportFormat } from '@/lib/export';
+import { logger } from '@/lib/logger';
 
 const USER_PAGE_LIMIT = 100;
 
@@ -123,7 +124,7 @@ function ApiKeysPageContent() {
         );
       }
     } catch (err: unknown) {
-      console.error('Failed to load unified API keys:', err);
+      logger.error('Failed to load unified API keys', { component: 'ApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       const message = err instanceof Error && err.message ? err.message : 'Failed to load API keys';
       setError(message);
       setRows([]);

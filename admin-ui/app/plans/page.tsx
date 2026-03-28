@@ -18,6 +18,7 @@ import { CreditCard, Plus, Pencil, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 import { Plan } from '@/types';
+import { logger } from '@/lib/logger';
 
 const PLAN_TIERS = ['free', 'pro', 'enterprise'] as const;
 
@@ -75,7 +76,7 @@ export default function PlansPage() {
       const data = await api.getPlans();
       setPlans(Array.isArray(data) ? data : []);
     } catch (err: unknown) {
-      console.error('Failed to load plans:', err);
+      logger.error('Failed to load plans', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to load plans', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setLoading(false);
@@ -139,7 +140,7 @@ export default function PlansPage() {
       form.reset();
       loadPlans();
     } catch (err: unknown) {
-      console.error('Failed to save plan:', err);
+      logger.error('Failed to save plan', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to save plan', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setSubmitting(false);
@@ -155,7 +156,7 @@ export default function PlansPage() {
         const subs = await api.getSubscriptions({ plan_id: String(plan.id) });
         subscriberCount = Array.isArray(subs) ? subs.length : 0;
       } catch (err: unknown) {
-        console.error('Failed to check plan subscribers:', err);
+        logger.error('Failed to check plan subscribers', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
         subscriberCheckFailed = true;
       }
     }
@@ -180,7 +181,7 @@ export default function PlansPage() {
       success('Plan Deleted', `Plan "${plan.name}" has been deleted`);
       loadPlans();
     } catch (err: unknown) {
-      console.error('Failed to delete plan:', err);
+      logger.error('Failed to delete plan', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to delete plan', err instanceof Error ? err.message : 'Please try again.');
     }
   };

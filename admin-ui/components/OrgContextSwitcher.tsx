@@ -15,6 +15,7 @@ import { api } from '@/lib/api-client';
 import { Organization } from '@/types';
 import { usePermissions } from '@/components/PermissionGuard';
 import { getScopedItem, setScopedItem, removeScopedItem } from '@/lib/scoped-storage';
+import { logger } from '@/lib/logger';
 
 interface OrgContextType {
   organizations: Organization[];
@@ -62,7 +63,7 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
         removeScopedItem(ORG_SELECTION_STORAGE_KEY);
       }
     } catch (error) {
-      console.warn('Failed to persist org selection:', error);
+      logger.warn('Failed to persist org selection', { component: 'OrgContextProvider', error: error instanceof Error ? error.message : String(error) });
     }
   }, []);
 
@@ -73,7 +74,7 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
       const orgList = Array.isArray(orgs) ? orgs : [];
       setOrganizations(orgList);
     } catch (error) {
-      console.error('Failed to load organizations:', error);
+      logger.error('Failed to load organizations', { component: 'OrgContextProvider', error: error instanceof Error ? error.message : String(error) });
       setOrganizations([]);
     } finally {
       setLoading(false);
@@ -94,7 +95,7 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
         }
       }
     } catch (error) {
-      console.warn('Failed to load persisted org selection:', error);
+      logger.warn('Failed to load persisted org selection', { component: 'OrgContextProvider', error: error instanceof Error ? error.message : String(error) });
     }
 
     if (storedId !== null) {
@@ -106,7 +107,7 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
       try {
         removeScopedItem(ORG_SELECTION_STORAGE_KEY);
       } catch (error) {
-        console.warn('Failed to clear invalid org selection:', error);
+        logger.warn('Failed to clear invalid org selection', { component: 'OrgContextProvider', error: error instanceof Error ? error.message : String(error) });
       }
     }
 

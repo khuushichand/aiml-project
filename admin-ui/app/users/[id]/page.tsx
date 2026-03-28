@@ -35,6 +35,7 @@ import { UserSecurityCard } from './components/UserSecurityCard';
 import { UserMembershipDialogs } from './components/UserMembershipDialogs';
 import { useUserSecurity } from './hooks/use-user-security';
 import Link from 'next/link';
+import { logger } from '@/lib/logger';
 
 type UserRateLimits = {
   requests_per_minute?: number | null;
@@ -328,7 +329,7 @@ export default function UserDetailPage() {
           setIsAuthorized(false);
           setError('You are not authorized to edit this user.');
         } else {
-          console.error('Failed to verify user scope:', scopeErr);
+          logger.error('Failed to verify user scope', { component: 'UserDetailPage', error: scopeErr instanceof Error ? scopeErr.message : String(scopeErr) });
         }
       }
     } catch (err: unknown) {
@@ -340,7 +341,7 @@ export default function UserDetailPage() {
       }
       const message =
         err instanceof Error ? err.message : typeof err === 'string' ? err : 'Failed to load user';
-      console.error('Failed to load user:', message);
+      logger.error('Failed to load user', { component: 'UserDetailPage', error: message });
       setError(message);
     } finally {
       setLoading(false);
@@ -372,7 +373,7 @@ export default function UserDetailPage() {
         }));
       setOrgMemberships(normalized);
     } catch (err: unknown) {
-      console.error('Failed to load user organizations:', err);
+      logger.error('Failed to load user organizations', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
       setOrgMemberships([]);
       setOrgMembershipsError('Failed to load user organizations.');
     } finally {
@@ -403,7 +404,7 @@ export default function UserDetailPage() {
         }));
       setTeamMemberships(normalized);
     } catch (err: unknown) {
-      console.error('Failed to load user teams:', err);
+      logger.error('Failed to load user teams', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
       setTeamMemberships([]);
       setTeamMembershipsError('Failed to load user teams.');
     } finally {
@@ -462,7 +463,7 @@ export default function UserDetailPage() {
         applyRateLimits(normalizedRateLimits);
       }
     } catch (err: unknown) {
-      console.error('Failed to load permissions:', err);
+      logger.error('Failed to load permissions', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
     } finally {
       setPermissionsLoading(false);
     }
@@ -542,10 +543,10 @@ export default function UserDetailPage() {
         return;
       }
       if (err instanceof Error) {
-        console.error('Failed to update user:', err);
+        logger.error('Failed to update user', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
         setError(err.message);
       } else {
-        console.error('Failed to update user:', err);
+        logger.error('Failed to update user', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
         setError(String(err));
       }
     } finally {
@@ -618,13 +619,13 @@ export default function UserDetailPage() {
         const updated = await api.getUserRateLimits(userId);
         normalizedRateLimits = normalizeRateLimits(updated);
       } catch (err: unknown) {
-        console.error('Failed to reload rate limits after update:', err);
+        logger.error('Failed to reload rate limits after update', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
         normalizedRateLimits = data;
       }
       applyRateLimits(normalizedRateLimits);
       toastSuccess('Rate limits updated', 'User rate limits have been saved.');
     } catch (err: unknown) {
-      console.error('Failed to update rate limits:', err);
+      logger.error('Failed to update rate limits', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
       const message = err instanceof Error ? err.message : 'Failed to update rate limits';
       showError('Save failed', message);
     } finally {

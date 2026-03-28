@@ -21,6 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
 import { PageHeaderSkeleton, TableSkeleton } from '@/components/ui/skeleton';
+import { logger } from '@/lib/logger';
 
 type VirtualApiKey = {
   id: string;
@@ -83,7 +84,7 @@ export default function UserApiKeysPage() {
         Array.isArray(result) ? result as VirtualApiKey[] : []
       );
     } catch (err: unknown) {
-      console.error('Failed to load virtual keys:', err);
+      logger.error('Failed to load virtual keys', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       // Don't set error - virtual keys may not be available
     } finally {
       setVirtualKeysLoading(false);
@@ -125,7 +126,7 @@ export default function UserApiKeysPage() {
       setShowCreateForm(false);
       void reload();
     } catch (err: unknown) {
-      console.error('Failed to create API key:', err);
+      logger.error('Failed to create API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to create API key');
     } finally {
       setCreatingKey(false);
@@ -152,7 +153,7 @@ export default function UserApiKeysPage() {
       setSuccess('API key rotated successfully');
       void reload();
     } catch (err: unknown) {
-      console.error('Failed to rotate API key:', err);
+      logger.error('Failed to rotate API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to rotate API key');
     }
   };
@@ -174,7 +175,7 @@ export default function UserApiKeysPage() {
       setSuccess('API key revoked successfully');
       void reload();
     } catch (err: unknown) {
-      console.error('Failed to revoke API key:', err);
+      logger.error('Failed to revoke API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to revoke API key');
     }
   };
@@ -198,7 +199,7 @@ export default function UserApiKeysPage() {
         successTimerRef.current = null;
       }, 2000);
     } catch (err: unknown) {
-      console.error('Failed to copy to clipboard:', err);
+      logger.error('Failed to copy to clipboard', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       if (!isMountedRef.current) {
         return;
       }
@@ -236,7 +237,7 @@ export default function UserApiKeysPage() {
       setSelectedScopes([]);
       void loadVirtualKeys();
     } catch (err: unknown) {
-      console.error('Failed to create virtual API key:', err);
+      logger.error('Failed to create virtual API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to create virtual API key');
     } finally {
       setCreatingVirtualKey(false);

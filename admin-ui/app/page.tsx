@@ -57,6 +57,7 @@ import {
   type DashboardUptimeSummary,
 } from '@/lib/dashboard-uptime';
 import Link from 'next/link';
+import { logger } from '@/lib/logger';
 
 type ServerStatusState = 'online' | 'degraded' | 'offline' | 'unknown';
 
@@ -407,10 +408,10 @@ export default function DashboardPage() {
         result: PromiseRejectedResult;
       } => entry.result.status === 'rejected');
       if (optionalHealthFailures.length > 0) {
-        console.warn(
-          'Optional dashboard subsystem health fetch failures:',
-          optionalHealthFailures.map((entry) => ({ key: entry.key, reason: entry.result.reason }))
-        );
+        logger.warn('Optional dashboard subsystem health fetch failures', {
+          component: 'DashboardPage',
+          failures: optionalHealthFailures.map((entry) => entry.key).join(', '),
+        });
       }
 
       const failures = [
@@ -438,14 +439,14 @@ export default function DashboardPage() {
 
       if (failures.length > 0) {
         const failedLabels = failures.map((entry) => entry.label);
-        console.warn(
-          'Dashboard data fetch failures:',
-          failures.map((entry) => ({ key: entry.key, reason: entry.result.reason }))
-        );
+        logger.warn('Dashboard data fetch failures', {
+          component: 'DashboardPage',
+          failures: failedLabels.join(', '),
+        });
         setError(`Some dashboard data failed to load: ${failedLabels.join(', ')}`);
       }
     } catch (err: unknown) {
-      console.error('Failed to load dashboard data:', err);
+      logger.error('Failed to load dashboard data', { component: 'DashboardPage', error: err instanceof Error ? err.message : String(err) });
       setError('Failed to load dashboard statistics');
       setOperationalKpis(DEFAULT_DASHBOARD_OPERATIONAL_KPIS);
       setUptimeSummary(DEFAULT_DASHBOARD_UPTIME_SUMMARY);
@@ -524,7 +525,7 @@ export default function DashboardPage() {
       await navigator.clipboard.writeText(value);
       success('Copied to clipboard', `${label} copied.`);
     } catch (err: unknown) {
-      console.error('Failed to copy to clipboard:', err);
+      logger.error('Failed to copy to clipboard', { component: 'DashboardPage', error: err instanceof Error ? err.message : String(err) });
       showError('Copy failed', 'Please copy manually or check browser permissions.');
     }
   };

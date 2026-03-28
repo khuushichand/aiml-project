@@ -25,6 +25,7 @@ import { ExportMenu } from '@/components/ui/export-menu';
 import { exportTeams, ExportFormat } from '@/lib/export';
 import Link from 'next/link';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
+import { logger } from '@/lib/logger';
 
 const teamSchema = z.object({
   name: z.string().min(1, 'Team name is required'),
@@ -70,7 +71,7 @@ function TeamsPageContent() {
       const orgs = Array.isArray(data) ? data : [];
       setOrganizations(orgs);
     } catch (error) {
-      console.error('Failed to load organizations:', error);
+      logger.error('Failed to load organizations', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       setOrganizations([]);
     }
   }, []);
@@ -81,7 +82,7 @@ function TeamsPageContent() {
       const data = await api.getTeams(orgId);
       setTeams(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error('Failed to load teams:', error);
+      logger.error('Failed to load teams', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       setTeams([]);
     } finally {
       setLoading(false);
@@ -129,7 +130,7 @@ function TeamsPageContent() {
       await loadTeams(selectedOrgId);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again.';
-      console.error('Failed to create team:', error);
+      logger.error('Failed to create team', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       showError('Failed to create team', message);
     } finally {
       setCreatingTeam(false);

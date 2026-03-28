@@ -30,6 +30,7 @@ import {
   isBillingEnabled,
   resolveOrganizationBillingSnapshot,
 } from '@/lib/billing';
+import { logger } from '@/lib/logger';
 
 export default function OrganizationDetailPage() {
   const params = useParams();
@@ -226,7 +227,7 @@ export default function OrganizationDetailPage() {
       setSelectedMember(null);
       void loadData();
     } catch (err: unknown) {
-      console.error('Failed to add member:', err);
+      logger.error('Failed to add member', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to add member');
     }
   };
@@ -247,7 +248,7 @@ export default function OrganizationDetailPage() {
       setSuccess('Member removed successfully');
       void loadData();
     } catch (err: unknown) {
-      console.error('Failed to remove member:', err);
+      logger.error('Failed to remove member', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to remove member');
     }
   };
@@ -260,7 +261,7 @@ export default function OrganizationDetailPage() {
       void loadData();
       return true;
     } catch (err: unknown) {
-      console.error('Failed to update member role:', err);
+      logger.error('Failed to update member role', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to update member role');
       return false;
     }
@@ -288,7 +289,7 @@ export default function OrganizationDetailPage() {
       setInviteEmail('');
       setInviteRole('member');
     } catch (err: unknown) {
-      console.error('Failed to create invite:', err);
+      logger.error('Failed to create invite', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to create invite');
     }
   };
@@ -312,7 +313,7 @@ export default function OrganizationDetailPage() {
       setShowByokApiKey(false);
       void loadData();
     } catch (err: unknown) {
-      console.error('Failed to add BYOK key:', err);
+      logger.error('Failed to add BYOK key', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to add provider key');
     }
   };
@@ -335,7 +336,7 @@ export default function OrganizationDetailPage() {
       setSuccess('Provider key removed');
       void loadData();
     } catch (err: unknown) {
-      console.error('Failed to delete BYOK key:', err);
+      logger.error('Failed to delete BYOK key', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete provider key');
     } finally {
       setDeletingByokProvider((prev) => (prev === provider ? null : prev));
@@ -438,7 +439,7 @@ export default function OrganizationDetailPage() {
         successTimerRef.current = null;
       }, 2000);
     } catch (err: unknown) {
-      console.error('Failed to copy to clipboard:', err);
+      logger.error('Failed to copy to clipboard', { component: 'OrganizationDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError('Failed to copy to clipboard');
     }
   };

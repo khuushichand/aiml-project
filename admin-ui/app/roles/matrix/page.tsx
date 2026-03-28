@@ -13,6 +13,7 @@ import { ArrowLeft, RefreshCw, Shield, Save, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Role, Permission } from '@/types';
+import { logger } from '@/lib/logger';
 
 type RolePermissionMap = Record<number, Set<number>>;
 
@@ -54,7 +55,7 @@ export default function PermissionMatrixPage() {
               (Array.isArray(rolePerms) ? rolePerms : []).map((p: Permission) => p.id)
             );
           } catch (err: unknown) {
-            console.warn(`Failed to load permissions for role ${role.id}`, err);
+            logger.warn(`Failed to load permissions for role ${role.id}`, { component: 'PermissionMatrixPage', error: err instanceof Error ? err.message : String(err) });
             permMap[role.id] = new Set();
           }
         })
@@ -63,7 +64,7 @@ export default function PermissionMatrixPage() {
       setRolePermissions(permMap);
       setPendingChanges({});
     } catch (err: unknown) {
-      console.error('Failed to load data:', err);
+      logger.error('Failed to load data', { component: 'PermissionMatrixPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error ? err.message : 'Failed to load roles and permissions');
     } finally {
       setLoading(false);
@@ -183,7 +184,7 @@ export default function PermissionMatrixPage() {
       setPendingChanges({});
       setSuccess(`Saved ${entries.length} permission change${entries.length === 1 ? '' : 's'}.`);
     } catch (err: unknown) {
-      console.error('Failed to save matrix changes:', err);
+      logger.error('Failed to save matrix changes', { component: 'PermissionMatrixPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error ? err.message : 'Failed to save matrix changes');
     } finally {
       setSaving(false);

@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { OrgContextSwitcher, OrgContextBanner } from '@/components/OrgContextSwitcher';
@@ -91,7 +92,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       await refresh();
       router.push('/login');
     } catch (error) {
-      console.error('Logout failed:', error);
+      logger.error('Logout failed', { component: 'SidebarContent', error: error instanceof Error ? error.message : String(error) });
       showError('Logout failed', 'Please try again.');
     }
   };

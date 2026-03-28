@@ -36,6 +36,7 @@ import { TableSkeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
+import { logger } from '@/lib/logger';
 
 type SavedOrgView = {
   id: string;
@@ -106,7 +107,7 @@ function OrganizationsPageContent() {
         setSavedViews(parsed as SavedOrgView[]);
       }
     } catch (err) {
-      console.warn('Failed to load saved organization views:', err);
+      logger.warn('Failed to load saved organization views', { component: 'OrganizationsPage', error: err instanceof Error ? err.message : String(err) });
     }
   }, []);
 
@@ -115,7 +116,7 @@ function OrganizationsPageContent() {
     try {
       setScopedItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(views));
     } catch (err) {
-      console.warn('Failed to persist saved organization views:', err);
+      logger.warn('Failed to persist saved organization views', { component: 'OrganizationsPage', error: err instanceof Error ? err.message : String(err) });
     }
   }, []);
 
@@ -156,7 +157,7 @@ function OrganizationsPageContent() {
           }
           setOrgPlans(planMap);
         } catch (err) {
-          console.warn('Failed to load subscription data for organizations:', err);
+          logger.warn('Failed to load subscription data for organizations', { component: 'OrganizationsPage', error: err instanceof Error ? err.message : String(err) });
         }
       }
     } catch (error: unknown) {
@@ -194,7 +195,7 @@ function OrganizationsPageContent() {
       setSlugTouched(false);
       loadOrganizations();
     } catch (error: unknown) {
-      console.error('Failed to create organization:', error);
+      logger.error('Failed to create organization', { component: 'OrganizationsPage', error: error instanceof Error ? error.message : String(error) });
       const message =
         error instanceof Error && error.message
           ? error.message

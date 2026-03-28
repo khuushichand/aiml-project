@@ -21,6 +21,7 @@ import { getDeprecatedModelNotice } from '@/lib/deprecated-models';
 import { buildProviderTokenTrendMap, buildSparklinePoints } from '@/lib/provider-token-trends';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { LLMProvider, LLMProviderOverride, User as UserType, Organization } from '@/types';
+import { logger } from '@/lib/logger';
 
 interface ByokKey {
   id?: string;
@@ -463,7 +464,7 @@ export default function ProvidersPage() {
         setProviderTokenTrendUnavailable(true);
       }
     } catch (err: unknown) {
-      console.error('Failed to load data:', err);
+      logger.error('Failed to load data', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       setProviderUsageSummary({});
       setProviderUsageUnavailable(true);
       setProviderTokenTrends({});
@@ -484,7 +485,7 @@ export default function ProvidersPage() {
       const keys = await api.getUserByokKeys(user.id.toString());
       updateByokState({ userKeys: Array.isArray(keys) ? keys : [] });
     } catch (err: unknown) {
-      console.error('Failed to load user BYOK keys:', err);
+      logger.error('Failed to load user BYOK keys', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       updateByokState({ userKeys: [] });
       toastError('Failed to load user keys', err instanceof Error ? err.message : 'Unable to load BYOK keys');
     } finally {
@@ -498,7 +499,7 @@ export default function ProvidersPage() {
       const keys = await api.getOrgByokKeys(org.id.toString());
       updateByokState({ orgKeys: Array.isArray(keys) ? keys : [] });
     } catch (err: unknown) {
-      console.error('Failed to load org BYOK keys:', err);
+      logger.error('Failed to load org BYOK keys', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       updateByokState({ orgKeys: [] });
       toastError('Failed to load org keys', err instanceof Error ? err.message : 'Unable to load BYOK keys');
     } finally {
@@ -539,7 +540,7 @@ export default function ProvidersPage() {
         apiKey: '',
       });
     } catch (err: unknown) {
-      console.error('Failed to add BYOK key:', err);
+      logger.error('Failed to add BYOK key', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       toastError('Failed to add BYOK key', err instanceof Error ? err.message : 'Try again.');
     } finally {
       updateAddByokDialog({ isAdding: false });
@@ -565,7 +566,7 @@ export default function ProvidersPage() {
       await loadUserByokKeys(byokState.selectedUser);
       toastSuccess('BYOK key deleted', `Removed ${provider} for ${byokState.selectedUser.email}`);
     } catch (err: unknown) {
-      console.error('Failed to delete BYOK key:', err);
+      logger.error('Failed to delete BYOK key', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       toastError('Failed to delete BYOK key', err instanceof Error ? err.message : 'Try again.');
     } finally {
       setDeletingUserByokProvider((prev) => (prev === provider ? null : prev));
@@ -591,7 +592,7 @@ export default function ProvidersPage() {
       await loadOrgByokKeys(byokState.selectedOrg);
       toastSuccess('BYOK key deleted', `Removed ${provider} for ${byokState.selectedOrg.name}`);
     } catch (err: unknown) {
-      console.error('Failed to delete BYOK key:', err);
+      logger.error('Failed to delete BYOK key', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       toastError('Failed to delete BYOK key', err instanceof Error ? err.message : 'Try again.');
     } finally {
       setDeletingOrgByokProvider((prev) => (prev === provider ? null : prev));
@@ -726,7 +727,7 @@ export default function ProvidersPage() {
       updateOverrideDialog({ isOpen: false });
       await loadData();
     } catch (err: unknown) {
-      console.error('Failed to update provider override:', err);
+      logger.error('Failed to update provider override', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       toastError('Failed to update override', err instanceof Error ? err.message : 'Try again.');
     } finally {
       updateOverrideDialog({ isSaving: false });
@@ -754,7 +755,7 @@ export default function ProvidersPage() {
       updateOverrideDialog({ isOpen: false });
       await loadData();
     } catch (err: unknown) {
-      console.error('Failed to delete provider override:', err);
+      logger.error('Failed to delete provider override', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       toastError('Failed to remove override', err instanceof Error ? err.message : 'Try again.');
     } finally {
       updateOverrideDialog({ isDeleting: false });
@@ -776,7 +777,7 @@ export default function ProvidersPage() {
         `${formatProviderName(provider.name)} (${response?.model || 'default'})`
       );
     } catch (err: unknown) {
-      console.error('Failed to test provider:', err);
+      logger.error('Failed to test provider', { component: 'ProvidersPage', error: err instanceof Error ? err.message : String(err) });
       toastError('Provider test failed', err instanceof Error ? err.message : 'Try again.');
     } finally {
       setTestingProvider(null);

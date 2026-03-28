@@ -30,6 +30,7 @@ import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
+import { logger } from '@/lib/logger';
 import { UsageTrendsChart, TopCommandsChart, ActiveSessionsPanel } from './components';
 
 const ACTION_TYPE_OPTIONS: { value: VoiceActionType; label: string }[] = [
@@ -103,7 +104,7 @@ function VoiceCommandsPageContent() {
       const items = Array.isArray(data) ? data : (data?.commands || data?.items || []);
       setCommands(items);
     } catch (err: unknown) {
-      console.error('Failed to load voice commands:', err);
+      logger.error('Failed to load voice commands', { component: 'VoiceCommandsPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error ? err.message : 'Failed to load voice commands');
       setCommands([]);
     } finally {
@@ -117,7 +118,7 @@ function VoiceCommandsPageContent() {
       const data = await api.getVoiceAnalytics({ days: 7 });
       setAnalytics(data);
     } catch (err: unknown) {
-      console.warn('Failed to load voice analytics:', err);
+      logger.warn('Failed to load voice analytics', { component: 'VoiceCommandsPage', error: err instanceof Error ? err.message : String(err) });
     } finally {
       setAnalyticsLoading(false);
     }

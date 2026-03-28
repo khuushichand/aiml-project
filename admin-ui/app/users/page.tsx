@@ -51,6 +51,7 @@ import {
   type UserStatusFilter,
   type UserVerifiedFilter,
 } from './hooks/use-user-filters';
+import { logger } from '@/lib/logger';
 
 type BulkActionType =
   | 'activate'
@@ -235,7 +236,7 @@ function UsersPageContent() {
     try {
       return await api.getUsers(params);
     } catch (err: unknown) {
-      console.error('Failed to load users:', err);
+      logger.error('Failed to load users', { component: 'UsersPage', error: err instanceof Error ? err.message : String(err) });
       throw err instanceof Error
         ? err
         : new Error('Failed to load users');
@@ -304,7 +305,7 @@ function UsersPageContent() {
 
       setOrgInvites(invites);
     } catch (err: unknown) {
-      console.error('Failed to load invitations:', err);
+      logger.error('Failed to load invitations', { component: 'UsersPage', error: err instanceof Error ? err.message : String(err) });
       setInvitesError(err instanceof Error && err.message ? err.message : 'Failed to load invitations');
       setOrgInvites([]);
     } finally {
@@ -358,7 +359,7 @@ function UsersPageContent() {
           return next;
         });
       } catch (err) {
-        console.error('Failed to load MFA status for users:', err);
+        logger.error('Failed to load MFA status for users', { component: 'UsersPage', error: err instanceof Error ? err.message : String(err) });
       } finally {
         if (!cancelled) {
           setMfaLoading(false);

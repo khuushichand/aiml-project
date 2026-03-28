@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useUrlState } from '@/lib/use-url-state';
 import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
+import { logger } from '@/lib/logger';
 
 export type SavedUserView = {
   id: string;
@@ -37,7 +38,7 @@ const readSavedViews = (): SavedUserView[] => {
     cachedSavedViews = Array.isArray(parsed) ? (parsed as SavedUserView[]) : [];
     return cachedSavedViews;
   } catch (error) {
-    console.warn('Failed to load saved user views:', error);
+    logger.warn('Failed to load saved user views', { component: 'useUserFilters', error: error instanceof Error ? error.message : String(error) });
     cachedSavedViewsRaw = stored;
     cachedSavedViews = [];
     return cachedSavedViews;
@@ -94,7 +95,7 @@ export function useUserFilters({ resetPagination }: UseUserFiltersOptions) {
       setScopedItem(SAVED_VIEWS_STORAGE_KEY, serialized);
       emitSavedViewsChange();
     } catch (error) {
-      console.warn('Failed to persist saved user views:', error);
+      logger.warn('Failed to persist saved user views', { component: 'useUserFilters', error: error instanceof Error ? error.message : String(error) });
     }
   }, []);
 

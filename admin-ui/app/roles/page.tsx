@@ -19,6 +19,7 @@ import { Shield, Plus, Trash2, Lock, Settings } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 import Link from 'next/link';
+import { logger } from '@/lib/logger';
 
 const roleSchema = z.object({
   name: z.string().min(1, 'Role name is required'),
@@ -74,7 +75,7 @@ export default function RolesPage() {
       setRoles(Array.isArray(rolesData) ? rolesData : []);
       setPermissions(Array.isArray(permsData) ? permsData : []);
     } catch (err: unknown) {
-      console.error('Failed to load data:', err);
+      logger.error('Failed to load data', { component: 'RolesPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to load data', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setLoading(false);
@@ -109,7 +110,7 @@ export default function RolesPage() {
       roleForm.reset();
       loadData();
     } catch (err: unknown) {
-      console.error('Failed to create role:', err);
+      logger.error('Failed to create role', { component: 'RolesPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to create role', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setCreatingRole(false);
@@ -139,7 +140,7 @@ export default function RolesPage() {
       success('Role Deleted', `Role "${role.name}" has been deleted`);
       loadData();
     } catch (err: unknown) {
-      console.error('Failed to delete role:', err);
+      logger.error('Failed to delete role', { component: 'RolesPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to delete role', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setDeletingRoleIds((prev) => {
@@ -163,7 +164,7 @@ export default function RolesPage() {
       permissionForm.reset();
       loadData();
     } catch (err: unknown) {
-      console.error('Failed to create permission:', err);
+      logger.error('Failed to create permission', { component: 'RolesPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to create permission', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setCreatingPermission(false);
@@ -188,7 +189,7 @@ export default function RolesPage() {
       success('Permission Deleted', `Permission "${perm.name}" has been deleted`);
       loadData();
     } catch (err: unknown) {
-      console.error('Failed to delete permission:', err);
+      logger.error('Failed to delete permission', { component: 'RolesPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to delete permission', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setDeletingPermissionIds((prev) => {

@@ -24,6 +24,7 @@ import {
 } from '@/lib/voice-commands';
 import type { VoiceCommand, VoiceActionType, VoiceCommandUsage } from '@/types';
 import { Skeleton } from '@/components/ui/skeleton';
+import { logger } from '@/lib/logger';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
@@ -101,7 +102,7 @@ export default function VoiceCommandDetailPage({
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
-      console.error('Failed to load voice command:', err);
+      logger.error('Failed to load voice command', { component: 'VoiceCommandDetailPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error ? err.message : 'Failed to load voice command');
     } finally {
       if (signal?.aborted) return;
@@ -116,7 +117,7 @@ export default function VoiceCommandDetailPage({
       setUsage(data);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
-      console.warn('Failed to load usage data:', err);
+      logger.warn('Failed to load usage data', { component: 'VoiceCommandDetailPage', error: err instanceof Error ? err.message : String(err) });
     }
   }, [commandId]);
 
