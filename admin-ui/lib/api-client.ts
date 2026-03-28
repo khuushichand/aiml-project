@@ -12,6 +12,7 @@ import type {
   ByokValidationRunCreateRequest,
   ByokValidationRunItem,
   ByokValidationRunListResponse,
+  CompliancePosture,
   EffectivePermissionsResponse,
   FeatureRegistryEntry,
   IncidentItem,
@@ -956,6 +957,11 @@ export const api = {
   // ============================================
   getSecurityHealth: () => requestJson<SecurityHealthData>('/health/security'),
   getSecurityAlertStatus: () => requestJson<SecurityAlertStatus>('/admin/security/alert-status'),
+
+  // ============================================
+  // Compliance Posture
+  // ============================================
+  getCompliancePosture: () => requestJson<CompliancePosture>('/admin/compliance/posture'),
 
   // ============================================
   // Virtual API Keys

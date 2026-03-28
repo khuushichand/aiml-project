@@ -348,6 +348,18 @@ export interface SecurityAlertStatus {
   }[];
 }
 
+export interface CompliancePosture {
+  overall_score: number;
+  mfa_adoption_pct: number;
+  mfa_enabled_count: number;
+  total_users: number;
+  key_rotation_compliance_pct: number;
+  keys_needing_rotation: number;
+  keys_total: number;
+  rotation_threshold_days: number;
+  audit_logging_enabled: boolean;
+}
+
 export interface EffectivePermissionsResponse {
   user_id: number;
   permissions: string[];

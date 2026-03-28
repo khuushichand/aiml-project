@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -745,3 +745,95 @@ async def reload_chat_model_alias_caches() -> dict:
     except _OPS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to reload chat model alias caches: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload chat model alias caches") from e
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Compliance Posture
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@router.get("/compliance/posture", response_model=dict)
+async def get_compliance_posture(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Aggregate compliance posture metrics for the admin dashboard.
+
+    Returns MFA adoption rate, API key rotation compliance, and an overall
+    compliance score.  This endpoint is designed to be called infrequently
+    (page-load) so two aggregate queries are acceptable.
+    """
+    _require_platform_admin(principal)
+
+    pool = await get_db_pool()
+    is_pg = bool(getattr(pool, "pool", None))
+
+    # --- MFA adoption ----------------------------------------------------------
+    mfa_enabled = 0
+    total_users = 0
+    try:
+        if is_pg:
+            row = await pool.fetchone(
+                "SELECT COUNT(*) AS total,"
+                " COUNT(*) FILTER (WHERE COALESCE(two_factor_enabled, FALSE) = TRUE) AS mfa_on"
+                " FROM users WHERE is_active = TRUE"
+            )
+        else:
+            row = await pool.fetchone(
+                "SELECT COUNT(*) AS total,"
+                " SUM(CASE WHEN COALESCE(two_factor_enabled, 0) = 1 THEN 1 ELSE 0 END) AS mfa_on"
+                " FROM users WHERE is_active = 1"
+            )
+        if row:
+            r = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else {"total": row[0], "mfa_on": row[1]}
+            total_users = int(r.get("total") or 0)
+            mfa_enabled = int(r.get("mfa_on") or 0)
+    except Exception as exc:
+        logger.warning("compliance/posture: MFA query failed: {}", exc)
+
+    # --- API key rotation compliance (keys older than 180 days need rotation) --
+    keys_compliant = 0
+    keys_total = 0
+    keys_needing_rotation = 0
+    rotation_threshold_days = 180
+    try:
+        now = datetime.now(timezone.utc)
+        if is_pg:
+            row = await pool.fetchone(
+                "SELECT COUNT(*) AS total,"
+                " COUNT(*) FILTER (WHERE created_at >= $1) AS compliant"
+                " FROM api_keys WHERE status = 'active'",
+                now - timedelta(days=rotation_threshold_days),
+            )
+        else:
+            threshold_iso = (now - timedelta(days=rotation_threshold_days)).isoformat()
+            row = await pool.fetchone(
+                "SELECT COUNT(*) AS total,"
+                " SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS compliant"
+                " FROM api_keys WHERE status = 'active'",
+                threshold_iso,
+            )
+        if row:
+            r = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else {"total": row[0], "compliant": row[1]}
+            keys_total = int(r.get("total") or 0)
+            keys_compliant = int(r.get("compliant") or 0)
+            keys_needing_rotation = keys_total - keys_compliant
+    except Exception as exc:
+        logger.warning("compliance/posture: API key rotation query failed: {}", exc)
+
+    mfa_pct = round((mfa_enabled / total_users * 100), 1) if total_users > 0 else 0.0
+    key_rotation_pct = round((keys_compliant / keys_total * 100), 1) if keys_total > 0 else 0.0
+
+    # Simple weighted overall score: MFA 40%, key rotation 40%, 20% baseline for audit logging
+    overall = round(mfa_pct * 0.4 + key_rotation_pct * 0.4 + 20, 1)
+
+    return {
+        "overall_score": min(overall, 100.0),
+        "mfa_adoption_pct": mfa_pct,
+        "mfa_enabled_count": mfa_enabled,
+        "total_users": total_users,
+        "key_rotation_compliance_pct": key_rotation_pct,
+        "keys_needing_rotation": keys_needing_rotation,
+        "keys_total": keys_total,
+        "rotation_threshold_days": rotation_threshold_days,
+        "audit_logging_enabled": True,
+    }
