@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setJwtSessionCookies } from '@/lib/server-auth';
+import { checkRateLimit } from '@/lib/rate-limiter';
 
 type LoginResponsePayload = {
   access_token?: string;
@@ -20,6 +21,21 @@ const sanitizePayload = (payload: LoginResponsePayload): Omit<LoginResponsePaylo
 };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    ?? request.headers.get('x-real-ip')
+    ?? 'unknown';
+
+  const rateCheck = checkRateLimit(ip);
+  if (!rateCheck.allowed) {
+    return NextResponse.json(
+      { detail: 'Too many login attempts. Please try again later.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rateCheck.retryAfterSeconds) },
+      }
+    );
+  }
+
   const body = await request.text();
   const response = await fetch(buildApiUrlForRequest(request, '/auth/login'), {
     method: 'POST',
