@@ -19,7 +19,10 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
-from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import enqueue_recipe_run
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
+    enqueue_recipe_run,
+    mark_recipe_run_enqueue_failure,
+)
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeDefinitionNotFoundError,
     RecipeRunNotFoundError,
@@ -124,7 +127,14 @@ async def create_recipe_run(
             force_rerun=bool(payload.get("force_rerun", False)),
         )
         if getattr(record.status, "value", record.status) == "pending":
-            enqueue_run(record, owner_user_id=stable_user_id)
+            try:
+                enqueue_run(record, owner_user_id=stable_user_id)
+            except Exception as exc:
+                mark_recipe_run_enqueue_failure(service, record, error=str(exc))
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="recipe_run_enqueue_failed",
+                ) from exc
             if response is not None:
                 response.status_code = status.HTTP_202_ACCEPTED
         elif response is not None:

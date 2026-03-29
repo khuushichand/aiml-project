@@ -116,6 +116,20 @@ class _Service:
         return _Report()
 
 
+class _RecordingDB:
+    def __init__(self):
+        self.updated: dict[str, object] | None = None
+
+    def update_recipe_run(self, run_id: str, **kwargs):
+        self.updated = {"run_id": run_id, **kwargs}
+        return True
+
+
+class _ServiceWithDb(_Service):
+    def __init__(self):
+        self.db = _RecordingDB()
+
+
 def test_unified_cli_help_includes_recipes_group():
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
@@ -190,6 +204,46 @@ def test_recipes_run_command_enqueues_pending_run(monkeypatch):
     assert result.exit_code == 0
     assert "recipe_run_123" in result.output
     assert "job-123" in result.output
+
+
+def test_recipes_run_command_marks_failed_when_enqueue_raises(monkeypatch):
+    service = _ServiceWithDb()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced._get_recipe_runs_service",
+        lambda user_id=None, db_path=None: service,
+    )
+
+    def _raise_enqueue(record, owner_user_id=None, job_manager=None):
+        del record, owner_user_id, job_manager
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced.enqueue_recipe_run",
+        _raise_enqueue,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "recipes",
+            "run",
+            "summarization_quality",
+            "--dataset-json",
+            '[{"input":"hello","expected":"hi"}]',
+            "--run-config-json",
+            '{"candidate_model_ids":["openai:gpt-4.1-mini"],"comparison_mode":"leaderboard","weights":{"quality":1.0}}',
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Failed to enqueue recipe run" in result.output
+    assert service.db.updated is not None
+    assert service.db.updated["run_id"] == "recipe_run_123"
+    assert getattr(service.db.updated["status"], "value", service.db.updated["status"]) == "failed"
+    metadata = service.db.updated["metadata"]
+    assert metadata["jobs"]["worker_state"] == "enqueue_failed"
+    assert metadata["jobs"]["error"] == "queue unavailable"
 
 
 def test_recipes_report_command_outputs_report_payload(monkeypatch):

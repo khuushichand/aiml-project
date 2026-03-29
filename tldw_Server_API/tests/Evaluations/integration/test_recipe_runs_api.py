@@ -236,6 +236,51 @@ async def test_recipe_run_create_endpoint_enqueues_pending_job(
 
 
 @pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_marks_run_failed_when_enqueue_fails(
+    async_api_client,
+    auth_headers,
+) -> None:
+    from tldw_Server_API.app.main import app
+
+    def _raise_enqueue(record, *, owner_user_id=None, job_manager=None):
+        del record, owner_user_id, job_manager
+        raise RuntimeError("queue unavailable")
+
+    app.dependency_overrides[get_recipe_run_job_enqueuer] = lambda: _raise_enqueue
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "recipe_run_enqueue_failed"
+
+    db = EvaluationsDatabase(os.environ["EVALUATIONS_TEST_DB_PATH"])
+    user_id = get_single_user_instance().id_str
+    reuse_hash = RecipeRunsService(db=db, user_id=user_id).build_reuse_hash(
+        "summarization_quality",
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
+    )
+    failed_run_id = db.lookup_idempotency(
+        RECIPE_RUN_REUSE_ENTITY_TYPE,
+        reuse_hash,
+        user_id,
+    )
+    assert failed_run_id is not None
+    failed_run = db.get_recipe_run(failed_run_id)
+    assert failed_run is not None
+    assert failed_run.status is RunStatus.FAILED
+    assert failed_run.metadata["jobs"]["worker_state"] == "enqueue_failed"
+    assert failed_run.metadata["jobs"]["error"] == "queue unavailable"
+
+
+@pytest.mark.asyncio
 async def test_recipe_run_endpoint_reuses_completed_run_unless_forced(async_api_client, auth_headers) -> None:
     db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
     db = EvaluationsDatabase(db_path)

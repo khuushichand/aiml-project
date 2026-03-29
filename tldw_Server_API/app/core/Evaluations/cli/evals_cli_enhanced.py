@@ -25,7 +25,10 @@ from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDat
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
 from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import enqueue_recipe_run
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
+    enqueue_recipe_run,
+    mark_recipe_run_enqueue_failure,
+)
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import RecipeRunsService
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import get_recipe_runs_service_for_user
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
@@ -643,7 +646,11 @@ def run_recipe(ctx, recipe_id, dataset_id, dataset_json, run_config_json, force_
     )
     output = {"run": record.model_dump(mode="json")}
     if getattr(record.status, "value", record.status) == "pending":
-        output["job_id"] = enqueue_recipe_run(record)
+        try:
+            output["job_id"] = enqueue_recipe_run(record)
+        except Exception as exc:
+            mark_recipe_run_enqueue_failure(service, record, error=str(exc))
+            raise click.ClickException(f"Failed to enqueue recipe run: {exc}") from exc
     click.echo(json.dumps(output, indent=2, default=str))
 
 

@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeRunRecord
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
@@ -85,12 +86,36 @@ def enqueue_recipe_run(
     return str(job.get("id"))
 
 
+def mark_recipe_run_enqueue_failure(
+    service: Any,
+    record: RecipeRunRecord | dict[str, Any],
+    *,
+    error: str,
+) -> None:
+    """Persist a terminal enqueue failure so runs do not remain stranded in pending."""
+    db = getattr(service, "db", None)
+    if db is None or not hasattr(db, "update_recipe_run"):
+        return
+    payload = record.model_dump(mode="json") if hasattr(record, "model_dump") else dict(record)
+    metadata = dict(payload.get("metadata") or {})
+    metadata["jobs"] = {
+        "worker_state": "enqueue_failed",
+        "error": str(error),
+    }
+    db.update_recipe_run(
+        str(payload["run_id"]),
+        status=RunStatus.FAILED,
+        metadata=metadata,
+    )
+
+
 __all__ = [
     "RECIPE_RUN_JOB_DOMAIN",
     "RECIPE_RUN_JOB_TYPE",
     "build_recipe_run_idempotency_key",
     "build_recipe_run_job_payload",
     "enqueue_recipe_run",
+    "mark_recipe_run_enqueue_failure",
     "parse_recipe_run_job_payload",
     "recipe_run_queue",
 ]
