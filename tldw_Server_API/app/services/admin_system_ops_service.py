@@ -1139,6 +1139,8 @@ def _normalize_invitation_record(value: Any) -> dict[str, Any]:
     invitation.setdefault("accepted_at", None)
     invitation.setdefault("email_sent", False)
     invitation.setdefault("email_error", None)
+    invitation.setdefault("resend_count", 0)
+    invitation.setdefault("last_resent_at", None)
     return invitation
 
 

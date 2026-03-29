@@ -6,10 +6,14 @@ import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api } from '@/lib/api-client';
-import type { CompliancePosture } from '@/types';
-import { Shield, ShieldCheck, Key, Users, FileText, RefreshCw, ExternalLink } from 'lucide-react';
+import type { CompliancePosture, ComplianceReportSchedule } from '@/types';
+import { Shield, ShieldCheck, Key, Users, FileText, RefreshCw, ExternalLink, Plus, Trash2, Send, Calendar } from 'lucide-react';
 import Link from 'next/link';
 
 type ComplianceGrade = 'A' | 'B' | 'C' | 'D' | 'F';
@@ -73,6 +77,20 @@ function CompliancePageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Report Schedules state
+  const [schedules, setSchedules] = useState<ComplianceReportSchedule[]>([]);
+  const [schedulesLoading, setSchedulesLoading] = useState(true);
+  const [schedulesError, setSchedulesError] = useState<string | null>(null);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [createFrequency, setCreateFrequency] = useState<string>('weekly');
+  const [createFormat, setCreateFormat] = useState<string>('html');
+  const [createRecipients, setCreateRecipients] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [sendingIds, setSendingIds] = useState<Set<string>>(new Set());
+  const [sendResult, setSendResult] = useState<string | null>(null);
+
   const fetchPosture = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -87,9 +105,97 @@ function CompliancePageContent() {
     }
   }, []);
 
+  const fetchSchedules = useCallback(async () => {
+    setSchedulesLoading(true);
+    setSchedulesError(null);
+    try {
+      const data = await api.getReportSchedules();
+      setSchedules(Array.isArray(data?.items) ? data.items : []);
+    } catch (err: unknown) {
+      setSchedulesError(err instanceof Error ? err.message : 'Failed to load schedules');
+    } finally {
+      setSchedulesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchPosture();
-  }, [fetchPosture]);
+    fetchSchedules();
+  }, [fetchPosture, fetchSchedules]);
+
+  const handleCreateSchedule = async () => {
+    setCreateError('');
+    const recipientList = createRecipients
+      .split(/[,;\n]+/)
+      .map((e) => e.trim())
+      .filter(Boolean);
+    if (recipientList.length === 0) {
+      setCreateError('At least one recipient email is required.');
+      return;
+    }
+    try {
+      setCreateBusy(true);
+      await api.createReportSchedule({
+        frequency: createFrequency,
+        recipients: recipientList,
+        format: createFormat,
+        enabled: true,
+      });
+      setShowCreateDialog(false);
+      setCreateRecipients('');
+      void fetchSchedules();
+    } catch (err: unknown) {
+      setCreateError(err instanceof Error ? err.message : 'Failed to create schedule');
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
+  const handleDeleteSchedule = async (id: string) => {
+    try {
+      setDeletingIds((prev) => new Set(prev).add(id));
+      await api.deleteReportSchedule(id);
+      void fetchSchedules();
+    } catch {
+      // Silently handle - schedule may have already been deleted
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const handleSendNow = async (id: string) => {
+    try {
+      setSendingIds((prev) => new Set(prev).add(id));
+      setSendResult(null);
+      const result = await api.sendReportNow(id);
+      setSendResult(
+        `Report sent to ${result.sent_count}/${result.total_recipients} recipients.` +
+        (result.errors.length > 0 ? ` Errors: ${result.errors.join('; ')}` : ''),
+      );
+      void fetchSchedules();
+    } catch (err: unknown) {
+      setSendResult(err instanceof Error ? err.message : 'Failed to send report');
+    } finally {
+      setSendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const handleToggleEnabled = async (schedule: ComplianceReportSchedule) => {
+    try {
+      await api.updateReportSchedule(schedule.id, { enabled: !schedule.enabled });
+      void fetchSchedules();
+    } catch {
+      // Silently handle
+    }
+  };
 
   if (loading) {
     return (
@@ -270,6 +376,167 @@ function CompliancePageContent() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Report Schedules */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Report Schedules</CardTitle>
+            <CardDescription>
+              Configure automated compliance report delivery to recipients.
+            </CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setShowCreateDialog(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Schedule
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {schedulesError && (
+            <Alert variant="destructive">
+              <AlertDescription>{schedulesError}</AlertDescription>
+            </Alert>
+          )}
+          {sendResult && (
+            <Alert>
+              <AlertDescription>{sendResult}</AlertDescription>
+            </Alert>
+          )}
+          {schedulesLoading ? (
+            <p className="text-sm text-muted-foreground">Loading schedules...</p>
+          ) : schedules.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No report schedules configured. Create one to start receiving automated compliance reports.
+            </p>
+          ) : (
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Frequency</TableHead>
+                    <TableHead>Recipients</TableHead>
+                    <TableHead>Format</TableHead>
+                    <TableHead>Enabled</TableHead>
+                    <TableHead>Last Sent</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {schedules.map((sched) => (
+                    <TableRow key={sched.id} data-testid={`schedule-row-${sched.id}`}>
+                      <TableCell className="capitalize">{sched.frequency}</TableCell>
+                      <TableCell>
+                        <span className="text-sm" title={sched.recipients.join(', ')}>
+                          {sched.recipients.length} recipient{sched.recipients.length !== 1 ? 's' : ''}
+                        </span>
+                      </TableCell>
+                      <TableCell className="uppercase text-xs">{sched.format}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={sched.enabled ? 'default' : 'secondary'}
+                          className="cursor-pointer"
+                          onClick={() => handleToggleEnabled(sched)}
+                        >
+                          {sched.enabled ? 'Active' : 'Paused'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {sched.last_sent_at
+                          ? new Date(sched.last_sent_at).toLocaleDateString()
+                          : 'Never'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span className="inline-flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleSendNow(sched.id)}
+                            disabled={sendingIds.has(sched.id)}
+                            title="Send report now"
+                          >
+                            <Send className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteSchedule(sched.id)}
+                            disabled={deletingIds.has(sched.id)}
+                            className="text-destructive hover:text-destructive"
+                            title="Delete schedule"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Create Schedule Dialog */}
+      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Report Schedule</DialogTitle>
+            <DialogDescription>
+              Configure a recurring compliance report to be sent to specified recipients.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="schedule-frequency">Frequency</Label>
+              <select
+                id="schedule-frequency"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={createFrequency}
+                onChange={(e) => setCreateFrequency(e.target.value)}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="schedule-format">Format</Label>
+              <select
+                id="schedule-format"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={createFormat}
+                onChange={(e) => setCreateFormat(e.target.value)}
+              >
+                <option value="html">HTML</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="schedule-recipients">Recipients (comma-separated emails)</Label>
+              <Input
+                id="schedule-recipients"
+                placeholder="admin@example.com, security@example.com"
+                value={createRecipients}
+                onChange={(e) => setCreateRecipients(e.target.value)}
+              />
+            </div>
+            {createError && (
+              <Alert variant="destructive">
+                <AlertDescription>{createError}</AlertDescription>
+              </Alert>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateSchedule} disabled={createBusy}>
+              {createBusy ? 'Creating...' : 'Create Schedule'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

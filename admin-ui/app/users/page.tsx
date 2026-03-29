@@ -24,6 +24,7 @@ import {
   Eye,
   Key,
   Mail,
+  RefreshCw,
   Search,
   Plus,
   Trash2,
@@ -189,11 +190,14 @@ function UsersPageContent() {
     expires_at: string | null;
     email_sent: boolean;
     email_error: string | null;
+    resend_count?: number;
+    last_resent_at?: string | null;
   };
   const [directInvitations, setDirectInvitations] = useState<DirectInvitation[]>([]);
   const [directInvitesLoading, setDirectInvitesLoading] = useState(true);
   const [directInvitesError, setDirectInvitesError] = useState('');
   const [revokingInviteIds, setRevokingInviteIds] = useState<Set<string>>(new Set());
+  const [resendingInviteIds, setResendingInviteIds] = useState<Set<string>>(new Set());
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(true);
   const [invitesError, setInvitesError] = useState('');
@@ -323,6 +327,35 @@ function UsersPageContent() {
       setRevokingInviteIds((prev) => {
         const next = new Set(prev);
         next.delete(invitationId);
+        return next;
+      });
+    }
+  };
+
+  const handleResendInvitation = async (inv: DirectInvitation) => {
+    if ((inv.resend_count ?? 0) >= 3) {
+      showError('Resend limit', 'This invitation has reached the maximum resend limit (3).');
+      return;
+    }
+    try {
+      setResendingInviteIds((prev) => new Set(prev).add(inv.id));
+      const result = await api.resendInvitation(inv.id) as DirectInvitation;
+      if (result.email_sent) {
+        success('Invitation resent', `Invite email resent to ${inv.email}.`);
+      } else {
+        success(
+          'Invitation renewed',
+          `Token renewed for ${inv.email}, but email could not be sent. ${result.email_error || 'Check email configuration.'}`,
+        );
+      }
+      void loadDirectInvitations();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to resend invitation';
+      showError('Resend failed', message);
+    } finally {
+      setResendingInviteIds((prev) => {
+        const next = new Set(prev);
+        next.delete(inv.id);
         return next;
       });
     }
@@ -1280,16 +1313,28 @@ function UsersPageContent() {
                             </TableCell>
                             <TableCell className="text-right">
                               {inv.status === 'pending' && (
-                                <AccessibleIconButton
-                                  icon={XCircle}
-                                  label="Revoke invitation"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRevokeInvitation(inv.id)}
-                                  disabled={revokingInviteIds.has(inv.id)}
-                                  loading={revokingInviteIds.has(inv.id)}
-                                  className="text-destructive hover:text-destructive"
-                                />
+                                <span className="inline-flex gap-1">
+                                  <AccessibleIconButton
+                                    icon={RefreshCw}
+                                    label="Resend invitation"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleResendInvitation(inv)}
+                                    disabled={resendingInviteIds.has(inv.id) || (inv.resend_count ?? 0) >= 3}
+                                    loading={resendingInviteIds.has(inv.id)}
+                                    title={(inv.resend_count ?? 0) >= 3 ? 'Resend limit reached (3)' : `Resend (${inv.resend_count ?? 0}/3)`}
+                                  />
+                                  <AccessibleIconButton
+                                    icon={XCircle}
+                                    label="Revoke invitation"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleRevokeInvitation(inv.id)}
+                                    disabled={revokingInviteIds.has(inv.id)}
+                                    loading={revokingInviteIds.has(inv.id)}
+                                    className="text-destructive hover:text-destructive"
+                                  />
+                                </span>
                               )}
                             </TableCell>
                           </TableRow>

@@ -118,6 +118,7 @@ vi.mock('@/lib/api-client', () => ({
     inviteUser: vi.fn(),
     getInvitations: vi.fn(),
     revokeInvitation: vi.fn(),
+    resendInvitation: vi.fn(),
   },
 }));
 
@@ -226,6 +227,16 @@ beforeEach(() => {
   apiMock.revokeInvitation.mockResolvedValue({
     id: 'inv-001',
     status: 'revoked',
+  });
+  apiMock.resendInvitation.mockResolvedValue({
+    id: 'inv-001',
+    email: 'invited@example.com',
+    role: 'user',
+    status: 'pending',
+    email_sent: true,
+    email_error: null,
+    resend_count: 1,
+    last_resent_at: '2026-03-27T10:00:00Z',
   });
 });
 
@@ -482,5 +493,96 @@ describe('UsersPage', () => {
 
     await screen.findByText('Pending Invitations');
     expect(screen.getByText('No invitations')).toBeInTheDocument();
+  });
+
+  it('renders a resend button on pending invitation rows', async () => {
+    apiMock.getInvitations.mockResolvedValue({
+      items: [
+        {
+          id: 'inv-resend',
+          email: 'resendme@example.com',
+          role: 'user',
+          status: 'pending',
+          invited_by: 'Alice',
+          created_at: '2026-03-20T10:00:00Z',
+          expires_at: '2099-03-27T10:00:00Z',
+          email_sent: true,
+          email_error: null,
+          resend_count: 0,
+        },
+      ],
+      total: 1,
+    });
+    render(<UsersPage />);
+
+    const row = await screen.findByTestId('direct-invitation-row-inv-resend');
+    const resendBtn = within(row).getByLabelText('Resend invitation');
+    expect(resendBtn).toBeInTheDocument();
+    expect(resendBtn).not.toBeDisabled();
+  });
+
+  it('disables resend button when resend_count >= 3', async () => {
+    apiMock.getInvitations.mockResolvedValue({
+      items: [
+        {
+          id: 'inv-maxed',
+          email: 'maxed@example.com',
+          role: 'user',
+          status: 'pending',
+          invited_by: 'Alice',
+          created_at: '2026-03-20T10:00:00Z',
+          expires_at: '2099-03-27T10:00:00Z',
+          email_sent: true,
+          email_error: null,
+          resend_count: 3,
+        },
+      ],
+      total: 1,
+    });
+    render(<UsersPage />);
+
+    const row = await screen.findByTestId('direct-invitation-row-inv-maxed');
+    const resendBtn = within(row).getByLabelText('Resend invitation');
+    expect(resendBtn).toBeDisabled();
+  });
+
+  it('calls resendInvitation API when resend button is clicked', async () => {
+    const user = userEvent.setup();
+    apiMock.getInvitations.mockResolvedValue({
+      items: [
+        {
+          id: 'inv-click',
+          email: 'click@example.com',
+          role: 'user',
+          status: 'pending',
+          invited_by: 'Alice',
+          created_at: '2026-03-20T10:00:00Z',
+          expires_at: '2099-03-27T10:00:00Z',
+          email_sent: false,
+          email_error: 'delivery failed',
+          resend_count: 1,
+        },
+      ],
+      total: 1,
+    });
+    apiMock.resendInvitation.mockResolvedValue({
+      id: 'inv-click',
+      email: 'click@example.com',
+      role: 'user',
+      status: 'pending',
+      email_sent: true,
+      email_error: null,
+      resend_count: 2,
+      last_resent_at: '2026-03-27T12:00:00Z',
+    });
+    render(<UsersPage />);
+
+    const row = await screen.findByTestId('direct-invitation-row-inv-click');
+    const resendBtn = within(row).getByLabelText('Resend invitation');
+    await user.click(resendBtn);
+
+    await waitFor(() => {
+      expect(apiMock.resendInvitation).toHaveBeenCalledWith('inv-click');
+    });
   });
 });

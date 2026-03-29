@@ -1569,11 +1569,12 @@ async def send_report_now(
         email_service = get_email_service()
         for recipient in recipients:
             try:
-                ok = await email_service.send_raw_email(
+                ok = await email_service.send_email(
                     to_email=recipient,
                     subject="Compliance Report",
-                    body_html=report_body if report_format == "html" else None,
-                    body_text=report_body if report_format != "html" else None,
+                    html_body=report_body if report_format == "html" else "<pre>" + report_body + "</pre>",
+                    text_body=report_body if report_format != "html" else None,
+                    _template="compliance_report",
                 )
                 if ok:
                     sent_count += 1
