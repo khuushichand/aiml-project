@@ -611,6 +611,8 @@ async def generate_quiz(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ChatConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except CharactersRAGDBError as e:

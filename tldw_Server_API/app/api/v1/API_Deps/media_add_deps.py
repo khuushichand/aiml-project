@@ -241,6 +241,10 @@ async def get_add_media_form(
         False,
         description="Generate embeddings after media processing",
     ),
+    embedding_dispatch_mode: str | None = Form(
+        None,
+        description="Embeddings dispatch strategy override for /media/add",
+    ),
     embedding_model: str | None = Form(
         None,
         description="Specific embedding model to use",
@@ -383,6 +387,7 @@ async def get_add_media_form(
             accept_mbox=accept_mbox,
             accept_pst=accept_pst,
             generate_embeddings=generate_embeddings,
+            embedding_dispatch_mode=embedding_dispatch_mode,
             embedding_model=embedding_model,
             embedding_provider=embedding_provider,
         )

@@ -72,11 +72,15 @@ def test_validate_audio_pack_manifest_reports_platform_mismatch(tmp_path):
         catalog_version="v2",
         compatibility={"platform": "linux", "arch": "x86_64", "python_version": "3.11"},
     )
-    pack_path = tmp_path / "audio_pack.json"
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Setup.audio_pack_service.CONFIG_ROOT",
+        monkeypatch_root,
+    )
+    pack_path = resolve_audio_pack_path("audio_pack.json")
     pack_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_audio_pack_manifest(
-        pack_path,
+        "audio_pack.json",
         machine_profile={"platform": "darwin", "arch": "arm64"},
         python_version="3.11.13",
     )

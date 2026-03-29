@@ -53,8 +53,6 @@ _GENERATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     json.JSONDecodeError,
 )
-
-
 @registry.register(
     "flashcard_generate",
     category="content",

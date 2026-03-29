@@ -388,6 +388,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       min_score: 0.2,
       enable_reranking: true
     }
+    chatModelSettingsStoreState.apiProvider = undefined
     mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
     mockCreateChatCompletion.mockResolvedValue(
       createChatCompletionResponse("Generated summary")
@@ -630,6 +631,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       generation_prompt:
         "Write an executive summary focused on failures, tradeoffs, and next steps."
     }
+    chatModelSettingsStoreState.apiProvider = "openai"
     mockGetMediaDetails.mockResolvedValue({
       source: { title: "DSPy Prompting Talk" },
       content: {
@@ -647,7 +649,8 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
 
     const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
     expect(summaryRequest).toMatchObject({
-      model: "gpt-4o-mini"
+      model: "gpt-4o-mini",
+      api_provider: "openai"
     })
     expect(summaryRequest.messages?.[0]).toMatchObject({
       role: "system"
@@ -879,6 +882,26 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     })
 
     expect(mockCreateChatCompletion).not.toHaveBeenCalled()
+  })
+
+  it("passes the selected model runtime through to slides generation", async () => {
+    messageOptionStoreState.selectedModel = "llama-3.1-8b"
+    chatModelSettingsStoreState.apiProvider = "ollama"
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }))
+
+    await waitFor(() => {
+      expect(mockGenerateSlidesFromMedia).toHaveBeenCalledWith(
+        101,
+        expect.objectContaining({
+          model: "llama-3.1-8b",
+          provider: "ollama",
+          temperature: 0.7
+        })
+      )
+    })
   })
 
   it("downloads quiz artifacts locally instead of calling outputs download", async () => {

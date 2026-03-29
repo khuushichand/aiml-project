@@ -4,7 +4,9 @@ from typing import Any, Dict, List
 import pytest
 
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import ChromaDBAdapter
+from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import (
+    ChromaDBAdapter,
+)
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter
 
 
@@ -49,6 +51,48 @@ def test_parity_basic_search_and_filter(monkeypatch, backend, request):
         res3 = await adapter.search(coll, vecs[0], k=1)
         assert len(res3) == 1
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_chromadb_adapter_uses_resolved_user_db_base(monkeypatch, tmp_path):
+    captured: dict[str, Any] = {}
+
+    class FakeManager:
+        def __init__(self, *, user_id, user_embedding_config):
+            captured["user_id"] = user_id
+            captured["user_embedding_config"] = dict(user_embedding_config)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter.settings",
+        {"USER_DB_BASE_DIR": "Databases/user_databases"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter.DatabasePaths.get_user_db_base_dir",
+        staticmethod(lambda: tmp_path / "isolated-user-dbs"),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter.ChromaDBManager",
+        FakeManager,
+        raising=True,
+    )
+
+    adapter = ChromaDBAdapter(
+        VectorStoreConfig(
+            store_type=VectorStoreType.CHROMADB,
+            connection_params={"embedding_config": {}},
+            embedding_dim=8,
+            user_id="user-1",
+        )
+    )
+
+    await adapter.initialize()
+
+    assert captured["user_id"] == "user-1"
+    assert captured["user_embedding_config"]["USER_DB_BASE_DIR"] == str(
+        tmp_path / "isolated-user-dbs"
+    )
 
 
 @pytest.mark.parametrize("backend", ["pgvector"])  # $in and numeric bounds parity primarily for pgvector

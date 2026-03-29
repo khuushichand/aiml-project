@@ -3347,19 +3347,14 @@ async def create_chat_completion(
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
-            def _build_mock_response(messages_payload: list[dict[str, Any]]) -> str:
-                for msg in reversed(messages_payload):
-                    if isinstance(msg, dict) and msg.get("role") == "user":
-                        content = msg.get("content")
-                        if isinstance(content, str) and content.strip():
-                            return f"Mock response: {content.strip()}"
-                return "Mock response from test mode"
-
             def _mock_chat_call(**kwargs):
                 messages_payload = kwargs.get("messages_payload") or []
                 streaming_flag = bool(kwargs.get("streaming"))
                 model_name = kwargs.get("model") or request_data.model or "mock-model"
-                content = _build_mock_response(messages_payload)
+                content = _build_test_mode_chat_response(
+                    messages_payload,
+                    system_message=kwargs.get("system_message"),
+                )
 
                 if streaming_flag:
                     chunk_text = content

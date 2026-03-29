@@ -1341,6 +1341,41 @@ def test_slides_generate_from_media_uses_stubbed_llm(slides_client_with_sources,
     assert data["source_ref"] == 1
 
 
+def test_slides_generate_from_document_media_uses_document_content(
+    slides_client_with_sources, monkeypatch
+):
+    client, _, fake_media = slides_client_with_sources
+    fake_media.media[1] = {"id": 1, "title": "Document Media", "type": "document"}
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.get_latest_transcription",
+        lambda _db, _media_id: None,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.get_document_version",
+        lambda db_instance, media_id, version_number=None, include_content=True: {
+            "content": "Document body content for slide generation."
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.slides_generator.perform_chat_api_call",
+        _build_llm_stub("Document Deck"),
+    )
+    resp = client.post(
+        "/api/v1/slides/generate/from-media",
+        json={
+            "media_id": 1,
+            "title_hint": "Document Deck",
+            "theme": "black",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "Document Deck"
+    assert data["source_type"] == "media"
+    assert data["source_ref"] == 1
+
+
 def test_slides_generate_from_chat_missing_conversation(slides_client_with_sources):
     client, fake_notes, _ = slides_client_with_sources
     fake_notes.conversations.pop("conv_1", None)

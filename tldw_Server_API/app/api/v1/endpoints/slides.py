@@ -837,6 +837,39 @@ def _resolve_provider(request_provider: str | None) -> str:
     return provider.lower() if provider else "openai"
 
 
+def _resolve_media_source_text(
+    *,
+    media_db: MediaDatabase,
+    media_row: dict[str, Any],
+    media_id: int,
+) -> str | None:
+    transcript = get_latest_transcription(media_db, media_id)
+    if isinstance(transcript, str) and transcript.strip():
+        return transcript.strip()
+
+    try:
+        latest_document = get_document_version(
+            db_instance=media_db,
+            media_id=media_id,
+            version_number=None,
+            include_content=True,
+        )
+    except Exception as exc:
+        logger.debug("Failed to resolve latest document content for media {}: {}", media_id, exc)
+        latest_document = None
+
+    if isinstance(latest_document, dict):
+        document_content = latest_document.get("content")
+        if isinstance(document_content, str) and document_content.strip():
+            return document_content.strip()
+
+    media_content = media_row.get("content")
+    if isinstance(media_content, str) and media_content.strip():
+        return media_content.strip()
+
+    return None
+
+
 def _format_chat_messages(messages: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for msg in messages:
@@ -1949,14 +1982,24 @@ async def generate_from_media(
     media_row = media_db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media_row:
         raise HTTPException(status_code=404, detail="media_not_found")
-    transcript = get_latest_transcription(media_db, media_id)
-    if not transcript:
-        raise HTTPException(status_code=404, detail="media_transcript_not_found")
+    source_text = _resolve_media_source_text(
+        media_db=media_db,
+        media_row=media_row,
+        media_id=media_id,
+    )
+    if not source_text:
+        media_type = str(media_row.get("type") or "").strip().lower()
+        detail = (
+            "media_transcript_not_found"
+            if media_type in {"", "audio", "video"}
+            else "media_content_not_found"
+        )
+        raise HTTPException(status_code=404, detail=detail)
     return _generate_presentation(
         response=response,
         db=db,
         request=request,
-        source_text=transcript,
+        source_text=source_text,
         source_type="media",
         source_ref=str(media_id),
         source_query=None,

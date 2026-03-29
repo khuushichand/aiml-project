@@ -11,6 +11,8 @@ from typing import Any, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 # Import existing ChromaDB implementation
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
@@ -63,7 +65,10 @@ class ChromaDBAdapter(VectorStoreAdapter):
             from tldw_Server_API.app.core.config import settings
             user_id = self.config.user_id
             embedding_config = self.config.connection_params.get("embedding_config", {}).copy()
-            embedding_config["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
+            try:
+                embedding_config["USER_DB_BASE_DIR"] = str(DatabasePaths.get_user_db_base_dir())
+            except Exception:  # noqa: BLE001 - preserve adapter initialization fallback
+                embedding_config["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
             self.manager = ChromaDBManager(
                 user_id=user_id,
                 user_embedding_config=embedding_config
