@@ -19,6 +19,13 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
+    ConfidenceSummary,
+    RecommendationSlot,
+    RecipeRunRecord,
+    ReviewState,
+)
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 # Backend abstraction (optional) for PostgreSQL support
@@ -245,7 +252,8 @@ class EvaluationsDatabase:
                 conn.close()
             return
 
-        assert self.backend is not None
+        if self.backend is None:
+            raise RuntimeError("Evaluations backend is not configured")
         raw = self.backend.get_pool().get_connection()
         try:
             yield _EvaluationsBackendConnection(self, raw)
@@ -327,6 +335,36 @@ class EvaluationsDatabase:
                 )
             """)
 
+            # Recipe runs table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS evaluation_recipe_runs (
+                    run_id TEXT PRIMARY KEY,
+                    recipe_id TEXT NOT NULL,
+                    recipe_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    review_state TEXT NOT NULL DEFAULT 'not_required',
+                    dataset_snapshot_ref TEXT,
+                    dataset_content_hash TEXT,
+                    confidence_summary_json TEXT,
+                    recommendation_slots_json TEXT,
+                    metadata_json TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS evaluation_recipe_run_children (
+                    parent_run_id TEXT NOT NULL,
+                    child_run_id TEXT NOT NULL,
+                    child_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (parent_run_id, child_run_id),
+                    FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id),
+                    FOREIGN KEY (child_run_id) REFERENCES evaluation_recipe_runs(run_id)
+                )
+            """)
+
             # Internal evaluations table (for tldw-specific evaluations)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS internal_evaluations (
@@ -394,6 +432,11 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON evaluation_runs(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_recipe_id ON evaluation_recipe_runs(recipe_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_status ON evaluation_recipe_runs(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_created_at ON evaluation_recipe_runs(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_parent ON evaluation_recipe_run_children(parent_run_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_child ON evaluation_recipe_run_children(child_run_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_registrations(active)")
@@ -517,7 +560,8 @@ class EvaluationsDatabase:
 
     def _initialize_database_postgres(self) -> None:
         """Provision PostgreSQL tables and indexes to mirror SQLite schema."""
-        assert self.backend is not None
+        if self.backend is None:
+            raise RuntimeError("Evaluations backend is not configured")
         ddl = """
         CREATE TABLE IF NOT EXISTS evaluations (
             id TEXT PRIMARY KEY,
@@ -557,6 +601,29 @@ class EvaluationsDatabase:
             created_at TIMESTAMPTZ DEFAULT NOW(),
             created_by TEXT,
             metadata JSONB
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_recipe_runs (
+            run_id TEXT PRIMARY KEY,
+            recipe_id TEXT NOT NULL,
+            recipe_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            review_state TEXT NOT NULL DEFAULT 'not_required',
+            dataset_snapshot_ref TEXT,
+            dataset_content_hash TEXT,
+            confidence_summary_json JSONB,
+            recommendation_slots_json JSONB,
+            metadata_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_recipe_run_children (
+            parent_run_id TEXT NOT NULL,
+            child_run_id TEXT NOT NULL,
+            child_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (parent_run_id, child_run_id),
+            FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id),
+            FOREIGN KEY (child_run_id) REFERENCES evaluation_recipe_runs(run_id)
         );
         -- Unified evaluations table (enabled by default on PostgreSQL)
         CREATE TABLE IF NOT EXISTS evaluations_unified (
@@ -680,6 +747,11 @@ class EvaluationsDatabase:
         CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id);
         CREATE INDEX IF NOT EXISTS idx_runs_status ON evaluation_runs(status);
         CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_recipe_id ON evaluation_recipe_runs(recipe_id);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_status ON evaluation_recipe_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_created_at ON evaluation_recipe_runs(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_parent ON evaluation_recipe_run_children(parent_run_id);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_child ON evaluation_recipe_run_children(child_run_id);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_created ON evaluations_unified(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_status ON evaluations_unified(status);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_type ON evaluations_unified(evaluation_type);
@@ -708,14 +780,22 @@ class EvaluationsDatabase:
             from tldw_Server_API.app.core.DB_Management.migrations_v5_unified_evaluations import (
                 migrate_to_unified_evaluations,
             )
+            from tldw_Server_API.app.core.DB_Management.migrations_v6_evaluation_recipes import (
+                migrate_to_evaluation_recipes,
+            )
 
             # Apply the unified evaluations migration
             if migrate_to_unified_evaluations(self.db_path):
                 logger.info("Applied unified evaluations migration successfully")
             else:
                 logger.warning("Unified evaluations migration already applied or failed")
+
+            if migrate_to_evaluation_recipes(self.db_path):
+                logger.info("Applied evaluation recipe migration successfully")
+            else:
+                logger.warning("Evaluation recipe migration already applied or failed")
         except ImportError:
-            logger.warning("Unified evaluations migration module not found, skipping")
+            logger.warning("Migration module not found, skipping")
         except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error applying migrations: {e}")
 
@@ -1770,7 +1850,193 @@ class EvaluationsDatabase:
             conn.commit()
             return cursor.rowcount > 0
 
+    # ============= Recipe Run CRUD Operations =============
+
+    def create_recipe_run(
+        self,
+        *,
+        recipe_id: str,
+        recipe_version: str,
+        status: RunStatus | str = RunStatus.PENDING,
+        review_state: ReviewState | str = ReviewState.NOT_REQUIRED,
+        dataset_snapshot_ref: Optional[str] = None,
+        dataset_content_hash: Optional[str] = None,
+        confidence_summary: ConfidenceSummary | dict[str, Any] | None = None,
+        recommendation_slots: Optional[dict[str, RecommendationSlot | dict[str, Any] | None]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        child_run_ids: Optional[list[str]] = None,
+        run_id: Optional[str] = None,
+    ) -> str:
+        """Create a recipe run row and optional child links."""
+
+        run_id = run_id or f"recipe_run_{uuid.uuid4().hex[:12]}"
+        status_value = self._coerce_recipe_run_status(status)
+        review_value = self._coerce_review_state(review_state)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO evaluation_recipe_runs (
+                    run_id,
+                    recipe_id,
+                    recipe_version,
+                    status,
+                    review_state,
+                    dataset_snapshot_ref,
+                    dataset_content_hash,
+                    confidence_summary_json,
+                    recommendation_slots_json,
+                    metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    recipe_id,
+                    recipe_version,
+                    status_value,
+                    review_value,
+                    dataset_snapshot_ref,
+                    dataset_content_hash,
+                    self._json_dump_value(confidence_summary),
+                    self._json_dump_mapping(recommendation_slots or {}),
+                    self._json_dump_mapping(metadata or {}),
+                ),
+            )
+            conn.commit()
+
+        if child_run_ids is not None:
+            self.set_recipe_run_children(run_id, child_run_ids)
+
+        return run_id
+
+    def get_recipe_run(self, run_id: str) -> RecipeRunRecord | None:
+        """Fetch a recipe run by id."""
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM evaluation_recipe_runs WHERE run_id = ?", (run_id,))
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_recipe_run_record(row)
+        return None
+
+    def list_recipe_run_children(self, parent_run_id: str) -> list[str]:
+        """List child run ids for a parent recipe run."""
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT child_run_id
+                FROM evaluation_recipe_run_children
+                WHERE parent_run_id = ?
+                ORDER BY child_order ASC, created_at ASC
+                """,
+                (parent_run_id,),
+            )
+            rows = cursor.fetchall()
+            result: list[str] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    result.append(str(row["child_run_id"]))
+                else:
+                    result.append(str(row[0]))
+            return result
+
+    def set_recipe_run_children(self, parent_run_id: str, child_run_ids: list[str]) -> None:
+        """Replace the child run ids for a parent recipe run."""
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM evaluation_recipe_run_children WHERE parent_run_id = ?",
+                (parent_run_id,),
+            )
+            for child_order, child_run_id in enumerate(child_run_ids):
+                cursor.execute(
+                    """
+                    INSERT INTO evaluation_recipe_run_children (
+                        parent_run_id,
+                        child_run_id,
+                        child_order
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    (parent_run_id, child_run_id, child_order),
+                )
+            conn.commit()
+
     # ============= Helper Methods =============
+
+    def _coerce_recipe_run_status(self, status: RunStatus | str) -> str:
+        if isinstance(status, RunStatus):
+            return status.value
+        return RunStatus(str(status)).value
+
+    def _coerce_review_state(self, review_state: ReviewState | str) -> str:
+        if isinstance(review_state, ReviewState):
+            return review_state.value
+        return ReviewState(str(review_state)).value
+
+    def _json_dump_value(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if hasattr(value, "model_dump"):
+            payload = value.model_dump(mode="json")
+        else:
+            payload = value
+        return json.dumps(payload, sort_keys=True)
+
+    def _json_dump_mapping(self, value: Optional[dict[str, Any]]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if item is None:
+                normalized[key] = None
+            elif hasattr(item, "model_dump"):
+                normalized[key] = item.model_dump(mode="json")
+            else:
+                normalized[key] = item
+        return json.dumps(normalized, sort_keys=True)
+
+    def _parse_recipe_datetime(self, value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if value is None:
+            return datetime.now(timezone.utc)
+        text = str(value).strip()
+        if not text:
+            return datetime.now(timezone.utc)
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.now(timezone.utc)
+
+    def _row_to_recipe_run_record(self, row: Any) -> RecipeRunRecord:
+        confidence_summary = self._json_maybe(row["confidence_summary_json"], default=None)
+        recommendation_slots = self._json_maybe(row["recommendation_slots_json"], default={}) or {}
+        metadata = self._json_maybe(row["metadata_json"], default={}) or {}
+        child_run_ids = self.list_recipe_run_children(str(row["run_id"]))
+
+        payload = {
+            "run_id": row["run_id"],
+            "recipe_id": row["recipe_id"],
+            "recipe_version": row["recipe_version"],
+            "status": row["status"],
+            "review_state": row["review_state"],
+            "dataset_snapshot_ref": row["dataset_snapshot_ref"],
+            "dataset_content_hash": row["dataset_content_hash"],
+            "confidence_summary": confidence_summary,
+            "recommendation_slots": recommendation_slots,
+            "child_run_ids": child_run_ids,
+            "created_at": self._parse_recipe_datetime(row["created_at"]),
+            "updated_at": self._parse_recipe_datetime(row["updated_at"]) if row["updated_at"] else None,
+            "metadata": metadata,
+        }
+        return RecipeRunRecord.model_validate(payload)
 
     def _ensure_unix_timestamp(self, value: Any, *, fallback_now: bool = False) -> Optional[int]:
         """Convert various timestamp representations to a Unix epoch int.
