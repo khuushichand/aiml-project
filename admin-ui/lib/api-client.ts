@@ -233,6 +233,17 @@ export const api = {
     method: 'DELETE',
     body: JSON.stringify(data),
   }),
+  inviteUser: (data: { email: string; role: string; expiry_days?: number }) => requestJson('/admin/users/invite', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  getInvitations: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/users/invitations${queryParams ? `?${queryParams}` : ''}`);
+  },
+  revokeInvitation: (invitationId: string) => requestJson(`/admin/users/invitations/${encodeURIComponent(invitationId)}`, {
+    method: 'DELETE',
+  }),
   getCurrentUser: () => requestJson<User>('/users/me'),
 
   // ============================================
