@@ -24,8 +24,8 @@ import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dia
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
-import type { WebhookItem } from '@/types/webhooks';
-import { Copy, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react';
+import type { WebhookItem, WebhookDeliveryItem } from '@/types/webhooks';
+import { Activity, ChevronDown, ChevronRight, Copy, Play, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react';
 
 const AVAILABLE_EVENTS = [
   'user.created',
@@ -35,6 +35,108 @@ const AVAILABLE_EVENTS = [
   'incident.resolved',
 ] as const;
 
+function DeliveryStatusBadge({ success }: { success: boolean }) {
+  return (
+    <Badge variant={success ? 'default' : 'destructive'} className="text-xs">
+      {success ? 'Success' : 'Failed'}
+    </Badge>
+  );
+}
+
+function DeliveryHistory({
+  webhookId,
+  visible,
+}: {
+  webhookId: string;
+  visible: boolean;
+}) {
+  const [deliveries, setDeliveries] = useState<WebhookDeliveryItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const fetchDeliveries = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await api.getWebhookDeliveries(webhookId, 50);
+      setDeliveries(response.items ?? []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load deliveries';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [webhookId]);
+
+  useEffect(() => {
+    if (visible) {
+      fetchDeliveries();
+    }
+  }, [visible, fetchDeliveries]);
+
+  if (!visible) return null;
+
+  return (
+    <div className="px-4 pb-4">
+      <div className="rounded-md border bg-muted/30 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-sm font-medium flex items-center gap-1">
+            <Activity className="h-3.5 w-3.5" />
+            Delivery History
+          </h4>
+          <Button variant="ghost" size="sm" onClick={fetchDeliveries} disabled={loading}>
+            <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
+        {error && (
+          <Alert variant="destructive" className="mb-2">
+            <AlertDescription className="text-xs">{error}</AlertDescription>
+          </Alert>
+        )}
+        {!loading && deliveries.length === 0 && !error && (
+          <p className="text-xs text-muted-foreground py-2">No deliveries recorded yet.</p>
+        )}
+        {deliveries.length > 0 && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Event</TableHead>
+                <TableHead className="text-xs">Status</TableHead>
+                <TableHead className="text-xs">HTTP Code</TableHead>
+                <TableHead className="text-xs">Response Time</TableHead>
+                <TableHead className="text-xs">Time</TableHead>
+                <TableHead className="text-xs">Error</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {deliveries.map((delivery) => (
+                <TableRow key={delivery.id}>
+                  <TableCell className="text-xs font-mono">{delivery.event_type}</TableCell>
+                  <TableCell>
+                    <DeliveryStatusBadge success={delivery.success} />
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {delivery.status_code ?? '\u2014'}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {delivery.response_time_ms != null ? `${delivery.response_time_ms}ms` : '\u2014'}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatDateTime(delivery.attempted_at, { fallback: '\u2014' })}
+                  </TableCell>
+                  <TableCell className="text-xs text-destructive max-w-[200px] truncate">
+                    {delivery.error ?? ''}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WebhooksPageContent() {
   const promptPrivileged = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
@@ -42,6 +144,12 @@ function WebhooksPageContent() {
   const [webhooks, setWebhooks] = useState<WebhookItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Track which webhook's deliveries are expanded
+  const [expandedWebhookId, setExpandedWebhookId] = useState<string | null>(null);
+
+  // Track which webhooks have a test in-flight
+  const [testingWebhookIds, setTestingWebhookIds] = useState<Set<string>>(new Set());
 
   // Create dialog state
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -120,10 +228,36 @@ function WebhooksPageContent() {
     try {
       await api.deleteWebhook(webhook.id);
       success('Webhook deleted');
+      if (expandedWebhookId === webhook.id) {
+        setExpandedWebhookId(null);
+      }
       await fetchWebhooks();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete webhook';
       showError(message);
+    }
+  };
+
+  const handleTestWebhook = async (webhook: WebhookItem) => {
+    setTestingWebhookIds((prev) => new Set(prev).add(webhook.id));
+    try {
+      const delivery = await api.testWebhook(webhook.id);
+      if (delivery.success) {
+        success(`Test delivery succeeded (HTTP ${delivery.status_code})`);
+      } else {
+        showError(`Test delivery failed: ${delivery.error || `HTTP ${delivery.status_code}`}`);
+      }
+      // Expand deliveries to show the result
+      setExpandedWebhookId(webhook.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send test';
+      showError(message);
+    } finally {
+      setTestingWebhookIds((prev) => {
+        const next = new Set(prev);
+        next.delete(webhook.id);
+        return next;
+      });
     }
   };
 
@@ -140,6 +274,10 @@ function WebhooksPageContent() {
     setCreateEvents((prev) =>
       prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
     );
+  };
+
+  const toggleDeliveries = (webhookId: string) => {
+    setExpandedWebhookId((prev) => (prev === webhookId ? null : webhookId));
   };
 
   return (
@@ -181,61 +319,101 @@ function WebhooksPageContent() {
           )}
 
           {webhooks.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>URL</TableHead>
-                  <TableHead>Events</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {webhooks.map((webhook) => (
-                  <TableRow key={webhook.id}>
-                    <TableCell className="font-mono text-sm max-w-[300px] truncate">
-                      {webhook.url}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {webhook.events.map((event) => (
-                          <Badge key={event} variant="secondary" className="text-xs">
-                            {event}
-                          </Badge>
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={webhook.enabled ? 'default' : 'outline'}>
-                        {webhook.enabled ? 'Enabled' : 'Disabled'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatDateTime(webhook.created_at, { fallback: '\u2014' })}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleToggleEnabled(webhook)}
-                        >
-                          {webhook.enabled ? 'Disable' : 'Enable'}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(webhook)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8"></TableHead>
+                    <TableHead>URL</TableHead>
+                    <TableHead>Events</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {webhooks.map((webhook) => (
+                    <>
+                      <TableRow key={webhook.id}>
+                        <TableCell className="w-8 pr-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => toggleDeliveries(webhook.id)}
+                            aria-label="Toggle deliveries"
+                          >
+                            {expandedWebhookId === webhook.id ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="font-mono text-sm max-w-[300px] truncate">
+                          {webhook.url}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {webhook.events.map((event) => (
+                              <Badge key={event} variant="secondary" className="text-xs">
+                                {event}
+                              </Badge>
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={webhook.enabled ? 'default' : 'outline'}>
+                            {webhook.enabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDateTime(webhook.created_at, { fallback: '\u2014' })}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleTestWebhook(webhook)}
+                              disabled={testingWebhookIds.has(webhook.id)}
+                              title="Send test delivery"
+                            >
+                              <Play className={`h-4 w-4 mr-1 ${testingWebhookIds.has(webhook.id) ? 'animate-pulse' : ''}`} />
+                              {testingWebhookIds.has(webhook.id) ? 'Testing...' : 'Test'}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleToggleEnabled(webhook)}
+                            >
+                              {webhook.enabled ? 'Disable' : 'Enable'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(webhook)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {expandedWebhookId === webhook.id && (
+                        <TableRow key={`${webhook.id}-deliveries`}>
+                          <TableCell colSpan={6} className="p-0">
+                            <DeliveryHistory
+                              webhookId={webhook.id}
+                              visible={expandedWebhookId === webhook.id}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

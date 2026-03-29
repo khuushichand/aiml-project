@@ -1285,6 +1285,29 @@ class WebhookUpdateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WebhookDeliveryItem(BaseModel):
+    """A single webhook delivery record."""
+    id: str
+    webhook_id: str
+    event_type: str = ""
+    status_code: int | None = None
+    response_time_ms: int | None = None
+    success: bool = False
+    error: str | None = None
+    attempted_at: str | None = None
+    payload_preview: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookDeliveryListResponse(BaseModel):
+    """Response for webhook delivery listing."""
+    items: list[WebhookDeliveryItem]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Batch Operation Schemas

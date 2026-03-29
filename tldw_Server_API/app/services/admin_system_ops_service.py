@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -124,6 +126,7 @@ def _default_store() -> dict[str, Any]:
         "feature_flags": [],
         "incidents": [],
         "webhooks": [],
+        "webhook_deliveries": [],
         "invitations": [],
     }
 
@@ -204,6 +207,7 @@ def _load_store() -> dict[str, Any]:
     data.setdefault("feature_flags", [])
     data.setdefault("incidents", [])
     data.setdefault("webhooks", [])
+    data.setdefault("webhook_deliveries", [])
     data.setdefault("invitations", [])
     return data
 
@@ -876,6 +880,135 @@ def delete_webhook(*, webhook_id: str) -> None:
         if len(remaining) == len(webhooks):
             raise ValueError("not_found")
         store["webhooks"] = remaining
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Webhook Delivery Log
+# ──────────────────────────────────────────────────────────────────────────────
+
+_WEBHOOK_DELIVERIES_CAP = 1000
+
+
+def _get_webhook_with_secret(webhook_id: str) -> dict[str, Any]:
+    """Return a webhook record including its secret. Raises ValueError if not found."""
+    with _locked_store() as store:
+        for webhook in store.get("webhooks", []):
+            if webhook.get("id") == webhook_id:
+                return dict(webhook)
+    raise ValueError("not_found")
+
+
+def record_webhook_delivery(
+    *,
+    webhook_id: str,
+    event_type: str,
+    status_code: int | None,
+    response_time_ms: int | None,
+    success: bool,
+    error: str | None = None,
+    payload_preview: str | None = None,
+) -> dict[str, Any]:
+    """Append a delivery record for a webhook. Prunes oldest entries beyond cap."""
+    now = _now_iso()
+    record = {
+        "id": f"wd_{uuid4().hex[:12]}",
+        "webhook_id": str(webhook_id),
+        "event_type": str(event_type or ""),
+        "status_code": int(status_code) if status_code is not None else None,
+        "response_time_ms": int(response_time_ms) if response_time_ms is not None else None,
+        "success": bool(success),
+        "error": str(error)[:500] if error else None,
+        "attempted_at": now,
+        "payload_preview": str(payload_preview)[:500] if payload_preview else None,
+    }
+    with _locked_store(write=True) as store:
+        deliveries = store.setdefault("webhook_deliveries", [])
+        deliveries.append(record)
+        # Keep only the most recent entries per webhook (prune oldest)
+        wh_deliveries = [d for d in deliveries if d.get("webhook_id") == webhook_id]
+        if len(wh_deliveries) > _WEBHOOK_DELIVERIES_CAP:
+            excess = len(wh_deliveries) - _WEBHOOK_DELIVERIES_CAP
+            # Remove the oldest excess entries for this webhook
+            removed = 0
+            pruned: list[dict[str, Any]] = []
+            for d in deliveries:
+                if d.get("webhook_id") == webhook_id and removed < excess:
+                    removed += 1
+                    continue
+                pruned.append(d)
+            store["webhook_deliveries"] = pruned
+    return record
+
+
+def list_webhook_deliveries(
+    *,
+    webhook_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return delivery records for a webhook, newest first."""
+    limit = max(1, min(limit, _WEBHOOK_DELIVERIES_CAP))
+    with _locked_store() as store:
+        deliveries = store.get("webhook_deliveries", [])
+        wh_deliveries = [d for d in deliveries if d.get("webhook_id") == webhook_id]
+    # Sort newest first
+    wh_deliveries.sort(key=lambda d: d.get("attempted_at") or "", reverse=True)
+    return wh_deliveries[:limit]
+
+
+def send_test_webhook(*, webhook_id: str) -> dict[str, Any]:
+    """Send a test payload to a webhook URL with HMAC signing and record the delivery.
+
+    Returns the delivery record.
+    """
+    import httpx
+
+    webhook = _get_webhook_with_secret(webhook_id)
+    url = webhook.get("url", "")
+    secret = webhook.get("secret", "")
+
+    test_payload = {
+        "event": "webhook.test",
+        "webhook_id": webhook_id,
+        "timestamp": _now_iso(),
+        "data": {"message": "This is a test delivery from the admin panel."},
+    }
+
+    body_bytes = json.dumps(test_payload, separators=(",", ":")).encode("utf-8")
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if secret:
+        sig = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+        headers["X-Webhook-Signature"] = f"sha256={sig}"
+
+    status_code: int | None = None
+    success = False
+    error_msg: str | None = None
+    start = time.monotonic()
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(url, content=body_bytes, headers=headers)
+            status_code = resp.status_code
+            success = 200 <= resp.status_code < 300
+            if not success:
+                error_msg = f"HTTP {resp.status_code}"
+    except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        error_msg = str(exc)[:500]
+    except Exception as exc:
+        error_msg = str(exc)[:500]
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    delivery = record_webhook_delivery(
+        webhook_id=webhook_id,
+        event_type="webhook.test",
+        status_code=status_code,
+        response_time_ms=elapsed_ms,
+        success=success,
+        error=error_msg,
+        payload_preview=json.dumps(test_payload)[:500],
+    )
+    return delivery
 
 
 # ──────────────────────────────────────────────────────────────────────────────
