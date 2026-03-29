@@ -5,68 +5,129 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
-_STYLE_PROMPT_HINTS: dict[str, tuple[str, ...]] = {
-    "timeline": (
-        "Favor chronology, causality, and milestone sequencing.",
-        "When helpful, emit timeline visual blocks with dated events and short explanations.",
-    ),
-    "exam-focused-bullet": (
-        "Prefer concise, high-yield bullets over narrative paragraphs.",
-        "Optimize for recall, revision, and fast scanning.",
-    ),
-    "diagram-map-based": (
-        "Emphasize relationships, flows, regions, and conceptual structure.",
-        "Use process or comparison blocks when they improve comprehension.",
-    ),
-    "data-visualization": (
-        "Highlight metrics, trends, comparisons, and quantitative takeaways.",
-        "Prefer stat groups or comparison blocks over decorative prose.",
-    ),
-    "storytelling": (
-        "Use a narrative arc with setup, development, and payoff.",
-        "Keep slides concise while preserving story progression.",
-    ),
-}
+from tldw_Server_API.app.core.Slides.visual_style_catalog import (
+    get_builtin_visual_style_definition,
+)
+from tldw_Server_API.app.core.Slides.visual_style_profiles import (
+    build_prompt_profile_prompt_lines,
+)
 
 
-def build_visual_style_generation_prompt(visual_style_snapshot: dict[str, Any] | None) -> str:
-    """Return style-specific prompt guidance for slide generation."""
+_SUPPORTED_VISUAL_BLOCK_TYPES: tuple[str, ...] = (
+    "timeline",
+    "comparison_matrix",
+    "process_flow",
+    "stat_group",
+)
 
-    if not isinstance(visual_style_snapshot, dict) or not visual_style_snapshot:
-        return ""
 
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _coerce_string_tuple(value: Any) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    return ()
+
+
+def _resolve_visual_style_prompt_source(
+    visual_style_snapshot: dict[str, Any],
+) -> dict[str, Any]:
     style_id = str(visual_style_snapshot.get("id") or "").strip()
+    style_scope = str(visual_style_snapshot.get("scope") or "").strip().lower()
     style_name = str(visual_style_snapshot.get("name") or style_id or "selected").strip()
-    generation_rules = (
-        visual_style_snapshot.get("generation_rules")
-        if isinstance(visual_style_snapshot.get("generation_rules"), dict)
-        else {}
+    resolved = {
+        "id": style_id,
+        "scope": style_scope,
+        "name": style_name,
+        "description": str(visual_style_snapshot.get("description") or "").strip(),
+        "prompt_profile": str(visual_style_snapshot.get("prompt_profile") or "").strip(),
+        "generation_rules": _coerce_dict(visual_style_snapshot.get("generation_rules")),
+        "artifact_preferences": _coerce_string_tuple(
+            visual_style_snapshot.get("artifact_preferences")
+        ),
+        "fallback_policy": _coerce_dict(visual_style_snapshot.get("fallback_policy")),
+        "prompt_notes": _coerce_string_tuple(visual_style_snapshot.get("prompt_notes")),
+        "builtin": False,
+    }
+
+    if style_scope == "builtin" and style_id:
+        definition = get_builtin_visual_style_definition(style_id)
+        if definition is not None:
+            resolved.update(
+                {
+                    "name": definition.name,
+                    "description": definition.description,
+                    "prompt_profile": definition.prompt_profile,
+                    "generation_rules": dict(definition.generation_rules),
+                    "artifact_preferences": tuple(definition.artifact_preferences),
+                    "fallback_policy": dict(definition.fallback_policy),
+                    "prompt_notes": tuple(definition.prompt_notes),
+                    "builtin": True,
+                }
+            )
+    return resolved
+
+
+def _format_fallback_policy(fallback_policy: dict[str, Any]) -> str:
+    if not fallback_policy:
+        return "Keep slides readable in plain markdown if a structured block does not fit."
+
+    parts: list[str] = []
+    if "mode" in fallback_policy and str(fallback_policy["mode"]).strip():
+        parts.append(f"mode={fallback_policy['mode']}")
+    if "preserve_key_stats" in fallback_policy:
+        parts.append(f"preserve_key_stats={fallback_policy['preserve_key_stats']}")
+
+    extra_keys = sorted(
+        key for key in fallback_policy.keys() if key not in {"mode", "preserve_key_stats"}
     )
-    artifact_preferences = (
-        visual_style_snapshot.get("artifact_preferences")
-        if isinstance(visual_style_snapshot.get("artifact_preferences"), list)
-        else []
-    )
+    for key in extra_keys:
+        value = fallback_policy.get(key)
+        if isinstance(value, (str, int, float, bool)) and str(value).strip():
+            parts.append(f"{key}={value}")
+
+    return "; ".join(parts) if parts else "Keep slides readable in plain markdown."
+
+
+def _build_prompt_sections(visual_style_snapshot: dict[str, Any]) -> list[str]:
+    source = _resolve_visual_style_prompt_source(visual_style_snapshot)
 
     lines = [
-        f"Visual style preset: {style_name}.",
+        f"Visual style preset: {source['name']}.",
         "Adapt slide structure and emphasis to this preset instead of using a generic deck pattern.",
     ]
-    lines.extend(_STYLE_PROMPT_HINTS.get(style_id, ()))
-    if generation_rules:
+
+    if source["description"]:
+        lines.append(f"Style description: {source['description']}")
+
+    if source["prompt_notes"]:
+        lines.append("Style notes:")
+        lines.extend(f"- {note}" for note in source["prompt_notes"])
+
+    profile_lines = build_prompt_profile_prompt_lines(str(source["prompt_profile"]))
+    if profile_lines:
+        lines.extend(profile_lines)
+
+    if source["generation_rules"]:
         lines.append(
             "Generation rules: "
-            + json.dumps(generation_rules, ensure_ascii=True, sort_keys=True)
+            + json.dumps(source["generation_rules"], ensure_ascii=True, sort_keys=True)
         )
-    if artifact_preferences:
+    if source["artifact_preferences"]:
         lines.append(
             "Preferred visual block types: "
-            + ", ".join(str(item) for item in artifact_preferences)
+            + ", ".join(str(item) for item in source["artifact_preferences"])
         )
+
+    lines.append("Fallback instructions: " + _format_fallback_policy(source["fallback_policy"]))
     lines.append(
         "You may include metadata.visual_blocks on slides using these supported types: "
-        "timeline, comparison_matrix, process_flow, stat_group."
+        + ", ".join(_SUPPORTED_VISUAL_BLOCK_TYPES)
+        + "."
     )
     lines.append(
         "Every slide must remain valid in plain markdown or reveal exports, so provide meaningful content "
@@ -75,7 +136,15 @@ def build_visual_style_generation_prompt(visual_style_snapshot: dict[str, Any] |
     lines.append(
         'Example timeline block: {"type":"timeline","items":[{"label":"1776","title":"Event","description":"Why it matters"}]}'
     )
-    return "\n".join(lines)
+    return lines
+
+
+def build_visual_style_generation_prompt(visual_style_snapshot: dict[str, Any] | None) -> str:
+    """Return style-specific prompt guidance for slide generation."""
+
+    if not isinstance(visual_style_snapshot, dict) or not visual_style_snapshot:
+        return ""
+    return "\n".join(_build_prompt_sections(visual_style_snapshot))
 
 
 def apply_visual_block_fallback(slide: dict[str, Any]) -> dict[str, Any]:

@@ -25,6 +25,7 @@ class BuiltinVisualStyleDefinition:
     generation_rules: dict[str, Any] = field(default_factory=dict)
     artifact_preferences: tuple[str, ...] = field(default_factory=tuple)
     fallback_policy: dict[str, Any] = field(default_factory=dict)
+    prompt_notes: tuple[str, ...] = field(default_factory=tuple)
     appearance_overrides: dict[str, Any] = field(default_factory=dict)
     tags: tuple[str, ...] = field(default_factory=tuple)
     best_for: tuple[str, ...] = field(default_factory=tuple)
@@ -80,6 +81,10 @@ def _legacy_style_specs() -> tuple[dict[str, Any], ...]:
             "generation_rules": {"density": "high", "bullet_bias": "high", "exam_focus": True},
             "artifact_preferences": ("stat_group", "comparison_matrix"),
             "fallback_policy": {"mode": "key-points", "preserve_key_stats": True},
+            "prompt_notes": (
+                "Prefer concise, high-yield bullets over narrative paragraphs.",
+                "Optimize for recall, revision, and fast scanning.",
+            ),
         },
         {
             "style_id": "diagram-map-based",
@@ -93,6 +98,10 @@ def _legacy_style_specs() -> tuple[dict[str, Any], ...]:
             "generation_rules": {"density": "medium", "bullet_bias": "low", "spatial_reasoning": "high"},
             "artifact_preferences": ("process_flow", "comparison_matrix"),
             "fallback_policy": {"mode": "labeled-outline", "preserve_key_stats": True},
+            "prompt_notes": (
+                "Emphasize relationships, flows, regions, and conceptual structure.",
+                "Use process or comparison blocks when they improve comprehension.",
+            ),
         },
         {
             "style_id": "timeline",
@@ -106,6 +115,7 @@ def _legacy_style_specs() -> tuple[dict[str, Any], ...]:
             "generation_rules": {"density": "medium", "bullet_bias": "medium", "chronology_bias": "high"},
             "artifact_preferences": ("timeline", "stat_group"),
             "fallback_policy": {"mode": "ordered-bullets", "preserve_key_stats": True},
+            "prompt_notes": ("Favor chronology, causality, and milestone sequencing.",),
         },
         {
             "style_id": "data-visualization",
@@ -119,6 +129,10 @@ def _legacy_style_specs() -> tuple[dict[str, Any], ...]:
             "generation_rules": {"density": "medium", "bullet_bias": "low", "quant_focus": "high"},
             "artifact_preferences": ("stat_group", "comparison_matrix"),
             "fallback_policy": {"mode": "metric-summary", "preserve_key_stats": True},
+            "prompt_notes": (
+                "Highlight metrics, trends, comparisons, and quantitative takeaways.",
+                "Prefer stat groups or comparison blocks over decorative prose.",
+            ),
         },
         {
             "style_id": "storytelling",
@@ -132,6 +146,10 @@ def _legacy_style_specs() -> tuple[dict[str, Any], ...]:
             "generation_rules": {"density": "medium", "bullet_bias": "low", "narrative_bias": "high"},
             "artifact_preferences": ("timeline", "process_flow"),
             "fallback_policy": {"mode": "narrative-outline", "preserve_key_stats": False},
+            "prompt_notes": (
+                "Use a narrative arc with setup, development, and payoff.",
+                "Keep slides concise while preserving story progression.",
+            ),
         },
         {
             "style_id": "high-contrast-revision",
@@ -663,6 +681,7 @@ def _build_definition(spec: dict[str, Any], *, sort_order: int) -> BuiltinVisual
         generation_rules=deepcopy(spec.get("generation_rules") or {}),
         artifact_preferences=tuple(str(item) for item in spec.get("artifact_preferences") or ()),
         fallback_policy=deepcopy(spec.get("fallback_policy") or {}),
+        prompt_notes=tuple(str(item) for item in spec.get("prompt_notes") or ()),
         appearance_overrides=deepcopy(spec.get("appearance_overrides") or {}),
         tags=(
             category,
@@ -699,6 +718,7 @@ def _clone_definition(definition: BuiltinVisualStyleDefinition) -> BuiltinVisual
         generation_rules=deepcopy(definition.generation_rules),
         artifact_preferences=tuple(definition.artifact_preferences),
         fallback_policy=deepcopy(definition.fallback_policy),
+        prompt_notes=tuple(definition.prompt_notes),
         appearance_overrides=deepcopy(definition.appearance_overrides),
         tags=tuple(definition.tags),
         best_for=tuple(definition.best_for),

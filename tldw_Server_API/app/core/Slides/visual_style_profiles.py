@@ -165,3 +165,23 @@ def build_prompt_profile_guidance(profile_id: str) -> tuple[str, ...]:
     if profile is None:
         return ()
     return profile.guidance
+
+
+def build_prompt_profile_prompt_lines(profile_id: str) -> tuple[str, ...]:
+    """Return prompt-ready lines describing a profile."""
+
+    profile = get_visual_style_profile(profile_id)
+    if profile is None:
+        return ()
+
+    lines = [f"Prompt profile: {profile.name}."]
+    if profile.guidance:
+        lines.append("Profile guidance:")
+        lines.extend(f"- {item}" for item in profile.guidance)
+    if profile.avoid:
+        lines.append("Profile avoid:")
+        lines.extend(f"- {item}" for item in profile.avoid)
+    if profile.artifact_bias:
+        lines.append("Profile artifact bias:")
+        lines.extend(f"- {item}" for item in profile.artifact_bias)
+    return tuple(lines)
