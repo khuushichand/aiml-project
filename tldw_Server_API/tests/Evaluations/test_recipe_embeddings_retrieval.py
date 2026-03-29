@@ -13,7 +13,7 @@ def test_labeled_dataset_requires_query_ids_and_expected_ids() -> None:
             {
                 "query_id": "q-1",
                 "input": "alpha query",
-                "expected_ids": ["doc-1", "doc-2"],
+                "expected_ids": ["1", "2"],
             },
             {
                 "input": "missing query id",

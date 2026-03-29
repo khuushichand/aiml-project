@@ -75,6 +75,32 @@ def _run_config() -> dict[str, Any]:
     }
 
 
+def _embeddings_run_config() -> dict[str, Any]:
+    return {
+        "comparison_mode": "embedding_only",
+        "candidates": [
+            {"provider": "openai", "model": "text-embedding-3-small"},
+            {"provider": "local", "model": "bge-small", "is_local": True},
+        ],
+        "media_ids": [1, 2],
+    }
+
+
+def _embeddings_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "query_id": "q-1",
+            "input": "find alpha",
+            "expected_ids": ["1"],
+        },
+        {
+            "query_id": "q-2",
+            "input": "find beta",
+            "expected_ids": ["2"],
+        },
+    ]
+
+
 def _mark_recipe_run_completed(db: EvaluationsDatabase, run_id: str) -> None:
     with db.get_connection() as conn:
         cursor = conn.cursor()
@@ -201,6 +227,25 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
     for slot in report["recommendation_slots"].values():
         assert slot["candidate_run_id"] is None
         assert slot["reason_code"] is not None
+
+
+@pytest.mark.asyncio
+async def test_embeddings_recipe_run_create_persists_inline_dataset(async_api_client, auth_headers) -> None:
+    payload = {
+        "dataset": _embeddings_dataset(),
+        "run_config": _embeddings_run_config(),
+    }
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/embeddings_model_selection/runs",
+        json=payload,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["metadata"]["inline_dataset"] == payload["dataset"]
+    assert body["metadata"]["run_config"]["media_ids"] == [1, 2]
 
 
 @pytest.mark.asyncio

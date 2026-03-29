@@ -206,6 +206,11 @@ class RecipeRunsService:
                 "reuse_hash": reuse_hash,
                 "dataset_mode": validation["dataset_mode"],
                 "dataset_id": dataset_id,
+                "inline_dataset": (
+                    self._normalize_dataset_samples(dataset)
+                    if dataset_id is None and dataset is not None
+                    else None
+                ),
                 "owner_user_id": self.user_id,
                 "recipe_validation": validation_metadata,
                 "review_sample": validation_metadata.get("review_sample"),

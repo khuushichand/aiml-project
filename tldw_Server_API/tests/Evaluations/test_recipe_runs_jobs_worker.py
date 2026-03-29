@@ -45,6 +45,32 @@ def _run_config() -> dict[str, Any]:
     }
 
 
+def _embeddings_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "query_id": "q-1",
+            "input": "find alpha",
+            "expected_ids": ["1"],
+        },
+        {
+            "query_id": "q-2",
+            "input": "find beta",
+            "expected_ids": ["2"],
+        },
+    ]
+
+
+def _embeddings_run_config() -> dict[str, Any]:
+    return {
+        "comparison_mode": "embedding_only",
+        "candidates": [
+            {"provider": "openai", "model": "text-embedding-3-small"},
+            {"provider": "local", "model": "bge-small", "is_local": True},
+        ],
+        "media_ids": [1, 2],
+    }
+
+
 def _service(tmp_path) -> tuple[EvaluationsDatabase, RecipeRunsService, str]:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     user_id = get_single_user_instance().id_str
@@ -158,6 +184,119 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
     assert refreshed.status is RunStatus.FAILED
     assert refreshed.metadata["jobs"]["worker_state"] == "failed"
     assert refreshed.metadata["jobs"]["error"] == "boom"
+
+
+def test_handle_recipe_run_job_executes_embeddings_recipe_and_persists_child_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, user_id = _service(tmp_path)
+    dataset = _embeddings_dataset()
+    record = service.create_run(
+        "embeddings_model_selection",
+        dataset=dataset,
+        run_config=_embeddings_run_config(),
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    captured: dict[str, Any] = {}
+
+    def _fake_execute(*, record, db, user_id, service):
+        del db, service
+        captured["run_id"] = record.run_id
+        captured["inline_dataset"] = record.metadata.get("inline_dataset")
+        captured["user_id"] = user_id
+        return {
+            "child_run_ids": ["arm-1"],
+            "metadata": {
+                "abtest": {"test_id": "abtest-child-1"},
+                "candidate_results": [
+                    {
+                        "candidate_id": "arm-1",
+                        "candidate_run_id": "arm-1",
+                        "model": "text-embedding-3-small",
+                        "provider": "openai",
+                        "query_results": [
+                            {
+                                "ranked_ids": ["1"],
+                                "expected_ids": ["1"],
+                                "latency_ms": 80.0,
+                            },
+                            {
+                                "ranked_ids": ["2"],
+                                "expected_ids": ["2"],
+                                "latency_ms": 90.0,
+                            },
+                        ],
+                    }
+                ],
+                "recipe_report_inputs": {
+                    "dataset_mode": "labeled",
+                    "review_sample": {
+                        "required": False,
+                        "sample_size": 0,
+                        "sample_query_ids": [],
+                    },
+                    "candidate_results": [
+                        {
+                            "candidate_id": "arm-1",
+                            "candidate_run_id": "arm-1",
+                            "model": "text-embedding-3-small",
+                            "provider": "openai",
+                            "query_results": [
+                                {
+                                    "ranked_ids": ["1"],
+                                    "expected_ids": ["1"],
+                                    "latency_ms": 80.0,
+                                },
+                                {
+                                    "ranked_ids": ["2"],
+                                    "expected_ids": ["2"],
+                                    "latency_ms": 90.0,
+                                },
+                            ],
+                        }
+                    ],
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        worker,
+        "_execute_embeddings_recipe_run",
+        _fake_execute,
+        raising=False,
+    )
+
+    result = worker.handle_recipe_run_job(
+        {
+            "id": "job-embeddings",
+            "payload": build_recipe_run_job_payload(
+                run_id=record.run_id,
+                recipe_id=record.recipe_id,
+                owner_user_id=user_id,
+            ),
+        },
+        db=db,
+        user_id=user_id,
+    )
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert result["status"] == "completed"
+    assert captured["run_id"] == record.run_id
+    assert captured["inline_dataset"] == dataset
+    assert captured["user_id"] == user_id
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.COMPLETED
+    assert refreshed.child_run_ids == ["arm-1"]
+    assert refreshed.metadata["abtest"]["test_id"] == "abtest-child-1"
+    assert refreshed.metadata["candidate_results"]
+    assert refreshed.metadata["recipe_report_inputs"]["candidate_results"]
+    assert refreshed.metadata["recipe_report"]["best_overall"]["candidate_id"] == "arm-1"
+    assert refreshed.metadata["jobs"]["worker_state"] == "completed"
+    assert refreshed.recommendation_slots["best_overall"].candidate_run_id == "arm-1"
 
 
 @pytest.mark.asyncio

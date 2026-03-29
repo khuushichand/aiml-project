@@ -176,7 +176,7 @@ def test_recipe_service_uses_embeddings_recipe_validation_and_normalization(tmp_
         {
             "query_id": "q-1",
             "input": "find the alpha document",
-            "expected_ids": ["doc-1"],
+            "expected_ids": ["1"],
         },
     ]
     run_config = {
@@ -221,6 +221,7 @@ def test_recipe_service_uses_embeddings_recipe_validation_and_normalization(tmp_
         "local:bge-small",
         "openai:text-embedding-3-small",
     ]
+    assert record.metadata["inline_dataset"] == dataset
     assert record.metadata["review_sample"] == {
         "required": False,
         "sample_size": 0,
@@ -231,8 +232,8 @@ def test_recipe_service_uses_embeddings_recipe_validation_and_normalization(tmp_
 def test_recipe_service_builds_embeddings_report_from_stored_recipe_inputs(tmp_path) -> None:
     db, service, _ = _service(tmp_path)
     dataset = [
-        {"query_id": "q-1", "input": "alpha", "expected_ids": ["doc-1"]},
-        {"query_id": "q-2", "input": "beta", "expected_ids": ["doc-2"]},
+        {"query_id": "q-1", "input": "alpha", "expected_ids": ["1"]},
+        {"query_id": "q-2", "input": "beta", "expected_ids": ["2"]},
     ]
     record = service.create_run(
         "embeddings_model_selection",

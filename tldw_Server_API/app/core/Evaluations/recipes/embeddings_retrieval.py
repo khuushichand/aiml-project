@@ -70,6 +70,17 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
                 errors.append(f"Dataset sample {index} must include a non-empty expected_ids list for labeled retrieval.")
                 labeled_flags.append(False)
                 continue
+            invalid_expected_ids = [
+                str(value).strip()
+                for value in expected_ids
+                if str(value).strip() and not str(value).strip().isdigit()
+            ]
+            if invalid_expected_ids:
+                errors.append(
+                    f"Dataset sample {index} expected_ids must contain integer media ids for runnable retrieval evals."
+                )
+                labeled_flags.append(False)
+                continue
 
             labeled_flags.append(True)
 
@@ -109,10 +120,20 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
                 str(candidate.get("provider") or "").strip(),
             ),
         )
-        return {
+        normalized: dict[str, Any] = {
             "comparison_mode": comparison_mode,
             "candidates": normalized_candidates,
         }
+        media_ids = run_config.get("media_ids")
+        if media_ids is not None:
+            if not isinstance(media_ids, list):
+                raise ValueError("run_config.media_ids must be a list when provided.")
+            normalized["media_ids"] = [int(media_id) for media_id in media_ids]
+        if run_config.get("top_k") is not None:
+            normalized["top_k"] = int(run_config["top_k"])
+        if run_config.get("hybrid_alpha") is not None:
+            normalized["hybrid_alpha"] = float(run_config["hybrid_alpha"])
+        return normalized
 
     def build_report(
         self,
