@@ -69,6 +69,20 @@ def _service(tmp_path) -> tuple[EvaluationsDatabase, RecipeRunsService, str]:
     return db, RecipeRunsService(db=db, user_id=user_id), user_id
 
 
+def _mark_recipe_run_completed(db: EvaluationsDatabase, run_id: str) -> None:
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE evaluation_recipe_runs
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE run_id = ?
+            """,
+            (RunStatus.COMPLETED.value, run_id),
+        )
+        conn.commit()
+
+
 def test_recipe_service_lists_and_fetches_builtin_manifests(tmp_path) -> None:
     _, service, _ = _service(tmp_path)
 
@@ -139,29 +153,23 @@ def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> Non
     db, service, user_id = _service(tmp_path)
     dataset = _inline_dataset()
     run_config = _run_config()
-    manifest = service.get_manifest("summarization_quality")
-    reuse_hash = service.build_reuse_hash(
+    created = service.create_run(
         "summarization_quality",
         dataset=dataset,
         run_config=run_config,
     )
+    reuse_hash = created.metadata["reuse_hash"]
 
-    completed_run_id = db.create_recipe_run(
-        recipe_id=manifest.recipe_id,
-        recipe_version=manifest.recipe_version,
-        status=RunStatus.COMPLETED,
-        dataset_content_hash=build_dataset_content_hash(dataset),
-        metadata={
-            "run_config": run_config,
-            "reuse_hash": reuse_hash,
-        },
+    assert (
+        db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            user_id,
+        )
+        == created.run_id
     )
-    db.record_idempotency(
-        RECIPE_RUN_REUSE_ENTITY_TYPE,
-        reuse_hash,
-        completed_run_id,
-        user_id,
-    )
+
+    _mark_recipe_run_completed(db, created.run_id)
 
     reused = service.create_run(
         "summarization_quality",
@@ -169,8 +177,16 @@ def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> Non
         run_config=run_config,
     )
 
-    assert reused.run_id == completed_run_id
+    assert reused.run_id == created.run_id
     assert reused.status is RunStatus.COMPLETED
+    assert (
+        db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            user_id,
+        )
+        == created.run_id
+    )
 
     forced = service.create_run(
         "summarization_quality",
@@ -179,5 +195,49 @@ def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> Non
         force_rerun=True,
     )
 
-    assert forced.run_id != completed_run_id
+    assert forced.run_id != created.run_id
     assert forced.status is RunStatus.PENDING
+
+
+def test_recipe_service_repairs_stale_reuse_mapping_to_latest_completed_run(tmp_path) -> None:
+    db, service, user_id = _service(tmp_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+
+    first_run = service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+    reuse_hash = first_run.metadata["reuse_hash"]
+    db.record_idempotency(
+        RECIPE_RUN_REUSE_ENTITY_TYPE,
+        reuse_hash,
+        first_run.run_id,
+        user_id,
+    )
+
+    forced_run = service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+        force_rerun=True,
+    )
+    _mark_recipe_run_completed(db, forced_run.run_id)
+
+    reused = service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    assert reused.run_id == forced_run.run_id
+    assert reused.status is RunStatus.COMPLETED
+    assert (
+        db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            user_id,
+        )
+        == forced_run.run_id
+    )

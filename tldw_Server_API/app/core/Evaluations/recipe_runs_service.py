@@ -163,6 +163,7 @@ class RecipeRunsService:
         if not force_rerun:
             reusable = self._get_reusable_completed_run(reuse_hash)
             if reusable is not None:
+                self._record_reuse_mapping(reusable.run_id, reuse_hash)
                 return reusable
 
         run_id = self.db.create_recipe_run(
@@ -178,6 +179,7 @@ class RecipeRunsService:
                 "dataset_id": dataset_id,
             },
         )
+        self._record_reuse_mapping(run_id, reuse_hash)
         return self.get_run(run_id)
 
     def get_run(self, run_id: str) -> RecipeRunRecord:
@@ -202,12 +204,71 @@ class RecipeRunsService:
             reuse_hash,
             self.user_id,
         )
-        if not reusable_run_id:
+        if reusable_run_id:
+            record = self.db.get_recipe_run(reusable_run_id)
+            if record is not None and record.status is RunStatus.COMPLETED:
+                return record
+
+        record = self._find_latest_completed_run_by_reuse_hash(reuse_hash)
+        if record is None:
             return None
-        record = self.db.get_recipe_run(reusable_run_id)
-        if record is None or record.status is not RunStatus.COMPLETED:
-            return None
+        self._record_reuse_mapping(record.run_id, reuse_hash)
         return record
+
+    def _record_reuse_mapping(self, run_id: str, reuse_hash: str) -> None:
+        current_mapping = self.db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            self.user_id,
+        )
+        if current_mapping == run_id:
+            return
+        if not current_mapping:
+            self.db.record_idempotency(
+                RECIPE_RUN_REUSE_ENTITY_TYPE,
+                reuse_hash,
+                run_id,
+                self.user_id,
+            )
+            return
+
+        uid = self.user_id or ""
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE idempotency_keys
+                    SET entity_id = ?
+                    WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
+                    """,
+                    (run_id, uid, RECIPE_RUN_REUSE_ENTITY_TYPE, reuse_hash),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def _find_latest_completed_run_by_reuse_hash(self, reuse_hash: str) -> RecipeRunRecord | None:
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT run_id
+                FROM evaluation_recipe_runs
+                WHERE status = ?
+                ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+                """,
+                (RunStatus.COMPLETED.value,),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            run_id = str(row["run_id"]) if isinstance(row, dict) else str(row[0])
+            record = self.db.get_recipe_run(run_id)
+            if record is not None and record.metadata.get("reuse_hash") == reuse_hash:
+                return record
+        return None
 
     def _resolve_dataset(
         self,
