@@ -51,6 +51,7 @@ import {
   SourceFolderMembershipMenu,
   type SourceFolderMembershipOption
 } from "./SourceFolderMembershipMenu"
+import type { TransferSourcesModalLaunchRequest } from "../TransferSourcesModal"
 import {
   SourceFolderTree,
   type SourceFolderTreeNode
@@ -114,6 +115,10 @@ type SourceAnnotation = {
 interface SourcesPaneProps {
   /** Callback to hide/collapse the pane */
   onHide?: () => void
+  /** Open the shared transfer modal for the current effective selection. */
+  onOpenTransferSources?: (
+    request: TransferSourcesModalLaunchRequest
+  ) => void
   /** Rollout gate for status/guardrails source handling. */
   statusGuardrailsEnabled?: boolean
   /** Non-persisted session-local source list view state owned by the page. */
@@ -129,6 +134,7 @@ interface SourcesPaneProps {
  */
 export const SourcesPane: React.FC<SourcesPaneProps> = ({
   onHide,
+  onOpenTransferSources,
   statusGuardrailsEnabled = true,
   sourceListViewState = DEFAULT_SOURCE_LIST_VIEW_STATE,
   onPatchSourceListViewState,
@@ -468,9 +474,20 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
         .length,
     [effectiveSelectedSourceIds, filteredSources]
   )
+  const eligibleSelectedSourceIds = React.useMemo(
+    () =>
+      effectiveSelectedSourceEntries
+        .filter((source) => organizationIndex.readySourceIds.has(source.id))
+        .map((source) => source.id),
+    [effectiveSelectedSourceEntries, organizationIndex.readySourceIds]
+  )
   const hiddenSelectedCount = Math.max(
     0,
     effectiveSelectedCount - visibleEffectiveSelectedCount
+  )
+  const ineligibleSelectedCount = Math.max(
+    0,
+    effectiveSelectedCount - eligibleSelectedSourceIds.length
   )
   const isListNarrowed =
     activeFolderId !== null ||
@@ -583,6 +600,28 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     selectedSourceIds,
     sources,
     t
+  ])
+
+  const handleOpenTransferSources = React.useCallback(() => {
+    if (!onOpenTransferSources || effectiveSelectedCount === 0) {
+      return
+    }
+
+    onOpenTransferSources({
+      entryPoint: "sources",
+      selectedSourceIds: effectiveSelectedSourceEntries.map((source) => source.id),
+      eligibleSelectedSourceIds,
+      totalSelectedCount: effectiveSelectedCount,
+      hiddenSelectedCount,
+      ineligibleSelectedCount
+    })
+  }, [
+    effectiveSelectedCount,
+    effectiveSelectedSourceEntries,
+    eligibleSelectedSourceIds,
+    hiddenSelectedCount,
+    ineligibleSelectedCount,
+    onOpenTransferSources
   ])
   const previewSource = previewSourceId
     ? sources.find((source) => source.id === previewSourceId) || null
@@ -1443,6 +1482,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                   { count: effectiveSelectedCount }
                 )}
               </span>
+              <button
+                type="button"
+                onClick={handleOpenTransferSources}
+                className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-muted transition hover:bg-surface2 hover:text-text"
+              >
+                {t("playground:sources.transferSelected", "Move / Copy")}
+              </button>
               <button
                 type="button"
                 onClick={() => {
