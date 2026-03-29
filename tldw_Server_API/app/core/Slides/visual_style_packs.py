@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
+import re
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +154,8 @@ _VISUAL_STYLE_PACKS: tuple[VisualStylePack, ...] = (
 
 _VISUAL_STYLE_PACKS_BY_ID = {pack.pack_id: pack for pack in _VISUAL_STYLE_PACKS}
 _STYLE_PACKS_DIR = Path(__file__).resolve().parent / "style_packs"
+_SAFE_TOKEN_KEY_PATTERN = re.compile(r"^[a-z0-9-]+$")
+_SAFE_TOKEN_VALUE_PATTERN = re.compile(r"^[a-zA-Z0-9\s#(),.%'\"_/-]+$")
 
 
 def _clone_pack(pack: VisualStylePack) -> VisualStylePack:
@@ -211,14 +214,55 @@ def resolve_pack_settings(
     return resolved
 
 
-@lru_cache(maxsize=None)
+def _normalize_pack_id(pack_id: str) -> str | None:
+    """Return a known pack identifier or ``None`` when the value is invalid."""
+
+    normalized = str(pack_id).strip()
+    if not normalized:
+        return None
+    if normalized not in _VISUAL_STYLE_PACKS_BY_ID:
+        return None
+    return normalized
+
+
+@cache
 def _load_pack_css(pack_id: str) -> str:
     """Read the static stylesheet for a built-in pack."""
 
-    css_path = _STYLE_PACKS_DIR / f"{pack_id}.css"
+    normalized_pack_id = _normalize_pack_id(pack_id)
+    if normalized_pack_id is None:
+        return ""
+
+    packs_dir = _STYLE_PACKS_DIR.resolve()
+    css_path = (packs_dir / f"{normalized_pack_id}.css").resolve()
+    if css_path.parent != packs_dir:
+        return ""
     if not css_path.exists():
         return ""
     return css_path.read_text(encoding="utf-8").strip()
+
+
+def _normalize_token_key(value: Any) -> str | None:
+    """Return a safe CSS custom property suffix or ``None`` when invalid."""
+
+    normalized = str(value).strip().replace("_", "-").lower()
+    if not normalized or not _SAFE_TOKEN_KEY_PATTERN.fullmatch(normalized):
+        return None
+    return normalized
+
+
+def _normalize_token_value(value: Any) -> str | None:
+    """Return a safe CSS token value or ``None`` when it contains unsafe syntax."""
+
+    normalized = str(value).replace("\n", " ").strip()
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if "url(" in lowered or "@import" in lowered or "expression(" in lowered:
+        return None
+    if not _SAFE_TOKEN_VALUE_PATTERN.fullmatch(normalized):
+        return None
+    return normalized
 
 
 def _render_token_block(
@@ -235,9 +279,9 @@ def _render_token_block(
         value = token_overrides[key]
         if value is None:
             continue
-        css_key = str(key).replace("_", "-")
-        css_value = str(value).replace("\n", " ").strip()
-        if not css_value:
+        css_key = _normalize_token_key(key)
+        css_value = _normalize_token_value(value)
+        if css_key is None or css_value is None:
             continue
         lines.append(f"  --{css_key}: {css_value};")
     lines.append("}")
@@ -252,16 +296,20 @@ def render_pack_custom_css(
 ) -> str:
     """Render safe CSS for a built-in style pack."""
 
+    normalized_pack_id = _normalize_pack_id(pack_id)
+    if normalized_pack_id is None:
+        return ""
+
     parts = [
-        _load_pack_css(pack_id),
+        _load_pack_css(normalized_pack_id),
         _render_token_block(
-            selector=f'.reveal[data-style-pack="{pack_id}"]',
-            pack_id=pack_id,
+            selector=f'.reveal[data-style-pack="{normalized_pack_id}"]',
+            pack_id=normalized_pack_id,
             token_overrides=token_overrides,
         ),
         _render_token_block(
             selector=f'.reveal[data-visual-style="{style_id}"]',
-            pack_id=pack_id,
+            pack_id=normalized_pack_id,
             token_overrides=token_overrides,
         ),
     ]

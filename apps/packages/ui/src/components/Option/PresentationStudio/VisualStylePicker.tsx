@@ -333,6 +333,7 @@ export const VisualStylePicker: React.FC<VisualStylePickerProps> = ({
                       const isSelected =
                         selectedValue.visualStyleId === style.id &&
                         selectedValue.visualStyleScope === style.scope
+                      const bestForText = describeBestFor(style)
                       return (
                         <button
                           type="button"
@@ -361,12 +362,12 @@ export const VisualStylePicker: React.FC<VisualStylePickerProps> = ({
                             ) : null}
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2">{renderChips(style)}</div>
-                          {describeBestFor(style) ? (
+                          {bestForText ? (
                             <p className="mt-3 text-xs text-slate-500">
                               <span className="font-semibold uppercase tracking-wide">
                                 Best for
                               </span>{" "}
-                              {describeBestFor(style)}
+                              {bestForText}
                             </p>
                           ) : null}
                         </button>

@@ -753,7 +753,7 @@ def _resolve_presentation_visual_style_application(
         if resolved_builtin is None:
             raise HTTPException(status_code=404, detail="visual_style_not_found")
         return _visual_style_application_from_builtin(resolved_builtin)
-    elif resolved_scope == "user":
+    if resolved_scope == "user":
         try:
             row = db.get_visual_style_by_id(resolved_id)
         except KeyError:
@@ -1393,6 +1393,8 @@ async def patch_presentation(
                     visual_style_application.snapshot
                 )
                 if visual_style_application.scope == "builtin":
+                    # Built-in presets provide deck-wide appearance defaults unless the caller
+                    # overrides a specific field in this patch request.
                     builtin_appearance_defaults = visual_style_application.appearance_defaults
                     if not theme_was_set and "theme" not in update_fields:
                         update_fields["theme"] = builtin_appearance_defaults.get("theme") or "black"

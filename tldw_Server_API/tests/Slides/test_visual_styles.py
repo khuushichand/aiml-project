@@ -9,6 +9,10 @@ from tldw_Server_API.app.core.Slides.visual_style_catalog import (
     list_builtin_visual_style_definitions,
 )
 from tldw_Server_API.app.core.Slides.visual_style_packs import get_visual_style_pack
+from tldw_Server_API.app.core.Slides.visual_style_profiles import (
+    VisualStyleProfile,
+    _index_visual_style_profiles,
+)
 
 
 def test_slides_db_initializes_visual_styles_table(tmp_path):
@@ -77,6 +81,16 @@ def test_visual_style_registry_references_are_valid():
             "retro_synthetic",
             "high_energy_marketing",
         }
+
+
+def test_visual_style_profiles_reject_duplicate_ids():
+    with pytest.raises(ValueError, match="Duplicate visual style profile IDs: duplicate"):
+        _index_visual_style_profiles(
+            (
+                VisualStyleProfile(profile_id="duplicate", name="One", guidance=("a",)),
+                VisualStyleProfile(profile_id="duplicate", name="Two", guidance=("b",)),
+            )
+        )
 
 
 def test_slides_db_visual_style_crud(tmp_path):

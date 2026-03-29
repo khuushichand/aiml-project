@@ -1,5 +1,5 @@
 import { bgRequest } from "@/services/background-proxy"
-import { buildQuery } from "../client-utils"
+import { buildQuery, toTrimmedStringArray } from "../client-utils"
 import type {
   PresentationStudioSlide,
   PresentationVisualStyleSnapshot,
@@ -14,12 +14,6 @@ import type {
 import {
   clonePresentationVisualStyleSnapshot,
 } from "../TldwApiClient"
-
-// Re-use the file-level normalizers from TldwApiClient.
-// They are module-scoped `const` functions, so we must
-// import the helpers they depend on and replicate them here
-// (they are not exported from TldwApiClient).
-// These inline versions mirror the originals exactly.
 
 const toOptionalString = (value: unknown): string | null => {
   if (typeof value !== "string") return null
@@ -52,16 +46,6 @@ const toFiniteNumber = (value: unknown, fallback = 0): number => {
   return fallback
 }
 
-const toStringArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      .map((entry) => entry.trim())
-  }
-  if (typeof value === "string" && value.trim().length > 0) return [value.trim()]
-  return []
-}
-
 const normalizeVisualStyleSnapshot = (
   value: unknown
 ): PresentationVisualStyleSnapshot | null => {
@@ -82,10 +66,10 @@ const normalizeVisualStyleSnapshot = (
     description: toOptionalString(snapshot.description),
     category: toOptionalString(snapshot.category),
     guide_number: toOptionalNumber(snapshot.guide_number),
-    tags: toStringArray(snapshot.tags),
-    best_for: toStringArray(snapshot.best_for),
+    tags: toTrimmedStringArray(snapshot.tags),
+    best_for: toTrimmedStringArray(snapshot.best_for),
     generation_rules: toRecord(snapshot.generation_rules),
-    artifact_preferences: toStringArray(snapshot.artifact_preferences),
+    artifact_preferences: toTrimmedStringArray(snapshot.artifact_preferences),
     appearance_defaults: toRecord(snapshot.appearance_defaults),
     fallback_policy: toRecord(snapshot.fallback_policy),
     version: toOptionalNumber(snapshot.version)
@@ -103,10 +87,10 @@ const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
     description: toOptionalString(record.description),
     category: toOptionalString(record.category),
     guide_number: toOptionalNumber(record.guide_number),
-    tags: toStringArray(record.tags),
-    best_for: toStringArray(record.best_for),
+    tags: toTrimmedStringArray(record.tags),
+    best_for: toTrimmedStringArray(record.best_for),
     generation_rules: toRecord(record.generation_rules),
-    artifact_preferences: toStringArray(record.artifact_preferences),
+    artifact_preferences: toTrimmedStringArray(record.artifact_preferences),
     appearance_defaults: toRecord(record.appearance_defaults),
     fallback_policy: toRecord(record.fallback_policy),
     version: toOptionalNumber(record.version),

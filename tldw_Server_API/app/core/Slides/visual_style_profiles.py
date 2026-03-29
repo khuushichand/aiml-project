@@ -130,7 +130,26 @@ _VISUAL_STYLE_PROFILES: tuple[VisualStyleProfile, ...] = (
     ),
 )
 
-_VISUAL_STYLE_PROFILES_BY_ID = {profile.profile_id: profile for profile in _VISUAL_STYLE_PROFILES}
+
+def _index_visual_style_profiles(
+    profiles: tuple[VisualStyleProfile, ...],
+) -> dict[str, VisualStyleProfile]:
+    """Build a profile lookup table and fail fast on duplicate identifiers."""
+
+    indexed: dict[str, VisualStyleProfile] = {}
+    duplicate_ids: list[str] = []
+    for profile in profiles:
+        if profile.profile_id in indexed:
+            duplicate_ids.append(profile.profile_id)
+            continue
+        indexed[profile.profile_id] = profile
+    if duplicate_ids:
+        duplicates = ", ".join(sorted(set(duplicate_ids)))
+        raise ValueError(f"Duplicate visual style profile IDs: {duplicates}")
+    return indexed
+
+
+_VISUAL_STYLE_PROFILES_BY_ID = _index_visual_style_profiles(_VISUAL_STYLE_PROFILES)
 
 
 def _clone_profile(profile: VisualStyleProfile) -> VisualStyleProfile:

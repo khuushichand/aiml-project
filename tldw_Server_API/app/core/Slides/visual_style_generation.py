@@ -90,9 +90,7 @@ def _format_fallback_policy(fallback_policy: dict[str, Any]) -> str:
     if "preserve_key_stats" in fallback_policy:
         parts.append(f"preserve_key_stats={fallback_policy['preserve_key_stats']}")
 
-    extra_keys = sorted(
-        key for key in fallback_policy.keys() if key not in {"mode", "preserve_key_stats"}
-    )
+    extra_keys = sorted(key for key in fallback_policy if key not in {"mode", "preserve_key_stats"})
     for key in extra_keys:
         value = fallback_policy.get(key)
         if isinstance(value, (str, int, float, bool)) and str(value).strip():
