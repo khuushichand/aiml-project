@@ -18718,22 +18718,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     @staticmethod
-    def _serialize_note_studio_json_field(value: Any, field_name: str, *, required: bool) -> str | None:
+    def _serialize_note_studio_json_field(value: dict[str, Any] | None, field_name: str, *, required: bool) -> str | None:
         if value is None:
             if required:
                 raise InputError(f"{field_name} cannot be None.")  # noqa: TRY003
             return None
-        if isinstance(value, str):
-            stripped = value.strip()
-            if not stripped:
-                if required:
-                    raise InputError(f"{field_name} cannot be empty.")  # noqa: TRY003
-                return None
-            try:
-                json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise InputError(f"{field_name} must be valid JSON.") from exc  # noqa: TRY003
-            return stripped
+        if not isinstance(value, dict):
+            raise InputError(f"{field_name} must be a JSON object.")  # noqa: TRY003
         try:
             return json.dumps(value)
         except TypeError as exc:
@@ -18751,9 +18742,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "render_version": document.get("render_version", 1),
         }
 
-    def _fetch_note_studio_document_row(self, note_id: str) -> dict[str, Any] | None:
+    def _fetch_note_studio_document_row(
+        self,
+        note_id: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
         query = "SELECT * FROM note_studio_documents WHERE note_id = ?"
-        cursor = self.execute_query(query, (note_id,))
+        if conn is None:
+            cursor = self.execute_query(query, (note_id,))
+        else:
+            cursor = conn.execute(query, (note_id,))
         row = cursor.fetchone()
         return self._deserialize_row_fields(row, ["payload_json", "diagram_manifest_json"]) if row else None
 
@@ -18764,13 +18763,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         *,
         note_id: str,
-        payload_json: dict[str, Any] | list[Any] | str,
+        payload_json: dict[str, Any],
         template_type: str,
         handwriting_mode: str,
         source_note_id: str | None,
         excerpt_snapshot: str | None,
         excerpt_hash: str | None,
-        diagram_manifest_json: dict[str, Any] | list[Any] | str | None,
+        diagram_manifest_json: dict[str, Any] | None,
         companion_content_hash: str | None,
         render_version: int,
         conn: sqlite3.Connection | None,
@@ -18844,7 +18843,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         def _execute(inner_conn: sqlite3.Connection) -> dict[str, Any]:
             prepared_query, prepared_params = self._prepare_backend_statement(query, params)
             inner_conn.execute(prepared_query, prepared_params or ())
-            document = self._fetch_note_studio_document_row(normalized_note_id)
+            document = self._fetch_note_studio_document_row(normalized_note_id, conn=inner_conn)
             if not document:
                 raise CharactersRAGDBError(f"Failed to read note studio document for note ID '{normalized_note_id}'.")
             return document
@@ -18858,13 +18857,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         *,
         note_id: str,
-        payload_json: dict[str, Any] | list[Any] | str,
+        payload_json: dict[str, Any],
         template_type: str,
         handwriting_mode: str,
         source_note_id: str | None = None,
         excerpt_snapshot: str | None = None,
         excerpt_hash: str | None = None,
-        diagram_manifest_json: dict[str, Any] | list[Any] | str | None = None,
+        diagram_manifest_json: dict[str, Any] | None = None,
         companion_content_hash: str | None = None,
         render_version: int,
         conn: sqlite3.Connection | None = None,
@@ -18888,13 +18887,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         *,
         note_id: str,
-        payload_json: dict[str, Any] | list[Any] | str,
+        payload_json: dict[str, Any],
         template_type: str,
         handwriting_mode: str,
         source_note_id: str | None = None,
         excerpt_snapshot: str | None = None,
         excerpt_hash: str | None = None,
-        diagram_manifest_json: dict[str, Any] | list[Any] | str | None = None,
+        diagram_manifest_json: dict[str, Any] | None = None,
         companion_content_hash: str | None = None,
         render_version: int,
         conn: sqlite3.Connection | None = None,

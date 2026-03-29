@@ -38,6 +38,10 @@ import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
 import { SharedWorkspaceProvider } from "./SharedWorkspaceContext"
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { ChatPane } from "./ChatPane"
+import {
+  TransferSourcesModal,
+  type TransferSourcesModalLaunchRequest
+} from "./TransferSourcesModal"
 import { useSourceListViewState } from "./use-source-list-view-state"
 import {
   PaneResizer,
@@ -795,6 +799,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const [globalSearchOpen, setGlobalSearchOpen] = React.useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = React.useState("")
   const [activeSearchResultIndex, setActiveSearchResultIndex] = React.useState(0)
+  const [transferSourcesRequest, setTransferSourcesRequest] =
+    React.useState<TransferSourcesModalLaunchRequest | null>(null)
   const [workspaceSearchNotes, setWorkspaceSearchNotes] = React.useState<
     WorkspaceGlobalSearchNoteDocument[]
   >([])
@@ -1083,6 +1089,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
     setGlobalSearchOpen(false)
     setGlobalSearchQuery("")
     setActiveSearchResultIndex(0)
+  }, [])
+
+  const openTransferSourcesModal = React.useCallback(
+    (request: TransferSourcesModalLaunchRequest) => {
+      setTransferSourcesRequest(request)
+    },
+    []
+  )
+
+  const closeTransferSourcesModal = React.useCallback(() => {
+    setTransferSourcesRequest(null)
   }, [])
 
   const dismissOnboardingOverlay = React.useCallback(() => {
@@ -1958,6 +1975,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       >
         <SourcesPane
           onHide={options?.onHide}
+          onOpenTransferSources={openTransferSourcesModal}
           sourceListViewState={sourceListViewState}
           onPatchSourceListViewState={patchSourceListViewState}
           onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
@@ -2424,6 +2442,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <TransferSourcesModal
+        open={transferSourcesRequest !== null}
+        request={transferSourcesRequest}
+        onCancel={closeTransferSourcesModal}
+      />
 
       {showWorkspaceTransitionCue && (
         <div

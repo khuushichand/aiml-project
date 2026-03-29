@@ -12,7 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_studio import (
     NoteStudioDocumentCreateRequest,
     NoteStudioDocumentResponse,
 )
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
 
 
 @pytest.fixture
@@ -90,6 +90,88 @@ def test_create_and_fetch_note_studio_document_by_note_id(db: CharactersRAGDB) -
     assert studio["template_type"] == "lined"  # nosec B101
     assert studio["handwriting_mode"] == "accented"  # nosec B101
     assert studio["payload_json"]["meta"]["source_note_id"] == note_id  # nosec B101
+
+
+def test_note_studio_document_rejects_non_dict_json_shapes(db: CharactersRAGDB) -> None:
+    note_id = db.add_note(title="Source", content="Alpha beta gamma")
+
+    with pytest.raises(InputError, match="payload_json must be a JSON object"):
+        db.create_note_studio_document(
+            note_id=note_id,
+            payload_json=["unexpected", "list"],
+            template_type="lined",
+            handwriting_mode="accented",
+            source_note_id=note_id,
+            excerpt_snapshot="beta",
+            excerpt_hash="sha256:demo",
+            companion_content_hash="sha256:markdown",
+            render_version=1,
+        )
+
+    with pytest.raises(InputError, match="diagram_manifest_json must be a JSON object"):
+        db.create_note_studio_document(
+            note_id=note_id,
+            payload_json={"meta": {"source_note_id": note_id}, "sections": []},
+            template_type="lined",
+            handwriting_mode="accented",
+            source_note_id=note_id,
+            excerpt_snapshot="beta",
+            excerpt_hash="sha256:demo",
+            diagram_manifest_json='{"unexpected":"string"}',
+            companion_content_hash="sha256:markdown",
+            render_version=1,
+        )
+
+
+def test_upsert_note_studio_document_uses_explicit_transaction_connection(db: CharactersRAGDB, monkeypatch: pytest.MonkeyPatch) -> None:
+    note_id = db.add_note(title="Source", content="Alpha beta gamma")
+
+    monkeypatch.setattr(
+        db,
+        "execute_query",
+        lambda *_args, **_kwargs: pytest.fail("write helper should read back through the explicit transaction connection"),
+    )
+
+    with db.transaction() as conn:
+        created = db.upsert_note_studio_document(
+            note_id=note_id,
+            payload_json={"meta": {"source_note_id": note_id}, "sections": [{"title": "Intro"}]},
+            template_type="lined",
+            handwriting_mode="accented",
+            source_note_id=note_id,
+            excerpt_snapshot="beta",
+            excerpt_hash="sha256:demo",
+            diagram_manifest_json={"diagrams": [{"id": "d-1"}]},
+            companion_content_hash="sha256:markdown",
+            render_version=1,
+            conn=conn,
+        )
+
+        updated = db.upsert_note_studio_document(
+            note_id=note_id,
+            payload_json={"meta": {"source_note_id": note_id}, "sections": [{"title": "Revised"}]},
+            template_type="cornell",
+            handwriting_mode="off",
+            source_note_id=note_id,
+            excerpt_snapshot="gamma",
+            excerpt_hash="sha256:demo-2",
+            diagram_manifest_json={"diagrams": [{"id": "d-2"}]},
+            companion_content_hash="sha256:markdown-2",
+            render_version=2,
+            conn=conn,
+        )
+
+    monkeypatch.undo()
+
+    assert created["payload_json"]["sections"][0]["title"] == "Intro"  # nosec B101
+    assert created["diagram_manifest_json"]["diagrams"][0]["id"] == "d-1"  # nosec B101
+    assert updated["template_type"] == "cornell"  # nosec B101
+    assert updated["render_version"] == 2  # nosec B101
+
+    persisted = db.get_note_studio_document(note_id)
+    assert persisted is not None  # nosec B101
+    assert persisted["payload_json"]["sections"][0]["title"] == "Revised"  # nosec B101
+    assert persisted["diagram_manifest_json"]["diagrams"][0]["id"] == "d-2"  # nosec B101
 
 
 def test_soft_delete_preserves_sidecar_and_restore_reuses_same_row(db: CharactersRAGDB) -> None:
