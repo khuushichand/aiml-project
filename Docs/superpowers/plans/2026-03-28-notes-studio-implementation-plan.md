@@ -99,7 +99,7 @@
 
 **Tests:** `python -m pytest tldw_Server_API/tests/Notes_NEW/unit/test_notes_studio_service.py tldw_Server_API/tests/Notes_NEW/integration/test_notes_studio_api.py -v`
 
-**Status:** Not Started
+**Status:** Complete
 
 ### Stage 3: Notes UI Entry And State
 

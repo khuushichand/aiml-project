@@ -81,6 +81,11 @@ def test_notes_studio_derive_fetch_and_regenerate_flow(client_with_notes_studio_
     assert derived["studio_document"]["source_note_id"] == source_note_id
     assert derived["studio_document"]["excerpt_snapshot"] == excerpt
     assert derived["studio_document"]["excerpt_hash"].startswith("sha256:")
+    assert derived["studio_document"]["payload_json"]["layout"] == {
+        "template_type": "cornell",
+        "handwriting_mode": "accented",
+        "render_version": 1,
+    }
     assert derived["is_stale"] is False
 
     note_response = client.get(f"/api/v1/notes/{note_id}")
@@ -88,28 +93,67 @@ def test_notes_studio_derive_fetch_and_regenerate_flow(client_with_notes_studio_
     note_payload = note_response.json()
     assert note_payload["studio"]["source_note_id"] == source_note_id
 
-    fetch_response = client.get(f"/api/v1/notes/studio/{note_id}")
+    fetch_response = client.get(f"/api/v1/notes/{note_id}/studio")
     assert fetch_response.status_code == 200
     fetched = fetch_response.json()
     assert fetched["studio_document"]["note_id"] == note_id
     assert fetched["is_stale"] is False
 
+    manual_markdown = (
+        "# Biology Study Notes\n\n"
+        "## Key Questions\n\n"
+        "- Why do cells need ATP?\n"
+        "- Which organelle supports cellular energy production?\n\n"
+        "## Notes\n\n"
+        "The mitochondrion is the powerhouse of the cell.\n"
+        "ATP supports cellular work.\n\n"
+        "## Summary\n\n"
+        "Mitochondria help cells access usable energy."
+    )
     drift_response = client.patch(
         f"/api/v1/notes/{note_id}",
-        json={"content": "Manual drift"},
+        json={"content": manual_markdown},
     )
     assert drift_response.status_code == 200, drift_response.text
 
-    stale_response = client.get(f"/api/v1/notes/studio/{note_id}")
+    stale_response = client.get(f"/api/v1/notes/{note_id}/studio")
     assert stale_response.status_code == 200
     assert stale_response.json()["is_stale"] is True
     assert stale_response.json()["stale_reason"] == "companion_content_hash_mismatch"
 
-    regenerate_response = client.post(f"/api/v1/notes/studio/{note_id}/regenerate")
+    regenerate_response = client.post(f"/api/v1/notes/{note_id}/studio/regenerate")
     assert regenerate_response.status_code == 200, regenerate_response.text
     regenerated = regenerate_response.json()
     assert regenerated["is_stale"] is False
-    assert "## Summary" in regenerated["note"]["content"]
+    assert regenerated["note"]["content"] == manual_markdown
+    assert regenerated["studio_document"]["payload_json"]["layout"] == {
+        "template_type": "cornell",
+        "handwriting_mode": "accented",
+        "render_version": 1,
+    }
+    assert regenerated["studio_document"]["payload_json"]["sections"] == [
+        {
+            "id": "cue-1",
+            "kind": "cue",
+            "title": "Key Questions",
+            "items": [
+                "Why do cells need ATP?",
+                "Which organelle supports cellular energy production?",
+            ],
+        },
+        {
+            "id": "notes-1",
+            "kind": "notes",
+            "title": "Notes",
+            "content": "The mitochondrion is the powerhouse of the cell.\nATP supports cellular work.",
+        },
+        {
+            "id": "summary-1",
+            "kind": "summary",
+            "title": "Summary",
+            "content": "Mitochondria help cells access usable energy.",
+        },
+    ]
 
 
 def test_notes_studio_diagram_manifest_round_trip(client_with_notes_studio_db: TestClient):
@@ -135,7 +179,7 @@ def test_notes_studio_diagram_manifest_round_trip(client_with_notes_studio_db: T
     sections = payload["studio_document"]["payload_json"]["sections"]
 
     diagram_response = client.post(
-        f"/api/v1/notes/studio/{note_id}/diagram",
+        f"/api/v1/notes/{note_id}/studio/diagrams",
         json={
             "diagram_type": "flowchart",
             "source_section_ids": [sections[0]["id"], sections[1]["id"]],
@@ -146,10 +190,10 @@ def test_notes_studio_diagram_manifest_round_trip(client_with_notes_studio_db: T
 
     assert manifest["diagram_type"] == "flowchart"
     assert manifest["source_section_ids"] == [sections[0]["id"], sections[1]["id"]]
-    assert manifest["canonical_source"]
+    assert manifest["source_graph"]
     assert manifest["cached_svg"].startswith("<svg")
     assert manifest["render_hash"].startswith("sha256:")
-    assert manifest["status"] == "ready"
+    assert manifest["generation_status"] == "ready"
 
 
 @pytest.mark.parametrize("excerpt_text", ["   ", "Excerpt missing from source"])

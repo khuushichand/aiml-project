@@ -78,6 +78,11 @@ def test_derive_creates_derived_note_and_sidecar(studio_db):
     assert studio_document["excerpt_hash"].startswith("sha256:")
     assert studio_document["companion_content_hash"].startswith("sha256:")
     assert studio_document["payload_json"]["meta"]["source_note_id"] == str(source_note_id)
+    assert studio_document["payload_json"]["layout"] == {
+        "template_type": "lined",
+        "handwriting_mode": "accented",
+        "render_version": 1,
+    }
 
 
 def test_cornell_generation_includes_explicit_recall_prompt(studio_db):
@@ -107,7 +112,7 @@ def test_cornell_generation_includes_explicit_recall_prompt(studio_db):
     assert "Recall prompt:" in note_content or "Fill in the blank:" in note_content
 
 
-def test_get_state_detects_markdown_drift_and_regenerate_resets_companion(studio_db):
+def test_get_state_detects_markdown_drift_and_regenerate_rebuilds_payload_from_current_markdown(studio_db):
     db = studio_db
     source_note_id = db.add_note(
         title="Chemistry",
@@ -128,9 +133,20 @@ def test_get_state_detects_markdown_drift_and_regenerate_resets_companion(studio
 
     current_note = db.get_note_by_id(note_id=note_id)
     assert current_note is not None
+    manual_markdown = (
+        "# Chemistry Study Notes\n\n"
+        "## Key Questions\n\n"
+        "- Which particles are shared in covalent bonds?\n"
+        "- What changes during electron transfer?\n\n"
+        "## Notes\n\n"
+        "Atoms form bonds by sharing or transferring electrons.\n"
+        "Electron transfer can create ions.\n\n"
+        "## Summary\n\n"
+        "Bonding changes electron stability."
+    )
     db.update_note(
         note_id=note_id,
-        update_data={"content": "Manually drifted markdown."},
+        update_data={"content": manual_markdown},
         expected_version=int(current_note["version"]),
     )
 
@@ -141,8 +157,36 @@ def test_get_state_detects_markdown_drift_and_regenerate_resets_companion(studio
     regenerated = asyncio.run(service.regenerate_note_markdown(note_id=note_id))
     assert regenerated["is_stale"] is False
     assert regenerated["stale_reason"] is None
-    assert "## Summary" in regenerated["note"]["content"]
+    assert regenerated["note"]["content"] == manual_markdown
     assert regenerated["studio_document"]["companion_content_hash"].startswith("sha256:")
+    assert regenerated["studio_document"]["payload_json"]["layout"] == {
+        "template_type": "lined",
+        "handwriting_mode": "accented",
+        "render_version": 1,
+    }
+    assert regenerated["studio_document"]["payload_json"]["sections"] == [
+        {
+            "id": "cue-1",
+            "kind": "cue",
+            "title": "Key Questions",
+            "items": [
+                "Which particles are shared in covalent bonds?",
+                "What changes during electron transfer?",
+            ],
+        },
+        {
+            "id": "notes-1",
+            "kind": "notes",
+            "title": "Notes",
+            "content": "Atoms form bonds by sharing or transferring electrons.\nElectron transfer can create ions.",
+        },
+        {
+            "id": "summary-1",
+            "kind": "summary",
+            "title": "Summary",
+            "content": "Bonding changes electron stability.",
+        },
+    ]
 
 
 def test_update_diagram_manifest_persists_notebook_diagram_metadata(studio_db):
@@ -173,10 +217,10 @@ def test_update_diagram_manifest_persists_notebook_diagram_metadata(studio_db):
 
     assert manifest["diagram_type"] == "flowchart"
     assert manifest["source_section_ids"] == section_ids[:2]
-    assert manifest["canonical_source"]
+    assert manifest["source_graph"]
     assert manifest["cached_svg"].startswith("<svg")
     assert manifest["render_hash"].startswith("sha256:")
-    assert manifest["status"] == "ready"
+    assert manifest["generation_status"] == "ready"
 
 
 @pytest.mark.parametrize(

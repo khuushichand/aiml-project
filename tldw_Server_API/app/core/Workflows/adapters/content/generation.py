@@ -63,6 +63,7 @@ def _build_notes_studio_payload(
     source_title: str | None,
     derived_title: str | None,
     template_type: str,
+    handwriting_mode: str | None = None,
 ) -> dict[str, Any]:
     excerpt = str(excerpt_text or "").strip()
     source_title_text = str(source_title or "").strip()
@@ -86,6 +87,11 @@ def _build_notes_studio_payload(
             "source_title": source_title_text or None,
             "title": note_title,
             "template_type": template_type,
+        },
+        "layout": {
+            "template_type": template_type,
+            "handwriting_mode": str(handwriting_mode or "accented"),
+            "render_version": 1,
         },
         "sections": [
             {
@@ -689,6 +695,7 @@ async def run_notes_studio_generate_adapter(config: dict[str, Any], context: dic
         source_title=config.get("source_title"),
         derived_title=config.get("derived_title"),
         template_type=str(config.get("template_type") or "lined"),
+        handwriting_mode=str(config.get("handwriting_mode") or "accented"),
     )
 
     provider = config.get("provider")
@@ -699,7 +706,7 @@ async def run_notes_studio_generate_adapter(config: dict[str, Any], context: dic
     try:
         prompt = (
             "Return JSON with shape "
-            '{"meta":{"source_note_id":"...","title":"..."},"sections":[{"id":"cue-1","kind":"cue","title":"Key Questions","items":[]},{"id":"notes-1","kind":"notes","title":"Notes","content":"..."},{"id":"summary-1","kind":"summary","title":"Summary","content":"..."}]} '
+            '{"meta":{"source_note_id":"...","title":"..."},"layout":{"template_type":"lined","handwriting_mode":"accented","render_version":1},"sections":[{"id":"cue-1","kind":"cue","title":"Key Questions","items":[]},{"id":"notes-1","kind":"notes","title":"Notes","content":"..."},{"id":"summary-1","kind":"summary","title":"Summary","content":"..."}]} '
             f"from this excerpt:\n\n{excerpt_text[:4000]}"
         )
         response = await perform_chat_api_call_async(

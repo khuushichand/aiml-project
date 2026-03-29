@@ -12,8 +12,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.Notes.studio_markdown import (
     NOTE_STUDIO_RENDER_VERSION,
+    normalize_studio_payload,
     render_studio_markdown,
     stable_content_hash,
+    studio_payload_from_markdown,
 )
 from tldw_Server_API.app.core.Workflows.adapters.content import (
     run_diagram_generate_adapter,
@@ -63,9 +65,14 @@ class NotesStudioService:
         if not isinstance(payload, dict) or not payload:
             raise InputError("Notes Studio generation failed to return a canonical payload.")  # noqa: TRY003
 
-        payload.setdefault("meta", {})
-        payload["meta"]["source_note_id"] = str(source_note["id"])
-        payload["meta"]["title"] = derived_title
+        payload = normalize_studio_payload(
+            payload,
+            template_type=template_type,
+            handwriting_mode=handwriting_mode,
+            render_version=NOTE_STUDIO_RENDER_VERSION,
+            fallback_title=derived_title,
+            source_note_id=str(source_note["id"]),
+        )
 
         markdown = render_studio_markdown(payload)
         note_id = self.db.add_note(title=derived_title, content=markdown)
@@ -94,9 +101,19 @@ class NotesStudioService:
         note = self._require_note(note_id)
         studio_document = self._require_studio_document(note_id)
 
-        payload = studio_document.get("payload_json")
-        if not isinstance(payload, dict):
+        existing_payload = studio_document.get("payload_json")
+        if not isinstance(existing_payload, dict):
             raise InputError("Studio document payload is invalid.")  # noqa: TRY003
+
+        payload = studio_payload_from_markdown(
+            str(note.get("content") or ""),
+            template_type=str(studio_document["template_type"]),
+            handwriting_mode=str(studio_document["handwriting_mode"]),
+            render_version=int(studio_document.get("render_version") or NOTE_STUDIO_RENDER_VERSION),
+            fallback_title=str(note.get("title") or "Untitled Study Notes"),
+            source_note_id=str(studio_document.get("source_note_id") or "").strip() or None,
+            existing_payload=existing_payload,
+        )
 
         markdown = render_studio_markdown(payload)
         self.db.update_note(
@@ -152,10 +169,12 @@ class NotesStudioService:
         manifest = {
             "diagram_type": diagram_type,
             "source_section_ids": [section["id"] for section in selected_sections],
-            "canonical_source": diagram_context["canonical_source"],
+            "source_graph": diagram_context["source_graph"],
+            "canonical_source": diagram_context["source_graph"],
             "diagram": diagram_code,
             "cached_svg": self._build_svg_preview(diagram_type=diagram_type, text=diagram_context["text"]),
             "render_hash": render_hash,
+            "generation_status": "ready",
             "status": "ready",
             "format": str(diagram_result.get("format") or "mermaid"),
         }
@@ -267,7 +286,7 @@ class NotesStudioService:
 
         combined_text = "\n".join(part for part in text_parts if part).strip()
         return {
-            "canonical_source": {"sections": canonical_sections},
+            "source_graph": {"sections": canonical_sections},
             "text": combined_text or "Notes Studio diagram",
         }
 

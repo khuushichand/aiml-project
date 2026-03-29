@@ -2774,7 +2774,7 @@ async def list_moodboard_notes_endpoint(
 
 
 @router.get(
-    "/studio/{note_id}",
+    "/{note_id}/studio",
     response_model=NoteStudioStateResponse,
     summary="Fetch Notes Studio state for a note",
     tags=["notes"],
@@ -2850,9 +2850,9 @@ async def derive_note_studio_endpoint(
 
 
 @router.post(
-    "/studio/{note_id}/regenerate",
+    "/{note_id}/studio/regenerate",
     response_model=NoteStudioStateResponse,
-    summary="Regenerate the Markdown companion from the canonical Notes Studio payload",
+    summary="Regenerate the Markdown companion from the current Notes Studio Markdown",
     tags=["notes"],
     responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}},
 )
@@ -2881,7 +2881,7 @@ async def regenerate_note_studio_endpoint(
         record_note_updated(
             user_id=current_user.id,
             note=studio_state["note"],
-            route=f"/api/v1/notes/studio/{note_id}/regenerate",
+            route=f"/api/v1/notes/{note_id}/studio/regenerate",
             action="regenerate",
             patch={"regenerated": True},
         )
@@ -2891,7 +2891,7 @@ async def regenerate_note_studio_endpoint(
 
 
 @router.post(
-    "/studio/{note_id}/diagram",
+    "/{note_id}/studio/diagrams",
     response_model=NoteStudioDiagramResponse,
     summary="Store a Notes Studio diagram manifest",
     tags=["notes"],
