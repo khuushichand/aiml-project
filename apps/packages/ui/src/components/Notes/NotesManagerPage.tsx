@@ -1312,6 +1312,7 @@ const NotesManagerPage: React.FC = () => {
     (nextMode: NotesInputMode) => {
       if (nextMode === ed.editorInputMode) return
       if (nextMode === 'wysiwyg') { enterWysiwygMode(); return }
+      setNotesStudioMarkdownOnlyNoticeOpen(false)
       exitWysiwygMode()
       window.requestAnimationFrame(() => {
         const textarea = ed.contentTextareaRef.current
