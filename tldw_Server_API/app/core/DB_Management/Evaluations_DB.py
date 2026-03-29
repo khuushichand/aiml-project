@@ -2016,7 +2016,6 @@ class EvaluationsDatabase:
                 )
             normalized[slot_name] = slot_value
         return normalized
-
     def _json_dump_value(self, value: Any) -> Optional[str]:
         if value is None:
             return None
