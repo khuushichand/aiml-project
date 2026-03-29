@@ -1414,6 +1414,62 @@ describe("workspace store snapshot persistence", () => {
     }
   })
 
+  it("repairs origin folder selection after cleaning up newly empty folders from a move transfer", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Origin Workspace")
+    const originId = useWorkspaceStore.getState().workspaceId
+    const transferredSource = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8451, title: "Transferred Source", type: "pdf" })
+    const originFolder = useWorkspaceStore
+      .getState()
+      .createSourceFolder("Origin Folder")
+
+    useWorkspaceStore
+      .getState()
+      .assignSourceToFolders(transferredSource.id, [originFolder.id])
+    useWorkspaceStore.setState({
+      selectedSourceFolderIds: [originFolder.id],
+      activeFolderId: originFolder.id
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().createNewWorkspace("Destination Workspace")
+    const destinationId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.getState().switchWorkspace(originId)
+
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    const result = transferSourcesBetweenWorkspaces?.({
+      mode: "move",
+      destination: { kind: "existing", workspaceId: destinationId },
+      selectedSourceIds: [transferredSource.id],
+      emptyFolderPolicy: "delete-empty-folders",
+      switchToDestinationOnComplete: false
+    })
+
+    expect(result?.newlyEmptiedOriginFolderIds).toEqual([originFolder.id])
+    expect(useWorkspaceStore.getState().selectedSourceFolderIds).toEqual([
+      originFolder.id
+    ])
+    expect(useWorkspaceStore.getState().activeFolderId).toBe(originFolder.id)
+
+    useWorkspaceStore.getState().deleteSourceFolder(originFolder.id)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe(originId)
+    expect(state.sources).toHaveLength(0)
+    expect(state.selectedSourceFolderIds).toEqual([])
+    expect(state.activeFolderId).toBeNull()
+    expect(state.sourceFolders).toHaveLength(0)
+    expect(state.sourceFolderMemberships).toHaveLength(0)
+    expect(
+      state.workspaceSnapshots[destinationId]?.sources.map(
+        (workspaceSource) => workspaceSource.mediaId
+      )
+    ).toEqual([8451])
+  })
+
   it("rejects the current workspace as a transfer destination", () => {
     useWorkspaceStore.getState().initializeWorkspace("Current Workspace")
     const originId = useWorkspaceStore.getState().workspaceId
