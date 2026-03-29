@@ -406,6 +406,21 @@ export interface VoiceCommand {
   updated_at?: string;
 }
 
+export interface VoiceCommandValidationStep {
+  name: string;
+  passed: boolean;
+  message: string;
+  details?: Record<string, unknown> | null;
+}
+
+export interface VoiceCommandValidationResponse {
+  command_id: string;
+  command_name: string;
+  action_type: VoiceActionType;
+  valid: boolean;
+  steps: VoiceCommandValidationStep[];
+}
+
 export interface VoiceSession {
   session_id: string;
   user_id: number;

@@ -44,6 +44,7 @@ import type {
   VoiceCommand,
   VoiceCommandListResponse,
   VoiceCommandUsage,
+  VoiceCommandValidationResponse,
   VoiceSession,
   VoiceSessionListResponse,
   WatchlistSettings,
@@ -1288,6 +1289,10 @@ export const api = {
     requestJson<VoiceCommand>(`/voice/commands/${encodeURIComponent(commandId)}/toggle`, {
       method: 'POST',
       body: JSON.stringify({ enabled }),
+    }),
+  validateVoiceCommand: (commandId: string) =>
+    requestJson<VoiceCommandValidationResponse>(`/voice/commands/${encodeURIComponent(commandId)}/validate`, {
+      method: 'POST',
     }),
 
   // Voice Sessions
