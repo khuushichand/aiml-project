@@ -1,11 +1,16 @@
 import React from "react"
-import { Alert, Button, Checkbox, Input, Modal, Radio } from "antd"
+import { Alert, Button, Checkbox, Input, Modal, Radio, message } from "antd"
 import { useTranslation } from "react-i18next"
 import { useWorkspaceStore } from "@/store/workspace"
 import type {
   WorkspaceSourceTransferConflictResolution,
   WorkspaceSourceTransferEmptyFolderPolicy
 } from "@/types/workspace"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "./undo-manager"
 
 export type TransferSourcesModalEntryPoint = "sources" | "header"
 
@@ -56,11 +61,14 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
   onCancel
 }) => {
   const { t } = useTranslation(["playground", "common"])
+  const [messageApi, messageContextHolder] = message.useMessage()
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces) || []
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces) || []
   const workspaceSnapshots = useWorkspaceStore((s) => s.workspaceSnapshots) || {}
   const sources = useWorkspaceStore((s) => s.sources) || []
+  const captureUndoSnapshot = useWorkspaceStore((s) => s.captureUndoSnapshot)
+  const restoreUndoSnapshot = useWorkspaceStore((s) => s.restoreUndoSnapshot)
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace)
   const transferSourcesBetweenWorkspaces = useWorkspaceStore(
     (s) => s.transferSourcesBetweenWorkspaces
@@ -209,19 +217,45 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
     }
 
     try {
-      const result = transferSourcesBetweenWorkspaces({
-        mode,
-        destination:
-          destinationKind === "existing"
-            ? { kind: "existing", workspaceId: destinationWorkspaceId }
-            : { kind: "new", name: newWorkspaceName.trim() },
-        selectedSourceIds: request.eligibleSelectedSourceIds,
-        conflictResolutions,
-        emptyFolderPolicy,
-        switchToDestinationOnComplete: false
+      const postUndoStep: TransferStep =
+        mode === "move"
+          ? "cleanup"
+          : conflictCandidates.length > 0
+            ? "conflicts"
+            : "summary"
+      const undoSnapshot = captureUndoSnapshot()
+      let transferResult: ReturnType<typeof transferSourcesBetweenWorkspaces> = null
+      const undoHandle = scheduleWorkspaceUndoAction({
+        apply: () => {
+          const result = transferSourcesBetweenWorkspaces({
+            mode,
+            destination:
+              destinationKind === "existing"
+                ? { kind: "existing", workspaceId: destinationWorkspaceId }
+                : { kind: "new", name: newWorkspaceName.trim() },
+            selectedSourceIds: request.eligibleSelectedSourceIds,
+            conflictResolutions,
+            emptyFolderPolicy,
+            switchToDestinationOnComplete: false
+          })
+
+          if (!result) {
+            throw new Error(
+              t(
+                "playground:sources.transferUnavailable",
+                "Could not complete the source transfer."
+              )
+            )
+          }
+
+          transferResult = result
+        },
+        undo: () => {
+          restoreUndoSnapshot(undoSnapshot)
+        }
       })
 
-      if (!result) {
+      if (!transferResult) {
         throw new Error(
           t(
             "playground:sources.transferUnavailable",
@@ -231,13 +265,63 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
       }
 
       setResultSummary({
-        destinationWorkspaceId: result.destinationWorkspaceId,
-        destinationWasCreated: result.destinationWasCreated,
-        transferredCount: result.transferredMediaIds.length,
-        conflictsSkipped: result.conflictsSkipped.length
+        destinationWorkspaceId: transferResult.destinationWorkspaceId,
+        destinationWasCreated: transferResult.destinationWasCreated,
+        transferredCount: transferResult.transferredMediaIds.length,
+        conflictsSkipped: transferResult.conflictsSkipped.length
       })
       setStep("complete")
       setSubmitError(null)
+
+      const undoMessageKey = `workspace-transfer-undo-${undoHandle.id}`
+      const messageConfig = {
+        key: undoMessageKey,
+        type: "warning",
+        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+        content: t(
+          "playground:sources.transferUndoAvailable",
+          "Sources transferred. You can undo for a few seconds."
+        ),
+        btn: (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              if (undoWorkspaceAction(undoHandle.id)) {
+                setResultSummary(null)
+                setSubmitError(null)
+                setStep(postUndoStep)
+                messageApi.success(
+                  t(
+                    "playground:sources.transferRestored",
+                    "Transfer undone."
+                  )
+                )
+              }
+              messageApi.destroy(undoMessageKey)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        )
+      }
+
+      const maybeOpen = (messageApi as { open?: (config: unknown) => void }).open
+      if (typeof maybeOpen === "function") {
+        maybeOpen(messageConfig)
+      } else {
+        const maybeWarning = (
+          messageApi as { warning?: (content: string) => void }
+        ).warning
+        if (typeof maybeWarning === "function") {
+          maybeWarning(
+            t(
+              "playground:sources.transferUndoAvailable",
+              "Sources transferred. You can undo for a few seconds."
+            )
+          )
+        }
+      }
     } catch (error) {
       setSubmitError(
         error instanceof Error
@@ -250,13 +334,17 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
     }
   }, [
     canSubmit,
+    captureUndoSnapshot,
+    conflictCandidates.length,
     conflictResolutions,
     destinationKind,
     destinationWorkspaceId,
     emptyFolderPolicy,
     mode,
+    messageApi,
     newWorkspaceName,
     request,
+    restoreUndoSnapshot,
     t,
     transferSourcesBetweenWorkspaces
   ])
@@ -383,207 +471,210 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
   )
 
   return (
-    <Modal
-      title={t("playground:sources.transferTitle", "Transfer sources")}
-      open={open}
-      onCancel={onCancel}
-      destroyOnHidden
-      width={720}
-      footer={footer}
-    >
-      {!request ? null : (
-        <div className="space-y-4">
-          <p className="text-sm text-text-muted">
-            {t(
-              "playground:sources.transferIntro",
-              "Move or copy the selected sources into another workspace."
-            )}
-          </p>
+    <>
+      {messageContextHolder}
+      <Modal
+        title={t("playground:sources.transferTitle", "Transfer sources")}
+        open={open}
+        onCancel={onCancel}
+        destroyOnHidden
+        width={720}
+        footer={footer}
+      >
+        {!request ? null : (
+          <div className="space-y-4">
+            <p className="text-sm text-text-muted">
+              {t(
+                "playground:sources.transferIntro",
+                "Move or copy the selected sources into another workspace."
+              )}
+            </p>
 
-          {submitError ? (
-            <Alert type="error" showIcon title={submitError} />
-          ) : null}
+            {submitError ? (
+              <Alert type="error" showIcon title={submitError} />
+            ) : null}
 
-          {step === "mode" ? (
-            <Radio.Group
-              value={mode}
-              onChange={(event) => setMode(event.target.value)}
-              className="flex flex-col gap-3"
-            >
-              <Radio value="copy">Copy selected sources</Radio>
-              <Radio value="move">Move selected sources</Radio>
-            </Radio.Group>
-          ) : null}
-
-          {step === "destination" ? (
-            <div className="space-y-4">
+            {step === "mode" ? (
               <Radio.Group
-                value={destinationKind}
+                value={mode}
+                onChange={(event) => setMode(event.target.value)}
+                className="flex flex-col gap-3"
+              >
+                <Radio value="copy">Copy selected sources</Radio>
+                <Radio value="move">Move selected sources</Radio>
+              </Radio.Group>
+            ) : null}
+
+            {step === "destination" ? (
+              <div className="space-y-4">
+                <Radio.Group
+                  value={destinationKind}
+                  onChange={(event) =>
+                    setDestinationKind(event.target.value as TransferDestinationKind)
+                  }
+                  className="flex flex-col gap-3"
+                >
+                  <Radio value="existing">Use an existing workspace</Radio>
+                  <Radio value="new">Create a new workspace</Radio>
+                </Radio.Group>
+
+                {destinationKind === "existing" ? (
+                  destinationOptions.length > 0 ? (
+                    <Radio.Group
+                      value={destinationWorkspaceId}
+                      onChange={(event) => setDestinationWorkspaceId(event.target.value)}
+                      className="flex flex-col gap-2 rounded-lg border border-border p-3"
+                    >
+                      {destinationOptions.map((workspace) => (
+                        <Radio key={workspace.id} value={workspace.id}>
+                          {workspace.name}
+                        </Radio>
+                      ))}
+                    </Radio.Group>
+                  ) : (
+                    <Alert
+                      type="info"
+                      showIcon
+                      title={t(
+                        "playground:sources.transferNoDestinations",
+                        "No eligible destination workspaces are available. Create a new workspace instead."
+                      )}
+                    />
+                  )
+                ) : (
+                  <div className="space-y-2">
+                    <label
+                      className="block text-sm font-medium text-text"
+                      htmlFor="transfer-new-workspace-name"
+                    >
+                      {t(
+                        "playground:sources.transferNewWorkspaceLabel",
+                        "Workspace name"
+                      )}
+                    </label>
+                    <Input
+                      id="transfer-new-workspace-name"
+                      value={newWorkspaceName}
+                      onChange={(event) => setNewWorkspaceName(event.target.value)}
+                      placeholder={DEFAULT_NEW_WORKSPACE_NAME}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {step === "summary" ? (
+              <div className="space-y-3">
+                <Alert
+                  type="info"
+                  showIcon
+                  title={t(
+                    "playground:sources.transferEligibleSummary",
+                    "{{count}} ready sources will transfer.",
+                    { count: request.eligibleSelectedSourceIds.length }
+                  )}
+                />
+                {request.hiddenSelectedCount > 0 ? (
+                  <p className="text-sm text-text-muted">
+                    {t(
+                      "playground:sources.transferHiddenSummary",
+                      "{{count}} selected sources are hidden by current filters.",
+                      { count: request.hiddenSelectedCount }
+                    )}
+                  </p>
+                ) : null}
+                {request.ineligibleSelectedCount > 0 ? (
+                  <p className="text-sm text-text-muted">
+                    {t(
+                      "playground:sources.transferIneligibleSummary",
+                      "{{count}} processing or errored sources are excluded from transfer.",
+                      { count: request.ineligibleSelectedCount }
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {step === "conflicts" ? (
+              <div className="space-y-4">
+                <Checkbox
+                  checked={applyToAllRemaining}
+                  onChange={(event) => setApplyToAllRemaining(event.target.checked)}
+                >
+                  Apply to all remaining conflicts
+                </Checkbox>
+
+                {conflictCandidates.map((candidate) => (
+                  <div
+                    key={candidate.mediaId}
+                    className="space-y-2 rounded-lg border border-border p-3"
+                  >
+                    <p className="text-sm font-medium text-text">{candidate.title}</p>
+                    <Radio.Group
+                      value={conflictResolutions[candidate.mediaId]}
+                      onChange={(event) =>
+                        handleResolveConflict(
+                          candidate.mediaId,
+                          event.target.value as WorkspaceSourceTransferConflictResolution
+                        )
+                      }
+                      className="flex flex-col gap-2"
+                    >
+                      <Radio value="skip">Skip</Radio>
+                      <Radio value="merge-folders">Merge folder memberships</Radio>
+                      <Radio value="replace-transferred-folders">
+                        Replace transferred folder memberships
+                      </Radio>
+                    </Radio.Group>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {step === "cleanup" ? (
+              <Radio.Group
+                value={emptyFolderPolicy}
                 onChange={(event) =>
-                  setDestinationKind(event.target.value as TransferDestinationKind)
+                  setEmptyFolderPolicy(
+                    event.target.value as WorkspaceSourceTransferEmptyFolderPolicy
+                  )
                 }
                 className="flex flex-col gap-3"
               >
-                <Radio value="existing">Use an existing workspace</Radio>
-                <Radio value="new">Create a new workspace</Radio>
+                <Radio value="keep">Keep empty folders</Radio>
+                <Radio value="delete-empty-folders">Delete emptied folders</Radio>
               </Radio.Group>
+            ) : null}
 
-              {destinationKind === "existing" ? (
-                destinationOptions.length > 0 ? (
-                  <Radio.Group
-                    value={destinationWorkspaceId}
-                    onChange={(event) => setDestinationWorkspaceId(event.target.value)}
-                    className="flex flex-col gap-2 rounded-lg border border-border p-3"
-                  >
-                    {destinationOptions.map((workspace) => (
-                      <Radio key={workspace.id} value={workspace.id}>
-                        {workspace.name}
-                      </Radio>
-                    ))}
-                  </Radio.Group>
-                ) : (
-                  <Alert
-                    type="info"
-                    showIcon
-                    title={t(
-                      "playground:sources.transferNoDestinations",
-                      "No eligible destination workspaces are available. Create a new workspace instead."
-                    )}
-                  />
-                )
-              ) : (
-                <div className="space-y-2">
-                  <label
-                    className="block text-sm font-medium text-text"
-                    htmlFor="transfer-new-workspace-name"
-                  >
-                    {t(
-                      "playground:sources.transferNewWorkspaceLabel",
-                      "Workspace name"
-                    )}
-                  </label>
-                  <Input
-                    id="transfer-new-workspace-name"
-                    value={newWorkspaceName}
-                    onChange={(event) => setNewWorkspaceName(event.target.value)}
-                    placeholder={DEFAULT_NEW_WORKSPACE_NAME}
-                  />
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {step === "summary" ? (
-            <div className="space-y-3">
-              <Alert
-                type="info"
-                showIcon
-                title={t(
-                  "playground:sources.transferEligibleSummary",
-                  "{{count}} ready sources will transfer.",
-                  { count: request.eligibleSelectedSourceIds.length }
-                )}
-              />
-              {request.hiddenSelectedCount > 0 ? (
-                <p className="text-sm text-text-muted">
-                  {t(
-                    "playground:sources.transferHiddenSummary",
-                    "{{count}} selected sources are hidden by current filters.",
-                    { count: request.hiddenSelectedCount }
+            {step === "complete" && resultSummary ? (
+              <div className="space-y-3">
+                <Alert
+                  type="success"
+                  showIcon
+                  title={t(
+                    "playground:sources.transferComplete",
+                    "{{count}} sources transferred.",
+                    { count: resultSummary.transferredCount }
                   )}
-                </p>
-              ) : null}
-              {request.ineligibleSelectedCount > 0 ? (
-                <p className="text-sm text-text-muted">
-                  {t(
-                    "playground:sources.transferIneligibleSummary",
-                    "{{count}} processing or errored sources are excluded from transfer.",
-                    { count: request.ineligibleSelectedCount }
-                  )}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {step === "conflicts" ? (
-            <div className="space-y-4">
-              <Checkbox
-                checked={applyToAllRemaining}
-                onChange={(event) => setApplyToAllRemaining(event.target.checked)}
-              >
-                Apply to all remaining conflicts
-              </Checkbox>
-
-              {conflictCandidates.map((candidate) => (
-                <div
-                  key={candidate.mediaId}
-                  className="space-y-2 rounded-lg border border-border p-3"
-                >
-                  <p className="text-sm font-medium text-text">{candidate.title}</p>
-                  <Radio.Group
-                    value={conflictResolutions[candidate.mediaId]}
-                    onChange={(event) =>
-                      handleResolveConflict(
-                        candidate.mediaId,
-                        event.target.value as WorkspaceSourceTransferConflictResolution
-                      )
-                    }
-                    className="flex flex-col gap-2"
-                  >
-                    <Radio value="skip">Skip</Radio>
-                    <Radio value="merge-folders">Merge folder memberships</Radio>
-                    <Radio value="replace-transferred-folders">
-                      Replace transferred folder memberships
-                    </Radio>
-                  </Radio.Group>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {step === "cleanup" ? (
-            <Radio.Group
-              value={emptyFolderPolicy}
-              onChange={(event) =>
-                setEmptyFolderPolicy(
-                  event.target.value as WorkspaceSourceTransferEmptyFolderPolicy
-                )
-              }
-              className="flex flex-col gap-3"
-            >
-              <Radio value="keep">Keep empty folders</Radio>
-              <Radio value="delete-empty-folders">Delete emptied folders</Radio>
-            </Radio.Group>
-          ) : null}
-
-          {step === "complete" && resultSummary ? (
-            <div className="space-y-3">
-              <Alert
-                type="success"
-                showIcon
-                title={t(
-                  "playground:sources.transferComplete",
-                  "{{count}} sources transferred.",
-                  { count: resultSummary.transferredCount }
-                )}
-                description={
-                  resultSummary.conflictsSkipped > 0
-                    ? t(
-                        "playground:sources.transferSkippedConflicts",
-                        "{{count}} conflicts were skipped.",
-                        { count: resultSummary.conflictsSkipped }
-                      )
-                    : undefined
-                }
-              />
-              {!resultSummary.destinationWasCreated ? (
-                <Button onClick={handleOpenDestination}>Open destination</Button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      )}
-    </Modal>
+                  description={
+                    resultSummary.conflictsSkipped > 0
+                      ? t(
+                          "playground:sources.transferSkippedConflicts",
+                          "{{count}} conflicts were skipped.",
+                          { count: resultSummary.conflictsSkipped }
+                        )
+                      : undefined
+                  }
+                />
+                {!resultSummary.destinationWasCreated ? (
+                  <Button onClick={handleOpenDestination}>Open destination</Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </Modal>
+    </>
   )
 }
 

@@ -423,4 +423,141 @@ describe("applyWorkspaceSourceTransfer", () => {
     expect(result.newlyEmptiedOriginFolderIds).toEqual(["origin-empty"])
     expect(result.newlyEmptiedOriginFolderIds).not.toContain("origin-stays-full")
   })
+
+  it("deletes emptied origin folders while leaving non-empty ancestors in place", () => {
+    const originSnapshot = createSnapshot({
+      workspaceId: "origin-workspace",
+      sources: [
+        createSource({ id: "origin-s1", mediaId: 101, title: "Moved" }),
+        createSource({ id: "origin-s2", mediaId: 202, title: "Retained" })
+      ],
+      sourceFolders: [
+        createFolder({ id: "origin-parent", name: "Parent" }),
+        createFolder({
+          id: "origin-child-moved",
+          name: "Moved Folder",
+          parentFolderId: "origin-parent"
+        }),
+        createFolder({
+          id: "origin-child-retained",
+          name: "Retained Folder",
+          parentFolderId: "origin-parent"
+        })
+      ],
+      sourceFolderMemberships: [
+        createMembership({
+          folderId: "origin-child-moved",
+          sourceId: "origin-s1"
+        }),
+        createMembership({
+          folderId: "origin-child-retained",
+          sourceId: "origin-s2"
+        })
+      ]
+    })
+    const destinationSnapshot = createSnapshot({
+      workspaceId: "destination-workspace"
+    })
+
+    const result = applyWorkspaceSourceTransfer({
+      mode: "move",
+      originSnapshot,
+      destinationSnapshot,
+      selectedSourceIds: ["origin-s1"],
+      conflictResolutions: {},
+      emptyFolderPolicy: "delete-empty-folders",
+      sourceFolderFallbackName,
+      generateId: createIdFactory()
+    })
+
+    expect(result.originSnapshot.sourceFolders.map((folder) => folder.id)).toEqual([
+      "origin-parent",
+      "origin-child-retained"
+    ])
+    expect(result.originSnapshot.sourceFolders[0]?.parentFolderId).toBeNull()
+    expect(result.originSnapshot.sourceFolders[1]?.parentFolderId).toBe(
+      "origin-parent"
+    )
+    expect(result.originSnapshot.sourceFolderMemberships).toEqual([
+      { folderId: "origin-child-retained", sourceId: "origin-s2" }
+    ])
+    expect(result.newlyEmptiedOriginFolderIds).toEqual(["origin-child-moved"])
+  })
+
+  it("does not delete newly emptied folders that still contain surviving child folders", () => {
+    const originSnapshot = createSnapshot({
+      workspaceId: "origin-workspace",
+      sources: [
+        createSource({ id: "origin-s1", mediaId: 301, title: "Moved Parent Source" }),
+        createSource({ id: "origin-s2", mediaId: 302, title: "Retained Child Source" })
+      ],
+      sourceFolders: [
+        createFolder({ id: "origin-parent", name: "Parent" }),
+        createFolder({
+          id: "origin-child",
+          name: "Child",
+          parentFolderId: "origin-parent"
+        })
+      ],
+      sourceFolderMemberships: [
+        createMembership({ folderId: "origin-parent", sourceId: "origin-s1" }),
+        createMembership({ folderId: "origin-child", sourceId: "origin-s2" })
+      ]
+    })
+    const destinationSnapshot = createSnapshot({
+      workspaceId: "destination-workspace"
+    })
+
+    const result = applyWorkspaceSourceTransfer({
+      mode: "move",
+      originSnapshot,
+      destinationSnapshot,
+      selectedSourceIds: ["origin-s1"],
+      conflictResolutions: {},
+      emptyFolderPolicy: "delete-empty-folders",
+      sourceFolderFallbackName,
+      generateId: createIdFactory()
+    })
+
+    expect(result.originSnapshot.sourceFolders).toEqual([
+      expect.objectContaining({ id: "origin-parent", parentFolderId: null }),
+      expect.objectContaining({
+        id: "origin-child",
+        parentFolderId: "origin-parent"
+      })
+    ])
+    expect(result.originSnapshot.sourceFolderMemberships).toEqual([
+      { folderId: "origin-child", sourceId: "origin-s2" }
+    ])
+  })
+
+  it("renames reparented child folders to avoid collisions with later siblings", () => {
+    const originSnapshot = createSnapshot({
+      workspaceId: "origin-workspace",
+      sourceFolders: [
+        createFolder({ id: "folder-parent", name: "Parent" }),
+        createFolder({
+          id: "folder-child-docs",
+          name: "Docs",
+          parentFolderId: "folder-parent"
+        }),
+        createFolder({ id: "folder-root-docs", name: "Docs" })
+      ]
+    })
+
+    deleteSourceFolderForTest(originSnapshot, "folder-parent")
+
+    expect(originSnapshot.sourceFolders).toEqual([
+      expect.objectContaining({
+        id: "folder-child-docs",
+        parentFolderId: null,
+        name: "Docs (2)"
+      }),
+      expect.objectContaining({
+        id: "folder-root-docs",
+        parentFolderId: null,
+        name: "Docs"
+      })
+    ])
+  })
 })

@@ -1420,9 +1420,12 @@ describe("workspace store snapshot persistence", () => {
     const transferredSource = useWorkspaceStore
       .getState()
       .addSource({ mediaId: 8451, title: "Transferred Source", type: "pdf" })
+    const originParentFolder = useWorkspaceStore
+      .getState()
+      .createSourceFolder("Origin Parent Folder")
     const originFolder = useWorkspaceStore
       .getState()
-      .createSourceFolder("Origin Folder")
+      .createSourceFolder("Origin Folder", originParentFolder.id)
 
     useWorkspaceStore
       .getState()
@@ -1449,12 +1452,6 @@ describe("workspace store snapshot persistence", () => {
     })
 
     expect(result?.newlyEmptiedOriginFolderIds).toEqual([originFolder.id])
-    expect(useWorkspaceStore.getState().selectedSourceFolderIds).toEqual([
-      originFolder.id
-    ])
-    expect(useWorkspaceStore.getState().activeFolderId).toBe(originFolder.id)
-
-    useWorkspaceStore.getState().deleteSourceFolder(originFolder.id)
 
     const state = useWorkspaceStore.getState()
     expect(state.workspaceId).toBe(originId)

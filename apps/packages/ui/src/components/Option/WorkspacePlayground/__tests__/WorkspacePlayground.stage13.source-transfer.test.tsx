@@ -1,13 +1,25 @@
 import React from "react"
-import { fireEvent, render, screen, within } from "@testing-library/react"
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from "vitest"
 import { WorkspacePlayground } from "../index"
+import { clearWorkspaceUndoActionsForTests } from "../undo-manager"
 
 const mockInitializeWorkspace = vi.fn()
 const mockCreateNewWorkspace = vi.fn()
 const mockAddSources = vi.fn()
 const mockSetSelectedSourceIds = vi.fn()
 const mockCaptureToCurrentNote = vi.fn()
+const mockCaptureUndoSnapshot = vi.fn()
+const mockRestoreUndoSnapshot = vi.fn()
 const mockClearCurrentNote = vi.fn()
 const mockSetCurrentNote = vi.fn()
 const mockLoadNote = vi.fn()
@@ -173,6 +185,7 @@ const testState = {
   addSources: mockAddSources,
   setSelectedSourceIds: mockSetSelectedSourceIds,
   captureToCurrentNote: mockCaptureToCurrentNote,
+  captureUndoSnapshot: mockCaptureUndoSnapshot,
   clearCurrentNote: mockClearCurrentNote,
   setCurrentNote: mockSetCurrentNote,
   loadNote: mockLoadNote,
@@ -183,6 +196,7 @@ const testState = {
   focusChatMessageById: mockFocusChatMessageById,
   focusWorkspaceNote: mockFocusWorkspaceNote,
   setSourceStatusByMediaId: mockSetSourceStatusByMediaId,
+  restoreUndoSnapshot: mockRestoreUndoSnapshot,
   getEffectiveSelectedSources: () =>
     testState.sources.filter((source) =>
       testState.selectedSourceIds.includes(source.id)
@@ -358,6 +372,13 @@ if (!(globalThis as { ResizeObserver?: unknown }).ResizeObserver) {
 
 describe("WorkspacePlayground stage 13 source transfer", () => {
   const originalMatchMedia = window.matchMedia
+  const mockUndoSnapshot = {
+    workspaceId: "workspace-current",
+    workspaceName: "Current Workspace",
+    sources: [],
+    sourceFolders: [],
+    sourceFolderMemberships: []
+  }
 
   beforeAll(() => {
     if (typeof window.matchMedia !== "function") {
@@ -386,6 +407,7 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearWorkspaceUndoActionsForTests()
     testState.isMobile = false
     testState.storeHydrated = true
     testState.workspaceId = "workspace-current"
@@ -393,6 +415,7 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
     testState.leftPaneCollapsed = false
     testState.selectedSourceIds = ["source-a", "source-b"]
     nextLaunchPayload = launchHiddenSelectionTransfer
+    mockCaptureUndoSnapshot.mockReturnValue(mockUndoSnapshot)
     mockTransferSourcesBetweenWorkspaces.mockReturnValue({
       originWorkspaceId: "workspace-current",
       destinationWorkspaceId,
@@ -419,6 +442,10 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
         sourceFolderMemberships: []
       }
     })
+  })
+
+  afterEach(() => {
+    clearWorkspaceUndoActionsForTests()
   })
 
   it("shows hidden and ineligible summaries and excludes current and archived workspaces from the destination picker", async () => {
@@ -556,7 +583,7 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
     expect(screen.queryByRole("dialog", { name: "Transfer sources" })).toBeNull()
   })
 
-  it("collects conflict resolutions, move cleanup policy, and offers an open-destination follow-up for existing workspaces", async () => {
+  it("collects conflict resolutions, move cleanup policy, and rewinds the modal state when the transfer is undone", async () => {
     nextLaunchPayload = launchConflictTransfer
 
     render(<WorkspacePlayground />)
@@ -633,6 +660,62 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
         }
       })
     )
+    expect(mockCaptureUndoSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockMessageApi.open).toHaveBeenCalledTimes(1)
+
+    const undoMessageConfig = mockMessageApi.open.mock.calls[0]?.[0] as
+      | { btn?: React.ReactElement; key?: string; type?: string }
+      | undefined
+    expect(undoMessageConfig?.type).toBe("warning")
+    expect(undoMessageConfig?.btn).toBeTruthy()
+
+    if (React.isValidElement(undoMessageConfig?.btn)) {
+      act(() => {
+        undoMessageConfig.btn?.props?.onClick?.()
+      })
+    } else {
+      throw new Error("Expected the transfer undo button to be rendered")
+    }
+
+    expect(mockRestoreUndoSnapshot).toHaveBeenCalledWith(mockUndoSnapshot)
+    expect(mockMessageApi.success).toHaveBeenCalledWith("Transfer undone.")
+    expect(mockMessageApi.destroy).toHaveBeenCalledWith(undoMessageConfig?.key)
+    expect(
+      screen.queryByRole("button", { name: "Open destination" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("radio", { name: "Delete emptied folders" })
+    ).toBeChecked()
+  })
+
+  it("offers an open-destination follow-up for existing workspaces after a successful transfer", async () => {
+    nextLaunchPayload = launchConflictTransfer
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Launch transfer" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Move selected sources" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Destination Workspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Apply to all remaining conflicts"
+      })
+    )
+    fireEvent.click(
+      within(
+        screen.getByText("Alpha Source").closest("div") as HTMLElement
+      ).getByRole("radio", {
+        name: "Merge folder memberships"
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Delete emptied folders" })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Transfer sources" }))
 
     expect(
       screen.getByRole("button", { name: "Open destination" })

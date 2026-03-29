@@ -88,6 +88,83 @@ const findMatchingSiblingFolder = (
   )
 }
 
+const getFolderDepth = (
+  foldersById: Map<string, WorkspaceSourceFolder>,
+  folderId: string,
+  cache: Map<string, number>
+): number => {
+  const cachedDepth = cache.get(folderId)
+  if (cachedDepth !== undefined) {
+    return cachedDepth
+  }
+
+  const folder = foldersById.get(folderId)
+  if (!folder) {
+    cache.set(folderId, 0)
+    return 0
+  }
+
+  const parentFolderId = folder.parentFolderId
+  if (!parentFolderId || parentFolderId === folderId) {
+    cache.set(folderId, 0)
+    return 0
+  }
+
+  const depth = getFolderDepth(foldersById, parentFolderId, cache) + 1
+  cache.set(folderId, depth)
+  return depth
+}
+
+const deleteOriginFolder = (
+  snapshot: WorkspaceSourceTransferSnapshot,
+  folderId: string,
+  fallbackName: string
+): void => {
+  const folderToDelete = snapshot.sourceFolders.find((folder) => folder.id === folderId)
+  if (!folderToDelete) {
+    return
+  }
+
+  const remainingFolders = snapshot.sourceFolders.filter(
+    (folder) => folder.id !== folderId
+  )
+  const reparentedFolders = new Map<string, WorkspaceSourceFolder>()
+  const siblingPool = remainingFolders.filter(
+    (folder) =>
+      folder.parentFolderId !== folderId &&
+      folder.parentFolderId === folderToDelete.parentFolderId
+  )
+
+  for (const folder of remainingFolders) {
+    if (folder.parentFolderId !== folderId) {
+      continue
+    }
+
+    const reparentedFolder = {
+      ...folder,
+      parentFolderId: folderToDelete.parentFolderId,
+      name: getUniqueSourceFolderName(
+        [...siblingPool, ...reparentedFolders.values()],
+        folder.name,
+        folderToDelete.parentFolderId,
+        fallbackName,
+        folder.id
+      ),
+      updatedAt: new Date()
+    }
+    reparentedFolders.set(folder.id, reparentedFolder)
+  }
+
+  const nextFolders = remainingFolders.map(
+    (folder) => reparentedFolders.get(folder.id) || folder
+  )
+
+  snapshot.sourceFolders = nextFolders
+  snapshot.sourceFolderMemberships = snapshot.sourceFolderMemberships.filter(
+    (membership) => membership.folderId !== folderId
+  )
+}
+
 export const applyWorkspaceSourceTransfer = (
   input: WorkspaceSourceTransferInput
 ): WorkspaceSourceTransferResult => {
@@ -303,6 +380,83 @@ export const applyWorkspaceSourceTransfer = (
           })
           .map((folder) => folder.id)
       : []
+
+  if (input.mode === "move" && input.emptyFolderPolicy === "delete-empty-folders") {
+    const foldersById = new Map(
+      originSnapshot.sourceFolders.map((folder) => [folder.id, folder] as const)
+    )
+    const childrenByFolderId = new Map<string, string[]>(
+      originSnapshot.sourceFolders.map((folder) => [folder.id, []])
+    )
+    for (const folder of originSnapshot.sourceFolders) {
+      if (
+        folder.parentFolderId &&
+        folder.parentFolderId !== folder.id &&
+        childrenByFolderId.has(folder.parentFolderId)
+      ) {
+        childrenByFolderId.get(folder.parentFolderId)?.push(folder.id)
+      }
+    }
+
+    const candidateFolderIds = new Set<string>()
+    for (const folderId of newlyEmptiedOriginFolderIds) {
+      let currentFolderId: string | null = folderId
+      while (currentFolderId) {
+        if (candidateFolderIds.has(currentFolderId)) {
+          break
+        }
+        candidateFolderIds.add(currentFolderId)
+        const parentFolderId = foldersById.get(currentFolderId)?.parentFolderId || null
+        currentFolderId =
+          parentFolderId && parentFolderId !== currentFolderId
+            ? parentFolderId
+            : null
+      }
+    }
+
+    const foldersToDelete = new Set<string>()
+    let addedFolderId: string | null = null
+    do {
+      addedFolderId = null
+      for (const folderId of candidateFolderIds) {
+        if (foldersToDelete.has(folderId)) {
+          continue
+        }
+
+        const folder = foldersById.get(folderId)
+        if (!folder) {
+          continue
+        }
+
+        const afterCount = originMembershipCountsAfter.get(folder.id) || 0
+        if (afterCount > 0) {
+          continue
+        }
+
+        const childFolderIds = childrenByFolderId.get(folder.id) || []
+        if (
+          childFolderIds.length === 0 ||
+          !childFolderIds.every((childFolderId) => foldersToDelete.has(childFolderId))
+        ) {
+          continue
+        }
+
+        foldersToDelete.add(folder.id)
+        addedFolderId = folder.id
+      }
+    } while (addedFolderId)
+
+    const folderDepthCache = new Map<string, number>()
+    const orderedFolderIdsToDelete = Array.from(foldersToDelete).sort(
+      (leftFolderId, rightFolderId) =>
+        getFolderDepth(foldersById, rightFolderId, folderDepthCache) -
+        getFolderDepth(foldersById, leftFolderId, folderDepthCache)
+    )
+
+    for (const folderId of orderedFolderIdsToDelete) {
+      deleteOriginFolder(originSnapshot, folderId, input.sourceFolderFallbackName)
+    }
+  }
 
   return {
     originSnapshot,
