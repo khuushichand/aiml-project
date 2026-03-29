@@ -23,6 +23,9 @@ import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { formatDistanceToNow } from 'date-fns';
+import Link from 'next/link';
+
+type UserInfo = { id: number; username?: string; email?: string };
 
 interface ACPSession {
   session_id: string;
@@ -73,8 +76,33 @@ export default function ACPSessionsPage() {
   const loadingRef = useRef(false);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [userMap, setUserMap] = useState<Record<number, UserInfo>>({});
   const confirm = useConfirm();
   const toast = useToast();
+
+  // Load user map for resolving IDs to names
+  useEffect(() => {
+    let cancelled = false;
+    const loadUsers = async () => {
+      try {
+        const response = await api.getUsersPage({ page: '1', limit: '200' });
+        if (cancelled) return;
+        const items: UserInfo[] = Array.isArray(response?.items) ? response.items : [];
+        const map: Record<number, UserInfo> = {};
+        items.forEach((u) => { map[u.id] = u; });
+        setUserMap(map);
+      } catch {
+        // Best-effort — keep numeric IDs as fallback
+      }
+    };
+    void loadUsers();
+    return () => { cancelled = true; };
+  }, []);
+
+  const resolveUserLabel = (userId: number) => {
+    const info = userMap[userId];
+    return info?.username || info?.email || String(userId);
+  };
 
   const loadSessions = useCallback(async () => {
     loadingRef.current = true;
@@ -386,7 +414,11 @@ export default function ACPSessionsPage() {
                               <span className="text-muted-foreground">{session.session_id.slice(0, 12)}...</span>
                             </div>
                           </TableCell>
-                          <TableCell>{session.user_id}</TableCell>
+                          <TableCell>
+                            <Link href={`/users/${session.user_id}`} className="text-primary hover:underline">
+                              {resolveUserLabel(session.user_id)}
+                            </Link>
+                          </TableCell>
                           <TableCell>
                             <Badge variant="outline">{session.agent_type}</Badge>
                           </TableCell>

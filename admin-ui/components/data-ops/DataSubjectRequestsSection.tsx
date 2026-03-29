@@ -356,9 +356,14 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
         <CardDescription>Record GDPR-style access, export, and erasure requests with authoritative backend data.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Alert>
-          <AlertDescription>
-            Requests are recorded server-side for review. Export and erasure are not executed automatically in this release.
+        <Alert className="border-amber-300 bg-amber-50">
+          <AlertDescription className="flex items-center gap-2 text-amber-800">
+            <Badge variant="outline" className="border-amber-500 text-amber-700 font-semibold shrink-0" data-testid="dsr-record-only-badge">
+              Record-only mode
+            </Badge>
+            <span>
+              Erasure and export are not executed automatically. Requests are recorded server-side for manual review.
+            </span>
           </AlertDescription>
         </Alert>
 

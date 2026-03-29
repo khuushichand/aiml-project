@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -21,7 +21,7 @@ import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form'
 import { Eye, Mic, MicOff, Search, Plus, Trash2, BarChart2 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
-import { parseVoiceCommandInputs } from '@/lib/voice-commands';
+import { parseVoiceCommandInputs, testVoiceCommandPhraseMatch } from '@/lib/voice-commands';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportVoiceCommands, ExportFormat } from '@/lib/export';
 import type { VoiceCommand, VoiceActionType, VoiceAnalyticsSummary } from '@/types';
@@ -66,6 +66,7 @@ function VoiceCommandsPageContent() {
   const [deletingCommandId, setDeletingCommandId] = useState<string | null>(null);
   const [showDetailedAnalytics, setShowDetailedAnalytics] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [phraseTestInput, setPhraseTestInput] = useState('');
 
   const createForm = useForm<CreateCommandFormInput, unknown, CreateCommandFormData>({
     resolver: zodResolver(createCommandSchema),
@@ -128,6 +129,20 @@ function VoiceCommandsPageContent() {
     loadCommands();
     loadAnalytics();
   }, [loadCommands, loadAnalytics]);
+
+  // Phrase test: find best matching command
+  const phraseTestResult = useMemo(() => {
+    if (!phraseTestInput.trim() || commands.length === 0) return null;
+    let bestMatch: { command: VoiceCommand; confidence: number; bestPhrase: string | null } | null = null;
+    for (const cmd of commands) {
+      if (!cmd.enabled || !cmd.phrases?.length) continue;
+      const result = testVoiceCommandPhraseMatch(phraseTestInput, cmd.phrases);
+      if (result.matched && (!bestMatch || result.confidence > bestMatch.confidence)) {
+        bestMatch = { command: cmd, confidence: result.confidence, bestPhrase: result.bestPhrase };
+      }
+    }
+    return bestMatch;
+  }, [phraseTestInput, commands]);
 
   const filteredCommands = commands.filter((cmd) => {
     if (!searchQuery) return true;
@@ -449,6 +464,51 @@ function VoiceCommandsPageContent() {
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </Select>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Phrase Test */}
+          <Card className="mb-6">
+            <CardContent className="pt-6">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="relative flex-1 max-w-md">
+                  <Mic className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <label htmlFor="phrase-test" className="sr-only">
+                    Test a phrase
+                  </label>
+                  <Input
+                    id="phrase-test"
+                    placeholder="Test a phrase to see which command matches..."
+                    value={phraseTestInput}
+                    onChange={(e) => setPhraseTestInput(e.target.value)}
+                    className="pl-10"
+                    data-testid="phrase-test-input"
+                  />
+                </div>
+                {phraseTestInput.trim() && (
+                  <div className="text-sm" data-testid="phrase-test-result">
+                    {phraseTestResult ? (
+                      <span>
+                        Matches{' '}
+                        <Link href={`/voice-commands/${phraseTestResult.command.id}`} className="font-medium text-primary hover:underline">
+                          {phraseTestResult.command.name}
+                        </Link>
+                        {' '}
+                        <Badge variant="outline" className="text-xs">
+                          {Math.round(phraseTestResult.confidence * 100)}% confidence
+                        </Badge>
+                        {phraseTestResult.bestPhrase && (
+                          <span className="text-muted-foreground ml-1">
+                            via &ldquo;{phraseTestResult.bestPhrase}&rdquo;
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">No command matched</span>
+                    )}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

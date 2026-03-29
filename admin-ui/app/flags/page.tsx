@@ -541,6 +541,7 @@ export default function FlagsPage() {
             </CardContent>
           </Card>
 
+          <hr className="my-2 border-border" />
           <Card>
             <CardHeader>
               <CardTitle>Feature Flags</CardTitle>

@@ -1091,13 +1091,29 @@ export const api = {
   // ============================================
   // Debug Tools
   // ============================================
-  debugResolveApiKey: (apiKey: string) =>
-    requestJson('/authnz/debug/api-key-id', {
-      headers: { 'X-API-KEY': apiKey },
-    }),
+  debugResolveApiKey: (value: string, options?: { mode?: 'raw_key' | 'key_id' | 'user_id' }) => {
+    const mode = options?.mode ?? 'raw_key';
+    if (mode === 'key_id') {
+      return requestJson(`/authnz/debug/api-key-id?key_id=${encodeURIComponent(value)}`);
+    }
+    if (mode === 'user_id') {
+      return requestJson(`/authnz/debug/api-key-id?user_id=${encodeURIComponent(value)}`);
+    }
+    return requestJson('/authnz/debug/api-key-id', {
+      headers: { 'X-API-KEY': value },
+    });
+  },
   debugGetBudgetSummary: (apiKey: string) =>
     requestJson('/authnz/debug/budget-summary', {
       headers: { 'X-API-KEY': apiKey },
+    }),
+  debugResolvePermissions: (userId: string) =>
+    requestJson(`/authnz/debug/permissions?user_id=${encodeURIComponent(userId)}`),
+  debugValidateToken: (token: string) =>
+    requestJson('/authnz/debug/validate-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
     }),
 
   // ============================================

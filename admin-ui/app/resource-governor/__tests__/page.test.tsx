@@ -196,7 +196,7 @@ describe('ResourceGovernor policy form', () => {
     await waitFor(() => {
       expect(screen.queryByText('Loading scope context...')).not.toBeInTheDocument();
     });
-    await user.type(screen.getByLabelText('User ID'), '42');
+    await user.selectOptions(screen.getByLabelText('User'), '42');
     await user.click(screen.getByRole('button', { name: 'Resolve Policy' }));
 
     expect(

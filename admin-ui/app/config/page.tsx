@@ -414,7 +414,19 @@ export default function ConfigPage() {
         <div className="p-4 lg:p-8">
           <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold">System Configuration Overview</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-3xl font-bold">System Configuration Overview</h1>
+                <Badge
+                  variant={
+                    process.env.NODE_ENV === 'production' ? 'default'
+                    : process.env.NODE_ENV === 'development' ? 'secondary'
+                    : 'outline'
+                  }
+                  data-testid="environment-badge"
+                >
+                  {process.env.NODE_ENV ?? 'unknown'}
+                </Badge>
+              </div>
               <p className="text-muted-foreground">
                 Read-only platform configuration and subsystem status at a glance.
               </p>

@@ -132,17 +132,22 @@ export const navigationSections: NavigationSection[] = [
     ],
   },
   {
-    title: 'Governance',
+    title: 'Cost & Usage',
     items: [
-      navigationItems.compliance,
-      navigationItems.security,
-      navigationItems.resourceGovernor,
-      navigationItems.budgets,
       navigationItems.usage,
+      navigationItems.budgets,
+      navigationItems.resourceGovernor,
       navigationItems.plans,
       navigationItems.subscriptions,
       navigationItems.revenueAnalytics,
       navigationItems.featureRegistry,
+    ],
+  },
+  {
+    title: 'Security & Compliance',
+    items: [
+      navigationItems.compliance,
+      navigationItems.security,
       navigationItems.flags,
       navigationItems.dataOps,
     ],

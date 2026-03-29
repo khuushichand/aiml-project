@@ -470,6 +470,13 @@ export default function SecurityPage() {
                           Estimated {riskBreakdown?.estimatedScore ?? 0}/100
                         </Badge>
                       </div>
+                      <div className="mb-3 flex flex-wrap gap-3 text-xs text-muted-foreground" data-testid="risk-weight-legend">
+                        <span>Weight legend:</span>
+                        <span title="Each user without MFA adds 3 points (cap 40)">MFA = <strong className="text-foreground">3</strong></span>
+                        <span title="Each aged API key adds 2 points (cap 25)">Keys = <strong className="text-foreground">2</strong></span>
+                        <span title="Each failed login adds 1 point (cap 20)">Failed logins = <strong className="text-foreground">1</strong></span>
+                        <span title="Each suspicious event adds 4 points (cap 20)">Suspicious = <strong className="text-foreground">4</strong></span>
+                      </div>
                       {riskBreakdownLoading ? (
                         <div className="text-sm text-muted-foreground">Loading risk factor details...</div>
                       ) : riskBreakdown ? (
