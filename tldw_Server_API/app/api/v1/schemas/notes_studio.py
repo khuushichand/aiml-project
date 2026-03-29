@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -65,7 +66,7 @@ class NoteStudioDocumentSummaryResponse(BaseModel):
 
 
 class NoteStudioDocumentResponse(NoteStudioDocumentBase):
-    created_at: str = Field(..., description="Creation timestamp.")
-    last_modified: str = Field(..., description="Last modification timestamp.")
+    created_at: datetime = Field(..., description="Creation timestamp.")
+    last_modified: datetime = Field(..., description="Last modification timestamp.")
 
     model_config = ConfigDict(from_attributes=True)

@@ -74,6 +74,38 @@ const resetWorkspaceStore = () => {
   })
 }
 
+type WorkspaceTransferDestinationRequest =
+  | { kind: "existing"; workspaceId: string }
+  | { kind: "new"; name: string }
+
+type WorkspaceTransferRequest = {
+  mode: "copy" | "move"
+  destination: WorkspaceTransferDestinationRequest
+  selectedSourceIds: string[]
+  conflictResolutions?: Record<
+    number,
+    "skip" | "merge-folders" | "replace-transferred-folders"
+  >
+  emptyFolderPolicy?: "keep" | "delete-empty-folders"
+  sourceFolderFallbackName?: string
+  switchToDestinationOnComplete?: boolean
+}
+
+type WorkspaceTransferExecutionResult = {
+  originWorkspaceId: string
+  destinationWorkspaceId: string
+  transferredDestinationSourceIds: string[]
+}
+
+const getWorkspaceTransferAction = () =>
+  (
+    useWorkspaceStore.getState() as {
+      transferSourcesBetweenWorkspaces?: (
+        request: WorkspaceTransferRequest
+      ) => WorkspaceTransferExecutionResult | null
+    }
+  ).transferSourcesBetweenWorkspaces
+
 describe("workspace store snapshot persistence", () => {
   beforeEach(async () => {
     resetWorkspaceStore()
@@ -1286,6 +1318,261 @@ describe("workspace store snapshot persistence", () => {
     expect(state.workspaceId).toBe(workspaceBId)
     expect(state.archivedWorkspaces.some((workspace) => workspace.id === workspaceAId)).toBe(
       true
+    )
+  })
+
+  it("creates a destination workspace for split without switching before transfer commit", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Original Workspace")
+    const originId = useWorkspaceStore.getState().workspaceId
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8301, title: "Source Alpha", type: "pdf" })
+    useWorkspaceStore.getState().setSelectedSourceIds([source.id])
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    const result = transferSourcesBetweenWorkspaces?.({
+      mode: "copy",
+      destination: { kind: "new", name: "Strategy Workspace" },
+      selectedSourceIds: [source.id],
+      switchToDestinationOnComplete: false
+    })
+
+    const state = useWorkspaceStore.getState()
+    expect(result?.destinationWorkspaceId).toBeTruthy()
+    expect(state.workspaceId).toBe(originId)
+    expect(state.workspaceName).toBe("Original Workspace")
+    expect(
+      state.savedWorkspaces.some(
+        (workspace) => workspace.id === result?.destinationWorkspaceId
+      )
+    ).toBe(true)
+    expect(
+      state.workspaceSnapshots[result?.destinationWorkspaceId || ""]?.sources.map(
+        (workspaceSource) => workspaceSource.mediaId
+      )
+    ).toEqual([8301])
+  })
+
+  it("updates sourceCount, lastAccessedAt, and collection assignment for origin and destination", () => {
+    vi.useFakeTimers()
+    try {
+      const transferTime = new Date("2026-03-29T00:00:00.000Z")
+
+      useWorkspaceStore.getState().initializeWorkspace("Origin Workspace")
+      const originId = useWorkspaceStore.getState().workspaceId
+      const sourceOne = useWorkspaceStore
+        .getState()
+        .addSource({ mediaId: 8401, title: "Source One", type: "pdf" })
+      useWorkspaceStore
+        .getState()
+        .addSource({ mediaId: 8402, title: "Source Two", type: "video" })
+      useWorkspaceStore.getState().saveCurrentWorkspace()
+
+      const collection = useWorkspaceStore
+        .getState()
+        .createWorkspaceCollection("Transfer Collection")
+      useWorkspaceStore
+        .getState()
+        .assignWorkspaceToCollection(originId, collection.id)
+
+      vi.setSystemTime(transferTime)
+
+      const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+      expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+      const result = transferSourcesBetweenWorkspaces?.({
+        mode: "move",
+        destination: { kind: "new", name: "Destination Workspace" },
+        selectedSourceIds: [sourceOne.id],
+        switchToDestinationOnComplete: false
+      })
+
+      const state = useWorkspaceStore.getState()
+      const originWorkspace = state.savedWorkspaces.find(
+        (workspace) => workspace.id === originId
+      )
+      const destinationWorkspace = state.savedWorkspaces.find(
+        (workspace) => workspace.id === result?.destinationWorkspaceId
+      )
+
+      expect(state.savedWorkspaces[0]?.id).toBe(result?.destinationWorkspaceId)
+      expect(originWorkspace?.sourceCount).toBe(1)
+      expect(destinationWorkspace?.sourceCount).toBe(1)
+      expect(originWorkspace?.collectionId ?? null).toBe(collection.id)
+      expect(destinationWorkspace?.collectionId ?? null).toBe(collection.id)
+      expect(originWorkspace?.lastAccessedAt.toISOString()).toBe(
+        transferTime.toISOString()
+      )
+      expect(destinationWorkspace?.lastAccessedAt.toISOString()).toBe(
+        transferTime.toISOString()
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("rejects the current workspace as a transfer destination", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Current Workspace")
+    const originId = useWorkspaceStore.getState().workspaceId
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8501, title: "Current Source", type: "pdf" })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    expect(() =>
+      transferSourcesBetweenWorkspaces?.({
+        mode: "copy",
+        destination: { kind: "existing", workspaceId: originId },
+        selectedSourceIds: [source.id],
+        switchToDestinationOnComplete: false
+      })
+    ).toThrow(/destination/i)
+  })
+
+  it("rejects archived workspaces as transfer targets in v1", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Origin Workspace")
+    const originId = useWorkspaceStore.getState().workspaceId
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8601, title: "Origin Source", type: "pdf" })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().createNewWorkspace("Archived Target")
+    const archivedTargetId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+    useWorkspaceStore.getState().switchWorkspace(originId)
+    useWorkspaceStore.getState().archiveWorkspace(archivedTargetId)
+
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    expect(() =>
+      transferSourcesBetweenWorkspaces?.({
+        mode: "copy",
+        destination: { kind: "existing", workspaceId: archivedTargetId },
+        selectedSourceIds: [source.id],
+        switchToDestinationOnComplete: false
+      })
+    ).toThrow(/archived/i)
+  })
+
+  it("restores both origin and destination to their pre-transfer state from one undo snapshot", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Undo Origin")
+    const originId = useWorkspaceStore.getState().workspaceId
+    const originSource = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8701, title: "Undo Origin Source", type: "pdf" })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().createNewWorkspace("Undo Destination")
+    const destinationId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8702, title: "Undo Destination Source", type: "audio" })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+    useWorkspaceStore.getState().switchWorkspace(originId)
+
+    const undoSnapshot = useWorkspaceStore.getState().captureUndoSnapshot()
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    transferSourcesBetweenWorkspaces?.({
+      mode: "move",
+      destination: { kind: "existing", workspaceId: destinationId },
+      selectedSourceIds: [originSource.id],
+      switchToDestinationOnComplete: false
+    })
+
+    let state = useWorkspaceStore.getState()
+    expect(
+      state.workspaceSnapshots[originId]?.sources.map((workspaceSource) => workspaceSource.mediaId)
+    ).toEqual([])
+    expect(
+      state.workspaceSnapshots[destinationId]?.sources.map(
+        (workspaceSource) => workspaceSource.mediaId
+      )
+    ).toEqual(expect.arrayContaining([8701, 8702]))
+
+    useWorkspaceStore.getState().restoreUndoSnapshot(undoSnapshot)
+
+    state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe(originId)
+    expect(
+      state.workspaceSnapshots[originId]?.sources.map((workspaceSource) => workspaceSource.mediaId)
+    ).toEqual([8701])
+    expect(
+      state.workspaceSnapshots[destinationId]?.sources.map(
+        (workspaceSource) => workspaceSource.mediaId
+      )
+    ).toEqual([8702])
+  })
+
+  it("inherits the source workspace collection for a newly split workspace", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Collection Origin")
+    const originId = useWorkspaceStore.getState().workspaceId
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8801, title: "Collection Source", type: "pdf" })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const collection = useWorkspaceStore
+      .getState()
+      .createWorkspaceCollection("Inherited Collection")
+    useWorkspaceStore
+      .getState()
+      .assignWorkspaceToCollection(originId, collection.id)
+
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    const result = transferSourcesBetweenWorkspaces?.({
+      mode: "copy",
+      destination: { kind: "new", name: "Split Workspace" },
+      selectedSourceIds: [source.id],
+      switchToDestinationOnComplete: false
+    })
+
+    expect(
+      useWorkspaceStore
+        .getState()
+        .savedWorkspaces.find(
+          (workspace) => workspace.id === result?.destinationWorkspaceId
+        )?.collectionId ?? null
+    ).toBe(collection.id)
+  })
+
+  it("selects transferred destination wrappers by default when switching into a new split workspace", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Switch Origin")
+    useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8901, title: "Keep Source", type: "pdf" })
+    const transferredSource = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 8902, title: "Transferred Source", type: "video" })
+    useWorkspaceStore.getState().setSelectedSourceIds([transferredSource.id])
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const transferSourcesBetweenWorkspaces = getWorkspaceTransferAction()
+    expect(transferSourcesBetweenWorkspaces).toBeTypeOf("function")
+
+    const result = transferSourcesBetweenWorkspaces?.({
+      mode: "copy",
+      destination: { kind: "new", name: "Split Destination" },
+      selectedSourceIds: [transferredSource.id],
+      switchToDestinationOnComplete: true
+    })
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe(result?.destinationWorkspaceId)
+    expect(state.sources.map((source) => source.mediaId)).toEqual([8902])
+    expect(state.selectedSourceIds).toEqual(
+      result?.transferredDestinationSourceIds || []
     )
   })
 

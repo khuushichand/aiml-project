@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 import pytest
 
+from tldw_Server_API.app.api.v1.schemas.notes_schemas import NoteResponse
 from tldw_Server_API.app.api.v1.schemas.notes_studio import (
     NoteStudioDocumentCreateRequest,
     NoteStudioDocumentResponse,
@@ -47,6 +49,9 @@ def test_note_studio_schema_models_validate_core_fields() -> None:
     )
     assert response.note_id == "note-1"  # nosec B101
     assert response.payload_json["meta"]["source_note_id"] == "note-1"  # nosec B101
+    assert isinstance(response.created_at, datetime)  # nosec B101
+    assert isinstance(response.last_modified, datetime)  # nosec B101
+    assert response.created_at.isoformat().startswith("2026-03-28T00:00:00")  # nosec B101
 
 
 def test_notes_db_creates_note_studio_documents_table(db: CharactersRAGDB) -> None:
@@ -185,3 +190,8 @@ def test_note_fetch_can_include_lightweight_studio_summary(db: CharactersRAGDB) 
     assert note["studio"]["note_id"] == note_id  # nosec B101
     assert note["studio"]["template_type"] == "grid"  # nosec B101
     assert "payload_json" not in note["studio"]  # nosec B101
+
+    validated = NoteResponse.model_validate(note)
+    assert validated.studio is not None  # nosec B101
+    assert validated.studio.note_id == note_id  # nosec B101
+    assert validated.studio.template_type == "grid"  # nosec B101
