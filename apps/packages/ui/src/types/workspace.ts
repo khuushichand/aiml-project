@@ -48,6 +48,47 @@ export interface WorkspaceSourceFolderMembership {
   sourceId: string
 }
 
+export type WorkspaceSourceTransferMode = "copy" | "move"
+
+export type WorkspaceSourceTransferConflictResolution =
+  | "skip"
+  | "merge-folders"
+  | "replace-transferred-folders"
+
+export type WorkspaceSourceTransferEmptyFolderPolicy =
+  | "keep"
+  | "delete-empty-folders"
+
+export type WorkspaceSourceTransferIdKind = "source" | "folder"
+
+export interface WorkspaceSourceTransferSnapshot {
+  workspaceId: string
+  sources: WorkspaceSource[]
+  sourceFolders: WorkspaceSourceFolder[]
+  sourceFolderMemberships: WorkspaceSourceFolderMembership[]
+}
+
+export interface WorkspaceSourceTransferInput {
+  mode: WorkspaceSourceTransferMode
+  originSnapshot: WorkspaceSourceTransferSnapshot
+  destinationSnapshot: WorkspaceSourceTransferSnapshot
+  selectedSourceIds: string[]
+  conflictResolutions: Record<number, WorkspaceSourceTransferConflictResolution>
+  emptyFolderPolicy: WorkspaceSourceTransferEmptyFolderPolicy
+  generateId: (kind: WorkspaceSourceTransferIdKind) => string
+}
+
+export interface WorkspaceSourceTransferResult {
+  originSnapshot: WorkspaceSourceTransferSnapshot
+  destinationSnapshot: WorkspaceSourceTransferSnapshot
+  transferredMediaIds: number[]
+  transferredDestinationSourceIds: string[]
+  removedOriginSourceIds: string[]
+  newlyEmptiedOriginFolderIds: string[]
+  conflictsResolved: number[]
+  conflictsSkipped: number[]
+}
+
 export interface WorkspaceCollection {
   id: string
   name: string
