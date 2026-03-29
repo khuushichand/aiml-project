@@ -440,6 +440,7 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Destination Workspace" }))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
 
+    expect(screen.getByText("Selected: 2")).toBeInTheDocument()
     expect(
       screen.getByText(/selected sources are hidden by current filters/i)
     ).toBeInTheDocument()
