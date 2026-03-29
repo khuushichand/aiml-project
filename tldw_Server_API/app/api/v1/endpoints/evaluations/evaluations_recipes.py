@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
@@ -19,6 +19,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import enqueue_recipe_run
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeDefinitionNotFoundError,
     RecipeRunNotFoundError,
@@ -32,6 +33,11 @@ recipes_router = APIRouter()
 def _service_for_user(current_user: User):
     stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
     return get_recipe_runs_service_for_user(stable_user_id)
+
+
+def get_recipe_run_job_enqueuer() -> Callable[..., str]:
+    """Return the callable used to enqueue recipe-run Jobs."""
+    return enqueue_recipe_run
 
 
 @recipes_router.get(
@@ -95,7 +101,7 @@ async def validate_recipe_dataset(
 @recipes_router.post(
     "/recipes/{recipe_id}/runs",
     response_model=RecipeRunRecord,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def create_recipe_run(
@@ -104,8 +110,10 @@ async def create_recipe_run(
     response: Response,
     user_ctx: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
+    enqueue_run: Callable[..., str] = Depends(get_recipe_run_job_enqueuer),
 ):
     del user_ctx
+    stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
     service = _service_for_user(current_user)
     try:
         record = service.create_run(
@@ -115,6 +123,12 @@ async def create_recipe_run(
             run_config=payload.get("run_config") or {},
             force_rerun=bool(payload.get("force_rerun", False)),
         )
+        if getattr(record.status, "value", record.status) == "pending":
+            enqueue_run(record, owner_user_id=stable_user_id)
+            if response is not None:
+                response.status_code = status.HTTP_202_ACCEPTED
+        elif response is not None:
+            response.status_code = status.HTTP_200_OK
         if response is not None:
             response.headers["Location"] = f"/api/v1/evaluations/recipe-runs/{record.run_id}"
         return record

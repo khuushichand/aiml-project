@@ -1927,6 +1927,76 @@ class EvaluationsDatabase:
                 return self._row_to_recipe_run_record(row)
         return None
 
+    def update_recipe_run(
+        self,
+        run_id: str,
+        *,
+        status: RunStatus | str | None = None,
+        review_state: ReviewState | str | None = None,
+        confidence_summary: ConfidenceSummary | dict[str, Any] | None = None,
+        recommendation_slots: Optional[dict[str, RecommendationSlot | dict[str, Any] | None]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Update persisted recipe run state with tightly scoped mutable fields."""
+
+        has_updates = any(
+            value is not None
+            for value in (
+                status,
+                review_state,
+                confidence_summary,
+                recommendation_slots,
+                metadata,
+            )
+        )
+        if not has_updates:
+            return False
+
+        status_value = self._coerce_recipe_run_status(status) if status is not None else None
+        review_value = self._coerce_review_state(review_state) if review_state is not None else None
+        confidence_payload = (
+            self._json_dump_value(confidence_summary)
+            if confidence_summary is not None
+            else None
+        )
+        recommendation_payload = (
+            self._json_dump_mapping(self._normalize_recommendation_slots(recommendation_slots))
+            if recommendation_slots is not None
+            else None
+        )
+        metadata_payload = self._json_dump_mapping(metadata) if metadata is not None else None
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE evaluation_recipe_runs
+                    SET
+                        status = COALESCE(?, status),
+                        review_state = COALESCE(?, review_state),
+                        confidence_summary_json = COALESCE(?, confidence_summary_json),
+                        recommendation_slots_json = COALESCE(?, recommendation_slots_json),
+                        metadata_json = COALESCE(?, metadata_json),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE run_id = ?
+                    """,
+                    (
+                        status_value,
+                        review_value,
+                        confidence_payload,
+                        recommendation_payload,
+                        metadata_payload,
+                        run_id,
+                    ),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
+
     def list_recipe_run_children(self, parent_run_id: str) -> list[str]:
         """List child run ids for a parent recipe run."""
 

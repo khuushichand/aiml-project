@@ -6,6 +6,9 @@ from typing import Any
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_recipes import (
+    get_recipe_run_job_enqueuer,
+)
 from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import (
     router as evaluations_unified_router,
 )
@@ -18,6 +21,19 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
 from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import build_dataset_content_hash
 
 pytestmark = [pytest.mark.integration]
+
+
+@pytest.fixture(autouse=True)
+def _override_recipe_run_enqueue_dependency():
+    from tldw_Server_API.app.main import app
+
+    def _noop_enqueue(record, *, owner_user_id=None, job_manager=None):
+        del record, owner_user_id, job_manager
+        return "job-noop"
+
+    app.dependency_overrides[get_recipe_run_job_enqueuer] = lambda: _noop_enqueue
+    yield
+    app.dependency_overrides.pop(get_recipe_run_job_enqueuer, None)
 
 
 def _inline_dataset() -> list[dict[str, Any]]:
@@ -153,7 +169,7 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
         headers=auth_headers,
     )
 
-    assert create_response.status_code == 201
+    assert create_response.status_code == 202
     created = create_response.json()
     assert created["status"] == "pending"
     assert created["metadata"]["run_config"] == payload["run_config"]
@@ -188,6 +204,38 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
 
 
 @pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_enqueues_pending_job(
+    async_api_client,
+    auth_headers,
+) -> None:
+    from tldw_Server_API.app.main import app
+
+    captured: dict[str, Any] = {}
+
+    def _capture_enqueue(record, *, owner_user_id=None, job_manager=None):
+        del job_manager
+        captured["run_id"] = record.run_id
+        captured["owner_user_id"] = owner_user_id
+        return "job-123"
+
+    app.dependency_overrides[get_recipe_run_job_enqueuer] = lambda: _capture_enqueue
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert captured["run_id"] == body["run_id"]
+    assert captured["owner_user_id"] == get_single_user_instance().id_str
+
+
+@pytest.mark.asyncio
 async def test_recipe_run_endpoint_reuses_completed_run_unless_forced(async_api_client, auth_headers) -> None:
     db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
     db = EvaluationsDatabase(db_path)
@@ -203,7 +251,7 @@ async def test_recipe_run_endpoint_reuses_completed_run_unless_forced(async_api_
         headers=auth_headers,
     )
 
-    assert create_response.status_code == 201
+    assert create_response.status_code == 202
     created = create_response.json()
     reuse_hash = created["metadata"]["reuse_hash"]
 
@@ -227,7 +275,7 @@ async def test_recipe_run_endpoint_reuses_completed_run_unless_forced(async_api_
         headers=auth_headers,
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 200
     reused = response.json()
     assert reused["run_id"] == created["run_id"]
     assert reused["status"] == "completed"
@@ -250,7 +298,7 @@ async def test_recipe_run_endpoint_reuses_completed_run_unless_forced(async_api_
         headers=auth_headers,
     )
 
-    assert forced_response.status_code == 201
+    assert forced_response.status_code == 202
     forced = forced_response.json()
     assert forced["run_id"] != created["run_id"]
     assert forced["status"] == "pending"
@@ -276,7 +324,7 @@ async def test_recipe_run_endpoint_repairs_stale_reuse_mapping_to_latest_complet
         headers=auth_headers,
     )
 
-    assert first_create_response.status_code == 201
+    assert first_create_response.status_code == 202
     first_run = first_create_response.json()
     reuse_hash = first_run["metadata"]["reuse_hash"]
     db.record_idempotency(
@@ -296,7 +344,7 @@ async def test_recipe_run_endpoint_repairs_stale_reuse_mapping_to_latest_complet
         headers=auth_headers,
     )
 
-    assert forced_response.status_code == 201
+    assert forced_response.status_code == 202
     forced_run = forced_response.json()
     _mark_recipe_run_completed(db, forced_run["run_id"])
     _set_reuse_mapping(
@@ -315,7 +363,7 @@ async def test_recipe_run_endpoint_repairs_stale_reuse_mapping_to_latest_complet
         headers=auth_headers,
     )
 
-    assert reused_response.status_code == 201
+    assert reused_response.status_code == 200
     reused = reused_response.json()
     assert reused["run_id"] == forced_run["run_id"]
     assert reused["status"] == "completed"
@@ -367,7 +415,7 @@ async def test_recipe_run_endpoint_does_not_reuse_completed_run_from_other_user(
         headers=auth_headers,
     )
 
-    assert reused_response.status_code == 201
+    assert reused_response.status_code == 202
     reused = reused_response.json()
     assert reused["run_id"] != other_user_run_id
     assert reused["metadata"]["owner_user_id"] == current_user_id
@@ -411,7 +459,7 @@ async def test_recipe_run_endpoint_reuses_legacy_completed_run_without_owner_in_
         headers=auth_headers,
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 200
     reused = response.json()
     assert reused["run_id"] == legacy_run_id
     assert reused["status"] == "completed"

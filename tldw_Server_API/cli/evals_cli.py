@@ -29,6 +29,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from tldw_Server_API.app.core.Evaluations.cli.benchmark_cli import benchmark_group
+from tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced import recipes_group
 from tldw_Server_API.cli.commands.config import config_group
 from tldw_Server_API.cli.commands.database import db_group
 from tldw_Server_API.cli.commands.evaluation import eval_group
@@ -185,6 +186,7 @@ main.add_command(test_group, name='test')
 main.add_command(export_group, name='export')
 main.add_command(watchlists_group, name='watchlists')
 main.add_command(benchmark_group, name='benchmark')
+main.add_command(recipes_group, name='recipes')
 
 
 @main.command(name="list-benchmarks")

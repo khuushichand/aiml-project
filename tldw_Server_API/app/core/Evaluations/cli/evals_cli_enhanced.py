@@ -21,9 +21,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
 from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import enqueue_recipe_run
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import RecipeRunsService
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import get_recipe_runs_service_for_user
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -74,6 +78,27 @@ _EVALS_CLI_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
     ChatConfigurationError,
 )
+
+
+def _default_recipe_user_id() -> str:
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
+
+    return get_single_user_instance().id_str
+
+
+def _get_recipe_runs_service(*, user_id: str | None = None, db_path: str | None = None):
+    if db_path:
+        return RecipeRunsService(db=EvaluationsDatabase(db_path), user_id=user_id or _default_recipe_user_id())
+    return get_recipe_runs_service_for_user(user_id or _default_recipe_user_id())
+
+
+def _load_json_option(value: str | None, *, option_name: str, default: Any) -> Any:
+    if value is None:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"{option_name} must be valid JSON: {exc}") from exc
 
 
 def _call_adapter_text(
@@ -551,6 +576,86 @@ def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
         with open(output, 'w') as f:
             json.dump(output_data, f, indent=2)
         click.echo(f"\nResults saved to {output}")
+
+
+@click.group(name="recipes")
+def recipes_group():
+    """Recipe evaluation commands."""
+
+
+@recipes_group.command("list")
+@click.option("--output-format", "-o", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def list_recipes(ctx, output_format):
+    """List available evaluation recipes."""
+    cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
+    service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
+    manifests = service.list_manifests()
+    if output_format == "json":
+        click.echo(json.dumps([manifest.model_dump(mode="json") for manifest in manifests], indent=2))
+        return
+
+    table_data = [
+        [
+            manifest.recipe_id,
+            manifest.recipe_version,
+            ",".join(manifest.supported_modes),
+            manifest.name,
+        ]
+        for manifest in manifests
+    ]
+    click.echo(tabulate(table_data, headers=["Recipe", "Version", "Modes", "Name"], tablefmt="simple"))
+
+
+@recipes_group.command("validate-dataset")
+@click.argument("recipe_id")
+@click.option("--dataset-id", type=str, help="Existing dataset id to validate")
+@click.option("--dataset-json", type=str, help="Inline JSON array dataset payload")
+@click.pass_context
+def validate_recipe_dataset(ctx, recipe_id, dataset_id, dataset_json):
+    """Validate a dataset for one recipe."""
+    dataset = _load_json_option(dataset_json, option_name="--dataset-json", default=None)
+    cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
+    service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
+    result = service.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+    click.echo(json.dumps(result, indent=2, default=str))
+
+
+@recipes_group.command("run")
+@click.argument("recipe_id")
+@click.option("--dataset-id", type=str, help="Existing dataset id to evaluate")
+@click.option("--dataset-json", type=str, help="Inline JSON array dataset payload")
+@click.option("--run-config-json", required=True, type=str, help="Inline JSON object run config")
+@click.option("--force-rerun", is_flag=True, help="Force a fresh run even if a completed match exists")
+@click.pass_context
+def run_recipe(ctx, recipe_id, dataset_id, dataset_json, run_config_json, force_rerun):
+    """Create and enqueue a recipe run."""
+    dataset = _load_json_option(dataset_json, option_name="--dataset-json", default=None)
+    run_config = _load_json_option(run_config_json, option_name="--run-config-json", default={})
+    cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
+    service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
+    record = service.create_run(
+        recipe_id,
+        dataset_id=dataset_id,
+        dataset=dataset,
+        run_config=run_config,
+        force_rerun=force_rerun,
+    )
+    output = {"run": record.model_dump(mode="json")}
+    if getattr(record.status, "value", record.status) == "pending":
+        output["job_id"] = enqueue_recipe_run(record)
+    click.echo(json.dumps(output, indent=2, default=str))
+
+
+@recipes_group.command("report")
+@click.argument("run_id")
+@click.pass_context
+def recipe_report(ctx, run_id):
+    """Fetch a normalized recipe run report."""
+    cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
+    service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
+    report = service.get_report(run_id)
+    click.echo(json.dumps(report.model_dump(mode="json"), indent=2, default=str))
 
 
 @cli.command()
