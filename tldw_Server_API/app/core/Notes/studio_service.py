@@ -75,8 +75,9 @@ class NotesStudioService:
         )
 
         markdown = render_studio_markdown(payload)
+        note_title = str(payload.get("meta", {}).get("title") or derived_title).strip() or derived_title
         with self.db.transaction() as conn:
-            note_id = self.db.add_note(title=derived_title, content=markdown, conn=conn)
+            note_id = self.db.add_note(title=note_title, content=markdown, conn=conn)
             if note_id is None:
                 raise InputError("Failed to create derived note.")  # noqa: TRY003
 

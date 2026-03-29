@@ -89,6 +89,51 @@ def test_derive_creates_derived_note_and_sidecar(studio_db):
     }
 
 
+def test_derive_uses_canonical_payload_title_for_note_row_and_markdown(studio_db):
+    db = studio_db
+    source_note_id = db.add_note(
+        title="Source Note",
+        content="A source excerpt that yields a canonical title from the generator.",
+    )
+    assert source_note_id is not None
+
+    async def _generation_adapter(request: dict[str, object], _context: dict[str, object]) -> dict[str, object]:
+        assert request["derived_title"] == "Source Note Study Notes"
+        return {
+            "payload": {
+                "meta": {
+                    "title": "Canonical Study Notes",
+                    "source_note_id": str(source_note_id),
+                },
+                "sections": [
+                    {
+                        "id": "notes-1",
+                        "kind": "notes",
+                        "title": "Notes",
+                        "content": "A source excerpt that yields a canonical title from the generator.",
+                    }
+                ],
+            }
+        }
+
+    service = NotesStudioService(db=db, generation_adapter=_generation_adapter)
+
+    result = _derive_note(
+        service,
+        source_note_id=str(source_note_id),
+        excerpt_text="A source excerpt that yields a canonical title from the generator.",
+    )
+
+    note = result["note"]
+    studio_document = result["studio_document"]
+
+    assert note["title"] == "Canonical Study Notes"
+    assert note["content"].startswith("# Canonical Study Notes")
+    assert studio_document["payload_json"]["meta"]["title"] == "Canonical Study Notes"
+    assert result["is_stale"] is False
+    assert result["stale_reason"] is None
+
+
 def test_cornell_generation_includes_explicit_recall_prompt(studio_db):
     db = studio_db
     source_note_id = db.add_note(
