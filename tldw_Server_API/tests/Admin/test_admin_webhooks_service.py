@@ -107,6 +107,37 @@ def _make_pool_mock() -> MagicMock:
     return pool
 
 
+class _FakeAsyncWebhookClient:
+    def __init__(self, response_or_responses):
+        if isinstance(response_or_responses, list):
+            self.post = AsyncMock(side_effect=response_or_responses)
+        else:
+            self.post = AsyncMock(return_value=response_or_responses)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def _install_fake_webhook_client(svc: AdminWebhooksService, response_or_responses):
+    factory_calls: list[dict[str, object]] = []
+    client = _FakeAsyncWebhookClient(response_or_responses)
+
+    def _factory(*, timeout: int, follow_redirects: bool):
+        factory_calls.append(
+            {
+                "timeout": timeout,
+                "follow_redirects": follow_redirects,
+            }
+        )
+        return client
+
+    svc.http_client_factory = _factory
+    return client, factory_calls
+
+
 @pytest.fixture
 def svc() -> AdminWebhooksService:
     return AdminWebhooksService(db_pool=_make_pool_mock())
@@ -226,17 +257,13 @@ async def test_deliver_success(svc: AdminWebhooksService):
     mock_response.status_code = 200
     mock_response.text = "OK"
 
-    with patch("tldw_Server_API.app.services.admin_webhooks_service.httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
+    mock_client, factory_calls = _install_fake_webhook_client(svc, mock_response)
 
-        entry = await svc.deliver(wh, "test.event", {"key": "value"})
-        assert entry.status_code == 200
-        mock_client_cls.assert_called_once_with(timeout=5, follow_redirects=False)
-        mock_client.post.assert_awaited_once()
+    entry = await svc.deliver(wh, "test.event", {"key": "value"})
+
+    assert entry.status_code == 200
+    assert factory_calls == [{"timeout": 5, "follow_redirects": False}]
+    mock_client.post.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -263,19 +290,15 @@ async def test_deliver_refreshes_signature_and_timestamp_for_each_retry_attempt(
     second_response.status_code = 200
     second_response.text = "OK"
 
+    mock_client, factory_calls = _install_fake_webhook_client(svc, [first_response, second_response])
+
     with (
-        patch("tldw_Server_API.app.services.admin_webhooks_service.httpx.AsyncClient") as mock_client_cls,
         patch("tldw_Server_API.app.services.admin_webhooks_service.asyncio.sleep", new=AsyncMock()),
         patch("tldw_Server_API.app.services.admin_webhooks_service.time.time", side_effect=[1000, 1005]),
     ):
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = [first_response, second_response]
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
-
         await svc.deliver(wh, "test.event", {"key": "value"})
 
+    assert factory_calls == [{"timeout": 5, "follow_redirects": False}]
     first_call = mock_client.post.await_args_list[0]
     second_call = mock_client.post.await_args_list[1]
     assert first_call.kwargs["headers"]["X-Admin-Webhook-Timestamp"] == "1000"
@@ -314,16 +337,14 @@ async def test_dispatch_event_filters_by_event_type(svc: AdminWebhooksService):
     mock_response.status_code = 200
     mock_response.text = "OK"
 
-    with patch("tldw_Server_API.app.services.admin_webhooks_service.httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
+    mock_client, factory_calls = _install_fake_webhook_client(svc, mock_response)
 
-        delivered = await svc.dispatch_event("incident.created", {"id": 1})
-        # Only webhook 1 matches "incident.created", webhook 2 only wants "alert.fired"
-        assert delivered == 1
+    delivered = await svc.dispatch_event("incident.created", {"id": 1})
+
+    assert factory_calls == [{"timeout": 5, "follow_redirects": False}]
+    mock_client.post.assert_awaited_once()
+    # Only webhook 1 matches "incident.created", webhook 2 only wants "alert.fired"
+    assert delivered == 1
 
 
 @pytest.mark.asyncio

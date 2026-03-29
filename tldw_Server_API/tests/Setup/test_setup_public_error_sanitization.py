@@ -9,7 +9,8 @@ from fastapi import HTTPException
 import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 
 
-def test_execute_audio_bundle_provision_hides_internal_validation_details(mocker):
+@pytest.mark.asyncio
+async def test_execute_audio_bundle_provision_hides_internal_validation_details(mocker):
     mocker.patch.object(setup_endpoint, "_ensure_audio_installer_available", return_value=None)
     mocker.patch.object(
         setup_endpoint.install_manager,
@@ -18,7 +19,7 @@ def test_execute_audio_bundle_provision_hides_internal_validation_details(mocker
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        setup_endpoint._execute_audio_bundle_provision(
+        await setup_endpoint._execute_audio_bundle_provision(
             setup_endpoint.AudioBundleProvisionRequest(
                 bundle_id="cpu_local",
                 resource_profile="balanced",

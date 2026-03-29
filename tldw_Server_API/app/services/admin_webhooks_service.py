@@ -12,7 +12,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from loguru import logger
@@ -67,6 +67,11 @@ def generate_signature(secret: str, timestamp: str, body: str) -> str:
     return f"v1={sig}"
 
 
+def _default_async_client_factory(*, timeout: int, follow_redirects: bool) -> httpx.AsyncClient:
+    """Create the outbound webhook client used for delivery attempts."""
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects)
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -76,6 +81,7 @@ class AdminWebhooksService:
     """Manages admin webhook registrations, delivery, and logs."""
 
     db_pool: DatabasePool = field(default=None)  # type: ignore[assignment]
+    http_client_factory: Callable[..., Any] = field(default=_default_async_client_factory)
 
     async def _get_pool(self) -> DatabasePool:
         if self.db_pool is not None:
@@ -245,7 +251,7 @@ class AdminWebhooksService:
         signature = ""
 
         max_attempts = max(1, webhook.retry_count + 1)
-        async with httpx.AsyncClient(
+        async with self.http_client_factory(
             timeout=webhook.timeout_seconds,
             follow_redirects=False,
         ) as client:
