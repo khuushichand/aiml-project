@@ -797,6 +797,51 @@ def test_slides_builtin_style_detail_exposes_catalog_metadata_and_compact_defaul
     assert "custom_css" not in style["appearance_defaults"]
 
 
+def test_slides_builtin_style_list_skips_custom_css_rendering(slides_client, monkeypatch):
+    from tldw_Server_API.app.core.Slides.visual_style_resolver import (
+        resolve_builtin_visual_style as real_resolve_builtin_visual_style,
+    )
+
+    captured: list[bool] = []
+
+    def _recorded_resolve(style_id: str, *, include_custom_css: bool):
+        captured.append(include_custom_css)
+        return real_resolve_builtin_visual_style(style_id, include_custom_css=include_custom_css)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_builtin_visual_style",
+        _recorded_resolve,
+    )
+
+    resp = slides_client.get("/api/v1/slides/styles")
+
+    assert resp.status_code == 200, resp.text
+    assert captured
+    assert set(captured) == {False}
+
+
+def test_slides_builtin_style_detail_skips_custom_css_rendering(slides_client, monkeypatch):
+    from tldw_Server_API.app.core.Slides.visual_style_resolver import (
+        resolve_builtin_visual_style as real_resolve_builtin_visual_style,
+    )
+
+    captured: list[bool] = []
+
+    def _recorded_resolve(style_id: str, *, include_custom_css: bool):
+        captured.append(include_custom_css)
+        return real_resolve_builtin_visual_style(style_id, include_custom_css=include_custom_css)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_builtin_visual_style",
+        _recorded_resolve,
+    )
+
+    resp = slides_client.get("/api/v1/slides/styles/notebooklm-blueprint")
+
+    assert resp.status_code == 200, resp.text
+    assert captured == [False]
+
+
 def test_slides_styles_list_supports_pagination(slides_client):
     create_resp = slides_client.post(
         "/api/v1/slides/styles",
@@ -1281,6 +1326,40 @@ def test_slides_patch_with_builtin_style_preserves_explicit_null_appearance_over
         "controls": True,
         "progress": True,
     }
+
+
+def test_slides_patch_rejects_explicit_null_theme(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={
+            "theme": None,
+            "visual_style_id": "notebooklm-blueprint",
+            "visual_style_scope": "builtin",
+        },
+        headers={"If-Match": create_resp.headers["ETag"]},
+    )
+
+    assert patch_resp.status_code == 422
+    assert patch_resp.json()["detail"] == "invalid_theme"
 
 
 def test_slides_generate_with_template_defaults(slides_client, tmp_path, monkeypatch):

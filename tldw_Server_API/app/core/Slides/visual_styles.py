@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tldw_Server_API.app.core.Slides.visual_style_catalog import (
+    BuiltinVisualStyleDefinition,
     get_builtin_visual_style_definition,
     list_builtin_visual_style_definitions,
 )
@@ -25,7 +26,9 @@ class VisualStylePreset:
     fallback_policy: dict[str, Any]
 
 
-def _project_definition(definition) -> VisualStylePreset:
+def _project_definition(definition: BuiltinVisualStyleDefinition) -> VisualStylePreset:
+    """Project a catalog definition into the legacy preset compatibility shape."""
+
     return VisualStylePreset(
         style_id=definition.style_id,
         name=definition.name,

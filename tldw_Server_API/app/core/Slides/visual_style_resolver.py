@@ -35,6 +35,8 @@ def _build_snapshot(
     resolved_theme: str,
     resolved_marp_theme: str | None,
 ) -> dict[str, Any]:
+    """Build the compact persisted snapshot for a resolved built-in style."""
+
     return {
         "id": definition.style_id,
         "scope": "builtin",
@@ -64,8 +66,11 @@ def _build_snapshot(
         },
     }
 
-
-def resolve_builtin_visual_style(style_id: str) -> ResolvedBuiltinVisualStyle | None:
+def resolve_builtin_visual_style(
+    style_id: str,
+    *,
+    include_custom_css: bool = True,
+) -> ResolvedBuiltinVisualStyle | None:
     """Resolve a built-in style id into compact snapshot metadata and appearance."""
 
     definition = get_builtin_visual_style_definition(style_id)
@@ -92,11 +97,13 @@ def resolve_builtin_visual_style(style_id: str) -> ResolvedBuiltinVisualStyle | 
     resolved_theme = str(appearance_overrides.get("theme") or definition.base_theme)
     resolved_marp_theme_value = appearance_overrides.get("marp_theme")
     resolved_marp_theme = str(resolved_marp_theme_value) if isinstance(resolved_marp_theme_value, str) else None
-    custom_css = render_pack_custom_css(
-        style_id=definition.style_id,
-        pack_id=pack.pack_id if pack is not None else definition.style_pack,
-        token_overrides=token_overrides,
-    )
+    custom_css = None
+    if include_custom_css:
+        custom_css = render_pack_custom_css(
+            style_id=definition.style_id,
+            pack_id=pack.pack_id if pack is not None else definition.style_pack,
+            token_overrides=token_overrides,
+        )
 
     snapshot = _build_snapshot(
         definition,

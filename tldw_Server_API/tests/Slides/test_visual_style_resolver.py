@@ -1,3 +1,5 @@
+import pytest
+
 from tldw_Server_API.app.core.Slides.visual_style_resolver import resolve_builtin_visual_style
 
 
@@ -36,3 +38,19 @@ def test_resolver_uses_style_specific_token_overrides_for_hand_drawn_styles():
     assert whiteboard.appearance["custom_css"] != sketch_noting.appearance["custom_css"]
     assert chalkboard.appearance["theme"] == "black"
     assert whiteboard.appearance["theme"] == "white"
+
+
+def test_resolver_can_skip_custom_css_rendering(monkeypatch):
+    def _unexpected_render(**kwargs):
+        raise AssertionError("custom_css should not be rendered")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.visual_style_resolver.render_pack_custom_css",
+        _unexpected_render,
+    )
+
+    resolved = resolve_builtin_visual_style("notebooklm-blueprint", include_custom_css=False)
+
+    assert resolved is not None
+    assert resolved.appearance["theme"] == "night"
+    assert resolved.appearance["custom_css"] is None

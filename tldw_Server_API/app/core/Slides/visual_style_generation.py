@@ -22,12 +22,16 @@ _SUPPORTED_VISUAL_BLOCK_TYPES: tuple[str, ...] = (
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
+    """Return a shallow dict copy when the incoming value is dict-like."""
+
     if isinstance(value, dict):
         return dict(value)
     return {}
 
 
 def _coerce_string_tuple(value: Any) -> tuple[str, ...]:
+    """Normalize a list-like value into a trimmed tuple of strings."""
+
     if isinstance(value, (list, tuple)):
         return tuple(str(item).strip() for item in value if str(item).strip())
     return ()
@@ -36,6 +40,8 @@ def _coerce_string_tuple(value: Any) -> tuple[str, ...]:
 def _resolve_visual_style_prompt_source(
     visual_style_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
+    """Resolve prompt-driving style metadata from a snapshot or builtin catalog entry."""
+
     style_id = str(visual_style_snapshot.get("id") or "").strip()
     style_scope = str(visual_style_snapshot.get("scope") or "").strip().lower()
     style_name = str(visual_style_snapshot.get("name") or style_id or "selected").strip()
@@ -73,6 +79,8 @@ def _resolve_visual_style_prompt_source(
 
 
 def _format_fallback_policy(fallback_policy: dict[str, Any]) -> str:
+    """Format fallback policy metadata into a compact prompt line."""
+
     if not fallback_policy:
         return "Keep slides readable in plain markdown if a structured block does not fit."
 
@@ -94,6 +102,8 @@ def _format_fallback_policy(fallback_policy: dict[str, Any]) -> str:
 
 
 def _build_prompt_sections(visual_style_snapshot: dict[str, Any]) -> list[str]:
+    """Build the prompt sections that steer slide generation toward the selected style."""
+
     source = _resolve_visual_style_prompt_source(visual_style_snapshot)
 
     lines = [
@@ -177,6 +187,8 @@ def apply_visual_block_fallback(slide: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compile_block_fallback(block: dict[str, Any]) -> list[str]:
+    """Compile a structured visual block into readable markdown fallback lines."""
+
     block_type = block.get("type")
     if block_type == "timeline":
         return _compile_timeline(block)
@@ -190,6 +202,8 @@ def _compile_block_fallback(block: dict[str, Any]) -> list[str]:
 
 
 def _compile_timeline(block: dict[str, Any]) -> list[str]:
+    """Compile a timeline block into ordered markdown bullets."""
+
     items = block.get("items")
     if not isinstance(items, list):
         return _compile_generic_block(block)
@@ -211,6 +225,8 @@ def _compile_timeline(block: dict[str, Any]) -> list[str]:
 
 
 def _compile_comparison_matrix(block: dict[str, Any]) -> list[str]:
+    """Compile a comparison matrix block into readable comparison bullets."""
+
     rows = block.get("rows")
     if not isinstance(rows, list):
         return _compile_generic_block(block)
@@ -232,6 +248,8 @@ def _compile_comparison_matrix(block: dict[str, Any]) -> list[str]:
 
 
 def _compile_process_flow(block: dict[str, Any]) -> list[str]:
+    """Compile a process flow block into numbered markdown steps."""
+
     steps = block.get("steps")
     if not isinstance(steps, list):
         return _compile_generic_block(block)
@@ -249,6 +267,8 @@ def _compile_process_flow(block: dict[str, Any]) -> list[str]:
 
 
 def _compile_stat_group(block: dict[str, Any]) -> list[str]:
+    """Compile a stat group block into metric bullets."""
+
     items = block.get("items")
     if not isinstance(items, list):
         return _compile_generic_block(block)
@@ -269,6 +289,8 @@ def _compile_stat_group(block: dict[str, Any]) -> list[str]:
 
 
 def _compile_generic_block(block: dict[str, Any]) -> list[str]:
+    """Compile an unknown block into a generic markdown fallback."""
+
     title = str(block.get("title") or block.get("name") or "").strip()
     description = str(block.get("description") or block.get("summary") or "").strip()
     if title and description:

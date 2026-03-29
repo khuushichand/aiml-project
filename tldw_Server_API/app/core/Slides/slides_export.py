@@ -449,6 +449,8 @@ def _sanitize_custom_css(css_text: str | None) -> str | None:
 
 
 def _normalize_text_block(text: str | None) -> str:
+    """Collapse a text block into comparable normalized lines."""
+
     if not text:
         return ""
     lines = [" ".join(line.split()) for line in str(text).splitlines()]
@@ -457,6 +459,8 @@ def _normalize_text_block(text: str | None) -> str:
 
 
 def _extract_visual_blocks(slide: Any) -> list[dict[str, Any]]:
+    """Extract normalized visual block metadata from a slide payload."""
+
     metadata = _get_slide_value(slide, "metadata", {}) or {}
     if not isinstance(metadata, dict):
         return []
@@ -471,6 +475,8 @@ def _extract_visual_blocks(slide: Any) -> list[dict[str, Any]]:
 
 
 def _compile_visual_block_fallback(block: dict[str, Any]) -> list[str]:
+    """Compile a visual block into plain-text fallback lines for markdown exports."""
+
     block_type = str(block.get("type") or "").strip()
     if block_type == "timeline":
         items = block.get("items")
@@ -547,6 +553,8 @@ def _compile_visual_block_fallback(block: dict[str, Any]) -> list[str]:
 
 
 def _render_timeline_block(block: dict[str, Any]) -> str:
+    """Render timeline metadata into HTML for Reveal exports."""
+
     items = block.get("items")
     if not isinstance(items, list):
         return ""
@@ -579,6 +587,8 @@ def _render_timeline_block(block: dict[str, Any]) -> str:
 
 
 def _render_comparison_matrix_block(block: dict[str, Any]) -> str:
+    """Render comparison matrix metadata into HTML for Reveal exports."""
+
     rows = block.get("rows")
     if not isinstance(rows, list):
         return ""
@@ -609,6 +619,8 @@ def _render_comparison_matrix_block(block: dict[str, Any]) -> str:
 
 
 def _render_process_flow_block(block: dict[str, Any]) -> str:
+    """Render process flow metadata into HTML for Reveal exports."""
+
     steps = block.get("steps")
     if not isinstance(steps, list):
         return ""
@@ -634,6 +646,8 @@ def _render_process_flow_block(block: dict[str, Any]) -> str:
 
 
 def _render_stat_group_block(block: dict[str, Any]) -> str:
+    """Render stat group metadata into HTML for Reveal exports."""
+
     items = block.get("items")
     if not isinstance(items, list):
         return ""
@@ -666,6 +680,8 @@ def _render_stat_group_block(block: dict[str, Any]) -> str:
 
 
 def _render_visual_blocks_html(blocks: list[dict[str, Any]]) -> tuple[str, bool, str]:
+    """Render all supported visual blocks and return HTML plus fallback metadata."""
+
     if not blocks:
         return "", False, ""
     rendered_html: list[str] = []
@@ -691,6 +707,8 @@ def _render_visual_blocks_html(blocks: list[dict[str, Any]]) -> tuple[str, bool,
 
 
 def _content_is_structured_fallback(content: Any, fallback_text: str) -> bool:
+    """Return whether slide content already matches the generated block fallback text."""
+
     normalized_content = _normalize_text_block(str(content or ""))
     normalized_fallback = _normalize_text_block(fallback_text)
     if not normalized_fallback:
@@ -699,6 +717,8 @@ def _content_is_structured_fallback(content: Any, fallback_text: str) -> bool:
 
 
 def _render_style_shell_attrs(visual_style_snapshot: dict[str, Any] | None) -> str:
+    """Render shell-level data attributes for built-in visual style hooks."""
+
     if not isinstance(visual_style_snapshot, dict):
         return ""
     resolution = visual_style_snapshot.get("resolution")
@@ -721,6 +741,8 @@ def _compose_export_css(
     custom_css: str | None,
     visual_style_snapshot: dict[str, Any] | None,
 ) -> str | None:
+    """Compose shared export CSS with builtin pack CSS and custom deck CSS."""
+
     built_in_css = None
     if isinstance(visual_style_snapshot, dict):
         resolution = visual_style_snapshot.get("resolution")

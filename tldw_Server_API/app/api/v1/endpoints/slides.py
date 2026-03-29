@@ -458,6 +458,8 @@ def _serialize_source_ref(value: Any | None) -> str | None:
 
 
 def _field_was_set(model: Any, field_name: str) -> bool:
+    """Return whether a Pydantic model received an explicit value for a field."""
+
     fields_set = getattr(model, "model_fields_set", None)
     if isinstance(fields_set, set):
         return field_name in fields_set
@@ -465,6 +467,8 @@ def _field_was_set(model: Any, field_name: str) -> bool:
 
 
 def _resolve_template(template_id: str | None) -> SlidesTemplate | None:
+    """Resolve a template id into a template object or raise the appropriate API error."""
+
     if not template_id:
         return None
     try:
@@ -487,6 +491,8 @@ def _compact_visual_style_appearance_defaults(appearance_defaults: dict[str, Any
 def _visual_style_application_from_builtin(
     resolved: ResolvedBuiltinVisualStyle,
 ) -> PresentationVisualStyleApplication:
+    """Convert a resolved builtin style into the presentation write-model shape."""
+
     appearance_defaults = _validate_visual_style_appearance_defaults(resolved.appearance)
     return PresentationVisualStyleApplication(
         style_id=resolved.definition.style_id,
@@ -499,6 +505,8 @@ def _visual_style_application_from_builtin(
 
 
 def _visual_style_application_from_row(row: VisualStyleRow) -> PresentationVisualStyleApplication:
+    """Convert a stored user visual-style row into the presentation write-model shape."""
+
     payload = _deserialize_visual_style_payload(row.style_payload)
     appearance_defaults_raw = payload.get("appearance_defaults") if isinstance(payload.get("appearance_defaults"), dict) else {}
     appearance_defaults = _validate_visual_style_appearance_defaults(appearance_defaults_raw)
@@ -536,6 +544,8 @@ def _apply_template_defaults(
     template: SlidesTemplate | None,
     visual_style_application: PresentationVisualStyleApplication | None = None,
 ) -> tuple[str, str | None, dict[str, Any] | None, str | None]:
+    """Merge request values with visual-style and template defaults."""
+
     appearance_defaults = (
         visual_style_application.appearance_defaults if visual_style_application is not None else {}
     )
@@ -639,6 +649,8 @@ def _serialize_visual_style_payload(
 def _visual_style_response_from_builtin(
     resolved: ResolvedBuiltinVisualStyle,
 ) -> VisualStyleResponse:
+    """Convert a resolved builtin style into the public API response shape."""
+
     return VisualStyleResponse(
         id=resolved.definition.style_id,
         name=resolved.definition.name,
@@ -683,7 +695,9 @@ def _visual_style_response_from_row(row: VisualStyleRow) -> VisualStyleResponse:
 
 
 def _resolve_visual_style_response(style_id: str, db: SlidesDatabase) -> VisualStyleResponse:
-    resolved_builtin = resolve_builtin_visual_style(style_id)
+    """Resolve either a builtin or stored style into the public API response shape."""
+
+    resolved_builtin = resolve_builtin_visual_style(style_id, include_custom_css=False)
     if resolved_builtin is not None:
         return _visual_style_response_from_builtin(resolved_builtin)
     try:
@@ -720,6 +734,8 @@ def _resolve_presentation_visual_style_application(
     visual_style_scope: str | None,
     db: SlidesDatabase,
 ) -> PresentationVisualStyleApplication | None:
+    """Resolve a presentation-level visual-style selection into an application payload."""
+
     if visual_style_id is None and visual_style_scope is None:
         return None
     if visual_style_id is None:
@@ -1339,6 +1355,8 @@ async def patch_presentation(
         update_fields["title"] = title
     if request.description is not None:
         update_fields["description"] = request.description
+    if theme_was_set and request.theme is None:
+        raise HTTPException(status_code=422, detail="invalid_theme")
     if request.theme is not None:
         _validate_theme(request.theme)
         update_fields["theme"] = request.theme
@@ -1573,7 +1591,10 @@ async def list_visual_styles(
     styles = [
         *(
             _visual_style_response_from_builtin(resolved)
-            for resolved in (resolve_builtin_visual_style(style.style_id) for style in builtin_slice)
+            for resolved in (
+                resolve_builtin_visual_style(style.style_id, include_custom_css=False)
+                for style in builtin_slice
+            )
             if resolved is not None
         ),
         *(_visual_style_response_from_row(row) for row in user_rows),
