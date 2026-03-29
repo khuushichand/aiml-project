@@ -113,19 +113,79 @@ def test_handle_recipe_run_job_marks_run_completed_with_normalized_report(tmp_pa
         dataset=_inline_dataset(),
         run_config=_run_config(),
     )
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
 
-    result = handle_recipe_run_job(
-        {
-            "id": "job-42",
-            "payload": build_recipe_run_job_payload(
-                run_id=record.run_id,
-                recipe_id=record.recipe_id,
-                owner_user_id=user_id,
-            ),
-        },
-        db=db,
-        user_id=user_id,
-    )
+    def _fake_execute(*, record, db, user_id, service):
+        del db, user_id, service
+        return {
+            "child_run_ids": [],
+            "metadata": {
+                "candidate_results": [
+                    {
+                        "candidate_id": "openai:gpt-4.1-mini",
+                        "candidate_run_id": "openai:gpt-4.1-mini",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                        "sample_results": [
+                            {
+                                "sample_id": "sample-0",
+                                "metrics": {
+                                    "consistency": 4.8,
+                                    "relevance": 4.5,
+                                    "coherence": 4.2,
+                                    "fluency": 2.9,
+                                },
+                                "latency_ms": 100.0,
+                            }
+                        ],
+                    }
+                ],
+                "recipe_report_inputs": {
+                    "dataset_mode": record.metadata["dataset_mode"],
+                    "review_sample": record.metadata["review_sample"],
+                    "weights": {"grounding": 0.5, "coverage": 0.3, "usefulness": 0.2},
+                    "candidate_results": [
+                        {
+                            "candidate_id": "openai:gpt-4.1-mini",
+                            "candidate_run_id": "openai:gpt-4.1-mini",
+                            "provider": "openai",
+                            "model": "gpt-4.1-mini",
+                            "sample_results": [
+                                {
+                                    "sample_id": "sample-0",
+                                    "metrics": {
+                                        "consistency": 4.8,
+                                        "relevance": 4.5,
+                                        "coherence": 4.2,
+                                        "fluency": 2.9,
+                                    },
+                                    "latency_ms": 100.0,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        }
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(worker, "_execute_summarization_recipe_run", _fake_execute)
+
+    try:
+        result = handle_recipe_run_job(
+            {
+                "id": "job-42",
+                "payload": build_recipe_run_job_payload(
+                    run_id=record.run_id,
+                    recipe_id=record.recipe_id,
+                    owner_user_id=user_id,
+                ),
+            },
+            db=db,
+            user_id=user_id,
+        )
+    finally:
+        monkeypatch.undo()
 
     refreshed = db.get_recipe_run(record.run_id)
 
@@ -160,20 +220,62 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
             assert run_id == record.run_id
             raise RuntimeError("boom")
 
-    try:
-        handle_recipe_run_job(
-            {
-                "id": "job-99",
-                "payload": build_recipe_run_job_payload(
-                    run_id=record.run_id,
-                    recipe_id=record.recipe_id,
-                    owner_user_id=user_id,
-                ),
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    def _fake_execute(*, record, db, user_id, service):
+        del db, user_id, service
+        return {
+            "child_run_ids": [],
+            "metadata": {
+                "candidate_results": [
+                    {
+                        "candidate_id": "openai:gpt-4.1-mini",
+                        "candidate_run_id": "openai:gpt-4.1-mini",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                        "sample_results": [
+                            {
+                                "sample_id": "sample-0",
+                                "metrics": {
+                                    "consistency": 4.8,
+                                    "relevance": 4.5,
+                                    "coherence": 4.2,
+                                    "fluency": 2.9,
+                                },
+                                "latency_ms": 100.0,
+                            }
+                        ],
+                    }
+                ],
+                "recipe_report_inputs": {
+                    "dataset_mode": record.metadata["dataset_mode"],
+                    "review_sample": record.metadata["review_sample"],
+                    "weights": {"grounding": 0.5, "coverage": 0.3, "usefulness": 0.2},
+                    "candidate_results": [],
+                },
             },
-            db=db,
-            user_id=user_id,
-            service=_BrokenService(),
-        )
+        }
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(worker, "_execute_summarization_recipe_run", _fake_execute)
+
+    try:
+        try:
+            handle_recipe_run_job(
+                {
+                    "id": "job-99",
+                    "payload": build_recipe_run_job_payload(
+                        run_id=record.run_id,
+                        recipe_id=record.recipe_id,
+                        owner_user_id=user_id,
+                    ),
+                },
+                db=db,
+                user_id=user_id,
+                service=_BrokenService(),
+            )
+        finally:
+            monkeypatch.undo()
     except RuntimeError as exc:
         assert str(exc) == "boom"
     else:
@@ -184,6 +286,106 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
     assert refreshed.status is RunStatus.FAILED
     assert refreshed.metadata["jobs"]["worker_state"] == "failed"
     assert refreshed.metadata["jobs"]["error"] == "boom"
+
+
+def test_handle_recipe_run_job_executes_summarization_recipe_and_persists_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, user_id = _service(tmp_path)
+    dataset = [
+        {
+            "input": "OpenAI released a smaller model for fast summarization workloads.",
+            "expected": "OpenAI released a small model for summarization.",
+            "metadata": {"sample_id": "news-1"},
+        },
+        {
+            "input": "Local models remain attractive for private deployments with lower direct cost.",
+            "expected": "Local models can be cheaper and more private.",
+            "metadata": {"sample_id": "news-2"},
+        },
+    ]
+    record = service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config={
+            **_run_config(),
+            "candidate_model_ids": [
+                "openai:gpt-4.1-mini",
+                "ollama:llama3.1:8b",
+            ],
+            "weights": {"grounding": 0.5, "coverage": 0.3, "usefulness": 0.2},
+        },
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    def _fake_generate_summary(*, provider: str, model: str, source_text: str, run_config: dict[str, Any]) -> str:
+        del run_config
+        return f"{provider}:{model} summary for {source_text[:18]}"
+
+    def _fake_score_summary(
+        *,
+        source_text: str,
+        summary: str,
+        run_config: dict[str, Any],
+        reference_summary: str | None,
+    ) -> dict[str, Any]:
+        del source_text, run_config, reference_summary
+        if summary.startswith("openai:"):
+            return {
+                "metrics": {
+                    "consistency": 4.8,
+                    "relevance": 4.5,
+                    "coherence": 4.3,
+                    "fluency": 2.9,
+                },
+                "average_score": 0.89,
+                "assessment": "High quality",
+            }
+        return {
+            "metrics": {
+                "consistency": 4.1,
+                "relevance": 4.0,
+                "coherence": 4.0,
+                "fluency": 2.8,
+            },
+            "average_score": 0.80,
+            "assessment": "Good quality",
+        }
+
+    monkeypatch.setattr(worker, "_generate_summary_for_candidate", _fake_generate_summary)
+    monkeypatch.setattr(worker, "_score_summary_with_geval", _fake_score_summary)
+
+    result = worker.handle_recipe_run_job(
+        {
+            "id": "job-summary",
+            "payload": build_recipe_run_job_payload(
+                run_id=record.run_id,
+                recipe_id=record.recipe_id,
+                owner_user_id=user_id,
+            ),
+        },
+        db=db,
+        user_id=user_id,
+    )
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert result["status"] == "completed"
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.COMPLETED
+    assert refreshed.child_run_ids == []
+    assert len(refreshed.metadata["candidate_results"]) == 2
+    assert refreshed.metadata["candidate_results"][0]["sample_results"][0]["summary"].startswith("openai:")
+    assert refreshed.metadata["recipe_report_inputs"]["weights"] == {
+        "grounding": 0.5,
+        "coverage": 0.3,
+        "usefulness": 0.2,
+    }
+    assert refreshed.metadata["recipe_report"]["best_overall"]["candidate_id"] == "openai:gpt-4.1-mini"
+    assert refreshed.recommendation_slots["best_overall"].candidate_run_id == "openai:gpt-4.1-mini"
+    assert refreshed.metadata["jobs"]["worker_state"] == "completed"
 
 
 def test_handle_recipe_run_job_executes_embeddings_recipe_and_persists_child_artifacts(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from typing import Any
 
 from loguru import logger
@@ -25,6 +26,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
 )
 from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import run_abtest_full
+from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
     RECIPE_RUN_JOB_DOMAIN,
     parse_recipe_run_job_payload,
@@ -36,7 +38,21 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.testing import env_flag_enabled
+
+_LOCAL_SUMMARIZATION_PROVIDERS = {
+    "ollama",
+    "llama.cpp",
+    "llamacpp",
+    "kobold.cpp",
+    "koboldcpp",
+    "oobabooga",
+    "tabbyapi",
+    "vllm",
+    "aphrodite",
+    "local",
+}
 
 
 def _get_db(*, user_id: str | None) -> EvaluationsDatabase:
@@ -92,6 +108,25 @@ def _resolve_embeddings_dataset(record: Any, db: EvaluationsDatabase, user_id: s
     return [dict(sample) for sample in samples]
 
 
+def _resolve_inline_or_persisted_dataset(
+    record: Any,
+    db: EvaluationsDatabase,
+    user_id: str | None,
+) -> list[dict[str, Any]]:
+    inline_dataset = record.metadata.get("inline_dataset")
+    if isinstance(inline_dataset, list):
+        return [dict(sample) for sample in inline_dataset]
+
+    dataset_id = record.metadata.get("dataset_id")
+    if not dataset_id:
+        raise ValueError("Recipe run requires inline_dataset or dataset_id metadata.")
+    dataset_row = db.get_dataset(str(dataset_id), created_by=user_id or None)
+    if not dataset_row:
+        raise ValueError(f"Dataset '{dataset_id}' was not found for recipe execution.")
+    samples = dataset_row.get("samples") or []
+    return [dict(sample) for sample in samples]
+
+
 def _resolve_candidate_provider_model(candidate: dict[str, Any]) -> tuple[str, str]:
     provider = str(candidate.get("provider") or "").strip()
     model = str(candidate.get("model") or "").strip()
@@ -101,6 +136,22 @@ def _resolve_candidate_provider_model(candidate: dict[str, Any]) -> tuple[str, s
         inferred_provider, inferred_model = model.split(":", 1)
         return inferred_provider.strip(), inferred_model.strip()
     raise ValueError("Embeddings recipe candidates must include provider and model.")
+
+
+def _split_candidate_model_id(candidate_model_id: str) -> tuple[str, str]:
+    normalized = str(candidate_model_id or "").strip()
+    if ":" not in normalized:
+        raise ValueError("Summarization recipe candidate_model_ids must use 'provider:model' format.")
+    provider, model = normalized.split(":", 1)
+    provider = provider.strip()
+    model = model.strip()
+    if not provider or not model:
+        raise ValueError("Summarization recipe candidates must include both provider and model.")
+    return provider, model
+
+
+def _is_local_summarization_provider(provider: str) -> bool:
+    return provider.strip().lower() in _LOCAL_SUMMARIZATION_PROVIDERS
 
 
 def _coerce_media_ids(run_config: dict[str, Any], dataset: list[dict[str, Any]]) -> list[int]:
@@ -120,6 +171,87 @@ def _coerce_media_ids(run_config: dict[str, Any], dataset: list[dict[str, Any]])
     raise ValueError(
         "Embeddings recipe execution requires run_config.media_ids or labeled expected_ids to derive the corpus."
     )
+
+
+def _extract_summarization_source_text(sample: dict[str, Any]) -> str:
+    input_value = sample.get("input")
+    if isinstance(input_value, dict):
+        source_text = input_value.get("source_text")
+        if isinstance(source_text, str):
+            return source_text.strip()
+    if isinstance(input_value, str):
+        return input_value.strip()
+    source_text = sample.get("source_text")
+    if isinstance(source_text, str):
+        return source_text.strip()
+    return ""
+
+
+def _extract_summarization_reference(sample: dict[str, Any]) -> str | None:
+    for key in ("expected", "reference_summary", "summary"):
+        value = sample.get(key)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+    return None
+
+
+def _extract_summarization_sample_id(sample: dict[str, Any], index: int) -> str:
+    metadata = sample.get("metadata")
+    if isinstance(metadata, dict):
+        sample_id = metadata.get("sample_id")
+        if isinstance(sample_id, str) and sample_id.strip():
+            return sample_id.strip()
+    sample_id = sample.get("sample_id")
+    if isinstance(sample_id, str) and sample_id.strip():
+        return sample_id.strip()
+    return f"sample-{index}"
+
+
+def _generate_summary_for_candidate(
+    *,
+    provider: str,
+    model: str,
+    source_text: str,
+    run_config: dict[str, Any],
+) -> str:
+    prompts = run_config.get("prompts") or {}
+    execution_policy = run_config.get("execution_policy") or {}
+    summary = analyze(
+        provider,
+        source_text,
+        prompts.get("user"),
+        api_key=(run_config.get("candidate_api_keys") or {}).get(provider),
+        system_message=prompts.get("system"),
+        temp=execution_policy.get("temperature"),
+        model_override=model,
+    )
+    if not isinstance(summary, str) or not summary.strip() or summary.startswith("Error:"):
+        raise ValueError(
+            f"Summarization candidate '{provider}:{model}' failed to generate a valid summary."
+        )
+    return summary.strip()
+
+
+def _score_summary_with_geval(
+    *,
+    source_text: str,
+    summary: str,
+    run_config: dict[str, Any],
+    reference_summary: str | None,
+) -> dict[str, Any]:
+    del reference_summary
+    judge_config = run_config.get("judge_config") or {}
+    result = run_geval(
+        transcript=source_text,
+        summary=summary,
+        api_key=judge_config.get("api_key"),
+        api_name=judge_config.get("provider") or "openai",
+        model=judge_config.get("model"),
+        save=False,
+    )
+    return dict(result)
 
 
 def _build_embeddings_abtest_config(record: Any, dataset: list[dict[str, Any]]) -> EmbeddingsABTestConfig:
@@ -313,6 +445,90 @@ def _execute_embeddings_recipe_run(
     }
 
 
+def _execute_summarization_recipe_run(
+    *,
+    record: Any,
+    db: EvaluationsDatabase,
+    user_id: str | None,
+    service: RecipeRunsService | Any,
+) -> dict[str, Any]:
+    del service
+    dataset = _resolve_inline_or_persisted_dataset(record, db, user_id)
+    run_config = dict(record.metadata.get("run_config") or {})
+    candidate_model_ids = list(run_config.get("candidate_model_ids") or [])
+    if not candidate_model_ids:
+        raise ValueError(
+            "Summarization recipe run_config.candidate_model_ids must be populated before execution."
+        )
+
+    candidate_results: list[dict[str, Any]] = []
+    for candidate_model_id in candidate_model_ids:
+        provider, model = _split_candidate_model_id(candidate_model_id)
+        sample_results: list[dict[str, Any]] = []
+        for index, sample in enumerate(dataset):
+            source_text = _extract_summarization_source_text(sample)
+            if not source_text:
+                raise ValueError(
+                    f"Summarization dataset sample {index} is missing input/source_text."
+                )
+            reference_summary = _extract_summarization_reference(sample)
+            sample_id = _extract_summarization_sample_id(sample, index)
+            started = time.perf_counter()
+            summary = _generate_summary_for_candidate(
+                provider=provider,
+                model=model,
+                source_text=source_text,
+                run_config=run_config,
+            )
+            evaluation = _score_summary_with_geval(
+                source_text=source_text,
+                summary=summary,
+                run_config=run_config,
+                reference_summary=reference_summary,
+            )
+            latency_ms = (time.perf_counter() - started) * 1000.0
+            sample_results.append(
+                {
+                    "sample_id": sample_id,
+                    "summary": summary,
+                    "reference_summary": reference_summary,
+                    "metrics": dict(evaluation.get("metrics") or {}),
+                    "assessment": evaluation.get("assessment"),
+                    "average_score": evaluation.get("average_score"),
+                    "latency_ms": latency_ms,
+                }
+            )
+
+        candidate_results.append(
+            {
+                "candidate_id": candidate_model_id,
+                "candidate_run_id": candidate_model_id,
+                "provider": provider,
+                "model": model,
+                "is_local": _is_local_summarization_provider(provider),
+                "sample_results": sample_results,
+            }
+        )
+
+    recipe_report_inputs = {
+        "dataset_mode": record.metadata.get("dataset_mode"),
+        "review_sample": record.metadata.get("review_sample") or {
+            "required": False,
+            "sample_size": 0,
+            "sample_ids": [],
+        },
+        "weights": run_config.get("weights"),
+        "candidate_results": candidate_results,
+    }
+    return {
+        "child_run_ids": [],
+        "metadata": {
+            "candidate_results": candidate_results,
+            "recipe_report_inputs": recipe_report_inputs,
+        },
+    }
+
+
 def _execute_recipe_run(
     *,
     record: Any,
@@ -322,6 +538,13 @@ def _execute_recipe_run(
 ) -> dict[str, Any] | None:
     if record.recipe_id == "embeddings_model_selection" and not record.metadata.get("candidate_results"):
         return _execute_embeddings_recipe_run(
+            record=record,
+            db=db,
+            user_id=user_id,
+            service=service,
+        )
+    if record.recipe_id == "summarization_quality" and not record.metadata.get("candidate_results"):
+        return _execute_summarization_recipe_run(
             record=record,
             db=db,
             user_id=user_id,

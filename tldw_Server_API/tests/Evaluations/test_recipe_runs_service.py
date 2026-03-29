@@ -300,6 +300,91 @@ def test_recipe_service_builds_embeddings_report_from_stored_recipe_inputs(tmp_p
     assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "arm-1"
 
 
+def test_recipe_service_builds_summarization_report_from_stored_recipe_inputs(tmp_path) -> None:
+    db, service, _ = _service(tmp_path)
+    record = service.create_run(
+        "summarization_quality",
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
+    )
+
+    db.update_recipe_run(
+        record.run_id,
+        metadata={
+            **record.metadata,
+            "recipe_report_inputs": {
+                "dataset_mode": "labeled",
+                "review_sample": {"required": False, "sample_size": 0, "sample_ids": []},
+                "weights": {"grounding": 0.5, "coverage": 0.3, "usefulness": 0.2},
+                "candidate_results": [
+                    {
+                        "candidate_id": "cand-openai",
+                        "candidate_run_id": "cand-openai",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                        "cost_usd": 0.01,
+                        "sample_results": [
+                            {
+                                "sample_id": "math-1",
+                                "metrics": {
+                                    "grounding": 0.92,
+                                    "coverage": 0.88,
+                                    "usefulness": 0.80,
+                                },
+                                "latency_ms": 110.0,
+                            },
+                            {
+                                "sample_id": "sky-1",
+                                "metrics": {
+                                    "grounding": 0.89,
+                                    "coverage": 0.86,
+                                    "usefulness": 0.81,
+                                },
+                                "latency_ms": 115.0,
+                            },
+                        ],
+                    },
+                    {
+                        "candidate_id": "cand-local",
+                        "candidate_run_id": "cand-local",
+                        "provider": "ollama",
+                        "model": "llama3.1:8b",
+                        "is_local": True,
+                        "cost_usd": 0.0,
+                        "sample_results": [
+                            {
+                                "sample_id": "math-1",
+                                "metrics": {
+                                    "grounding": 0.80,
+                                    "coverage": 0.77,
+                                    "usefulness": 0.79,
+                                },
+                                "latency_ms": 80.0,
+                            },
+                            {
+                                "sample_id": "sky-1",
+                                "metrics": {
+                                    "grounding": 0.78,
+                                    "coverage": 0.76,
+                                    "usefulness": 0.78,
+                                },
+                                "latency_ms": 82.0,
+                            },
+                        ],
+                    },
+                ],
+            },
+        },
+    )
+
+    report = service.get_report(record.run_id)
+
+    assert report.confidence_summary is not None
+    assert report.recommendation_slots["best_overall"].candidate_run_id == "cand-openai"
+    assert report.recommendation_slots["best_local"].candidate_run_id == "cand-local"
+    assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "cand-openai"
+
+
 def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> None:
     db, service, user_id = _service(tmp_path)
     dataset = _inline_dataset()

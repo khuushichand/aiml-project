@@ -4,25 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeManifest
-
-from .base import RecipeDefinition, StaticRecipeDefinition
+from .base import RecipeDefinition
 from .embeddings_retrieval import EmbeddingsRetrievalRecipe
+from .summarization_quality import SummarizationQualityRecipe
 
 
 def _default_builtin_recipes() -> tuple[RecipeDefinition, ...]:
     return (
         EmbeddingsRetrievalRecipe(),
-        StaticRecipeDefinition(
-            manifest=RecipeManifest(
-                recipe_id="summarization_quality",
-                recipe_version="1",
-                name="Summarization Quality",
-                description="Compare summarization candidates with a weighted grounding-focused rubric.",
-                supported_modes=["labeled", "unlabeled"],
-                tags=["summarization", "quality"],
-            )
-        ),
+        SummarizationQualityRecipe(),
     )
 
 
