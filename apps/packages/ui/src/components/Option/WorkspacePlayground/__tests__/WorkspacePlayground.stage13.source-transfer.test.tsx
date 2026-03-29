@@ -483,4 +483,75 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
 
     expect(mockSwitchWorkspace).toHaveBeenCalledWith(destinationWorkspaceId)
   })
+
+  it("keeps the success state visible after destination metadata changes and rerender", async () => {
+    nextLaunchPayload = launchConflictTransfer
+    const { rerender } = render(<WorkspacePlayground />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Launch transfer" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Destination Workspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Apply to all remaining conflicts"
+      })
+    )
+    fireEvent.click(
+      within(
+        screen.getByText("Alpha Source").closest("div") as HTMLElement
+      ).getByRole("radio", {
+        name: "Merge folder memberships"
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Transfer sources" }))
+
+    expect(
+      screen.getByRole("button", { name: "Open destination" })
+    ).toBeInTheDocument()
+
+    testState.savedWorkspaces = testState.savedWorkspaces.map((workspace) =>
+      workspace.id === destinationWorkspaceId
+        ? {
+            ...workspace,
+            name: "Destination Workspace Renamed",
+            sourceCount: 3,
+            lastAccessedAt: new Date("2026-03-29T00:00:00.000Z")
+          }
+        : workspace
+    )
+    testState.workspaceSnapshots = {
+      ...testState.workspaceSnapshots,
+      [destinationWorkspaceId]: {
+        ...(testState.workspaceSnapshots[destinationWorkspaceId] as Record<
+          string,
+          unknown
+        >),
+        sources: [
+          ...(
+            (
+              testState.workspaceSnapshots[destinationWorkspaceId] as {
+                sources?: unknown[]
+              }
+            )?.sources || []
+          ),
+          {
+            id: "destination-source-c",
+            mediaId: 103,
+            title: "Gamma Source",
+            type: "pdf",
+            status: "ready",
+            addedAt: new Date("2026-03-29T00:00:00.000Z")
+          }
+        ]
+      }
+    }
+
+    rerender(<WorkspacePlayground />)
+
+    expect(
+      screen.getByRole("button", { name: "Open destination" })
+    ).toBeInTheDocument()
+  })
 })

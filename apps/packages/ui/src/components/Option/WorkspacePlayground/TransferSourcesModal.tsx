@@ -87,6 +87,8 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
     conflictsSkipped: number
   } | null>(null)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
+  const initializedRequestRef =
+    React.useRef<TransferSourcesModalLaunchRequest | null>(null)
 
   const destinationOptions = React.useMemo(() => {
     const archivedIds = new Set(archivedWorkspaces.map((workspace) => workspace.id))
@@ -98,6 +100,10 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
 
   React.useEffect(() => {
     if (!open || !request) {
+      initializedRequestRef.current = null
+      return
+    }
+    if (initializedRequestRef.current === request) {
       return
     }
 
@@ -111,6 +117,7 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
     setConflictResolutions({})
     setResultSummary(null)
     setSubmitError(null)
+    initializedRequestRef.current = request
   }, [destinationOptions, open, request])
 
   const eligibleSources = React.useMemo(() => {
@@ -390,7 +397,7 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
           </p>
 
           {submitError ? (
-            <Alert type="error" showIcon message={submitError} />
+            <Alert type="error" showIcon title={submitError} />
           ) : null}
 
           {step === "mode" ? (
@@ -434,7 +441,7 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
                   <Alert
                     type="info"
                     showIcon
-                    message={t(
+                    title={t(
                       "playground:sources.transferNoDestinations",
                       "No eligible destination workspaces are available. Create a new workspace instead."
                     )}
@@ -467,7 +474,7 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
               <Alert
                 type="info"
                 showIcon
-                message={t(
+                title={t(
                   "playground:sources.transferEligibleSummary",
                   "{{count}} ready sources will transfer.",
                   { count: request.eligibleSelectedSourceIds.length }
@@ -550,7 +557,7 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
               <Alert
                 type="success"
                 showIcon
-                message={t(
+                title={t(
                   "playground:sources.transferComplete",
                   "{{count}} sources transferred.",
                   { count: resultSummary.transferredCount }

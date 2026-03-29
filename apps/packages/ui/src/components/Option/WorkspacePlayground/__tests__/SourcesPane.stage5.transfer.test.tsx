@@ -122,25 +122,46 @@ describe("SourcesPane stage 5 transfer launch", () => {
       "source-ready-visible",
       "source-processing"
     ]
+    workspaceStoreState.selectedSourceFolderIds = []
     workspaceStoreState.sourceSearchQuery = ""
     mockGetEffectiveSelectedSources.mockReturnValue([...defaultSources])
   })
 
-  it("shows Move / Copy for effective selection and launches the shared transfer modal", () => {
+  it("shows Move / Copy for effective selection and launches the shared transfer modal with the expected payload", () => {
     const mockOpenTransferSources = vi.fn()
 
-    render(
-      React.createElement(SourcesPane as unknown as React.ComponentType<any>, {
-        onOpenTransferSources: mockOpenTransferSources
-      })
-    )
+    render(<SourcesPane onOpenTransferSources={mockOpenTransferSources} />)
 
     fireEvent.click(screen.getByRole("button", { name: "Move / Copy" }))
 
-    expect(mockOpenTransferSources).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entryPoint: "sources"
-      })
-    )
+    expect(mockOpenTransferSources).toHaveBeenCalledWith({
+      entryPoint: "sources",
+      selectedSourceIds: ["source-ready-visible", "source-processing"],
+      eligibleSelectedSourceIds: ["source-ready-visible"],
+      totalSelectedCount: 2,
+      hiddenSelectedCount: 0,
+      ineligibleSelectedCount: 1
+    })
+  })
+
+  it("hides Move / Copy when the effective selection has no eligible ready sources", () => {
+    workspaceStoreState.sources = [
+      {
+        id: "source-processing",
+        mediaId: 102,
+        title: "Processing Source",
+        type: "website",
+        status: "processing",
+        addedAt: new Date("2026-03-28T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.selectedSourceIds = ["source-processing"]
+    mockGetEffectiveSelectedSources.mockReturnValue([...workspaceStoreState.sources])
+
+    render(<SourcesPane onOpenTransferSources={vi.fn()} />)
+
+    expect(
+      screen.queryByRole("button", { name: "Move / Copy" })
+    ).not.toBeInTheDocument()
   })
 })

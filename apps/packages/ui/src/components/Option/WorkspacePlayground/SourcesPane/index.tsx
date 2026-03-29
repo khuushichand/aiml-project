@@ -1482,13 +1482,15 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                   { count: effectiveSelectedCount }
                 )}
               </span>
-              <button
-                type="button"
-                onClick={handleOpenTransferSources}
-                className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-muted transition hover:bg-surface2 hover:text-text"
-              >
-                {t("playground:sources.transferSelected", "Move / Copy")}
-              </button>
+              {eligibleSelectedSourceIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleOpenTransferSources}
+                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-muted transition hover:bg-surface2 hover:text-text"
+                >
+                  {t("playground:sources.transferSelected", "Move / Copy")}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
