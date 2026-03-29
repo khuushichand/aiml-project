@@ -435,8 +435,7 @@ export const applyWorkspaceSourceTransfer = (
 
         const childFolderIds = childrenByFolderId.get(folder.id) || []
         if (
-          childFolderIds.length === 0 ||
-          !childFolderIds.every((childFolderId) => foldersToDelete.has(childFolderId))
+          childFolderIds.some((childFolderId) => !foldersToDelete.has(childFolderId))
         ) {
           continue
         }

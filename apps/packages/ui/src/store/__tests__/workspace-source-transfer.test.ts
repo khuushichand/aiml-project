@@ -531,33 +531,42 @@ describe("applyWorkspaceSourceTransfer", () => {
     ])
   })
 
-  it("renames reparented child folders to avoid collisions with later siblings", () => {
+  it("does not delete unrelated folders that were already empty before the move", () => {
     const originSnapshot = createSnapshot({
       workspaceId: "origin-workspace",
+      sources: [
+        createSource({ id: "origin-s1", mediaId: 401, title: "Moved Source" })
+      ],
       sourceFolders: [
-        createFolder({ id: "folder-parent", name: "Parent" }),
-        createFolder({
-          id: "folder-child-docs",
-          name: "Docs",
-          parentFolderId: "folder-parent"
-        }),
-        createFolder({ id: "folder-root-docs", name: "Docs" })
+        createFolder({ id: "origin-moved", name: "Moved Folder" }),
+        createFolder({ id: "origin-unrelated-empty", name: "Already Empty" })
+      ],
+      sourceFolderMemberships: [
+        createMembership({ folderId: "origin-moved", sourceId: "origin-s1" })
       ]
     })
+    const destinationSnapshot = createSnapshot({
+      workspaceId: "destination-workspace"
+    })
 
-    deleteSourceFolderForTest(originSnapshot, "folder-parent")
+    const result = applyWorkspaceSourceTransfer({
+      mode: "move",
+      originSnapshot,
+      destinationSnapshot,
+      selectedSourceIds: ["origin-s1"],
+      conflictResolutions: {},
+      emptyFolderPolicy: "delete-empty-folders",
+      sourceFolderFallbackName,
+      generateId: createIdFactory()
+    })
 
-    expect(originSnapshot.sourceFolders).toEqual([
+    expect(result.originSnapshot.sourceFolders).toEqual([
       expect.objectContaining({
-        id: "folder-child-docs",
-        parentFolderId: null,
-        name: "Docs (2)"
-      }),
-      expect.objectContaining({
-        id: "folder-root-docs",
-        parentFolderId: null,
-        name: "Docs"
+        id: "origin-unrelated-empty",
+        name: "Already Empty",
+        parentFolderId: null
       })
     ])
+    expect(result.newlyEmptiedOriginFolderIds).toEqual(["origin-moved"])
   })
 })
