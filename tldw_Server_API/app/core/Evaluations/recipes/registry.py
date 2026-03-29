@@ -7,20 +7,12 @@ from collections.abc import Iterable
 from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeManifest
 
 from .base import RecipeDefinition, StaticRecipeDefinition
+from .embeddings_retrieval import EmbeddingsRetrievalRecipe
 
 
 def _default_builtin_recipes() -> tuple[RecipeDefinition, ...]:
     return (
-        StaticRecipeDefinition(
-            manifest=RecipeManifest(
-                recipe_id="embeddings_model_selection",
-                recipe_version="1",
-                name="Embeddings Model Selection",
-                description="Compare embedding models for retrieval-focused evaluation workflows.",
-                supported_modes=["labeled", "unlabeled"],
-                tags=["embeddings", "retrieval"],
-            )
-        ),
+        EmbeddingsRetrievalRecipe(),
         StaticRecipeDefinition(
             manifest=RecipeManifest(
                 recipe_id="summarization_quality",

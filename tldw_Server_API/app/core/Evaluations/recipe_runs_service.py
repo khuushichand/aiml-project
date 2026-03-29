@@ -8,6 +8,7 @@ import os
 from typing import Any
 
 from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
+    ConfidenceSummary,
     RecommendationSlot,
     RecipeManifest,
     RecipeRunRecord,
@@ -77,32 +78,53 @@ class RecipeRunsService:
     ) -> dict[str, Any]:
         """Lightweight dataset validation that is real enough to gate launch."""
         manifest = self.get_manifest(recipe_id)
+        recipe = self.recipe_registry.get_recipe(recipe_id)
         errors: list[str] = []
         resolved = self._resolve_dataset(dataset_id=dataset_id, dataset=dataset, errors=errors)
-        dataset_mode = self._detect_dataset_mode(resolved["samples"], errors)
+        review_payload: dict[str, Any] = {}
+        sample_count = len(resolved["samples"])
+
+        if not errors:
+            validator = getattr(recipe, "validate_dataset", None)
+            if callable(validator):
+                validation = dict(validator(resolved["samples"]))
+                errors.extend(validation.get("errors") or [])
+                dataset_mode = validation.get("dataset_mode")
+                sample_count = int(validation.get("sample_count") or sample_count)
+                review_payload = {
+                    key: value
+                    for key, value in validation.items()
+                    if key not in {"valid", "errors", "dataset_mode", "sample_count"}
+                }
+            else:
+                dataset_mode = self._detect_dataset_mode(resolved["samples"], errors)
+        else:
+            dataset_mode = None
 
         if dataset_mode in {"labeled", "unlabeled"} and dataset_mode not in manifest.supported_modes:
             errors.append(
                 f"Recipe '{recipe_id}' does not support dataset mode '{dataset_mode}'. "
                 f"Supported modes: {', '.join(manifest.supported_modes)}."
             )
+        elif not callable(getattr(recipe, "validate_dataset", None)):
+            for index, sample in enumerate(resolved["samples"]):
+                input_value = sample.get("input")
+                if input_value is None:
+                    errors.append(f"Dataset sample {index} must include an input value.")
+                    continue
+                if isinstance(input_value, str) and not input_value.strip():
+                    errors.append(f"Dataset sample {index} input must not be empty.")
 
-        for index, sample in enumerate(resolved["samples"]):
-            input_value = sample.get("input")
-            if input_value is None:
-                errors.append(f"Dataset sample {index} must include an input value.")
-                continue
-            if isinstance(input_value, str) and not input_value.strip():
-                errors.append(f"Dataset sample {index} input must not be empty.")
-
-        return {
+        result = {
             "valid": not errors,
             "errors": errors,
             "dataset_mode": dataset_mode,
-            "sample_count": len(resolved["samples"]),
+            "sample_count": sample_count,
             "dataset_snapshot_ref": resolved["dataset_snapshot_ref"],
             "dataset_content_hash": resolved["dataset_content_hash"],
         }
+        result.update(review_payload)
+        return result
 
     def build_reuse_hash(
         self,
@@ -119,20 +141,13 @@ class RecipeRunsService:
             joined = "; ".join(validation["errors"])
             raise ValueError(f"Dataset validation failed: {joined}")
 
-        normalized_run_config = self._normalize_run_config(run_config)
+        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
         payload = {
             "recipe_id": manifest.recipe_id,
             "recipe_version": manifest.recipe_version,
             "dataset_snapshot_ref": validation["dataset_snapshot_ref"],
             "dataset_content_hash": validation["dataset_content_hash"],
-            "candidate_model_ids": sorted(normalized_run_config["candidate_model_ids"]),
-            "judge_config": normalized_run_config["judge_config"],
-            "prompts": normalized_run_config["prompts"],
-            "weights": normalized_run_config["weights"],
-            "comparison_mode": normalized_run_config["comparison_mode"],
-            "source_normalization": normalized_run_config["source_normalization"],
-            "context_policy": normalized_run_config["context_policy"],
-            "execution_policy": normalized_run_config["execution_policy"],
+            "run_config": normalized_run_config,
         }
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -152,8 +167,21 @@ class RecipeRunsService:
         if not validation["valid"]:
             joined = "; ".join(validation["errors"])
             raise ValueError(f"Dataset validation failed: {joined}")
+        validation_metadata = {
+            key: value
+            for key, value in validation.items()
+            if key
+            not in {
+                "valid",
+                "errors",
+                "dataset_mode",
+                "sample_count",
+                "dataset_snapshot_ref",
+                "dataset_content_hash",
+            }
+        }
 
-        normalized_run_config = self._normalize_run_config(run_config)
+        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
         reuse_hash = self.build_reuse_hash(
             recipe_id,
             dataset_id=dataset_id,
@@ -179,6 +207,8 @@ class RecipeRunsService:
                 "dataset_mode": validation["dataset_mode"],
                 "dataset_id": dataset_id,
                 "owner_user_id": self.user_id,
+                "recipe_validation": validation_metadata,
+                "review_sample": validation_metadata.get("review_sample"),
             },
         )
         self._record_reuse_mapping(run_id, reuse_hash)
@@ -194,6 +224,23 @@ class RecipeRunsService:
     def get_report(self, run_id: str) -> RecipeRunReport:
         """Fetch a normalized report shell for a recipe run."""
         record = self.get_run(run_id)
+        recipe = self.recipe_registry.get_recipe(record.recipe_id)
+        report_builder = getattr(recipe, "build_report", None)
+        report_inputs = self._extract_recipe_report_inputs(record)
+        if callable(report_builder) and report_inputs is not None:
+            built_report = dict(report_builder(**report_inputs))
+            report_metadata = dict(record.metadata)
+            report_metadata["recipe_report"] = built_report
+            report_record = record.model_copy(update={"metadata": report_metadata})
+            return RecipeRunReport(
+                run=report_record,
+                confidence_summary=ConfidenceSummary.model_validate(
+                    built_report.get("confidence_summary")
+                ),
+                recommendation_slots=self._normalize_report_slots(
+                    built_report.get("recommendation_slots") or {}
+                ),
+            )
         return RecipeRunReport(
             run=record,
             confidence_summary=record.confidence_summary,
@@ -351,9 +398,14 @@ class RecipeRunsService:
         )
         return "mixed"
 
-    def _normalize_run_config(self, run_config: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_run_config(self, recipe_id: str, run_config: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(run_config, dict):
             raise ValueError("run_config must be an object.")
+
+        recipe = self.recipe_registry.get_recipe(recipe_id)
+        normalizer = getattr(recipe, "normalize_run_config", None)
+        if callable(normalizer):
+            return dict(normalizer(run_config))
 
         candidate_model_ids = run_config.get("candidate_model_ids") or []
         if not isinstance(candidate_model_ids, list) or not candidate_model_ids:
@@ -421,6 +473,29 @@ class RecipeRunsService:
                 ),
             )
         return normalized
+
+    def _extract_recipe_report_inputs(self, record: RecipeRunRecord) -> dict[str, Any] | None:
+        explicit_inputs = record.metadata.get("recipe_report_inputs")
+        if isinstance(explicit_inputs, dict):
+            return dict(explicit_inputs)
+
+        candidate_results = record.metadata.get("candidate_results")
+        dataset_mode = record.metadata.get("dataset_mode")
+        review_sample = (
+            record.metadata.get("review_sample")
+            or (record.metadata.get("recipe_validation") or {}).get("review_sample")
+        )
+        if candidate_results is None or not dataset_mode:
+            return None
+        return {
+            "dataset_mode": dataset_mode,
+            "review_sample": review_sample or {
+                "required": False,
+                "sample_size": 0,
+                "sample_query_ids": [],
+            },
+            "candidate_results": candidate_results,
+        }
 
 
 def get_recipe_runs_service_for_user(user_id: str | int | None) -> RecipeRunsService:

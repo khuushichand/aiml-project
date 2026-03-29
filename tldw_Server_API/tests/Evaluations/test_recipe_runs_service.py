@@ -170,6 +170,135 @@ def test_recipe_service_creates_parent_run_and_normalized_report_shell(tmp_path)
         assert slot.reason_code is not None
 
 
+def test_recipe_service_uses_embeddings_recipe_validation_and_normalization(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+    dataset = [
+        {
+            "query_id": "q-1",
+            "input": "find the alpha document",
+            "expected_ids": ["doc-1"],
+        },
+    ]
+    run_config = {
+        "comparison_mode": "embedding_only",
+        "candidates": [
+            {"model": "local:bge-small", "provider": "local", "is_local": True},
+            {"model": "openai:text-embedding-3-small", "provider": "openai", "is_local": False},
+        ],
+    }
+
+    validation = service.validate_dataset(
+        "embeddings_model_selection",
+        dataset=dataset,
+    )
+
+    assert validation["valid"] is True
+    assert validation["dataset_mode"] == "labeled"
+    assert validation["sample_count"] == 1
+
+    reuse_hash_a = service.build_reuse_hash(
+        "embeddings_model_selection",
+        dataset=dataset,
+        run_config=run_config,
+    )
+    reuse_hash_b = service.build_reuse_hash(
+        "embeddings_model_selection",
+        dataset=dataset,
+        run_config={
+            "comparison_mode": "embedding_only",
+            "candidates": list(reversed(run_config["candidates"])),
+        },
+    )
+    record = service.create_run(
+        "embeddings_model_selection",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    assert reuse_hash_a == reuse_hash_b
+    assert record.metadata["run_config"]["comparison_mode"] == "embedding_only"
+    assert [candidate["model"] for candidate in record.metadata["run_config"]["candidates"]] == [
+        "local:bge-small",
+        "openai:text-embedding-3-small",
+    ]
+    assert record.metadata["review_sample"] == {
+        "required": False,
+        "sample_size": 0,
+        "sample_query_ids": [],
+    }
+
+
+def test_recipe_service_builds_embeddings_report_from_stored_recipe_inputs(tmp_path) -> None:
+    db, service, _ = _service(tmp_path)
+    dataset = [
+        {"query_id": "q-1", "input": "alpha", "expected_ids": ["doc-1"]},
+        {"query_id": "q-2", "input": "beta", "expected_ids": ["doc-2"]},
+    ]
+    record = service.create_run(
+        "embeddings_model_selection",
+        dataset=dataset,
+        run_config={
+            "comparison_mode": "embedding_only",
+            "candidates": [
+                {"model": "openai:text-embedding-3-small", "provider": "openai"},
+                {"model": "local:bge-small", "provider": "local", "is_local": True},
+            ],
+        },
+    )
+
+    db.update_recipe_run(
+        record.run_id,
+        metadata={
+            **record.metadata,
+            "candidate_results": [
+                {
+                    "candidate_id": "arm-1",
+                    "candidate_run_id": "child-run-1",
+                    "model": "openai:text-embedding-3-small",
+                    "provider": "openai",
+                    "query_results": [
+                        {
+                            "ranked_ids": ["doc-1"],
+                            "expected_ids": ["doc-1"],
+                            "latency_ms": 100.0,
+                        },
+                        {
+                            "ranked_ids": ["doc-2"],
+                            "expected_ids": ["doc-2"],
+                            "latency_ms": 105.0,
+                        },
+                    ],
+                },
+                {
+                    "candidate_id": "arm-2",
+                    "candidate_run_id": "child-run-2",
+                    "model": "local:bge-small",
+                    "provider": "local",
+                    "is_local": True,
+                    "query_results": [
+                        {
+                            "ranked_ids": ["doc-1"],
+                            "expected_ids": ["doc-1"],
+                            "latency_ms": 95.0,
+                        },
+                        {
+                            "ranked_ids": ["doc-9"],
+                            "expected_ids": ["doc-2"],
+                            "latency_ms": 96.0,
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+    report = service.get_report(record.run_id)
+
+    assert report.confidence_summary is not None
+    assert report.recommendation_slots["best_overall"].candidate_run_id == "child-run-1"
+    assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "arm-1"
+
+
 def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> None:
     db, service, user_id = _service(tmp_path)
     dataset = _inline_dataset()

@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDat
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     _compute_collection_hash,
     build_collections_vector_only,
+    get_collection_manager,
     run_vector_search_and_score,
 )
 
@@ -60,6 +61,15 @@ class _DummyChromaReuse:
 
     def store_in_chroma(self, **_kwargs):
         raise AssertionError("store_in_chroma should not be called during reuse")
+
+
+class _FactoryManager:
+    def __init__(self):
+        self.collection_names = []
+
+    def get_or_create_collection(self, name):
+        self.collection_names.append(name)
+        return _DummyCollection()
 
 
 class _StubMediaDB:
@@ -219,3 +229,44 @@ async def test_abtest_reuses_collection_across_tests(tmp_path, monkeypatch):
     arms = db.get_abtest_arms(test_id_2)
     meta = json.loads(arms[0].get("metadata_json") or "{}")
     assert meta.get("shared_origin_test_id") == test_id_1
+
+
+def test_get_collection_manager_uses_injected_factory() -> None:
+    captured = {}
+
+    def _factory(*, user_id, embedding_config):
+        captured["user_id"] = user_id
+        captured["embedding_config"] = embedding_config
+        return _FactoryManager()
+
+    manager = get_collection_manager(
+        user_id="user-123",
+        embedding_config={"USER_DB_BASE_DIR": "/tmp/evals"},
+        manager_factory=_factory,
+    )
+
+    assert isinstance(manager, _FactoryManager)
+    assert captured["user_id"] == "user-123"
+    assert captured["embedding_config"]["USER_DB_BASE_DIR"] == "/tmp/evals"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_abtest_rejects_fts_search_mode(tmp_path) -> None:
+    db = EvaluationsDatabase(str(tmp_path / "evals.db"))
+    config = EmbeddingsABTestConfig(
+        arms=[ABTestArm(provider="stub", model="m1")],
+        media_ids=[],
+        chunking=ABTestChunking(method="words", size=20, overlap=0),
+        retrieval=ABTestRetrieval(k=1, search_mode="fts"),
+        queries=[ABTestQuery(text="hello", expected_ids=[1])],
+    )
+
+    with pytest.raises(ValueError, match="fts search_mode"):
+        await run_vector_search_and_score(
+            db=db,
+            config=config,
+            test_id="test-fts",
+            user_id="user-1",
+            arm_collections=[{"arm_id": "arm_test-fts_0", "collection_name": "ignored"}],
+        )

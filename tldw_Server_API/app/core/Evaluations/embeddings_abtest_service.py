@@ -279,12 +279,32 @@ def _collection_exists(manager: ChromaDBManager, name: str) -> bool:
     return False
 
 
+def get_collection_manager(
+    *,
+    user_id: str,
+    embedding_config: dict[str, Any],
+    manager_factory: Any | None = None,
+) -> ChromaDBManager:
+    """Build the collection manager through an injectable seam for tests."""
+    if manager_factory is not None:
+        return manager_factory(
+            user_id=str(user_id),
+            embedding_config=embedding_config,
+        )
+    return ChromaDBManager(
+        user_id=str(user_id),
+        user_embedding_config=embedding_config,
+    )
+
+
 async def build_collections_vector_only(
     db: EvaluationsDatabase,
     config: EmbeddingsABTestConfig,
     test_id: str,
     user_id: str,
     media_db: MediaDbLike,
+    *,
+    manager_factory: Any | None = None,
 ) -> list[dict[str, str]]:
     """Chunk, embed, and store vectors per arm into per-user collections.
 
@@ -293,7 +313,11 @@ async def build_collections_vector_only(
     from tldw_Server_API.app.core.config import settings as app_settings
     embedding_config = _resolve_abtest_embedding_config(app_settings)
 
-    manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
+    manager = get_collection_manager(
+        user_id=str(user_id),
+        embedding_config=embedding_config,
+        manager_factory=manager_factory,
+    )
 
     results: list[dict[str, str]] = []
     pipeline_hash = _compute_pipeline_hash(config)
@@ -584,14 +608,24 @@ async def run_vector_search_and_score(
     test_id: str,
     user_id: str,
     arm_collections: list[dict[str, str]],
+    *,
+    manager_factory: Any | None = None,
 ) -> dict[str, dict[str, float]]:
     """Run vector-only search across arms and compute metrics, storing results in DB.
 
     Returns aggregate metrics per arm_id.
     """
+    search_mode = (config.retrieval.search_mode or "vector").lower()
+    if search_mode == "fts":
+        raise ValueError("fts search_mode is not supported by the embeddings A/B vector retrieval path.")
+
     from tldw_Server_API.app.core.config import settings as app_settings
     embedding_config = _resolve_abtest_embedding_config(app_settings)
-    manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
+    manager = get_collection_manager(
+        user_id=str(user_id),
+        embedding_config=embedding_config,
+        manager_factory=manager_factory,
+    )
 
     # Embed queries per arm
     # Ensure DB has queries and align IDs
@@ -640,7 +674,7 @@ async def run_vector_search_and_score(
             metadatas: list[list[dict[str, Any]]] = [[]]
             documents: list[list[str]] = [[]]
             rerank_scores_out: list[float] | None = None
-            if (config.retrieval.search_mode or 'vector') == 'hybrid':
+            if search_mode == 'hybrid':
                 try:
                     from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
                     result = await unified_rag_pipeline(
@@ -893,12 +927,17 @@ def cleanup_abtest_resources(
     delete_db: bool,
     delete_idempotency: bool,
     created_by: str | None = None,
+    manager_factory: Any | None = None,
 ) -> dict[str, int]:
     from tldw_Server_API.app.core.config import settings as app_settings
 
     deleted = 0
     embedding_config = _resolve_abtest_embedding_config(app_settings)
-    manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
+    manager = get_collection_manager(
+        user_id=str(user_id),
+        embedding_config=embedding_config,
+        manager_factory=manager_factory,
+    )
     arms = db.get_abtest_arms(test_id, created_by=created_by)
     for arm in arms:
         cname = arm.get("collection_name")
