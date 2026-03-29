@@ -15,6 +15,7 @@ from urllib.parse import quote
 # 3rd-party Libraries
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
     Header,  # Keep Header for expected_version
@@ -78,6 +79,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_studio import (
     NoteStudioDeriveRequest,
     NoteStudioDiagramRequest,
     NoteStudioDiagramResponse,
+    NoteStudioRegenerateRequest,
     NoteStudioStateResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.notes_moodboards import (
@@ -2858,6 +2860,7 @@ async def derive_note_studio_endpoint(
 )
 async def regenerate_note_studio_endpoint(
         note_id: str,
+        regenerate_in: NoteStudioRegenerateRequest | None = Body(default=None),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
@@ -2875,7 +2878,10 @@ async def regenerate_note_studio_endpoint(
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
 
-        studio_state = await NotesStudioService(db=db).regenerate_note_markdown(note_id=note_id)
+        studio_state = await NotesStudioService(db=db).regenerate_note_markdown(
+            note_id=note_id,
+            current_markdown=regenerate_in.current_markdown if regenerate_in else None,
+        )
         studio_state["note"] = _attach_keywords_inline(db, studio_state["note"])
         studio_state["note"] = _attach_folders_inline(db, studio_state["note"])
         record_note_updated(

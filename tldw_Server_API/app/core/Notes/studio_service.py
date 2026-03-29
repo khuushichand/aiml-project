@@ -100,22 +100,30 @@ class NotesStudioService:
         studio_document = self._require_studio_document(note_id)
         return self._build_state(note_id=note_id, studio_document=studio_document)
 
-    async def regenerate_note_markdown(self, *, note_id: str) -> dict[str, Any]:
+    async def regenerate_note_markdown(
+        self,
+        *,
+        note_id: str,
+        current_markdown: str | None = None,
+    ) -> dict[str, Any]:
         note = self._require_note(note_id)
         studio_document = self._require_studio_document(note_id)
+        has_current_markdown_override = isinstance(current_markdown, str)
+        markdown_source = current_markdown if has_current_markdown_override else str(note.get("content") or "")
 
         existing_payload = studio_document.get("payload_json")
         if not isinstance(existing_payload, dict):
             raise InputError("Studio document payload is invalid.")  # noqa: TRY003
 
         payload = studio_payload_from_markdown(
-            str(note.get("content") or ""),
+            markdown_source,
             template_type=str(studio_document["template_type"]),
             handwriting_mode=str(studio_document["handwriting_mode"]),
             render_version=int(studio_document.get("render_version") or NOTE_STUDIO_RENDER_VERSION),
             fallback_title=str(note.get("title") or "Untitled Study Notes"),
             source_note_id=str(studio_document.get("source_note_id") or "").strip() or None,
             existing_payload=existing_payload,
+            preserve_existing_sections_when_empty=not has_current_markdown_override,
         )
 
         markdown = render_studio_markdown(payload)

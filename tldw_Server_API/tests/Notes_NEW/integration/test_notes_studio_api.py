@@ -162,6 +162,88 @@ def test_notes_studio_derive_fetch_and_regenerate_flow(client_with_notes_studio_
     assert note_after_regenerate.json()["title"] == "Biology Refined Study Notes"
 
 
+def test_notes_studio_regenerate_accepts_current_markdown_override(client_with_notes_studio_db: TestClient):
+    client = client_with_notes_studio_db
+    source_note_id = _create_source_note(
+        client,
+        title="Biology",
+        content="Cells use mitochondria to produce ATP.",
+    )
+
+    derive_response = client.post(
+        "/api/v1/notes/studio/derive",
+        json={
+            "source_note_id": source_note_id,
+            "excerpt_text": "Cells use mitochondria to produce ATP.",
+            "template_type": "cornell",
+            "handwriting_mode": "accented",
+        },
+    )
+    assert derive_response.status_code == 201, derive_response.text
+    note_id = derive_response.json()["note"]["id"]
+
+    override_markdown = (
+        "# Biology Refined Study Notes\n\n"
+        "## Key Questions\n\n"
+        "- What organelle helps produce ATP?\n\n"
+        "## Notes\n\n"
+        "Cells use mitochondria to produce ATP.\n\n"
+        "## Summary\n\n"
+        "Mitochondria support cellular energy."
+    )
+
+    regenerate_response = client.post(
+        f"/api/v1/notes/{note_id}/studio/regenerate",
+        json={"current_markdown": override_markdown},
+    )
+    assert regenerate_response.status_code == 200, regenerate_response.text
+    regenerated = regenerate_response.json()
+
+    assert regenerated["is_stale"] is False
+    assert regenerated["note"]["title"] == "Biology Refined Study Notes"
+    assert regenerated["note"]["content"] == override_markdown
+    assert regenerated["studio_document"]["payload_json"]["meta"]["title"] == "Biology Refined Study Notes"
+
+    note_response = client.get(f"/api/v1/notes/{note_id}")
+    assert note_response.status_code == 200
+    assert note_response.json()["content"] == override_markdown
+
+
+def test_notes_studio_regenerate_treats_empty_current_markdown_as_an_explicit_override(
+    client_with_notes_studio_db: TestClient,
+):
+    client = client_with_notes_studio_db
+    source_note_id = _create_source_note(
+        client,
+        title="Biology",
+        content="Cells use mitochondria to produce ATP.",
+    )
+
+    derive_response = client.post(
+        "/api/v1/notes/studio/derive",
+        json={
+            "source_note_id": source_note_id,
+            "excerpt_text": "Cells use mitochondria to produce ATP.",
+            "template_type": "cornell",
+            "handwriting_mode": "accented",
+        },
+    )
+    assert derive_response.status_code == 201, derive_response.text
+    note_id = derive_response.json()["note"]["id"]
+
+    regenerate_response = client.post(
+        f"/api/v1/notes/{note_id}/studio/regenerate",
+        json={"current_markdown": ""},
+    )
+    assert regenerate_response.status_code == 200, regenerate_response.text
+    regenerated = regenerate_response.json()
+
+    assert regenerated["is_stale"] is False
+    assert regenerated["note"]["title"] == "Biology Study Notes"
+    assert regenerated["note"]["content"] == "# Biology Study Notes"
+    assert regenerated["studio_document"]["payload_json"]["sections"] == []
+
+
 def test_notes_studio_derive_rolls_back_note_when_sidecar_persistence_fails(
     client_with_notes_studio_db: TestClient,
     monkeypatch: pytest.MonkeyPatch,

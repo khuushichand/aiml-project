@@ -269,6 +269,78 @@ def test_get_state_detects_markdown_drift_and_regenerate_rebuilds_payload_from_c
     assert persisted_note["title"] == "Chemistry Refined Study Notes"
 
 
+def test_regenerate_uses_current_markdown_override_without_persisting_drift_first(studio_db):
+    db = studio_db
+    source_note_id = db.add_note(
+        title="Biology",
+        content="Cells use mitochondria to produce ATP.",
+    )
+    assert source_note_id is not None
+
+    service = NotesStudioService(db=db)
+    result = _derive_note(
+        service,
+        source_note_id=str(source_note_id),
+        excerpt_text="Cells use mitochondria to produce ATP.",
+    )
+    note_id = result["note"]["id"]
+
+    override_markdown = (
+        "# Biology Refined Study Notes\n\n"
+        "## Key Questions\n\n"
+        "- What organelle helps produce ATP?\n\n"
+        "## Notes\n\n"
+        "Cells use mitochondria to produce ATP.\n\n"
+        "## Summary\n\n"
+        "Mitochondria support cellular energy."
+    )
+
+    regenerated = asyncio.run(
+        service.regenerate_note_markdown(
+            note_id=note_id,
+            current_markdown=override_markdown,
+        )
+    )
+
+    assert regenerated["is_stale"] is False
+    assert regenerated["note"]["title"] == "Biology Refined Study Notes"
+    assert regenerated["note"]["content"] == override_markdown
+    assert regenerated["studio_document"]["payload_json"]["meta"]["title"] == "Biology Refined Study Notes"
+
+    persisted_note = db.get_note_by_id(note_id=note_id)
+    assert persisted_note is not None
+    assert persisted_note["content"] == override_markdown
+
+
+def test_regenerate_treats_empty_current_markdown_as_an_explicit_override(studio_db):
+    db = studio_db
+    source_note_id = db.add_note(
+        title="Biology",
+        content="Cells use mitochondria to produce ATP.",
+    )
+    assert source_note_id is not None
+
+    service = NotesStudioService(db=db)
+    result = _derive_note(
+        service,
+        source_note_id=str(source_note_id),
+        excerpt_text="Cells use mitochondria to produce ATP.",
+    )
+    note_id = result["note"]["id"]
+
+    regenerated = asyncio.run(
+        service.regenerate_note_markdown(
+            note_id=note_id,
+            current_markdown="",
+        )
+    )
+
+    assert regenerated["is_stale"] is False
+    assert regenerated["note"]["title"] == "Biology Study Notes"
+    assert regenerated["note"]["content"] == "# Biology Study Notes"
+    assert regenerated["studio_document"]["payload_json"]["sections"] == []
+
+
 def test_regenerate_rolls_back_note_update_when_sidecar_upsert_fails(studio_db, monkeypatch: pytest.MonkeyPatch):
     db = studio_db
     source_note_id = db.add_note(

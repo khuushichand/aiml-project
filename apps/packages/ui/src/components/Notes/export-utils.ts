@@ -268,7 +268,7 @@ const renderStudioSectionHtml = (
   const contentText =
     typeof section.content === "string"
       ? section.content
-      : cueItems.length > 0
+      : kind !== "cue" && cueItems.length > 0
         ? cueItems.join("\n")
         : ""
   const cueMarkup =

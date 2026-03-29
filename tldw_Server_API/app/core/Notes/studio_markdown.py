@@ -114,14 +114,22 @@ def studio_payload_from_markdown(
     fallback_title: str = "Untitled Study Notes",
     source_note_id: str | None = None,
     existing_payload: Mapping[str, Any] | None = None,
+    preserve_existing_sections_when_empty: bool = True,
 ) -> dict[str, Any]:
     """Rebuild a canonical Studio payload from structured Studio Markdown."""
     title, section_blocks = _parse_studio_markdown(markdown)
+    normalized_existing_payload = existing_payload
+    if not preserve_existing_sections_when_empty and not section_blocks:
+        normalized_existing_payload = None
     payload = {
         "meta": {"title": title or fallback_title},
         "sections": _build_sections_from_blocks(
             section_blocks,
-            existing_sections=(existing_payload or {}).get("sections") if isinstance(existing_payload, Mapping) else None,
+            existing_sections=(
+                (normalized_existing_payload or {}).get("sections")
+                if isinstance(normalized_existing_payload, Mapping)
+                else None
+            ),
         ),
     }
     return normalize_studio_payload(
@@ -131,7 +139,7 @@ def studio_payload_from_markdown(
         render_version=render_version,
         fallback_title=title or fallback_title,
         source_note_id=source_note_id,
-        existing_payload=existing_payload,
+        existing_payload=normalized_existing_payload,
     )
 
 

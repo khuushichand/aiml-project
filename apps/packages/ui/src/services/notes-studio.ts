@@ -2,6 +2,7 @@ import { bgRequest } from '@/services/background-proxy'
 import type {
   NoteStudioDeriveRequest,
   NoteStudioDiagramRequest,
+  NoteStudioRegenerateRequest,
   NoteStudioState
 } from '@/components/Notes/notes-studio-types'
 
@@ -23,11 +24,15 @@ export const getNoteStudioState = async (noteId: string): Promise<NoteStudioStat
   })
 }
 
-export const regenerateNoteStudio = async (noteId: string): Promise<NoteStudioState> => {
+export const regenerateNoteStudio = async (
+  noteId: string,
+  payload?: NoteStudioRegenerateRequest
+): Promise<NoteStudioState> => {
   return await bgRequest<NoteStudioState>({
     path: `/api/v1/notes/${encodeURIComponent(noteId)}/studio/regenerate` as any,
     method: 'POST' as any,
     headers: { 'Content-Type': 'application/json' },
+    ...(payload ? { body: payload } : {}),
   })
 }
 

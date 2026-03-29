@@ -76,6 +76,10 @@ export interface NoteStudioDeriveRequest {
   model?: string | null
 }
 
+export interface NoteStudioRegenerateRequest {
+  current_markdown?: string | null
+}
+
 export interface NoteStudioDiagramRequest {
   diagram_type?: string
   source_section_ids?: string[]

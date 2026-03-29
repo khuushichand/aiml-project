@@ -242,6 +242,61 @@ describe("notes export utils", () => {
     expect(html).toContain("2026-03-29T00:00:00.000Z")
   })
 
+  it("does not duplicate cue items as body paragraphs in Studio printable HTML", () => {
+    const html = buildStudioPrintableHtml(
+      {
+        id: "studio-1",
+        title: "Studio printable note",
+        content: "Markdown companion body",
+        keywords: ["study"]
+      },
+      {
+        note_id: "studio-1",
+        template_type: "cornell",
+        handwriting_mode: "off",
+        source_note_id: "source-1",
+        excerpt_hash: "sha256:excerpt",
+        companion_content_hash: "sha256:companion",
+        render_version: 1,
+        created_at: "2026-03-28T10:00:00Z",
+        last_modified: "2026-03-28T10:00:00Z",
+        payload_json: {
+          layout: {
+            template_type: "cornell",
+            handwriting_mode: "off",
+            render_version: 1
+          },
+          sections: [
+            {
+              id: "cue-1",
+              kind: "cue",
+              title: "Cue",
+              items: ["Prompt"]
+            }
+          ]
+        },
+        diagram_manifest_json: null
+      },
+      {
+        paperSize: "A4",
+        generatedAtIso: "2026-03-29T00:00:00.000Z",
+        labels: {
+          untitledNote: "Untitled note",
+          printTitleSuffix: "Notes Studio Print",
+          exportedLabel: "Exported",
+          templateLabel: "Template",
+          paperLabel: "Paper",
+          diagramHeading: "Diagram"
+        }
+      }
+    )
+
+    const cueSectionHtml = html.split('<article class="studio-section studio-section-cue">')[1] || ""
+
+    expect(cueSectionHtml).toContain("studio-cue-item")
+    expect(cueSectionHtml).not.toContain("studio-section-content")
+  })
+
   it("returns locale-driven default Studio paper sizes", () => {
     expect(getDefaultStudioPaperSizeFromLocale("en-US")).toBe("US Letter")
     expect(getDefaultStudioPaperSizeFromLocale("es-US")).toBe("US Letter")

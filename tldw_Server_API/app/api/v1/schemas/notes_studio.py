@@ -90,6 +90,13 @@ class NoteStudioDeriveRequest(BaseModel):
     model: str | None = Field(default=None, description="Optional model override for structured generation.")
 
 
+class NoteStudioRegenerateRequest(BaseModel):
+    current_markdown: str | None = Field(
+        default=None,
+        description="Optional current Markdown companion from the editor when regenerating a stale Studio note.",
+    )
+
+
 class NoteStudioDiagramRequest(BaseModel):
     diagram_type: Literal["flowchart", "sequence", "class", "state", "er", "gantt", "pie"] = Field(
         "flowchart",

@@ -66,6 +66,40 @@ describe("notes-studio service", () => {
     })
   })
 
+  it("includes the current markdown companion when regenerating from unsaved edits", async () => {
+    mocks.bgRequest.mockResolvedValue({ note: { id: "derived-1" } })
+
+    await regenerateNoteStudio("derived-1", {
+      current_markdown: "# Studio note\n\nUpdated local markdown"
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith({
+      path: "/api/v1/notes/derived-1/studio/regenerate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        current_markdown: "# Studio note\n\nUpdated local markdown"
+      }
+    })
+  })
+
+  it("sends an explicit empty markdown override when the draft has been cleared", async () => {
+    mocks.bgRequest.mockResolvedValue({ note: { id: "derived-1" } })
+
+    await regenerateNoteStudio("derived-1", {
+      current_markdown: ""
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith({
+      path: "/api/v1/notes/derived-1/studio/regenerate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        current_markdown: ""
+      }
+    })
+  })
+
   it("posts diagram manifest updates for a selected studio note", async () => {
     mocks.bgRequest.mockResolvedValue({ note: { id: "derived-1" } })
 

@@ -134,16 +134,23 @@ vi.mock("@/components/Notes/NotesListPanel", () => ({
 type TemplateType = "lined" | "grid" | "cornell"
 type HandwritingMode = "off" | "accented"
 
+const titleFromMarkdown = (markdown: string): string => {
+  const headingMatch = markdown.match(/^#\s+(.+)$/m)
+  return headingMatch?.[1]?.trim() || "Studio note"
+}
+
 const makeStudioState = (options: {
   template: TemplateType
   handwritingMode: HandwritingMode
   isStale: boolean
   cachedSvg?: string | null
+  noteTitle?: string
+  noteContent?: string
 }) => ({
   note: {
     id: "derived-1",
-    title: "Studio note",
-    content: "# Studio note\n\nCanonical Markdown companion",
+    title: options.noteTitle || "Studio note",
+    content: options.noteContent || "# Studio note\n\nCanonical Markdown companion",
     metadata: { keywords: [] },
     studio: {
       note_id: "derived-1",
@@ -232,6 +239,8 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
   let currentHandwritingMode: HandwritingMode = "accented"
   let currentStale = false
   let currentCachedSvg: string | null = null
+  let currentNoteTitle = "Studio note"
+  let currentNoteContent = "# Studio note\n\nCanonical Markdown companion"
 
   beforeEach(() => {
     cleanup()
@@ -245,6 +254,8 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
     currentHandwritingMode = "accented"
     currentStale = false
     currentCachedSvg = null
+    currentNoteTitle = "Studio note"
+    currentNoteContent = "# Studio note\n\nCanonical Markdown companion"
 
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
       const path = String(request.path || "")
@@ -285,8 +296,8 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
       if (path === "/api/v1/notes/derived-1" && method === "GET") {
         return {
           id: "derived-1",
-          title: "Studio note",
-          content: "# Studio note\n\nCanonical Markdown companion",
+          title: currentNoteTitle,
+          content: currentNoteContent,
           version: 1,
           metadata: { keywords: [] },
           studio: {
@@ -306,17 +317,28 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
           template: currentTemplate,
           handwritingMode: currentHandwritingMode,
           isStale: currentStale,
-          cachedSvg: currentCachedSvg
+          cachedSvg: currentCachedSvg,
+          noteTitle: currentNoteTitle,
+          noteContent: currentNoteContent
         })
       }
 
       if (path === "/api/v1/notes/derived-1/studio/regenerate" && method === "POST") {
+        const body = (request as { body?: { current_markdown?: string } }).body
+        if (typeof body?.current_markdown === "string") {
+          currentNoteTitle = titleFromMarkdown(body.current_markdown)
+          currentNoteContent = body.current_markdown.trim().length > 0
+            ? body.current_markdown
+            : `# ${currentNoteTitle}`
+        }
         currentStale = false
         return makeStudioState({
           template: currentTemplate,
           handwritingMode: currentHandwritingMode,
           isStale: false,
-          cachedSvg: currentCachedSvg
+          cachedSvg: currentCachedSvg,
+          noteTitle: currentNoteTitle,
+          noteContent: currentNoteContent
         })
       }
 
@@ -365,6 +387,14 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
     expect(denseBody).not.toHaveClass("studio-handwriting-accent")
   })
 
+  it("renders cue sections without duplicating cue items as body paragraphs", async () => {
+    renderPage()
+
+    const cueSection = await screen.findByTestId("notes-studio-section-cue-1")
+    expect(cueSection).toBeInTheDocument()
+    expect(screen.queryByTestId("notes-studio-section-content-cue-1")).not.toBeInTheDocument()
+  })
+
   it("shows stale warning only when the selected studio state is stale", async () => {
     currentStale = false
 
@@ -374,19 +404,39 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
     expect(screen.queryByTestId("notes-studio-stale-banner")).not.toBeInTheDocument()
   })
 
-  it("calls regenerate and clears stale warning", async () => {
-    currentStale = true
+  it("posts the current markdown when regenerating a stale Studio preview", async () => {
+    currentStale = false
 
     renderPage()
 
+    await screen.findByTestId("notes-studio-view")
+    fireEvent.click(screen.getByRole("button", { name: "Continue editing plain note" }))
+
+    const nextMarkdown = ""
+    fireEvent.change(
+      await screen.findByPlaceholderText("Write your note here... (Markdown supported)"),
+      {
+        target: { value: nextMarkdown }
+      }
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }))
     await screen.findByTestId("notes-studio-stale-banner")
     fireEvent.click(screen.getByRole("button", { name: "Regenerate Studio view from current Markdown" }))
 
     await waitFor(() => {
       expect(
         mockBgRequest.mock.calls.some(([request]) => {
-          const payload = request as { path?: string; method?: string }
-          return payload.path === "/api/v1/notes/derived-1/studio/regenerate" && payload.method === "POST"
+          const payload = request as {
+            path?: string
+            method?: string
+            body?: { current_markdown?: string }
+          }
+          return (
+            payload.path === "/api/v1/notes/derived-1/studio/regenerate" &&
+            payload.method === "POST" &&
+            payload.body?.current_markdown === nextMarkdown
+          )
         })
       ).toBe(true)
     })
@@ -394,6 +444,7 @@ describe("NotesManagerPage stage 44 notes studio view", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("notes-studio-stale-banner")).not.toBeInTheDocument()
     })
+    expect(await screen.findByTestId("notes-studio-heading")).toHaveTextContent("Studio note")
   })
 
   it("lets a stale Studio note return to the plain Markdown editor", async () => {

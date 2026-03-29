@@ -255,9 +255,12 @@ const NotesManagerPage: React.FC = () => {
     React.useState<NotesStudioHandwritingMode>('accented')
   const [selectedStudioState, setSelectedStudioState] = React.useState<NoteStudioState | null>(null)
   const [notesStudioRegenerating, setNotesStudioRegenerating] = React.useState(false)
-  const [selectedStudioPaperSize, setSelectedStudioPaperSize] = React.useState<NotesStudioPaperSize>(() =>
-    getDefaultStudioPaperSizeFromLocale(typeof navigator !== 'undefined' ? navigator.language : '')
+  const defaultStudioPaperSize = React.useMemo(
+    () => getDefaultStudioPaperSizeFromLocale(typeof navigator !== 'undefined' ? navigator.language : ''),
+    []
   )
+  const [selectedStudioPaperSize, setSelectedStudioPaperSize] =
+    React.useState<NotesStudioPaperSize>(defaultStudioPaperSize)
 
   // Wire the keyword hook's cross-cutting refs now that editor is available
   setIsDirtyRef.current = ed.setIsDirty
@@ -324,6 +327,11 @@ const NotesManagerPage: React.FC = () => {
       stale_reason: selectedStudioState.stale_reason || 'companion_content_hash_mismatch'
     }
   }, [ed.content, ed.selectedId, selectedStudioState])
+
+  React.useEffect(() => {
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    setSelectedStudioPaperSize(defaultStudioPaperSize)
+  }, [defaultStudioPaperSize, ed.selectedId])
 
   // ---- Note graph neighbors ----
   const {
@@ -1521,8 +1529,19 @@ const NotesManagerPage: React.FC = () => {
     if (ed.selectedId == null) return
     setNotesStudioRegenerating(true)
     try {
-      const refreshed = await regenerateNoteStudio(String(ed.selectedId))
+      const selectedNoteId = String(ed.selectedId)
+      const refreshed = await regenerateNoteStudio(String(ed.selectedId), {
+        current_markdown: String(ed.content || ''),
+      })
+      const detailReloaded = await ed.loadDetail(selectedNoteId)
+      if (!detailReloaded) {
+        ed.setTitle(String(refreshed.note.title || ''))
+        ed.setContent(String(refreshed.note.content || ''))
+        ed.setWysiwygHtml(markdownToWysiwygHtml(String(refreshed.note.content || '')))
+        ed.setIsDirty(false)
+      }
       setSelectedStudioState(refreshed)
+      ed.setEditorMode('preview')
     } catch (error: any) {
       message.error(
         error?.message || t('option:notesSearch.notesStudioRegenerateError', {
@@ -1532,7 +1551,7 @@ const NotesManagerPage: React.FC = () => {
     } finally {
       setNotesStudioRegenerating(false)
     }
-  }, [ed.selectedId, message, t])
+  }, [ed, message, t])
 
   // Flashcards
   const handleGenerateFlashcardsFromNote = React.useCallback(() => {

@@ -50,6 +50,7 @@ const sectionBodyClassName = (kind: string): string => {
 
 const notesBodyText = (section: NoteStudioSectionPayload): string => {
   if (typeof section.content === "string") return section.content
+  if (section.kind === "cue") return ""
   if (Array.isArray(section.items)) return section.items.join("\n")
   return ""
 }
