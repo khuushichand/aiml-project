@@ -487,7 +487,7 @@ export interface VoiceAnalyticsSummary {
   usage_by_day: VoiceAnalytics[];
 }
 
-export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';
+export type { IncidentEvent, IncidentItem, IncidentNotifyResponse, IncidentsResponse } from './incidents';
 export type { WebhookItem, WebhookCreateResponse, WebhookListResponse, WebhookDeliveryItem, WebhookDeliveryListResponse } from './webhooks';
 export type { EmailDeliveryStatus, EmailDeliveryItem, EmailDeliveryListResponse } from './email-deliveries';
 
@@ -583,4 +583,23 @@ export interface FeatureRegistryEntry {
   description: string;
   plans: string[];
   category: string;
+}
+
+export interface ComplianceReportSchedule {
+  id: string;
+  frequency: 'daily' | 'weekly' | 'monthly';
+  recipients: string[];
+  format: 'html' | 'json';
+  enabled: boolean;
+  created_at: string | null;
+  last_sent_at: string | null;
+}
+
+export interface DigestPreference {
+  id?: string;
+  user_id: string;
+  email: string;
+  frequency: 'daily' | 'weekly' | 'off';
+  enabled: boolean;
+  created_at?: string;
 }

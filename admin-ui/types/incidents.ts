@@ -41,3 +41,14 @@ export type IncidentsResponse = {
   limit: number;
   offset: number;
 };
+
+export type IncidentNotifyRecipientResult = {
+  email: string;
+  status: string;
+  error?: string | null;
+};
+
+export type IncidentNotifyResponse = {
+  incident_id: string;
+  notifications: IncidentNotifyRecipientResult[];
+};

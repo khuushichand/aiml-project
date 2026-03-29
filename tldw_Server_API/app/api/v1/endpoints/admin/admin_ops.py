@@ -18,6 +18,8 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     IncidentEventCreateRequest,
     IncidentItem,
     IncidentListResponse,
+    IncidentNotifyRequest,
+    IncidentNotifyResponse,
     IncidentUpdateRequest,
     MaintenanceRotationRunCreateRequest,
     MaintenanceRotationRunCreateResponse,
@@ -67,6 +69,9 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
     list_incidents as svc_list_incidents,
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
+    notify_incident_stakeholders as svc_notify_incident_stakeholders,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
     update_incident as svc_update_incident,
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
@@ -101,6 +106,17 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     list_email_deliveries as svc_list_email_deliveries,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    create_report_schedule as svc_create_report_schedule,
+    delete_report_schedule as svc_delete_report_schedule,
+    list_report_schedules as svc_list_report_schedules,
+    mark_report_schedule_sent as svc_mark_report_schedule_sent,
+    update_report_schedule as svc_update_report_schedule,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    get_digest_preference as svc_get_digest_preference,
+    set_digest_preference as svc_set_digest_preference,
 )
 
 if TYPE_CHECKING:
@@ -741,6 +757,43 @@ async def delete_incident(
     return MessageResponse(message="incident_deleted")
 
 
+@router.post("/incidents/{incident_id}/notify", response_model=IncidentNotifyResponse)
+async def notify_incident_stakeholders(
+    incident_id: str,
+    payload: IncidentNotifyRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentNotifyResponse:
+    """Send email notifications to stakeholders about an incident."""
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    if not payload.recipients:
+        raise HTTPException(status_code=400, detail="recipients_required")
+    try:
+        result = svc_notify_incident_stakeholders(
+            incident_id=incident_id,
+            recipients=payload.recipients,
+            message=payload.message,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_notification") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.notify",
+        metadata={"recipient_count": len(payload.recipients)},
+    )
+    return IncidentNotifyResponse(**result)
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Webhooks
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1372,3 +1425,275 @@ async def list_email_deliveries(
     except _OPS_NONCRITICAL_EXCEPTIONS as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Compliance Report Schedules
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/compliance/report-schedules")
+async def get_report_schedules(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """List all compliance report schedules."""
+    _require_platform_admin(principal)
+    try:
+        items = await asyncio.to_thread(svc_list_report_schedules)
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/compliance/report-schedules")
+async def create_report_schedule(
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Create a new compliance report schedule."""
+    _require_platform_admin(principal)
+    body = await request.json()
+    try:
+        schedule = await asyncio.to_thread(
+            svc_create_report_schedule,
+            frequency=body.get("frequency", "weekly"),
+            recipients=body.get("recipients", []),
+            report_format=body.get("format", "html"),
+            enabled=body.get("enabled", True),
+        )
+    except ValueError as exc:
+        error_key = str(exc)
+        if error_key == "too_many_report_schedules":
+            raise HTTPException(
+                status_code=429,
+                detail="Maximum number of report schedules reached.",
+            ) from exc
+        raise HTTPException(status_code=400, detail=error_key) from exc
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return schedule
+
+
+@router.patch("/compliance/report-schedules/{schedule_id}")
+async def update_report_schedule(
+    schedule_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Update an existing compliance report schedule."""
+    _require_platform_admin(principal)
+    body = await request.json()
+    try:
+        schedule = await asyncio.to_thread(
+            svc_update_report_schedule,
+            schedule_id=schedule_id,
+            frequency=body.get("frequency"),
+            recipients=body.get("recipients"),
+            report_format=body.get("format"),
+            enabled=body.get("enabled"),
+        )
+    except ValueError as exc:
+        error_key = str(exc)
+        if error_key == "not_found":
+            raise HTTPException(status_code=404, detail="Schedule not found.") from exc
+        raise HTTPException(status_code=400, detail=error_key) from exc
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return schedule
+
+
+@router.delete("/compliance/report-schedules/{schedule_id}")
+async def delete_report_schedule(
+    schedule_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Delete a compliance report schedule."""
+    _require_platform_admin(principal)
+    try:
+        removed = await asyncio.to_thread(
+            svc_delete_report_schedule, schedule_id=schedule_id
+        )
+    except ValueError as exc:
+        error_key = str(exc)
+        if error_key == "not_found":
+            raise HTTPException(status_code=404, detail="Schedule not found.") from exc
+        raise HTTPException(status_code=400, detail=error_key) from exc
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"message": "Schedule deleted.", "schedule": removed}
+
+
+@router.post("/compliance/report-schedules/{schedule_id}/send-now")
+async def send_report_now(
+    schedule_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Generate and send a compliance report immediately for a schedule.
+
+    Reuses the compliance posture data and sends it via the email service
+    to the schedule's recipients.
+    """
+    _require_platform_admin(principal)
+
+    # Fetch the schedule
+    try:
+        schedules = await asyncio.to_thread(svc_list_report_schedules)
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    schedule = next((s for s in schedules if s.get("id") == schedule_id), None)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found.")
+
+    # Generate posture data (reuse the existing endpoint logic inline)
+    posture = await get_compliance_posture(principal=principal)
+
+    # Build report content
+    recipients = schedule.get("recipients", [])
+    report_format = schedule.get("format", "html")
+    if report_format == "json":
+        import json as _json
+        report_body = _json.dumps(posture, indent=2)
+    else:
+        report_body = _build_compliance_html_report(posture)
+
+    # Send via email service (best-effort)
+    sent_count = 0
+    errors: list[str] = []
+    try:
+        from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
+        from tldw_Server_API.app.services.admin_system_ops_service import (
+            record_email_delivery as svc_record_email_delivery,
+        )
+
+        email_service = get_email_service()
+        for recipient in recipients:
+            try:
+                ok = await email_service.send_raw_email(
+                    to_email=recipient,
+                    subject="Compliance Report",
+                    body_html=report_body if report_format == "html" else None,
+                    body_text=report_body if report_format != "html" else None,
+                )
+                if ok:
+                    sent_count += 1
+                    svc_record_email_delivery(
+                        recipient=recipient,
+                        subject="Compliance Report",
+                        template="compliance_report",
+                        status="sent",
+                    )
+                else:
+                    errors.append(f"{recipient}: delivery returned false")
+                    svc_record_email_delivery(
+                        recipient=recipient,
+                        subject="Compliance Report",
+                        template="compliance_report",
+                        status="failed",
+                        error="delivery returned false",
+                    )
+            except Exception as send_exc:
+                errors.append(f"{recipient}: {send_exc}")
+                svc_record_email_delivery(
+                    recipient=recipient,
+                    subject="Compliance Report",
+                    template="compliance_report",
+                    status="failed",
+                    error=str(send_exc),
+                )
+    except Exception as exc:
+        logger.warning("Compliance report send-now: email service unavailable: {}", exc)
+        errors.append(f"email service: {exc}")
+
+    # Mark as sent
+    try:
+        await asyncio.to_thread(
+            svc_mark_report_schedule_sent, schedule_id=schedule_id
+        )
+    except _OPS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    return {
+        "sent_count": sent_count,
+        "total_recipients": len(recipients),
+        "errors": errors,
+    }
+
+
+def _build_compliance_html_report(posture: dict[str, Any]) -> str:
+    """Build a simple HTML compliance report from posture data."""
+    score = posture.get("overall_score", 0)
+    mfa_pct = posture.get("mfa_adoption_pct", 0)
+    mfa_count = posture.get("mfa_enabled_count", 0)
+    total_users = posture.get("total_users", 0)
+    key_pct = posture.get("key_rotation_compliance_pct", 0)
+    keys_needing = posture.get("keys_needing_rotation", 0)
+    keys_total = posture.get("keys_total", 0)
+    audit = posture.get("audit_logging_enabled", False)
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Compliance Report</title></head>
+<body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h1 style="color:#333;">Compliance Report</h1>
+<p>Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+<table style="width:100%;border-collapse:collapse;">
+<tr><td style="padding:8px;border-bottom:1px solid #eee;font-weight:bold;">Overall Score</td>
+<td style="padding:8px;border-bottom:1px solid #eee;">{score:.0f}/100</td></tr>
+<tr><td style="padding:8px;border-bottom:1px solid #eee;font-weight:bold;">MFA Adoption</td>
+<td style="padding:8px;border-bottom:1px solid #eee;">{mfa_pct:.0f}% ({mfa_count}/{total_users} users)</td></tr>
+<tr><td style="padding:8px;border-bottom:1px solid #eee;font-weight:bold;">Key Rotation</td>
+<td style="padding:8px;border-bottom:1px solid #eee;">{key_pct:.0f}% ({keys_needing} of {keys_total} need rotation)</td></tr>
+<tr><td style="padding:8px;border-bottom:1px solid #eee;font-weight:bold;">Audit Logging</td>
+<td style="padding:8px;border-bottom:1px solid #eee;">{"Enabled" if audit else "Disabled"}</td></tr>
+</table>
+</body>
+</html>"""
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Email Digest Preferences
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/digest/preference")
+async def get_digest_preference(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Get the current user's email digest preference."""
+    user_id = str(getattr(principal, "user_id", None) or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identity required.")
+    try:
+        pref = await asyncio.to_thread(svc_get_digest_preference, user_id=user_id)
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if pref is None:
+        return {"user_id": user_id, "email": "", "frequency": "off", "enabled": False}
+    return pref
+
+
+@router.put("/digest/preference")
+async def set_digest_preference(
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Set or update the current user's email digest preference."""
+    user_id = str(getattr(principal, "user_id", None) or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identity required.")
+    body = await request.json()
+    email = body.get("email", "")
+    frequency = body.get("frequency", "off")
+    try:
+        pref = await asyncio.to_thread(
+            svc_set_digest_preference,
+            user_id=user_id,
+            email=email,
+            frequency=frequency,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return pref

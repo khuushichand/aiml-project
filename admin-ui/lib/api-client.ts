@@ -14,10 +14,13 @@ import type {
   ByokValidationRunItem,
   ByokValidationRunListResponse,
   CompliancePosture,
+  ComplianceReportSchedule,
+  DigestPreference,
   EffectivePermissionsResponse,
   EmailDeliveryListResponse,
   FeatureRegistryEntry,
   IncidentItem,
+  IncidentNotifyResponse,
   IncidentsResponse,
   Invoice,
   MaintenanceRotationRunCreateRequest,
@@ -249,6 +252,9 @@ export const api = {
   },
   revokeInvitation: (invitationId: string) => requestJson(`/admin/users/invitations/${encodeURIComponent(invitationId)}`, {
     method: 'DELETE',
+  }),
+  resendInvitation: (invitationId: string) => requestJson(`/admin/users/invitations/${encodeURIComponent(invitationId)}/resend`, {
+    method: 'POST',
   }),
   getCurrentUser: () => requestJson<User>('/users/me'),
 
@@ -602,6 +608,11 @@ export const api = {
   deleteIncident: (incidentId: string) =>
     requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
       method: 'DELETE',
+    }),
+  notifyIncidentStakeholders: (incidentId: string, data: { recipients: string[]; message?: string }) =>
+    requestJson<IncidentNotifyResponse>(`/admin/incidents/${encodeURIComponent(incidentId)}/notify`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
   getIncidentSlaMetrics: () =>
     requestJson<{
@@ -1024,6 +1035,41 @@ export const api = {
   // Compliance Posture
   // ============================================
   getCompliancePosture: () => requestJson<CompliancePosture>('/admin/compliance/posture'),
+
+  // ============================================
+  // Compliance Report Schedules
+  // ============================================
+  getReportSchedules: () =>
+    requestJson<{ items: ComplianceReportSchedule[]; total: number }>('/admin/compliance/report-schedules'),
+  createReportSchedule: (data: { frequency: string; recipients: string[]; format: string; enabled: boolean }) =>
+    requestJson<ComplianceReportSchedule>('/admin/compliance/report-schedules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateReportSchedule: (scheduleId: string, data: Record<string, unknown>) =>
+    requestJson<ComplianceReportSchedule>(`/admin/compliance/report-schedules/${encodeURIComponent(scheduleId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteReportSchedule: (scheduleId: string) =>
+    requestJson(`/admin/compliance/report-schedules/${encodeURIComponent(scheduleId)}`, {
+      method: 'DELETE',
+    }),
+  sendReportNow: (scheduleId: string) =>
+    requestJson<{ sent_count: number; total_recipients: number; errors: string[] }>(
+      `/admin/compliance/report-schedules/${encodeURIComponent(scheduleId)}/send-now`,
+      { method: 'POST' },
+    ),
+
+  // ============================================
+  // Email Digest Preferences
+  // ============================================
+  getDigestPreference: () => requestJson<DigestPreference>('/admin/digest/preference'),
+  setDigestPreference: (data: { email: string; frequency: string }) =>
+    requestJson<DigestPreference>('/admin/digest/preference', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 
   // ============================================
   // System Dependencies Health

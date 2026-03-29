@@ -130,6 +130,8 @@ def _default_store() -> dict[str, Any]:
         "invitations": [],
         "dependency_health_history": [],
         "email_delivery_log": [],
+        "compliance_report_schedules": [],
+        "digest_preferences": [],
     }
 
 
@@ -213,6 +215,8 @@ def _load_store() -> dict[str, Any]:
     data.setdefault("invitations", [])
     data.setdefault("dependency_health_history", [])
     data.setdefault("email_delivery_log", [])
+    data.setdefault("compliance_report_schedules", [])
+    data.setdefault("digest_preferences", [])
     return data
 
 
@@ -749,6 +753,15 @@ def add_incident_event(
     raise ValueError("not_found")
 
 
+def get_incident(*, incident_id: str) -> dict[str, Any]:
+    """Return a single incident by ID, or raise ``ValueError("not_found")``."""
+    with _locked_store() as store:
+        for incident in store.get("incidents", []):
+            if incident.get("id") == incident_id:
+                return _normalize_incident_record(incident)
+    raise ValueError("not_found")
+
+
 def delete_incident(*, incident_id: str) -> None:
     with _locked_store(write=True) as store:
         incidents = store.get("incidents", [])
@@ -756,6 +769,96 @@ def delete_incident(*, incident_id: str) -> None:
         if len(remaining) == len(incidents):
             raise ValueError("not_found")
         store["incidents"] = remaining
+
+
+def notify_incident_stakeholders(
+    *,
+    incident_id: str,
+    recipients: list[str],
+    message: str | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    """Send email notification to stakeholders about an incident.
+
+    Uses the ``EmailService`` to deliver a plain-text notification to each
+    recipient.  Results are collected per-address and the notification is
+    recorded as a timeline event on the incident.
+
+    Returns a dict with ``incident_id`` and a ``notifications`` list of
+    per-recipient delivery outcomes.
+    """
+    import asyncio
+
+    from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
+
+    incident = get_incident(incident_id=incident_id)
+    email_service = get_email_service()
+
+    subject = (
+        f"[Incident {incident['id']}] {incident['title']}"
+        f" \u2014 {incident['status']}"
+    )
+    body_parts = [
+        f"Incident: {incident['title']}",
+        f"Status: {incident['status']}",
+        f"Severity: {incident['severity']}",
+    ]
+    custom_text = (message or "").strip()
+    body_parts.append("")
+    body_parts.append(custom_text or incident.get("summary") or "")
+    text_body = "\n".join(body_parts)
+
+    results: list[dict[str, Any]] = []
+    for email_addr in recipients:
+        email_addr = email_addr.strip()
+        if not email_addr:
+            continue
+        try:
+            # EmailService.send_email is async; run it in a sync context.
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(
+                        asyncio.run,
+                        email_service.send_email(
+                            to_email=email_addr,
+                            subject=subject,
+                            html_body=f"<pre>{text_body}</pre>",
+                            text_body=text_body,
+                            _template="incident_notification",
+                        ),
+                    )
+                    fut.result(timeout=30)
+            else:
+                asyncio.run(
+                    email_service.send_email(
+                        to_email=email_addr,
+                        subject=subject,
+                        html_body=f"<pre>{text_body}</pre>",
+                        text_body=text_body,
+                        _template="incident_notification",
+                    )
+                )
+            results.append({"email": email_addr, "status": "sent"})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Incident notification to {} failed: {}", email_addr, exc)
+            results.append({"email": email_addr, "status": "failed", "error": str(exc)})
+
+    # Record notification in the incident timeline
+    sent_count = sum(1 for r in results if r["status"] == "sent")
+    total_count = len(results)
+    add_incident_event(
+        incident_id=incident_id,
+        message=f"Notification sent to {sent_count}/{total_count} stakeholder(s)",
+        actor=actor or "system",
+    )
+
+    return {"incident_id": incident_id, "notifications": results}
 
 
 # -----------------------------------------------------------------------------------------------------------------
@@ -1421,3 +1524,259 @@ def list_email_deliveries(
     # Newest first
     log.sort(key=lambda e: e.get("sent_at") or "", reverse=True)
     return log[offset: offset + limit], total
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Compliance Report Schedules
+# ──────────────────────────────────────────────────────────────────────────────
+
+_REPORT_FREQUENCIES = {"daily", "weekly", "monthly"}
+_REPORT_FORMATS = {"html", "json"}
+_REPORT_MAX_RECIPIENTS = 20
+_REPORT_MAX_SCHEDULES = 50
+
+
+def _normalize_report_schedule(value: Any) -> dict[str, Any]:
+    """Normalize and validate a compliance report schedule record."""
+    if not isinstance(value, dict):
+        raise ValueError("invalid_report_schedule")
+    schedule = dict(value)
+    schedule.setdefault("id", uuid4().hex[:16])
+    schedule.setdefault("frequency", "weekly")
+    schedule.setdefault("recipients", [])
+    schedule.setdefault("format", "html")
+    schedule.setdefault("enabled", True)
+    schedule.setdefault("created_at", _now_iso())
+    schedule.setdefault("last_sent_at", None)
+    return schedule
+
+
+def list_report_schedules() -> list[dict[str, Any]]:
+    """List all compliance report schedules."""
+    with _locked_store() as store:
+        raw = list(store.get("compliance_report_schedules", []))
+    schedules = []
+    for item in raw:
+        try:
+            schedules.append(_normalize_report_schedule(item))
+        except ValueError:
+            continue
+    schedules.sort(key=lambda s: s.get("created_at") or "", reverse=True)
+    return schedules
+
+
+def create_report_schedule(
+    *,
+    frequency: str,
+    recipients: list[str],
+    report_format: str = "html",
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Create a new compliance report schedule."""
+    freq_norm = (frequency or "").strip().lower()
+    if freq_norm not in _REPORT_FREQUENCIES:
+        raise ValueError("invalid_frequency")
+
+    fmt_norm = (report_format or "html").strip().lower()
+    if fmt_norm not in _REPORT_FORMATS:
+        raise ValueError("invalid_format")
+
+    if not isinstance(recipients, list) or len(recipients) == 0:
+        raise ValueError("recipients_required")
+    # Validate and normalize email recipients
+    clean_recipients: list[str] = []
+    for r in recipients[:_REPORT_MAX_RECIPIENTS]:
+        email = str(r).strip().lower()
+        if "@" not in email:
+            raise ValueError("invalid_recipient_email")
+        clean_recipients.append(email)
+
+    schedule = {
+        "id": uuid4().hex[:16],
+        "frequency": freq_norm,
+        "recipients": clean_recipients,
+        "format": fmt_norm,
+        "enabled": bool(enabled),
+        "created_at": _now_iso(),
+        "last_sent_at": None,
+    }
+
+    with _locked_store(write=True) as store:
+        schedules = store.get("compliance_report_schedules", [])
+        if len(schedules) >= _REPORT_MAX_SCHEDULES:
+            raise ValueError("too_many_report_schedules")
+        schedules.append(schedule)
+        store["compliance_report_schedules"] = schedules
+
+    return schedule
+
+
+def update_report_schedule(
+    *,
+    schedule_id: str,
+    frequency: str | None = None,
+    recipients: list[str] | None = None,
+    report_format: str | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    """Update an existing compliance report schedule."""
+    with _locked_store(write=True) as store:
+        schedules = store.get("compliance_report_schedules", [])
+        for sched in schedules:
+            if sched.get("id") == schedule_id:
+                if frequency is not None:
+                    freq_norm = frequency.strip().lower()
+                    if freq_norm not in _REPORT_FREQUENCIES:
+                        raise ValueError("invalid_frequency")
+                    sched["frequency"] = freq_norm
+                if recipients is not None:
+                    if not isinstance(recipients, list) or len(recipients) == 0:
+                        raise ValueError("recipients_required")
+                    clean: list[str] = []
+                    for r in recipients[:_REPORT_MAX_RECIPIENTS]:
+                        email = str(r).strip().lower()
+                        if "@" not in email:
+                            raise ValueError("invalid_recipient_email")
+                        clean.append(email)
+                    sched["recipients"] = clean
+                if report_format is not None:
+                    fmt_norm = report_format.strip().lower()
+                    if fmt_norm not in _REPORT_FORMATS:
+                        raise ValueError("invalid_format")
+                    sched["format"] = fmt_norm
+                if enabled is not None:
+                    sched["enabled"] = bool(enabled)
+                return _normalize_report_schedule(sched)
+    raise ValueError("not_found")
+
+
+def delete_report_schedule(*, schedule_id: str) -> dict[str, Any]:
+    """Delete a compliance report schedule."""
+    with _locked_store(write=True) as store:
+        schedules = store.get("compliance_report_schedules", [])
+        for i, sched in enumerate(schedules):
+            if sched.get("id") == schedule_id:
+                removed = schedules.pop(i)
+                store["compliance_report_schedules"] = schedules
+                return _normalize_report_schedule(removed)
+    raise ValueError("not_found")
+
+
+def mark_report_schedule_sent(*, schedule_id: str) -> dict[str, Any]:
+    """Update the last_sent_at timestamp for a report schedule."""
+    with _locked_store(write=True) as store:
+        schedules = store.get("compliance_report_schedules", [])
+        for sched in schedules:
+            if sched.get("id") == schedule_id:
+                sched["last_sent_at"] = _now_iso()
+                return _normalize_report_schedule(sched)
+    raise ValueError("not_found")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Digest Preferences
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DIGEST_FREQUENCIES = {"daily", "weekly", "off"}
+
+
+def get_digest_preference(*, user_id: str) -> dict[str, Any] | None:
+    """Get email digest preference for a user."""
+    user_id_norm = str(user_id).strip()
+    with _locked_store() as store:
+        prefs = store.get("digest_preferences", [])
+        for pref in prefs:
+            if str(pref.get("user_id", "")).strip() == user_id_norm:
+                return dict(pref)
+    return None
+
+
+def set_digest_preference(
+    *,
+    user_id: str,
+    email: str,
+    frequency: str = "off",
+) -> dict[str, Any]:
+    """Set or update the email digest preference for a user."""
+    user_id_norm = str(user_id).strip()
+    email_norm = str(email).strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("invalid_email")
+
+    freq_norm = (frequency or "off").strip().lower()
+    if freq_norm not in _DIGEST_FREQUENCIES:
+        raise ValueError("invalid_frequency")
+
+    with _locked_store(write=True) as store:
+        prefs = store.get("digest_preferences", [])
+        for pref in prefs:
+            if str(pref.get("user_id", "")).strip() == user_id_norm:
+                pref["email"] = email_norm
+                pref["frequency"] = freq_norm
+                pref["enabled"] = freq_norm != "off"
+                return dict(pref)
+        # Create new entry
+        new_pref = {
+            "id": uuid4().hex[:16],
+            "user_id": user_id_norm,
+            "email": email_norm,
+            "frequency": freq_norm,
+            "enabled": freq_norm != "off",
+            "created_at": _now_iso(),
+        }
+        prefs.append(new_pref)
+        store["digest_preferences"] = prefs
+        return dict(new_pref)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Resend Invitation
+# ──────────────────────────────────────────────────────────────────────────────
+
+_INVITATION_MAX_RESENDS = 3
+
+
+def resend_invitation(*, invitation_id: str) -> dict[str, Any]:
+    """Regenerate token and update expiry for a pending invitation.
+
+    Rate-limited to ``_INVITATION_MAX_RESENDS`` resends per invitation.
+    Returns the updated invitation record.
+
+    Raises:
+        ValueError: ``not_found`` if no invitation with that id exists.
+        ValueError: ``not_pending`` if the invitation is not in pending status.
+        ValueError: ``resend_limit_reached`` if max resends exceeded.
+    """
+    with _locked_store(write=True) as store:
+        invitations = store.get("invitations", [])
+        for inv in invitations:
+            if inv.get("id") == invitation_id:
+                # Check auto-expiry
+                if inv.get("status") == "pending":
+                    expires_at = inv.get("expires_at")
+                    if expires_at:
+                        expiry_dt = _parse_iso(expires_at)
+                        if expiry_dt < datetime.now(timezone.utc):
+                            inv["status"] = "expired"
+
+                if inv.get("status") != "pending":
+                    raise ValueError("not_pending")
+
+                resend_count = int(inv.get("resend_count") or 0)
+                if resend_count >= _INVITATION_MAX_RESENDS:
+                    raise ValueError("resend_limit_reached")
+
+                # Regenerate token and extend expiry
+                inv["token"] = secrets.token_urlsafe(32)
+                inv["expires_at"] = (
+                    datetime.now(timezone.utc)
+                    + timedelta(days=_INVITATION_DEFAULT_EXPIRY_DAYS)
+                ).isoformat()
+                inv["resend_count"] = resend_count + 1
+                inv["last_resent_at"] = _now_iso()
+                # Reset email status so the caller can attempt re-delivery
+                inv["email_sent"] = False
+                inv["email_error"] = None
+
+                return _normalize_invitation_record(inv)
+    raise ValueError("not_found")

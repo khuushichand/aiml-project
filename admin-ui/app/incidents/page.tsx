@@ -32,9 +32,10 @@ import {
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
-import { AlertTriangle, ExternalLink, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, ExternalLink, Mail, RefreshCw, Trash2, X } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportIncidents, ExportFormat } from '@/lib/export';
+import type { IncidentNotifyResponse } from '@/types/incidents';
 
 const STATUSES = ['open', 'investigating', 'mitigating', 'resolved'] as const;
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
@@ -111,6 +112,13 @@ function IncidentsPageContent() {
     resolved_count: number;
     total_incidents: number;
   } | null>(null);
+
+  // Notify dialog state
+  const [notifyIncidentId, setNotifyIncidentId] = useState<string | null>(null);
+  const [notifyRecipients, setNotifyRecipients] = useState('');
+  const [notifyMessage, setNotifyMessage] = useState('');
+  const [notifying, setNotifying] = useState(false);
+  const [notifyResults, setNotifyResults] = useState<IncidentNotifyResponse | null>(null);
 
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
@@ -361,6 +369,48 @@ function IncidentsPageContent() {
     } finally {
       setIncidentUpdating(incidentId, false);
     }
+  };
+
+  const handleNotifyStakeholders = async () => {
+    if (!notifyIncidentId) return;
+    const emails = notifyRecipients
+      .split(',')
+      .map((e) => e.trim())
+      .filter(Boolean);
+    if (emails.length === 0) {
+      showError('At least one recipient email is required');
+      return;
+    }
+    try {
+      setNotifying(true);
+      const result = await api.notifyIncidentStakeholders(notifyIncidentId, {
+        recipients: emails,
+        ...(notifyMessage.trim() ? { message: notifyMessage.trim() } : {}),
+      });
+      setNotifyResults(result);
+      const sentCount = result.notifications.filter((n) => n.status === 'sent').length;
+      success(`Notification sent to ${sentCount}/${result.notifications.length} recipient(s)`);
+      await reload();
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to send notifications';
+      showError(message);
+    } finally {
+      setNotifying(false);
+    }
+  };
+
+  const openNotifyDialog = (incidentId: string) => {
+    setNotifyIncidentId(incidentId);
+    setNotifyRecipients('');
+    setNotifyMessage('');
+    setNotifyResults(null);
+  };
+
+  const closeNotifyDialog = () => {
+    setNotifyIncidentId(null);
+    setNotifyRecipients('');
+    setNotifyMessage('');
+    setNotifyResults(null);
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -636,18 +686,31 @@ function IncidentsPageContent() {
                         )}
                       </CardDescription>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => {
-                        void handleDeleteIncident(incident.id);
-                      }}
-                      aria-label={`Delete incident ${incident.id}`}
-                      title={`Delete incident ${incident.id}`}
-                      disabled={isUpdating}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => openNotifyDialog(incident.id)}
+                        aria-label={`Notify stakeholders for incident ${incident.id}`}
+                        title="Notify stakeholders"
+                        disabled={isUpdating}
+                        data-testid={`incident-notify-${incident.id}`}
+                      >
+                        <Mail className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          void handleDeleteIncident(incident.id);
+                        }}
+                        aria-label={`Delete incident ${incident.id}`}
+                        title={`Delete incident ${incident.id}`}
+                        disabled={isUpdating}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </CardHeader>
                   <CardContent className="grid gap-4">
                     <div className="text-sm text-muted-foreground">
@@ -894,6 +957,89 @@ function IncidentsPageContent() {
             onPageChange={setPage}
             onPageSizeChange={setPageSize}
           />
+
+          {/* Notify Stakeholders Dialog */}
+          {notifyIncidentId && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+              data-testid="notify-dialog-overlay"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) closeNotifyDialog();
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Notify stakeholders"
+            >
+              <div className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Notify Stakeholders</h2>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={closeNotifyDialog}
+                    aria-label="Close notify dialog"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="notify-recipients">Recipients (comma-separated emails)</Label>
+                    <Input
+                      id="notify-recipients"
+                      data-testid="notify-recipients-input"
+                      placeholder="alice@example.com, bob@example.com"
+                      value={notifyRecipients}
+                      onChange={(e) => setNotifyRecipients(e.target.value)}
+                      disabled={notifying}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="notify-message">Message (optional)</Label>
+                    <textarea
+                      id="notify-message"
+                      data-testid="notify-message-input"
+                      className="flex min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      placeholder="Optional custom message for stakeholders"
+                      value={notifyMessage}
+                      onChange={(e) => setNotifyMessage(e.target.value)}
+                      disabled={notifying}
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={closeNotifyDialog} disabled={notifying}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        void handleNotifyStakeholders();
+                      }}
+                      disabled={notifying}
+                      loading={notifying}
+                      loadingText="Sending..."
+                      data-testid="notify-send-button"
+                    >
+                      <Mail className="mr-2 h-4 w-4" />
+                      Send Notification
+                    </Button>
+                  </div>
+                  {notifyResults && (
+                    <div className="space-y-2 rounded-md border p-3" data-testid="notify-results">
+                      <div className="text-sm font-medium">Delivery Results</div>
+                      {notifyResults.notifications.map((result, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-sm">
+                          <span className="truncate mr-2">{result.email}</span>
+                          <Badge variant={result.status === 'sent' ? 'secondary' : 'destructive'}>
+                            {result.status}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </ResponsiveLayout>
     </PermissionGuard>

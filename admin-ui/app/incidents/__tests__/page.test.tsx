@@ -54,6 +54,7 @@ vi.mock('@/lib/api-client', () => ({
     updateIncident: vi.fn(),
     addIncidentEvent: vi.fn(),
     deleteIncident: vi.fn(),
+    notifyIncidentStakeholders: vi.fn(),
     getIncidentSlaMetrics: vi.fn(),
   },
 }));
@@ -76,6 +77,10 @@ beforeEach(() => {
   apiMock.updateIncident.mockResolvedValue({});
   apiMock.addIncidentEvent.mockResolvedValue({});
   apiMock.deleteIncident.mockResolvedValue({});
+  apiMock.notifyIncidentStakeholders.mockResolvedValue({
+    incident_id: '',
+    notifications: [],
+  });
   apiMock.getIncidentSlaMetrics.mockResolvedValue({
     total_incidents: 0,
     resolved_count: 0,
@@ -393,5 +398,73 @@ describe('IncidentsPage Stage 3 workflows', () => {
     });
     expect(apiMock.addIncidentEvent).not.toHaveBeenCalled();
     expect(localStorage.getItem('admin.incidents.workflow.v1')).toBeNull();
+  });
+
+  it('opens notify dialog, sends notification, and displays delivery results', async () => {
+    usePagedResourceMock.mockReturnValue({
+      items: [{
+        id: 'inc-3',
+        title: 'API gateway timeout',
+        status: 'investigating',
+        severity: 'high',
+        summary: 'Gateway returning 504s',
+        tags: ['gateway'],
+        created_at: '2026-03-27T08:00:00Z',
+        updated_at: '2026-03-27T08:00:00Z',
+        resolved_at: null,
+        assigned_to_user_id: null,
+        assigned_to_label: null,
+        root_cause: null,
+        impact: null,
+        action_items: [],
+        timeline: [],
+      }],
+      total: 1,
+      loading: false,
+      error: '',
+      reload: reloadMock,
+    });
+    apiMock.notifyIncidentStakeholders.mockResolvedValue({
+      incident_id: 'inc-3',
+      notifications: [
+        { email: 'alice@example.com', status: 'sent' },
+        { email: 'bob@example.com', status: 'failed', error: 'SMTP timeout' },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<IncidentsPage />);
+
+    // Click the notify button
+    const notifyBtn = await screen.findByTestId('incident-notify-inc-3');
+    await user.click(notifyBtn);
+
+    // Dialog should be open
+    expect(screen.getByTestId('notify-dialog-overlay')).toBeInTheDocument();
+
+    // Fill in recipients and message
+    const recipientsInput = screen.getByTestId('notify-recipients-input');
+    const messageInput = screen.getByTestId('notify-message-input');
+    await user.type(recipientsInput, 'alice@example.com, bob@example.com');
+    await user.type(messageInput, 'Please investigate urgently');
+
+    // Send
+    await user.click(screen.getByTestId('notify-send-button'));
+
+    await waitFor(() => {
+      expect(apiMock.notifyIncidentStakeholders).toHaveBeenCalledWith('inc-3', {
+        recipients: ['alice@example.com', 'bob@example.com'],
+        message: 'Please investigate urgently',
+      });
+    });
+
+    // Delivery results should display
+    await waitFor(() => {
+      expect(screen.getByTestId('notify-results')).toBeInTheDocument();
+    });
+    expect(screen.getByText('alice@example.com')).toBeInTheDocument();
+    expect(screen.getByText('bob@example.com')).toBeInTheDocument();
+    expect(toastSuccessMock).toHaveBeenCalledWith('Notification sent to 1/2 recipient(s)');
+    expect(reloadMock).toHaveBeenCalled();
   });
 });

@@ -1229,6 +1229,31 @@ class IncidentEventCreateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class IncidentNotifyRequest(BaseModel):
+    """Request to notify stakeholders about an incident."""
+    recipients: list[str]
+    message: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyRecipientResult(BaseModel):
+    """Per-recipient delivery result."""
+    email: str
+    status: str
+    error: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyResponse(BaseModel):
+    """Response from incident stakeholder notification."""
+    incident_id: str
+    notifications: list[IncidentNotifyRecipientResult]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Webhook Schemas
