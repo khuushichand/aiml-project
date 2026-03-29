@@ -61,9 +61,22 @@ const testState = {
       type: "website" as const,
       status: "ready" as const,
       addedAt: new Date("2026-03-28T00:00:00.000Z")
+    },
+    {
+      id: "source-c",
+      mediaId: 103,
+      title: "Gamma Processing Source",
+      type: "document" as const,
+      status: "processing" as const,
+      addedAt: new Date("2026-03-28T00:00:00.000Z")
     }
   ],
   selectedSourceIds: ["source-a", "source-b"] as string[],
+  selectedSourceFolderIds: [] as string[],
+  sourceFolders: [] as Array<{ id: string }>,
+  sourceFolderMemberships: [] as Array<{ sourceId: string; folderId: string }>,
+  activeFolderId: null as string | null,
+  sourceSearchQuery: "",
   generatedArtifacts: [] as Array<{ id: string }>,
   currentNote: {
     title: "",
@@ -447,6 +460,23 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
       screen.getByRole("radio", { name: "Create a new workspace" })
     ).toBeChecked()
     expect(screen.getByPlaceholderText("New Research")).toBeInTheDocument()
+    expect(mockMessageApi.info).not.toHaveBeenCalled()
+  })
+
+  it("shows the ineligible summary for processing selections from the header path", async () => {
+    testState.selectedSourceIds = ["source-a", "source-c"]
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Split workspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+
+    expect(
+      screen.getByText(/1 ready sources will transfer/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/1 processing or errored sources are excluded/i)
+    ).toBeInTheDocument()
     expect(mockMessageApi.info).not.toHaveBeenCalled()
   })
 

@@ -1442,17 +1442,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             ),
             onClick: handleOpenCustomizeBannerModal
           },
-          {
-            key: "split-workspace",
-            icon: <PanelLeftOpen className="h-4 w-4" />,
-            label: t(
-              "playground:workspace.splitWorkspace",
-              "Split workspace"
-            ),
-            onClick: () => {
-              onOpenSplitWorkspace?.()
-            }
-          },
+          ...(onOpenSplitWorkspace
+            ? [
+                {
+                  key: "split-workspace",
+                  icon: <PanelLeftOpen className="h-4 w-4" />,
+                  label: t(
+                    "playground:workspace.splitWorkspace",
+                    "Split workspace"
+                  ),
+                  onClick: onOpenSplitWorkspace
+                }
+              ]
+            : []),
           { type: "divider" as const, key: "divider-current-actions" }
         ]
       : []),
