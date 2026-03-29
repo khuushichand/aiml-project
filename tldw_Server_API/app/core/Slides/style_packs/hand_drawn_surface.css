@@ -1,0 +1,13 @@
+.reveal[data-style-pack="hand_drawn_surface"] {
+  background-color: var(--surface, #101418);
+  color: var(--text, #f8f2c8);
+  font-family: "Patrick Hand", "Comic Sans MS", "Marker Felt", cursive;
+}
+
+.reveal[data-style-pack="hand_drawn_surface"] .slides section {
+  background-color: var(--surface, #101418);
+  color: var(--text, #f8f2c8);
+  border: 3px solid var(--border, #f8f2c8);
+  border-radius: 24px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.3);
+}

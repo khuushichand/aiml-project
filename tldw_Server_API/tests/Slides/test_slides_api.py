@@ -267,6 +267,17 @@ def _setup_rag_too_large(monkeypatch, fake_notes, fake_media):
     )
 
 
+def _assert_compact_builtin_snapshot(snapshot: dict) -> None:
+    assert snapshot["id"] == "notebooklm-blueprint"
+    assert snapshot["scope"] == "builtin"
+    assert snapshot["resolution"]["base_theme"] == "night"
+    assert snapshot["resolution"]["resolved_theme"] == "night"
+    assert snapshot["resolution"]["style_pack"] == "technical_grid"
+    assert snapshot["resolution"]["style_pack_version"] == 1
+    assert "custom_css" not in snapshot
+    assert "custom_css" not in snapshot["resolution"]
+
+
 _TOO_LARGE_CASES = [
     {
         "id": "prompt",
@@ -563,6 +574,41 @@ def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
         assert "alt=\"Logo\"" in index_html
 
 
+def test_slides_export_reveal_passes_visual_style_snapshot(slides_client, monkeypatch):
+    captured = {}
+
+    def _stub_export(**kwargs):
+        captured["visual_style_snapshot"] = kwargs.get("visual_style_snapshot")
+        return b"PK\x03\x04stub"
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_bundle",
+        _stub_export,
+    )
+    payload = {
+        "title": "Styled Deck",
+        "description": None,
+        "theme": "black",
+        "visual_style_id": "notebooklm-blueprint",
+        "visual_style_scope": "builtin",
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201, resp.text
+
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=revealjs"
+    )
+
+    assert export_resp.status_code == 200, export_resp.text
+    assert captured["visual_style_snapshot"]["id"] == "notebooklm-blueprint"
+    assert captured["visual_style_snapshot"]["resolution"]["style_pack"] == "technical_grid"
+
+
 def test_slides_export_markdown_marp_override(slides_client):
     payload = {
         "title": "Deck",
@@ -613,6 +659,38 @@ def test_slides_export_pdf(slides_client, monkeypatch):
     assert options.get("format") == "Letter"
     assert options.get("landscape") is True
     assert (options.get("margin") or {}).get("top") == "0.2in"
+
+
+def test_slides_export_pdf_passes_visual_style_snapshot(slides_client, monkeypatch):
+    captured = {}
+
+    def _stub_export(**kwargs):
+        captured["visual_style_snapshot"] = kwargs.get("visual_style_snapshot")
+        return b"%PDF-1.4\n%stub"
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_pdf", _stub_export)
+    payload = {
+        "title": "Styled Deck",
+        "description": None,
+        "theme": "black",
+        "visual_style_id": "notebooklm-blueprint",
+        "visual_style_scope": "builtin",
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201, resp.text
+
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=pdf"
+    )
+
+    assert export_resp.status_code == 200, export_resp.text
+    assert captured["visual_style_snapshot"]["id"] == "notebooklm-blueprint"
+    assert captured["visual_style_snapshot"]["resolution"]["style_pack"] == "technical_grid"
 
 
 def test_slides_export_pdf_input_error(slides_client, monkeypatch):
@@ -692,11 +770,76 @@ def test_slides_styles_list_returns_builtin_and_user_styles(slides_client):
     payload = list_resp.json()
     styles = payload["styles"]
 
-    assert any(item["scope"] == "builtin" and item["id"] == "timeline" for item in styles)
+    builtin = next(item for item in styles if item["id"] == "notebooklm-blueprint")
+    assert builtin["scope"] == "builtin"
+    assert builtin["category"] == "technical"
+    assert builtin["guide_number"] == 7
+    assert builtin["tags"] == ["technical", "technical_grid", "technical_precision"]
+    assert builtin["best_for"] == ["systems explanation", "architecture walkthrough"]
+    assert builtin["appearance_defaults"]["theme"] == "night"
+    assert "custom_css" not in builtin["appearance_defaults"]
     assert any(item["scope"] == "user" and item["id"] == created_id for item in styles)
     assert payload["total_count"] >= len(styles)
     assert payload["limit"] == 50
     assert payload["offset"] == 0
+
+
+def test_slides_builtin_style_detail_exposes_catalog_metadata_and_compact_defaults(slides_client):
+    resp = slides_client.get("/api/v1/slides/styles/notebooklm-blueprint")
+    assert resp.status_code == 200, resp.text
+    style = resp.json()
+    assert style["scope"] == "builtin"
+    assert style["category"] == "technical"
+    assert style["guide_number"] == 7
+    assert style["tags"] == ["technical", "technical_grid", "technical_precision"]
+    assert style["best_for"] == ["systems explanation", "architecture walkthrough"]
+    assert style["appearance_defaults"]["theme"] == "night"
+    assert "custom_css" not in style["appearance_defaults"]
+
+
+def test_slides_builtin_style_list_skips_custom_css_rendering(slides_client, monkeypatch):
+    from tldw_Server_API.app.core.Slides.visual_style_resolver import (
+        resolve_builtin_visual_style as real_resolve_builtin_visual_style,
+    )
+
+    captured: list[bool] = []
+
+    def _recorded_resolve(style_id: str, *, include_custom_css: bool):
+        captured.append(include_custom_css)
+        return real_resolve_builtin_visual_style(style_id, include_custom_css=include_custom_css)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_builtin_visual_style",
+        _recorded_resolve,
+    )
+
+    resp = slides_client.get("/api/v1/slides/styles")
+
+    assert resp.status_code == 200, resp.text
+    assert captured
+    assert set(captured) == {False}
+
+
+def test_slides_builtin_style_detail_skips_custom_css_rendering(slides_client, monkeypatch):
+    from tldw_Server_API.app.core.Slides.visual_style_resolver import (
+        resolve_builtin_visual_style as real_resolve_builtin_visual_style,
+    )
+
+    captured: list[bool] = []
+
+    def _recorded_resolve(style_id: str, *, include_custom_css: bool):
+        captured.append(include_custom_css)
+        return real_resolve_builtin_visual_style(style_id, include_custom_css=include_custom_css)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_builtin_visual_style",
+        _recorded_resolve,
+    )
+
+    resp = slides_client.get("/api/v1/slides/styles/notebooklm-blueprint")
+
+    assert resp.status_code == 200, resp.text
+    assert captured == [False]
 
 
 def test_slides_styles_list_supports_pagination(slides_client):
@@ -954,7 +1097,7 @@ def test_slides_create_persists_visual_style_snapshot(slides_client):
         "/api/v1/slides/presentations",
         json={
             "title": "History Deck",
-            "visual_style_id": "timeline",
+            "visual_style_id": "notebooklm-blueprint",
             "visual_style_scope": "builtin",
             "slides": [
                 {
@@ -970,12 +1113,126 @@ def test_slides_create_persists_visual_style_snapshot(slides_client):
     )
     assert resp.status_code == 201, resp.text
     payload = resp.json()
-    assert payload["visual_style_id"] == "timeline"
+    assert payload["visual_style_id"] == "notebooklm-blueprint"
     assert payload["visual_style_scope"] == "builtin"
-    assert payload["visual_style_name"] == "Timeline"
+    assert payload["visual_style_name"] == "Blueprint"
     assert payload["visual_style_version"] == 1
-    assert payload["visual_style_snapshot"]["id"] == "timeline"
-    assert payload["visual_style_snapshot"]["scope"] == "builtin"
+    assert payload["theme"] == "night"
+    assert payload["settings"] == {"controls": True, "progress": True}
+    assert payload["custom_css"]
+    _assert_compact_builtin_snapshot(payload["visual_style_snapshot"])
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_settings"] == payload["settings"]
+
+
+def test_slides_create_with_builtin_style_preserves_explicit_appearance_overrides(slides_client):
+    resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "theme": "white",
+            "marp_theme": "gaia",
+            "settings": {"controls": False, "progress": False},
+            "custom_css": ".reveal { font-size: 42px; }",
+            "visual_style_id": "notebooklm-blueprint",
+            "visual_style_scope": "builtin",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    payload = resp.json()
+    assert payload["theme"] == "white"
+    assert payload["marp_theme"] == "gaia"
+    assert payload["settings"] == {"controls": False, "progress": False}
+    assert payload["custom_css"] == ".reveal { font-size: 42px; }"
+    _assert_compact_builtin_snapshot(payload["visual_style_snapshot"])
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_theme"] == "night"
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_settings"] == {
+        "controls": True,
+        "progress": True,
+    }
+
+
+def test_slides_create_with_builtin_style_rejects_invalid_theme(slides_client):
+    resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "theme": "ultraviolet",
+            "visual_style_id": "notebooklm-blueprint",
+            "visual_style_scope": "builtin",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "invalid_theme"
+
+
+def test_slides_put_applies_builtin_visual_style_atomically(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+
+    put_resp = slides_client.put(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={
+            "title": "History Deck Updated",
+            "description": None,
+            "visual_style_id": "notebooklm-blueprint",
+            "visual_style_scope": "builtin",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+        headers={"If-Match": create_resp.headers["ETag"]},
+    )
+    assert put_resp.status_code == 200, put_resp.text
+    payload = put_resp.json()
+    assert payload["title"] == "History Deck Updated"
+    assert payload["visual_style_id"] == "notebooklm-blueprint"
+    assert payload["theme"] == "night"
+    assert payload["settings"] == {"controls": True, "progress": True}
+    assert payload["custom_css"]
+    _assert_compact_builtin_snapshot(payload["visual_style_snapshot"])
 
 
 def test_slides_patch_updates_visual_style_snapshot(slides_client):
@@ -1000,16 +1257,109 @@ def test_slides_patch_updates_visual_style_snapshot(slides_client):
     patch_resp = slides_client.patch(
         f"/api/v1/slides/presentations/{presentation_id}",
         json={
-            "visual_style_id": "timeline",
+            "theme": "white",
+            "marp_theme": "gaia",
+            "settings": {"controls": False, "progress": False},
+            "custom_css": ".reveal { font-size: 42px; }",
+            "visual_style_id": "notebooklm-blueprint",
             "visual_style_scope": "builtin",
         },
         headers={"If-Match": create_resp.headers["ETag"]},
     )
     assert patch_resp.status_code == 200, patch_resp.text
     payload = patch_resp.json()
-    assert payload["visual_style_id"] == "timeline"
+    assert payload["visual_style_id"] == "notebooklm-blueprint"
     assert payload["visual_style_scope"] == "builtin"
-    assert payload["visual_style_snapshot"]["id"] == "timeline"
+    assert payload["theme"] == "white"
+    assert payload["marp_theme"] == "gaia"
+    assert payload["settings"] == {"controls": False, "progress": False}
+    assert payload["custom_css"] == ".reveal { font-size: 42px; }"
+    _assert_compact_builtin_snapshot(payload["visual_style_snapshot"])
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_theme"] == "night"
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_settings"] == {
+        "controls": True,
+        "progress": True,
+    }
+
+
+def test_slides_patch_with_builtin_style_preserves_explicit_null_appearance_overrides(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={
+            "visual_style_id": "notebooklm-blueprint",
+            "visual_style_scope": "builtin",
+            "marp_theme": None,
+            "settings": None,
+            "custom_css": None,
+        },
+        headers={"If-Match": create_resp.headers["ETag"]},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    payload = patch_resp.json()
+    assert payload["visual_style_id"] == "notebooklm-blueprint"
+    assert payload["visual_style_scope"] == "builtin"
+    assert payload["theme"] == "night"
+    assert payload["marp_theme"] is None
+    assert payload["settings"] is None
+    assert payload["custom_css"] is None
+    _assert_compact_builtin_snapshot(payload["visual_style_snapshot"])
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_theme"] == "night"
+    assert payload["visual_style_snapshot"]["resolution"]["resolved_settings"] == {
+        "controls": True,
+        "progress": True,
+    }
+
+
+def test_slides_patch_rejects_explicit_null_theme(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={
+            "theme": None,
+            "visual_style_id": "notebooklm-blueprint",
+            "visual_style_scope": "builtin",
+        },
+        headers={"If-Match": create_resp.headers["ETag"]},
+    )
+
+    assert patch_resp.status_code == 422
+    assert patch_resp.json()["detail"] == "invalid_theme"
 
 
 def test_slides_generate_with_template_defaults(slides_client, tmp_path, monkeypatch):
@@ -1045,16 +1395,18 @@ def test_slides_generate_with_visual_style_snapshot(slides_client, monkeypatch):
         json={
             "title_hint": "Generated History Deck",
             "prompt": "Summarize key history milestones.",
-            "visual_style_id": "timeline",
+            "visual_style_id": "notebooklm-blueprint",
             "visual_style_scope": "builtin",
         },
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["visual_style_id"] == "timeline"
+    assert data["visual_style_id"] == "notebooklm-blueprint"
     assert data["visual_style_scope"] == "builtin"
-    assert data["visual_style_snapshot"]["id"] == "timeline"
-    assert data["theme"] == "beige"
+    assert data["theme"] == "night"
+    assert data["settings"] == {"controls": True, "progress": True}
+    assert data["custom_css"]
+    _assert_compact_builtin_snapshot(data["visual_style_snapshot"])
 
 
 def test_slides_reorder(slides_client):

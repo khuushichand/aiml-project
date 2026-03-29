@@ -1461,6 +1461,9 @@ class SlidesModule(BaseModule):
             pres_dict = self._presentation_to_dict(pres)
             slides = self._parse_slides_for_export(pres)
             settings = self._parse_settings(pres.settings)
+            visual_style_snapshot = self._parse_visual_style_snapshot(
+                getattr(pres, "visual_style_snapshot", None)
+            )
 
             if fmt == "json":
                 content = export_presentation_json(pres_dict)
@@ -1486,6 +1489,7 @@ class SlidesModule(BaseModule):
                         theme=pres.theme,
                         settings=settings,
                         custom_css=pres.custom_css,
+                        visual_style_snapshot=visual_style_snapshot,
                     )
                 except SlidesAssetsMissingError as exc:
                     raise ValueError("slides_assets_missing") from exc
@@ -1500,6 +1504,7 @@ class SlidesModule(BaseModule):
                         theme=pres.theme,
                         settings=settings,
                         custom_css=pres.custom_css,
+                        visual_style_snapshot=visual_style_snapshot,
                     )
                 except (SlidesExportInputError, SlidesExportError) as exc:
                     raise ValueError(str(exc)) from exc
@@ -1551,6 +1556,19 @@ class SlidesModule(BaseModule):
         if isinstance(settings, str):
             try:
                 parsed = json.loads(settings)
+                return parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _parse_visual_style_snapshot(self, snapshot: Any) -> Optional[dict[str, Any]]:
+        if snapshot is None:
+            return None
+        if isinstance(snapshot, dict):
+            return snapshot
+        if isinstance(snapshot, str):
+            try:
+                parsed = json.loads(snapshot)
                 return parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 return None

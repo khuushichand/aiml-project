@@ -1,0 +1,10 @@
+.reveal[data-style-pack="editorial_print"] {
+  background-color: var(--surface, #ffffff);
+  color: var(--text, #111111);
+  font-family: "Iowan Old Style", "Times New Roman", serif;
+}
+
+.reveal[data-style-pack="editorial_print"] .slides section {
+  border-top: 4px solid var(--rule, #d4d4d8);
+  border-bottom: 1px solid var(--rule, #d4d4d8);
+}
