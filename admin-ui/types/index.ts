@@ -489,6 +489,7 @@ export interface VoiceAnalyticsSummary {
 
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';
 export type { WebhookItem, WebhookCreateResponse, WebhookListResponse, WebhookDeliveryItem, WebhookDeliveryListResponse } from './webhooks';
+export type { EmailDeliveryStatus, EmailDeliveryItem, EmailDeliveryListResponse } from './email-deliveries';
 
 // ============================================
 // Billing & Subscription Types

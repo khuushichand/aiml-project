@@ -15,6 +15,7 @@ import type {
   ByokValidationRunListResponse,
   CompliancePosture,
   EffectivePermissionsResponse,
+  EmailDeliveryListResponse,
   FeatureRegistryEntry,
   IncidentItem,
   IncidentsResponse,
@@ -640,6 +641,14 @@ export const api = {
       `/admin/webhooks/${encodeURIComponent(webhookId)}/test`,
       { method: 'POST' }
     ),
+
+  // ============================================
+  // Email Delivery Log
+  // ============================================
+  getEmailDeliveries: (params?: { limit?: number; offset?: number; status?: string }) => {
+    const qs = buildQueryString(params);
+    return requestJson<EmailDeliveryListResponse>(`/admin/email/deliveries${qs ? `?${qs}` : ''}`);
+  },
 
   // ============================================
   // Audit Logs

@@ -129,6 +129,7 @@ def _default_store() -> dict[str, Any]:
         "webhook_deliveries": [],
         "invitations": [],
         "dependency_health_history": [],
+        "email_delivery_log": [],
     }
 
 
@@ -211,6 +212,7 @@ def _load_store() -> dict[str, Any]:
     data.setdefault("webhook_deliveries", [])
     data.setdefault("invitations", [])
     data.setdefault("dependency_health_history", [])
+    data.setdefault("email_delivery_log", [])
     return data
 
 
@@ -1358,3 +1360,64 @@ def get_uptime_stats(dependency_name: str, days: int = 30) -> dict[str, Any]:
         "downtime_minutes": downtime_minutes,
         "sparkline": sparkline,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Email Delivery Log
+# ──────────────────────────────────────────────────────────────────────────────
+
+_EMAIL_DELIVERY_LOG_CAP = 5000
+
+
+def record_email_delivery(
+    *,
+    recipient: str,
+    subject: str,
+    template: str | None = None,
+    status: str,  # "sent", "failed", "skipped"
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Record an email delivery attempt.
+
+    Appends to the ``email_delivery_log`` list in the system-ops store.
+    The log is capped at ``_EMAIL_DELIVERY_LOG_CAP`` entries (oldest pruned first).
+    """
+    entry: dict[str, Any] = {
+        "id": f"edl_{uuid4().hex[:10]}",
+        "recipient": str(recipient or ""),
+        "subject": str(subject or ""),
+        "template": str(template) if template else None,
+        "status": str(status or "sent"),
+        "error": str(error)[:500] if error else None,
+        "sent_at": _now_iso(),
+    }
+    with _locked_store(write=True) as store:
+        log = store.setdefault("email_delivery_log", [])
+        log.append(entry)
+        if len(log) > _EMAIL_DELIVERY_LOG_CAP:
+            store["email_delivery_log"] = log[-_EMAIL_DELIVERY_LOG_CAP:]
+    return entry
+
+
+def list_email_deliveries(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """List email delivery log entries, newest first.
+
+    Returns ``(items, total)`` where *total* is the count after any status
+    filter (before offset/limit slicing).
+    """
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    with _locked_store() as store:
+        log: list[dict[str, Any]] = store.get("email_delivery_log", [])
+    # Filter by status if requested
+    if status:
+        log = [entry for entry in log if entry.get("status") == status]
+    total = len(log)
+    # Newest first
+    log.sort(key=lambda e: e.get("sent_at") or "", reverse=True)
+    return log[offset: offset + limit], total

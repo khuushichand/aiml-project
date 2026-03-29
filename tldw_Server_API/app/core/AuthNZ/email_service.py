@@ -492,6 +492,31 @@ class EmailService:
         resolved_path = self._normalize_public_path(legacy_default_path)
         return f"{str(fallback_base_url).rstrip('/')}{resolved_path}?token={token}"
 
+    @staticmethod
+    def _record_delivery(
+        *,
+        recipient: str,
+        subject: str,
+        template: Optional[str] = None,
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        """Record an email delivery attempt to the system-ops store (fire-and-forget)."""
+        try:
+            from tldw_Server_API.app.services.admin_system_ops_service import (
+                record_email_delivery,
+            )
+
+            record_email_delivery(
+                recipient=recipient,
+                subject=subject,
+                template=template,
+                status=status,
+                error=error,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to record email delivery: {}", exc)
+
     async def send_email(
         self,
         to_email: str,
@@ -502,6 +527,7 @@ class EmailService:
         attachments: Optional[list[dict[str, Any]]] = None,
         *,
         redact_mock_tokens: bool = False,
+        _template: Optional[str] = None,
     ) -> bool:
         """
         Send an email
@@ -514,6 +540,7 @@ class EmailService:
             from_email: Sender email (uses default if not provided)
             attachments: List of attachments
             redact_mock_tokens: Whether mock transport should redact token-bearing content
+            _template: Internal hint identifying the email template (for delivery tracking)
 
         Returns:
             True if email was sent successfully
@@ -521,7 +548,7 @@ class EmailService:
         from_email = from_email or self.default_sender
 
         if self.provider == "mock":
-            return await self._send_mock_email(
+            result = await self._send_mock_email(
                 to_email,
                 subject,
                 html_body,
@@ -530,12 +557,44 @@ class EmailService:
                 attachments,
                 redact_mock_tokens=redact_mock_tokens,
             )
-        elif self.provider == "smtp":
-            return await self._send_smtp_email(
-                to_email, subject, html_body, text_body, from_email, attachments
+            self._record_delivery(
+                recipient=to_email,
+                subject=subject,
+                template=_template,
+                status="sent" if result else "failed",
             )
+            return result
+        elif self.provider == "smtp":
+            try:
+                result = await self._send_smtp_email(
+                    to_email, subject, html_body, text_body, from_email, attachments
+                )
+            except Exception as exc:
+                self._record_delivery(
+                    recipient=to_email,
+                    subject=subject,
+                    template=_template,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise
+            self._record_delivery(
+                recipient=to_email,
+                subject=subject,
+                template=_template,
+                status="sent" if result else "failed",
+                error=None if result else "SMTP send returned False",
+            )
+            return result
         else:
             logger.error(f"Unsupported email provider: {self.provider}")
+            self._record_delivery(
+                recipient=to_email,
+                subject=subject,
+                template=_template,
+                status="skipped",
+                error=f"Unsupported email provider: {self.provider}",
+            )
             return False
 
     async def _send_mock_email(
@@ -726,7 +785,7 @@ class EmailService:
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["password_reset"]["subject"]).render(**template_data)
 
-        return await self.send_email(to_email, subject, html_body, text_body)
+        return await self.send_email(to_email, subject, html_body, text_body, _template="password_reset")
 
     async def send_verification_email(
         self,
@@ -759,7 +818,7 @@ class EmailService:
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["email_verification"]["subject"]).render(**template_data)
 
-        return await self.send_email(to_email, subject, html_body, text_body)
+        return await self.send_email(to_email, subject, html_body, text_body, _template="email_verification")
 
     async def send_magic_link_email(
         self,
@@ -796,7 +855,7 @@ class EmailService:
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["magic_link"]["subject"]).render(**template_data)
 
-        return await self.send_email(to_email, subject, html_body, text_body)
+        return await self.send_email(to_email, subject, html_body, text_body, _template="magic_link")
 
     async def send_admin_reauth_email(
         self,
@@ -833,6 +892,7 @@ class EmailService:
             html_body,
             text_body,
             redact_mock_tokens=True,
+            _template="admin_reauth",
         )
 
     async def send_user_invitation_email(
@@ -867,7 +927,7 @@ class EmailService:
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["user_invitation"]["subject"]).render(**template_data)
 
-        return await self.send_email(to_email, subject, html_body, text_body)
+        return await self.send_email(to_email, subject, html_body, text_body, _template="user_invitation")
 
     async def send_mfa_enabled_email(
         self,
@@ -894,7 +954,7 @@ class EmailService:
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["mfa_enabled"]["subject"]).render(**template_data)
 
-        return await self.send_email(to_email, subject, html_body, text_body)
+        return await self.send_email(to_email, subject, html_body, text_body, _template="mfa_enabled")
 
 
 #######################################################################################################################

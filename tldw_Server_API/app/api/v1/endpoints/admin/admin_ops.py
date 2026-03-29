@@ -99,6 +99,9 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 from tldw_Server_API.app.services.admin_system_ops_service import (
     record_health_snapshot as svc_record_health_snapshot,
 )
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    list_email_deliveries as svc_list_email_deliveries,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
@@ -1346,3 +1349,26 @@ async def get_dependency_uptime(
     except _OPS_NONCRITICAL_EXCEPTIONS as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return stats
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Email Delivery Log
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/email/deliveries")
+async def list_email_deliveries(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    status: str | None = Query(default=None),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """List email delivery log entries with optional status filter and pagination."""
+    _require_platform_admin(principal)
+    try:
+        items, total = await asyncio.to_thread(
+            svc_list_email_deliveries, limit=limit, offset=offset, status=status
+        )
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
