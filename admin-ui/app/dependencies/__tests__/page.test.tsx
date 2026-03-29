@@ -23,6 +23,7 @@ vi.mock('@/lib/api-client', () => ({
     getLlmUsageSummary: vi.fn(),
     getMetricsText: vi.fn(),
     testLLMProvider: vi.fn(),
+    getSystemDependencies: vi.fn(),
   },
 }));
 
@@ -31,9 +32,21 @@ type ApiMock = {
   getLlmUsageSummary: ReturnType<typeof vi.fn>;
   getMetricsText: ReturnType<typeof vi.fn>;
   testLLMProvider: ReturnType<typeof vi.fn>;
+  getSystemDependencies: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
+
+const SYSTEM_DEPS_FIXTURE = {
+  items: [
+    { name: 'AuthNZ Database', status: 'healthy', latency_ms: 2.3, error: null, metadata: { type: 'sqlite' } },
+    { name: 'ChaChaNotes', status: 'healthy', latency_ms: 1.1, error: null, metadata: {} },
+    { name: 'Workflows Engine', status: 'degraded', latency_ms: 15.0, error: 'Queue depth unknown', metadata: {} },
+    { name: 'Embeddings Service', status: 'down', latency_ms: 5000.0, error: 'Timeout', metadata: {} },
+    { name: 'Metrics Registry', status: 'healthy', latency_ms: 0.5, error: null, metadata: {} },
+  ],
+  checked_at: '2026-03-27T10:00:00Z',
+};
 
 beforeEach(() => {
   apiMock.getLLMProviders.mockResolvedValue({
@@ -78,6 +91,8 @@ beforeEach(() => {
     }
     return { provider, status: 'ok', model: 'gpt-4o-mini' };
   });
+
+  apiMock.getSystemDependencies.mockResolvedValue(SYSTEM_DEPS_FIXTURE);
 });
 
 afterEach(() => {
@@ -245,5 +260,84 @@ describe('DependenciesPage', () => {
     });
     expect(row.className).toContain('bg-red-50');
     expect(within(row).getAllByText('Never')).toHaveLength(1);
+  });
+
+  // --- System Dependencies tests ---
+
+  it('renders system dependencies table with backend health data', async () => {
+    render(<DependenciesPage />);
+
+    expect(await screen.findByText('System Dependencies')).toBeInTheDocument();
+
+    const dbRow = await screen.findByText('AuthNZ Database');
+    expect(dbRow.closest('tr')).not.toBeNull();
+
+    expect(await screen.findByText('ChaChaNotes')).toBeInTheDocument();
+    expect(await screen.findByText('Workflows Engine')).toBeInTheDocument();
+    expect(await screen.findByText('Embeddings Service')).toBeInTheDocument();
+    expect(await screen.findByText('Metrics Registry')).toBeInTheDocument();
+  });
+
+  it('shows correct status badges for system dependencies', async () => {
+    render(<DependenciesPage />);
+
+    await screen.findByText('AuthNZ Database');
+
+    const healthyBadges = screen.getAllByText('Healthy');
+    expect(healthyBadges.length).toBe(3);
+
+    expect(screen.getByText('Degraded')).toBeInTheDocument();
+    expect(screen.getByText('Down')).toBeInTheDocument();
+  });
+
+  it('displays system dependency error messages', async () => {
+    render(<DependenciesPage />);
+
+    expect(await screen.findByText('Queue depth unknown')).toBeInTheDocument();
+    expect(screen.getByText('Timeout')).toBeInTheDocument();
+  });
+
+  it('shows system component summary counts', async () => {
+    render(<DependenciesPage />);
+
+    await screen.findByText('System Components');
+    const summarySection = screen.getByText('System Components').closest('div')?.parentElement;
+    expect(summarySection).not.toBeNull();
+
+    await screen.findByText('Components Healthy');
+  });
+
+  it('shows fallback when system dependencies endpoint fails', async () => {
+    apiMock.getSystemDependencies.mockRejectedValue(new Error('Not found'));
+
+    render(<DependenciesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/no system dependency data available/i)).toBeInTheDocument();
+    });
+  });
+
+  it('calls getSystemDependencies on page load', async () => {
+    render(<DependenciesPage />);
+
+    await waitFor(() => {
+      expect(apiMock.getSystemDependencies).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('reloads system dependencies when refresh is clicked', async () => {
+    const user = userEvent.setup();
+
+    render(<DependenciesPage />);
+
+    await screen.findByText('AuthNZ Database');
+
+    expect(apiMock.getSystemDependencies).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: /refresh data/i }));
+
+    await waitFor(() => {
+      expect(apiMock.getSystemDependencies).toHaveBeenCalledTimes(2);
+    });
   });
 });

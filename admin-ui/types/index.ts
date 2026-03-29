@@ -361,6 +361,21 @@ export interface CompliancePosture {
   audit_logging_enabled: boolean;
 }
 
+export type SystemDependencyStatus = 'healthy' | 'degraded' | 'down' | 'unknown';
+
+export interface SystemDependencyItem {
+  name: string;
+  status: SystemDependencyStatus;
+  latency_ms: number;
+  error: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface SystemDependenciesResponse {
+  items: SystemDependencyItem[];
+  checked_at: string;
+}
+
 export interface EffectivePermissionsResponse {
   user_id: number;
   permissions: string[];
@@ -447,7 +462,7 @@ export interface VoiceAnalyticsSummary {
 }
 
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';
-export type { WebhookItem, WebhookCreateResponse, WebhookListResponse } from './webhooks';
+export type { WebhookItem, WebhookCreateResponse, WebhookListResponse, WebhookDeliveryItem, WebhookDeliveryListResponse } from './webhooks';
 
 // ============================================
 // Billing & Subscription Types

@@ -35,6 +35,7 @@ import type {
   SecurityAlertStatus,
   SecurityHealthData,
   Subscription,
+  SystemDependenciesResponse,
   Team,
   TeamMembership,
   User,
@@ -47,6 +48,8 @@ import type {
   VoiceSessionListResponse,
   WatchlistSettings,
   WebhookCreateResponse,
+  WebhookDeliveryItem,
+  WebhookDeliveryListResponse,
   WebhookItem,
   WebhookListResponse,
 } from '@/types';
@@ -626,6 +629,15 @@ export const api = {
     requestJson(`/admin/webhooks/${encodeURIComponent(webhookId)}`, {
       method: 'DELETE',
     }),
+  getWebhookDeliveries: (webhookId: string, limit = 50) =>
+    requestJson<WebhookDeliveryListResponse>(
+      `/admin/webhooks/${encodeURIComponent(webhookId)}/deliveries?limit=${limit}`
+    ),
+  testWebhook: (webhookId: string) =>
+    requestJson<WebhookDeliveryItem>(
+      `/admin/webhooks/${encodeURIComponent(webhookId)}/test`,
+      { method: 'POST' }
+    ),
 
   // ============================================
   // Audit Logs
@@ -1001,6 +1013,11 @@ export const api = {
   // Compliance Posture
   // ============================================
   getCompliancePosture: () => requestJson<CompliancePosture>('/admin/compliance/posture'),
+
+  // ============================================
+  // System Dependencies Health
+  // ============================================
+  getSystemDependencies: () => requestJson<SystemDependenciesResponse>('/admin/dependencies'),
 
   // ============================================
   // Virtual API Keys

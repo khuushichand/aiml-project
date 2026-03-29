@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -26,6 +27,8 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     MaintenanceUpdateRequest,
     WebhookCreateRequest,
     WebhookCreateResponse,
+    WebhookDeliveryItem,
+    WebhookDeliveryListResponse,
     WebhookItem,
     WebhookListResponse,
     WebhookUpdateRequest,
@@ -83,6 +86,12 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     update_webhook as svc_update_webhook,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    list_webhook_deliveries as svc_list_webhook_deliveries,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    send_test_webhook as svc_send_test_webhook,
 )
 
 if TYPE_CHECKING:
@@ -837,6 +846,49 @@ async def delete_webhook(
     return MessageResponse(message="webhook_deleted")
 
 
+@router.get("/webhooks/{webhook_id}/deliveries", response_model=WebhookDeliveryListResponse)
+async def list_webhook_deliveries(
+    webhook_id: str,
+    limit: int = Query(default=50, ge=1, le=1000),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> WebhookDeliveryListResponse:
+    """List delivery history for a webhook, newest first."""
+    _require_platform_admin(principal)
+    items = svc_list_webhook_deliveries(webhook_id=webhook_id, limit=limit)
+    return WebhookDeliveryListResponse(
+        items=[WebhookDeliveryItem(**item) for item in items],
+        total=len(items),
+    )
+
+
+@router.post("/webhooks/{webhook_id}/test", response_model=WebhookDeliveryItem)
+async def test_webhook(
+    webhook_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> WebhookDeliveryItem:
+    """Send a test payload to a webhook and record the delivery result."""
+    _require_platform_admin(principal)
+    try:
+        delivery = await asyncio.to_thread(svc_send_test_webhook, webhook_id=webhook_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="webhook_not_found") from exc
+        raise HTTPException(status_code=400, detail="test_delivery_failed") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="webhook",
+        resource_id=webhook_id,
+        action="webhook.test",
+        metadata={"success": delivery.get("success"), "status_code": delivery.get("status_code")},
+    )
+    return WebhookDeliveryItem(**delivery)
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Billing Analytics
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1139,4 +1191,127 @@ async def get_compliance_posture(
         "keys_total": keys_total,
         "rotation_threshold_days": rotation_threshold_days,
         "audit_logging_enabled": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Unified dependency health
+# ---------------------------------------------------------------------------
+
+
+async def _check_dep(
+    name: str,
+    check_fn: Callable[[], Any],
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Run a single dependency health check with timeout."""
+    start = time.monotonic()
+    try:
+        result = await asyncio.wait_for(check_fn(), timeout=timeout)
+        latency = round((time.monotonic() - start) * 1000, 1)
+        # Allow check_fn to return a dict with extra metadata
+        meta = result if isinstance(result, dict) else {}
+        return {
+            "name": name,
+            "status": meta.get("status", "healthy"),
+            "latency_ms": latency,
+            "error": meta.get("error"),
+            "metadata": {k: v for k, v in meta.items() if k not in ("status", "error")},
+        }
+    except asyncio.TimeoutError:
+        return {"name": name, "status": "down", "latency_ms": 5000.0, "error": "Timeout", "metadata": {}}
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        latency = round((time.monotonic() - start) * 1000, 1)
+        return {"name": name, "status": "degraded", "latency_ms": latency, "error": str(exc), "metadata": {}}
+
+
+async def _check_authnz_database() -> dict[str, Any]:
+    """Check AuthNZ database pool connectivity."""
+    pool = await get_db_pool()
+    health = await pool.health_check()
+    return {
+        "status": health.get("status", "unhealthy"),
+        "type": health.get("type", "unknown"),
+        "pool_size": health.get("pool_size"),
+        "idle_connections": health.get("idle_connections"),
+    }
+
+
+async def _check_chacha_notes() -> dict[str, Any]:
+    """Check ChaChaNotes DB health snapshot."""
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_health_snapshot
+
+        snapshot = get_chacha_health_snapshot()
+        return {
+            "status": snapshot.get("status", "unknown"),
+            "cached_instances": snapshot.get("cached_instances"),
+            "init_failures": snapshot.get("init_failures"),
+        }
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        return {"status": "unhealthy", "error": str(exc)}
+
+
+async def _check_workflows_engine() -> dict[str, Any]:
+    """Check the workflow scheduler engine."""
+    try:
+        from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler
+
+        sched = WorkflowScheduler.instance()
+        qd = sched.queue_depth()
+        return {"status": "healthy", "queue_depth": qd}
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        return {"status": "degraded", "error": str(exc)}
+
+
+async def _check_embeddings_service() -> dict[str, Any]:
+    """Check embedding service availability."""
+    try:
+        from tldw_Server_API.app.core.Embeddings.async_embeddings import get_embedding_service
+
+        svc = await get_embedding_service()
+        provider_status = await svc.get_provider_status()
+        healthy = sum(1 for v in provider_status.values() if v.get("status") == "healthy")
+        total = len(provider_status)
+        overall = "healthy" if healthy == total else ("degraded" if healthy > 0 else "unhealthy")
+        return {"status": overall, "providers_healthy": healthy, "providers_total": total}
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        return {"status": "degraded", "error": str(exc)}
+
+
+async def _check_metrics_registry() -> dict[str, Any]:
+    """Check if the metrics registry is available."""
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+
+        reg = get_metrics_registry()
+        return {"status": "healthy" if bool(reg) else "degraded"}
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        return {"status": "degraded", "error": str(exc)}
+
+
+@router.get("/dependencies")
+async def get_all_dependencies(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Aggregated health status of all system dependencies.
+
+    Returns a list of dependency checks with status, latency, and error
+    information for the admin dashboard system-dependencies view.
+    """
+    _require_platform_admin(principal)
+
+    checks: list[tuple[str, Callable[[], Any]]] = [
+        ("AuthNZ Database", _check_authnz_database),
+        ("ChaChaNotes", _check_chacha_notes),
+        ("Workflows Engine", _check_workflows_engine),
+        ("Embeddings Service", _check_embeddings_service),
+        ("Metrics Registry", _check_metrics_registry),
+    ]
+
+    results = await asyncio.gather(*[_check_dep(name, fn) for name, fn in checks])
+
+    return {
+        "items": list(results),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
     }
