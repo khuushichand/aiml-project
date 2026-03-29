@@ -905,6 +905,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const setSourceStatusByMediaId = useWorkspaceStore(
     (s) => s.setSourceStatusByMediaId
   )
+  const getEffectiveSelectedSources = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedSources
+  )
   const storeHydrated = useWorkspaceStore((s) => s.storeHydrated)
   const isStoreHydrated = storeHydrated !== false
   const sourceStatusFailureRef = React.useRef<Record<number, number>>({})
@@ -1255,6 +1258,41 @@ const WorkspacePlaygroundBody: React.FC = () => {
     },
     [isMobile, setLeftPaneCollapsed, setRightPaneCollapsed]
   )
+
+  const handleOpenSplitWorkspace = React.useCallback(() => {
+    const effectiveSelectedSources =
+      typeof getEffectiveSelectedSources === "function"
+        ? getEffectiveSelectedSources()
+        : []
+
+    if (effectiveSelectedSources.length === 0) {
+      focusWorkspacePane("sources")
+      messageApi.info(
+        t(
+          "playground:workspace.splitNoSelection",
+          "Select at least one source before splitting this workspace."
+        )
+      )
+      return
+    }
+
+    openTransferSourcesModal({
+      entryPoint: "header",
+      selectedSourceIds: effectiveSelectedSources.map((source) => source.id),
+      eligibleSelectedSourceIds: effectiveSelectedSources.map(
+        (source) => source.id
+      ),
+      totalSelectedCount: effectiveSelectedSources.length,
+      hiddenSelectedCount: 0,
+      ineligibleSelectedCount: 0
+    })
+  }, [
+    focusWorkspacePane,
+    getEffectiveSelectedSources,
+    messageApi,
+    openTransferSourcesModal,
+    t
+  ])
 
   const focusNewNoteTitle = React.useCallback(() => {
     focusWorkspacePane("studio")
@@ -2137,6 +2175,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             rightPaneOpen={false}
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
+            onOpenSplitWorkspace={handleOpenSplitWorkspace}
             hideToggles
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
@@ -2179,6 +2218,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             rightPaneOpen={!!rightPaneOpen}
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
+            onOpenSplitWorkspace={handleOpenSplitWorkspace}
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
             storageOriginUsedBytes={workspaceStorageUsage.originUsedBytes ?? undefined}

@@ -20,6 +20,14 @@ const mockFocusWorkspaceNote = vi.fn()
 const mockSetSourceStatusByMediaId = vi.fn()
 const mockTransferSourcesBetweenWorkspaces = vi.fn()
 const mockSwitchWorkspace = vi.fn()
+const mockMessageApi = {
+  open: vi.fn(),
+  info: vi.fn(),
+  warning: vi.fn(),
+  success: vi.fn(),
+  error: vi.fn(),
+  destroy: vi.fn()
+}
 
 const destinationWorkspaceId = "workspace-destination"
 const archivedWorkspaceId = "workspace-archived"
@@ -162,6 +170,10 @@ const testState = {
   focusChatMessageById: mockFocusChatMessageById,
   focusWorkspaceNote: mockFocusWorkspaceNote,
   setSourceStatusByMediaId: mockSetSourceStatusByMediaId,
+  getEffectiveSelectedSources: () =>
+    testState.sources.filter((source) =>
+      testState.selectedSourceIds.includes(source.id)
+    ),
   isGeneratingOutput: false,
   generatingOutputType: null as string | null,
   transferSourcesBetweenWorkspaces: mockTransferSourcesBetweenWorkspaces,
@@ -246,8 +258,33 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("antd", async () => {
+  const actual = await vi.importActual<typeof import("antd")>("antd")
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      useMessage: () => [
+        mockMessageApi,
+        <div key="message-context" data-testid="workspace-message-context" />
+      ]
+    }
+  }
+})
+
 vi.mock("../WorkspaceHeader", () => ({
-  WorkspaceHeader: () => <div data-testid="workspace-header" />
+  WorkspaceHeader: (props: {
+    onOpenSplitWorkspace?: () => void
+  }) => (
+    <div data-testid="workspace-header">
+      <button
+        type="button"
+        onClick={() => props.onOpenSplitWorkspace?.()}
+      >
+        Split workspace
+      </button>
+    </div>
+  )
 }))
 
 const launchHiddenSelectionTransfer = {
@@ -340,6 +377,7 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
     testState.storeHydrated = true
     testState.workspaceId = "workspace-current"
     testState.workspaceName = "Current Workspace"
+    testState.leftPaneCollapsed = false
     testState.selectedSourceIds = ["source-a", "source-b"]
     nextLaunchPayload = launchHiddenSelectionTransfer
     mockTransferSourcesBetweenWorkspaces.mockReturnValue({
@@ -395,6 +433,65 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
     expect(
       screen.getByText(/processing or errored sources are excluded/i)
     ).toBeInTheDocument()
+  })
+
+  it("opens split mode from the workspace settings shortcut in create new workspace mode", async () => {
+    render(<WorkspacePlayground />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Split workspace" }))
+
+    expect(
+      await screen.findByRole("dialog", { name: "Transfer sources" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("radio", { name: "Create a new workspace" })
+    ).toBeChecked()
+    expect(screen.getByPlaceholderText("New Research")).toBeInTheDocument()
+    expect(mockMessageApi.info).not.toHaveBeenCalled()
+  })
+
+  it("reveals the Sources pane and shows an info message when nothing is selected on desktop", async () => {
+    const originalMatchMedia = window.matchMedia
+    try {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+
+      testState.selectedSourceIds = []
+      testState.leftPaneCollapsed = true
+
+      render(<WorkspacePlayground />)
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Split workspace" })
+      )
+
+      expect(mockSetLeftPaneCollapsed).toHaveBeenCalledWith(false)
+      expect(mockMessageApi.info).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole("dialog", { name: "Transfer sources" })).toBeNull()
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+  })
+
+  it("moves to the Sources tab instead of doing nothing on mobile when nothing is selected", async () => {
+    testState.isMobile = true
+    testState.selectedSourceIds = []
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Split workspace" }))
+
+    expect(mockMessageApi.info).toHaveBeenCalledTimes(1)
+    expect(await screen.findByTestId("workspace-sources-pane")).toBeInTheDocument()
+    expect(screen.queryByRole("dialog", { name: "Transfer sources" })).toBeNull()
   })
 
   it("collects conflict resolutions, move cleanup policy, and offers an open-destination follow-up for existing workspaces", async () => {

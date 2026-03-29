@@ -108,8 +108,12 @@ export const TransferSourcesModal: React.FC<TransferSourcesModalProps> = ({
     }
 
     setMode("copy")
-    setStep("mode")
-    setDestinationKind(destinationOptions.length > 0 ? "existing" : "new")
+    setStep(request.entryPoint === "header" ? "destination" : "mode")
+    setDestinationKind(
+      request.entryPoint === "header" || destinationOptions.length === 0
+        ? "new"
+        : "existing"
+    )
     setDestinationWorkspaceId(destinationOptions[0]?.id || "")
     setNewWorkspaceName(DEFAULT_NEW_WORKSPACE_NAME)
     setEmptyFolderPolicy("keep")

@@ -91,6 +91,7 @@ interface WorkspaceHeaderProps {
   rightPaneOpen: boolean
   onToggleLeftPane: () => void
   onToggleRightPane: () => void
+  onOpenSplitWorkspace?: () => void
   /** Hide pane toggle buttons (for mobile layout) */
   hideToggles?: boolean
   /** Approximate persisted workspace payload bytes in local storage */
@@ -143,6 +144,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   rightPaneOpen,
   onToggleLeftPane,
   onToggleRightPane,
+  onOpenSplitWorkspace,
   hideToggles = false,
   storageUsedBytes,
   storageQuotaBytes,
@@ -1439,6 +1441,17 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               "Customize banner"
             ),
             onClick: handleOpenCustomizeBannerModal
+          },
+          {
+            key: "split-workspace",
+            icon: <PanelLeftOpen className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.splitWorkspace",
+              "Split workspace"
+            ),
+            onClick: () => {
+              onOpenSplitWorkspace?.()
+            }
           },
           { type: "divider" as const, key: "divider-current-actions" }
         ]

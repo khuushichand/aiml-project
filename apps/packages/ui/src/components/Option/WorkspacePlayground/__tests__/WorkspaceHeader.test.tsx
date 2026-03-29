@@ -564,6 +564,25 @@ describe("WorkspaceHeader workspace browser modal", () => {
     })
   })
 
+  it("raises split workspace intent from the settings menu", async () => {
+    const onOpenSplitWorkspace = vi.fn()
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        onOpenSplitWorkspace={onOpenSplitWorkspace}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
+    fireEvent.click(await screen.findByText("Split workspace"))
+
+    expect(onOpenSplitWorkspace).toHaveBeenCalledTimes(1)
+  })
+
   it("falls back to JSON export when ZIP creation fails", async () => {
     mockCreateWorkspaceExportZipBlob.mockRejectedValueOnce(
       new Error("zip unavailable")
