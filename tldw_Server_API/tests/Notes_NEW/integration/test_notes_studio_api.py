@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 from tldw_Server_API.app.api.v1.endpoints import notes as notes_endpoint
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 
 
 pytestmark = pytest.mark.integration
@@ -38,6 +38,7 @@ def client_with_notes_studio_db(tmp_path, monkeypatch):
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
     fastapi_app.dependency_overrides[get_rate_limiter_dep] = lambda: _NoopRateLimiter()
+    fastapi_app.state.notes_studio_db = db
 
     with TestClient(fastapi_app) as client:
         yield client
@@ -100,7 +101,7 @@ def test_notes_studio_derive_fetch_and_regenerate_flow(client_with_notes_studio_
     assert fetched["is_stale"] is False
 
     manual_markdown = (
-        "# Biology Study Notes\n\n"
+        "# Biology Refined Study Notes\n\n"
         "## Key Questions\n\n"
         "- Why do cells need ATP?\n"
         "- Which organelle supports cellular energy production?\n\n"
@@ -125,7 +126,9 @@ def test_notes_studio_derive_fetch_and_regenerate_flow(client_with_notes_studio_
     assert regenerate_response.status_code == 200, regenerate_response.text
     regenerated = regenerate_response.json()
     assert regenerated["is_stale"] is False
+    assert regenerated["note"]["title"] == "Biology Refined Study Notes"
     assert regenerated["note"]["content"] == manual_markdown
+    assert regenerated["studio_document"]["payload_json"]["meta"]["title"] == "Biology Refined Study Notes"
     assert regenerated["studio_document"]["payload_json"]["layout"] == {
         "template_type": "cornell",
         "handwriting_mode": "accented",
@@ -154,6 +157,97 @@ def test_notes_studio_derive_fetch_and_regenerate_flow(client_with_notes_studio_
             "content": "Mitochondria help cells access usable energy.",
         },
     ]
+    note_after_regenerate = client.get(f"/api/v1/notes/{note_id}")
+    assert note_after_regenerate.status_code == 200
+    assert note_after_regenerate.json()["title"] == "Biology Refined Study Notes"
+
+
+def test_notes_studio_derive_rolls_back_note_when_sidecar_persistence_fails(
+    client_with_notes_studio_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = client_with_notes_studio_db
+    db = client.app.state.notes_studio_db
+    source_note_id = _create_source_note(
+        client,
+        title="Physics",
+        content="Velocity describes speed with direction.",
+    )
+
+    def _raise_sidecar_failure(**_kwargs):
+        raise CharactersRAGDBError("sidecar write failed")
+
+    monkeypatch.setattr(db, "create_note_studio_document", _raise_sidecar_failure)
+
+    response = client.post(
+        "/api/v1/notes/studio/derive",
+        json={
+            "source_note_id": source_note_id,
+            "excerpt_text": "Velocity describes speed with direction.",
+            "template_type": "lined",
+            "handwriting_mode": "accented",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "A database error occurred while processing your request for note studio."
+    assert [note["id"] for note in db.list_notes()] == [source_note_id]
+
+
+def test_notes_studio_regenerate_rolls_back_note_update_when_sidecar_upsert_fails(
+    client_with_notes_studio_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = client_with_notes_studio_db
+    db = client.app.state.notes_studio_db
+    source_note_id = _create_source_note(
+        client,
+        title="Astronomy",
+        content="Stars form inside dense molecular clouds.",
+    )
+
+    derive_response = client.post(
+        "/api/v1/notes/studio/derive",
+        json={
+            "source_note_id": source_note_id,
+            "excerpt_text": "Stars form inside dense molecular clouds.",
+            "template_type": "lined",
+            "handwriting_mode": "accented",
+        },
+    )
+    assert derive_response.status_code == 201, derive_response.text
+    note_id = derive_response.json()["note"]["id"]
+
+    draft_markdown = (
+        "# Astronomy Refined Study Notes\n\n"
+        "## Key Questions\n\n"
+        "* Where do stars form?\n"
+        "* What is dense inside the cloud?\n\n"
+        "## Notes\n\n"
+        "Stars form inside dense molecular clouds.\n"
+        "Gravity compresses the gas over time.\n\n"
+        "## Summary\n\n"
+        "Dense clouds can collapse into new stars."
+    )
+    drift_response = client.patch(
+        f"/api/v1/notes/{note_id}",
+        json={"content": draft_markdown},
+    )
+    assert drift_response.status_code == 200, drift_response.text
+
+    def _raise_sidecar_failure(**_kwargs):
+        raise CharactersRAGDBError("sidecar upsert failed")
+
+    monkeypatch.setattr(db, "upsert_note_studio_document", _raise_sidecar_failure)
+
+    regenerate_response = client.post(f"/api/v1/notes/{note_id}/studio/regenerate")
+    assert regenerate_response.status_code == 500
+    assert regenerate_response.json()["detail"] == "A database error occurred while processing your request for note studio."
+
+    note_after_failure = db.get_note_by_id(note_id)
+    assert note_after_failure is not None
+    assert note_after_failure["title"] == "Astronomy Study Notes"
+    assert note_after_failure["content"] == draft_markdown
 
 
 def test_notes_studio_diagram_manifest_round_trip(client_with_notes_studio_db: TestClient):

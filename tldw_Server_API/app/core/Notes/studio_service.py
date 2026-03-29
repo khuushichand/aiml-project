@@ -75,22 +75,24 @@ class NotesStudioService:
         )
 
         markdown = render_studio_markdown(payload)
-        note_id = self.db.add_note(title=derived_title, content=markdown)
-        if note_id is None:
-            raise InputError("Failed to create derived note.")  # noqa: TRY003
+        with self.db.transaction() as conn:
+            note_id = self.db.add_note(title=derived_title, content=markdown, conn=conn)
+            if note_id is None:
+                raise InputError("Failed to create derived note.")  # noqa: TRY003
 
-        studio_document = self.db.create_note_studio_document(
-            note_id=str(note_id),
-            payload_json=payload,
-            template_type=template_type,
-            handwriting_mode=handwriting_mode,
-            source_note_id=str(source_note["id"]),
-            excerpt_snapshot=excerpt_snapshot,
-            excerpt_hash=stable_content_hash(excerpt_snapshot),
-            diagram_manifest_json=None,
-            companion_content_hash=stable_content_hash(markdown),
-            render_version=NOTE_STUDIO_RENDER_VERSION,
-        )
+            studio_document = self.db.create_note_studio_document(
+                note_id=str(note_id),
+                payload_json=payload,
+                template_type=template_type,
+                handwriting_mode=handwriting_mode,
+                source_note_id=str(source_note["id"]),
+                excerpt_snapshot=excerpt_snapshot,
+                excerpt_hash=stable_content_hash(excerpt_snapshot),
+                diagram_manifest_json=None,
+                companion_content_hash=stable_content_hash(markdown),
+                render_version=NOTE_STUDIO_RENDER_VERSION,
+                conn=conn,
+            )
         return self._build_state(note_id=str(note_id), studio_document=studio_document)
 
     async def get_note_studio_state(self, *, note_id: str) -> dict[str, Any]:
@@ -116,23 +118,30 @@ class NotesStudioService:
         )
 
         markdown = render_studio_markdown(payload)
-        self.db.update_note(
-            note_id=note_id,
-            update_data={"content": markdown},
-            expected_version=int(note.get("version", 1)),
-        )
-        updated_studio_document = self.db.upsert_note_studio_document(
-            note_id=note_id,
-            payload_json=payload,
-            template_type=studio_document["template_type"],
-            handwriting_mode=studio_document["handwriting_mode"],
-            source_note_id=studio_document.get("source_note_id"),
-            excerpt_snapshot=studio_document.get("excerpt_snapshot"),
-            excerpt_hash=studio_document.get("excerpt_hash"),
-            diagram_manifest_json=studio_document.get("diagram_manifest_json"),
-            companion_content_hash=stable_content_hash(markdown),
-            render_version=int(studio_document.get("render_version") or NOTE_STUDIO_RENDER_VERSION),
-        )
+        rebuilt_title = str(payload.get("meta", {}).get("title") or note.get("title") or "Untitled Study Notes").strip()
+        if not rebuilt_title:
+            rebuilt_title = "Untitled Study Notes"
+
+        with self.db.transaction() as conn:
+            self.db.update_note(
+                note_id=note_id,
+                update_data={"title": rebuilt_title, "content": markdown},
+                expected_version=int(note.get("version", 1)),
+                conn=conn,
+            )
+            updated_studio_document = self.db.upsert_note_studio_document(
+                note_id=note_id,
+                payload_json=payload,
+                template_type=studio_document["template_type"],
+                handwriting_mode=studio_document["handwriting_mode"],
+                source_note_id=studio_document.get("source_note_id"),
+                excerpt_snapshot=studio_document.get("excerpt_snapshot"),
+                excerpt_hash=studio_document.get("excerpt_hash"),
+                diagram_manifest_json=studio_document.get("diagram_manifest_json"),
+                companion_content_hash=stable_content_hash(markdown),
+                render_version=int(studio_document.get("render_version") or NOTE_STUDIO_RENDER_VERSION),
+                conn=conn,
+            )
         return self._build_state(note_id=note_id, studio_document=updated_studio_document)
 
     async def update_diagram_manifest(

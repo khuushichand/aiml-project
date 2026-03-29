@@ -174,6 +174,38 @@ def test_upsert_note_studio_document_uses_explicit_transaction_connection(db: Ch
     assert persisted["diagram_manifest_json"]["diagrams"][0]["id"] == "d-2"  # nosec B101
 
 
+def test_add_and_update_note_accept_explicit_transaction_connection(
+    db: CharactersRAGDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with db.transaction() as conn:
+        monkeypatch.setattr(
+            db,
+            "transaction",
+            lambda: pytest.fail("note helpers should use the explicit transaction connection"),
+        )
+
+        note_id = db.add_note(
+            title="Source",
+            content="Alpha beta gamma",
+            conn=conn,
+        )
+        assert note_id is not None  # nosec B101
+
+        updated = db.update_note(
+            note_id=note_id,
+            update_data={"title": "Updated Source", "content": "Updated alpha beta gamma"},
+            expected_version=1,
+            conn=conn,
+        )
+        assert updated is True  # nosec B101
+
+    persisted = db.get_note_by_id(note_id)
+    assert persisted is not None  # nosec B101
+    assert persisted["title"] == "Updated Source"  # nosec B101
+    assert persisted["content"] == "Updated alpha beta gamma"  # nosec B101
+
+
 def test_soft_delete_preserves_sidecar_and_restore_reuses_same_row(db: CharactersRAGDB) -> None:
     note_id = db.add_note(title="Source", content="Alpha beta gamma")
     db.create_note_studio_document(

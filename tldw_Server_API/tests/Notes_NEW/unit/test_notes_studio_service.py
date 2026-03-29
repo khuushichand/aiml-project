@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    InputError,
+)
 from tldw_Server_API.app.core.Notes.studio_service import NotesStudioService
 
 
@@ -112,6 +116,32 @@ def test_cornell_generation_includes_explicit_recall_prompt(studio_db):
     assert "Recall prompt:" in note_content or "Fill in the blank:" in note_content
 
 
+def test_derive_rolls_back_note_when_sidecar_persistence_fails(studio_db, monkeypatch: pytest.MonkeyPatch):
+    db = studio_db
+    source_note_id = db.add_note(
+        title="Physics",
+        content="Velocity describes speed with direction.",
+    )
+    assert source_note_id is not None
+
+    service = NotesStudioService(db=db)
+    original_note_ids = [note["id"] for note in db.list_notes()]
+
+    def _raise_sidecar_failure(**_kwargs):
+        raise CharactersRAGDBError("sidecar write failed")
+
+    monkeypatch.setattr(db, "create_note_studio_document", _raise_sidecar_failure)
+
+    with pytest.raises(CharactersRAGDBError, match="sidecar write failed"):
+        _derive_note(
+            service,
+            source_note_id=str(source_note_id),
+            excerpt_text="Velocity describes speed with direction.",
+        )
+
+    assert [note["id"] for note in db.list_notes()] == original_note_ids
+
+
 def test_get_state_detects_markdown_drift_and_regenerate_rebuilds_payload_from_current_markdown(studio_db):
     db = studio_db
     source_note_id = db.add_note(
@@ -134,7 +164,7 @@ def test_get_state_detects_markdown_drift_and_regenerate_rebuilds_payload_from_c
     current_note = db.get_note_by_id(note_id=note_id)
     assert current_note is not None
     manual_markdown = (
-        "# Chemistry Study Notes\n\n"
+        "# Chemistry Refined Study Notes\n\n"
         "## Key Questions\n\n"
         "- Which particles are shared in covalent bonds?\n"
         "- What changes during electron transfer?\n\n"
@@ -157,8 +187,10 @@ def test_get_state_detects_markdown_drift_and_regenerate_rebuilds_payload_from_c
     regenerated = asyncio.run(service.regenerate_note_markdown(note_id=note_id))
     assert regenerated["is_stale"] is False
     assert regenerated["stale_reason"] is None
+    assert regenerated["note"]["title"] == "Chemistry Refined Study Notes"
     assert regenerated["note"]["content"] == manual_markdown
     assert regenerated["studio_document"]["companion_content_hash"].startswith("sha256:")
+    assert regenerated["studio_document"]["payload_json"]["meta"]["title"] == "Chemistry Refined Study Notes"
     assert regenerated["studio_document"]["payload_json"]["layout"] == {
         "template_type": "lined",
         "handwriting_mode": "accented",
@@ -187,6 +219,58 @@ def test_get_state_detects_markdown_drift_and_regenerate_rebuilds_payload_from_c
             "content": "Bonding changes electron stability.",
         },
     ]
+    persisted_note = db.get_note_by_id(note_id=note_id)
+    assert persisted_note is not None
+    assert persisted_note["title"] == "Chemistry Refined Study Notes"
+
+
+def test_regenerate_rolls_back_note_update_when_sidecar_upsert_fails(studio_db, monkeypatch: pytest.MonkeyPatch):
+    db = studio_db
+    source_note_id = db.add_note(
+        title="Astronomy",
+        content="Stars form inside dense molecular clouds.",
+    )
+    assert source_note_id is not None
+
+    service = NotesStudioService(db=db)
+    result = _derive_note(
+        service,
+        source_note_id=str(source_note_id),
+        excerpt_text="Stars form inside dense molecular clouds.",
+    )
+    note_id = result["note"]["id"]
+
+    current_note = db.get_note_by_id(note_id=note_id)
+    assert current_note is not None
+    draft_markdown = (
+        "# Astronomy Refined Study Notes\n\n"
+        "## Key Questions\n\n"
+        "* Where do stars form?\n"
+        "* What is dense inside the cloud?\n\n"
+        "## Notes\n\n"
+        "Stars form inside dense molecular clouds.\n"
+        "Gravity compresses the gas over time.\n\n"
+        "## Summary\n\n"
+        "Dense clouds can collapse into new stars."
+    )
+    db.update_note(
+        note_id=note_id,
+        update_data={"content": draft_markdown},
+        expected_version=int(current_note["version"]),
+    )
+
+    def _raise_sidecar_failure(**_kwargs):
+        raise CharactersRAGDBError("sidecar upsert failed")
+
+    monkeypatch.setattr(db, "upsert_note_studio_document", _raise_sidecar_failure)
+
+    with pytest.raises(CharactersRAGDBError, match="sidecar upsert failed"):
+        asyncio.run(service.regenerate_note_markdown(note_id=note_id))
+
+    note_after_failure = db.get_note_by_id(note_id=note_id)
+    assert note_after_failure is not None
+    assert note_after_failure["title"] == "Astronomy Study Notes"
+    assert note_after_failure["content"] == draft_markdown
 
 
 def test_update_diagram_manifest_persists_notebook_diagram_metadata(studio_db):

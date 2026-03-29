@@ -18667,6 +18667,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         note_id: str | None = None,
         conversation_id: str | None = None,
         message_id: str | None = None,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
     ) -> str | None:
         if not title or not title.strip():
             raise InputError("Note title cannot be empty.")  # noqa: TRY003
@@ -18695,10 +18696,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
 
         try:
-            with self.transaction() as conn:
-                conn.execute(query, params)
+            def _execute(transaction_conn: sqlite3.Connection | BackendConnectionWrapper) -> str:
+                transaction_conn.execute(query, params)
                 logger.info(f"Added note '{title.strip()}' with ID: {final_note_id}.")
                 return final_note_id
+
+            if conn is None:
+                with self.transaction() as transaction_conn:
+                    return _execute(transaction_conn)
+            return _execute(conn)
         except sqlite3.IntegrityError as e:
             msg = str(e).lower()
             if "foreign key constraint failed" in msg:
@@ -18995,7 +19001,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Return count of soft-deleted notes."""
         return self.count_notes(only_deleted=True)
 
-    def update_note(self, note_id: str, update_data: dict[str, Any], expected_version: int) -> bool | None:
+    def update_note(
+        self,
+        note_id: str,
+        update_data: dict[str, Any],
+        expected_version: int,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+    ) -> bool | None:
         if not update_data:
             raise InputError("No data provided for note update.")  # noqa: TRY003
 
@@ -19035,8 +19047,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query = f"UPDATE notes SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
 
         try:
-            with self.transaction() as conn:
-                current_db_version = self._get_current_db_version(conn, "notes", "id", note_id)
+            def _execute(transaction_conn: sqlite3.Connection | BackendConnectionWrapper) -> bool:
+                current_db_version = self._get_current_db_version(transaction_conn, "notes", "id", note_id)
 
                 if current_db_version != expected_version:
                     raise ConflictError(  # noqa: TRY003, TRY301
@@ -19044,10 +19056,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         entity="notes", entity_id=note_id
                     )
 
-                cursor = conn.execute(query, final_params_for_execute)
+                cursor = transaction_conn.execute(query, final_params_for_execute)
 
                 if cursor.rowcount == 0:
-                    check_again_cursor = conn.execute("SELECT version, deleted FROM notes WHERE id = ?", (note_id,))
+                    check_again_cursor = transaction_conn.execute("SELECT version, deleted FROM notes WHERE id = ?", (note_id,))
                     final_state = check_again_cursor.fetchone()
                     if not final_state:
                         msg = f"Note ID {note_id} disappeared."
@@ -19061,6 +19073,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 logger.info(f"Updated note ID {note_id} from version {expected_version} to version {next_version_val}.")
                 return True
+
+            if conn is None:
+                with self.transaction() as transaction_conn:
+                    return _execute(transaction_conn)
+            return _execute(conn)
         # No specific UNIQUE constraint on notes.title or notes.content in the schema, so sqlite3.IntegrityError less likely for these fields.
         except ConflictError:
             raise
