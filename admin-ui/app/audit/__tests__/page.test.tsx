@@ -73,12 +73,14 @@ vi.mock('@/lib/api-client', () => ({
   api: {
     getAuditLogs: vi.fn(),
     testNotification: vi.fn(),
+    getUsersPage: vi.fn(),
   },
 }));
 
 type ApiMock = {
   getAuditLogs: ReturnType<typeof vi.fn>;
   testNotification: ReturnType<typeof vi.fn>;
+  getUsersPage: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -120,6 +122,13 @@ beforeEach(() => {
     offset: 0,
   });
   apiMock.testNotification.mockResolvedValue({});
+  apiMock.getUsersPage.mockResolvedValue({
+    items: [{ id: 1, username: 'admin', role: 'admin' }],
+    total: 1,
+    limit: 200,
+    page: 1,
+    pages: 1,
+  });
 });
 
 afterEach(() => {
@@ -143,7 +152,7 @@ describe('AuditPage', () => {
 
     expect(await screen.findByText('Audit Logs')).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText('Action (exact)'), 'user.create');
+    await user.type(screen.getByLabelText('Action (exact or prefix*)'), 'user.create');
     await user.type(screen.getByLabelText('Saved search name'), 'Create events');
     await user.click(screen.getByRole('button', { name: 'Save Current Filters' }));
 

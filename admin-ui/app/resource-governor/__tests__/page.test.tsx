@@ -41,6 +41,7 @@ vi.mock('@/lib/api-client', () => ({
     getUserOrgMemberships: vi.fn(),
     getLlmUsage: vi.fn(),
     getRateLimitEvents: vi.fn(),
+    getRateLimitSummary: vi.fn(),
     getMetricsText: vi.fn(),
   },
 }));
@@ -54,6 +55,7 @@ type ApiMock = {
   getUserOrgMemberships: ReturnType<typeof vi.fn>;
   getLlmUsage: ReturnType<typeof vi.fn>;
   getRateLimitEvents: ReturnType<typeof vi.fn>;
+  getRateLimitSummary: ReturnType<typeof vi.fn>;
   getMetricsText: ReturnType<typeof vi.fn>;
 };
 
@@ -97,6 +99,12 @@ beforeEach(() => {
         last_rejection_at: '2026-02-17T10:00:00Z',
       },
     ],
+  });
+  apiMock.getRateLimitSummary.mockResolvedValue({
+    total_throttle_events: 5,
+    period: '24h',
+    top_throttled_entities: [],
+    policy_headroom: [],
   });
   apiMock.getMetricsText.mockResolvedValue('');
 });

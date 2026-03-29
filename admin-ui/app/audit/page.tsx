@@ -60,6 +60,34 @@ const SAVED_SEARCHES_STORAGE_KEY = 'admin.audit.saved-searches.v1';
 const ALERT_CHECK_INTERVAL_MS = 60_000;
 const COMPLIANCE_REPORT_LIMIT = 5000;
 
+/**
+ * Action prefix used for the "Admin Actions Only" quick filter.
+ * Matches dotted-namespace admin actions: maintenance.*, monitoring.*,
+ * backup.*, config.*, incident.*, webhook.*, feature_flag.*, etc.
+ * The trailing `*` triggers prefix matching on the backend.
+ */
+const ADMIN_ACTIONS_FILTER_PREFIXES = [
+  'maintenance.',
+  'monitoring.',
+  'backup.',
+  'backup_schedule.',
+  'config.',
+  'incident.',
+  'webhook.',
+  'feature_flag.',
+  'data_subject_request.',
+  'admin.',
+] as const;
+
+/**
+ * Client-side predicate to check whether an audit log entry looks like an
+ * admin-originated action, based on well-known action name prefixes.
+ */
+const isAdminAction = (action: string): boolean => {
+  const lower = action.toLowerCase();
+  return ADMIN_ACTIONS_FILTER_PREFIXES.some((prefix) => lower.startsWith(prefix));
+};
+
 const COMPLIANCE_REPORT_TYPE_LABELS: Record<ComplianceReportType, string> = {
   activity_summary: 'Activity Summary',
   access_review: 'Access Review',
@@ -343,6 +371,9 @@ function AuditPageContent() {
   });
   const [reportEndDate, setReportEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [reportGenerating, setReportGenerating] = useState(false);
+  const [adminUserIds, setAdminUserIds] = useState<Set<number> | null>(null);
+  const [adminUsersFilterActive, setAdminUsersFilterActive] = useState(false);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const storageHydratedRef = useRef(false);
   const savedSearchesRef = useRef<SavedAuditSearch[]>([]);
 
@@ -429,8 +460,52 @@ function AuditPageContent() {
   const handleClearFilters = () => {
     clearFilters();
     setActiveSavedSearchId(null);
+    setAdminUsersFilterActive(false);
     resetPagination();
   };
+
+  const loadAdminUserIds = useCallback(async (): Promise<Set<number>> => {
+    if (adminUserIds !== null) return adminUserIds;
+    try {
+      setAdminUsersLoading(true);
+      const response = await api.getUsersPage({ limit: '200' });
+      const items = Array.isArray(response?.items) ? response.items : [];
+      const ids = new Set<number>();
+      for (const user of items) {
+        const record = user as Record<string, unknown>;
+        const role = typeof record.role === 'string' ? record.role.toLowerCase() : '';
+        const roles = Array.isArray(record.roles) ? record.roles.map((r) => String(r).toLowerCase()) : [];
+        if (
+          role === 'admin' || role === 'owner' || role === 'super_admin'
+          || roles.includes('admin') || roles.includes('owner') || roles.includes('super_admin')
+          || record.is_superuser === true
+        ) {
+          const id = Number(record.id);
+          if (Number.isFinite(id)) ids.add(id);
+        }
+      }
+      setAdminUserIds(ids);
+      return ids;
+    } catch {
+      return new Set();
+    } finally {
+      setAdminUsersLoading(false);
+    }
+  }, [adminUserIds]);
+
+  const handleToggleAdminUsersFilter = useCallback(async () => {
+    if (adminUsersFilterActive) {
+      setAdminUsersFilterActive(false);
+      return;
+    }
+    await loadAdminUserIds();
+    setAdminUsersFilterActive(true);
+  }, [adminUsersFilterActive, loadAdminUserIds]);
+
+  const displayedLogs = useMemo(() => {
+    if (!adminUsersFilterActive || !adminUserIds) return logs;
+    return logs.filter((log) => adminUserIds.has(Number(log.user_id)));
+  }, [logs, adminUsersFilterActive, adminUserIds]);
 
   const dateRangeError = useMemo(() => getDateRangeError(filters.start, filters.end), [filters.end, filters.start]);
   const complianceDateRangeError = useMemo(
@@ -938,10 +1013,10 @@ function AuditPageContent() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="actionFilter">Action (exact)</Label>
+                    <Label htmlFor="actionFilter">Action (exact or prefix*)</Label>
                     <Input
                       id="actionFilter"
-                      placeholder="e.g., user.create"
+                      placeholder="e.g., user.create or admin*"
                       value={filters.action}
                       onChange={(e) => handleFilterChange({ action: e.target.value })}
                     />
@@ -980,23 +1055,32 @@ function AuditPageContent() {
                     <AlertDescription>{dateRangeError}</AlertDescription>
                   </Alert>
                 )}
-                <div className="flex gap-2 mt-4">
+                <div className="flex flex-wrap gap-2 mt-4">
                   <Button variant="outline" onClick={handleClearFilters}>
                     Clear Filters
                   </Button>
                   <Button
-                    variant={filters.action === 'admin' ? 'default' : 'outline'}
+                    variant={filters.action === 'admin*' ? 'default' : 'outline'}
                     onClick={() => {
-                      if (filters.action === 'admin') {
+                      if (filters.action === 'admin*') {
                         handleFilterChange({ action: '' });
                       } else {
-                        handleFilterChange({ action: 'admin' });
+                        handleFilterChange({ action: 'admin*' });
                       }
                     }}
                     data-testid="admin-actions-filter"
                   >
                     <ShieldAlert className="mr-1.5 h-4 w-4" />
                     Admin Actions Only
+                  </Button>
+                  <Button
+                    variant={adminUsersFilterActive ? 'default' : 'outline'}
+                    onClick={() => void handleToggleAdminUsersFilter()}
+                    disabled={adminUsersLoading}
+                    data-testid="admin-users-filter"
+                  >
+                    <Filter className="mr-1.5 h-4 w-4" />
+                    {adminUsersLoading ? 'Loading...' : 'Admin Users'}
                   </Button>
                 </div>
               </CardContent>
@@ -1095,6 +1179,7 @@ function AuditPageContent() {
                 <CardTitle>Activity Log</CardTitle>
                 <CardDescription>
                   {totalItems} record{totalItems !== 1 ? 's' : ''} found
+                  {adminUsersFilterActive ? ` (showing ${displayedLogs.length} from admin users)` : ''}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1102,9 +1187,11 @@ function AuditPageContent() {
                   <div className="py-4">
                     <TableSkeleton rows={5} columns={5} />
                   </div>
-                ) : logs.length === 0 ? (
+                ) : displayedLogs.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
-                    No audit logs found for the selected filters.
+                    {adminUsersFilterActive && logs.length > 0
+                      ? 'No audit logs from admin-role users in current results.'
+                      : 'No audit logs found for the selected filters.'}
                   </div>
                 ) : (
                   <>
@@ -1121,7 +1208,7 @@ function AuditPageContent() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {logs.map((log) => (
+                          {displayedLogs.map((log) => (
                             <TableRow key={log.id}>
                               <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                 {formatTimestamp(log.timestamp)}

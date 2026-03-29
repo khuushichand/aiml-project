@@ -248,6 +248,13 @@ export default function ResourceGovernorPage() {
   const [rateLimitEventsLoading, setRateLimitEventsLoading] = useState(false);
   const [rateLimitEventsError, setRateLimitEventsError] = useState('');
   const [rateLimitEventsSource, setRateLimitEventsSource] = useState<RateLimitEventsSource>('unavailable');
+  const [rateLimitSummary, setRateLimitSummary] = useState<{
+    total_throttle_events: number;
+    period: string;
+    top_throttled_entities: Array<{ entity: string; rejections: number; last_rejected_at: string | null }>;
+    policy_headroom: Array<{ policy_id: string; resource_type: string | null; utilization_pct: number; total_denials: number; total_decisions: number }>;
+  } | null>(null);
+  const [rateLimitSummaryLoading, setRateLimitSummaryLoading] = useState(false);
 
   const policyForm = useForm<PolicyFormInput, unknown, PolicyFormData>({
     resolver: zodResolver(policyFormSchema),
@@ -393,6 +400,31 @@ export default function ResourceGovernorPage() {
     }
   }, []);
 
+  const loadRateLimitSummary = useCallback(async () => {
+    try {
+      setRateLimitSummaryLoading(true);
+      const result = await api.getRateLimitSummary({ hours: String(USAGE_LOOKBACK_HOURS) });
+      if (result && typeof result === 'object') {
+        const record = result as Record<string, unknown>;
+        setRateLimitSummary({
+          total_throttle_events: typeof record.total_throttle_events === 'number' ? record.total_throttle_events : 0,
+          period: typeof record.period === 'string' ? record.period : '24h',
+          top_throttled_entities: Array.isArray(record.top_throttled_entities)
+            ? (record.top_throttled_entities as Array<{ entity: string; rejections: number; last_rejected_at: string | null }>)
+            : [],
+          policy_headroom: Array.isArray(record.policy_headroom)
+            ? (record.policy_headroom as Array<{ policy_id: string; resource_type: string | null; utilization_pct: number; total_denials: number; total_decisions: number }>)
+            : [],
+        });
+      }
+    } catch {
+      // Summary is non-critical; silently ignore failures
+      setRateLimitSummary(null);
+    } finally {
+      setRateLimitSummaryLoading(false);
+    }
+  }, []);
+
   const loadPolicies = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
@@ -403,6 +435,7 @@ export default function ResourceGovernorPage() {
       await Promise.all([
         refreshScopeContext(),
         loadRateLimitEvents(),
+        loadRateLimitSummary(),
       ]);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
@@ -412,7 +445,7 @@ export default function ResourceGovernorPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadRateLimitEvents, refreshScopeContext]);
+  }, [loadRateLimitEvents, loadRateLimitSummary, refreshScopeContext]);
 
   const policies = useMemo(() => {
     let filtered = allPolicies;
@@ -1088,6 +1121,104 @@ export default function ResourceGovernorPage() {
               ) : null}
             </CardContent>
           </Card>
+
+          {/* Rate Limit Analytics Summary */}
+          {rateLimitSummary && (rateLimitSummary.total_throttle_events > 0 || rateLimitSummary.policy_headroom.length > 0) ? (
+            <Card data-testid="rate-limit-analytics-card">
+              <CardHeader>
+                <CardTitle>Rate Limit Analytics</CardTitle>
+                <CardDescription>
+                  Throttle summary and policy utilization for the last {rateLimitSummary.period}.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-3 mb-4">
+                  <div className="rounded-lg bg-muted/50 p-4 text-center">
+                    <div className="text-2xl font-bold tabular-nums" data-testid="total-throttle-events">
+                      {rateLimitSummary.total_throttle_events}
+                    </div>
+                    <div className="text-sm text-muted-foreground">Total Throttle Events</div>
+                  </div>
+                  <div className="rounded-lg bg-muted/50 p-4 text-center">
+                    <div className="text-2xl font-bold tabular-nums">
+                      {rateLimitSummary.top_throttled_entities.length}
+                    </div>
+                    <div className="text-sm text-muted-foreground">Affected Entities</div>
+                  </div>
+                  <div className="rounded-lg bg-muted/50 p-4 text-center">
+                    <div className="text-2xl font-bold tabular-nums">
+                      {rateLimitSummary.policy_headroom.length}
+                    </div>
+                    <div className="text-sm text-muted-foreground">Active Policies</div>
+                  </div>
+                </div>
+
+                {rateLimitSummary.top_throttled_entities.length > 0 ? (
+                  <div className="mb-4">
+                    <h4 className="text-sm font-medium mb-2">Top Throttled Entities</h4>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Entity</TableHead>
+                          <TableHead className="text-right">Rejections</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rateLimitSummary.top_throttled_entities.slice(0, 5).map((entity, index) => (
+                          <TableRow key={`${entity.entity}-${index}`}>
+                            <TableCell className="font-medium">{entity.entity}</TableCell>
+                            <TableCell className="text-right tabular-nums">{entity.rejections}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+
+                {rateLimitSummary.policy_headroom.length > 0 ? (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2">Policy Utilization</h4>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Policy</TableHead>
+                          <TableHead>Resource</TableHead>
+                          <TableHead className="text-right">Denials</TableHead>
+                          <TableHead className="text-right">Utilization</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rateLimitSummary.policy_headroom.slice(0, 5).map((policy, index) => (
+                          <TableRow key={`${policy.policy_id}-${index}`}>
+                            <TableCell className="font-mono text-sm">{policy.policy_id}</TableCell>
+                            <TableCell>
+                              {policy.resource_type ? (
+                                <Badge variant="outline">
+                                  {policy.resource_type.replaceAll('_', ' ')}
+                                </Badge>
+                              ) : '--'}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{policy.total_denials}</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              <Badge variant={policy.utilization_pct > 50 ? 'destructive' : policy.utilization_pct > 20 ? 'secondary' : 'default'}>
+                                {policy.utilization_pct.toFixed(1)}%
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : rateLimitSummaryLoading ? (
+            <Card>
+              <CardContent className="py-6">
+                <div className="text-sm text-muted-foreground text-center">Loading rate limit analytics...</div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader>
