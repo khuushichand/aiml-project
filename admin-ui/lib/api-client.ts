@@ -5,6 +5,8 @@ import { normalizeListResponse, normalizePagedResponse } from './normalize';
 import type {
   ApiKey,
   ApiKeyMutationResponse,
+  ApiKeyUsageSummary,
+  ApiKeyUsageTopResponse,
   AuditLog,
   BackupScheduleListResponse,
   BackupScheduleMutationResponse,
@@ -305,6 +307,8 @@ export const api = {
     method: 'DELETE',
   }),
   getApiKeyAuditLog: (keyId: string) => requestJson(`/admin/api-keys/${keyId}/audit-log`),
+  getApiKeyUsage: (keyId: string) => requestJson<ApiKeyUsageSummary>(`/admin/api-keys/${keyId}/usage`),
+  getTopApiKeyUsage: (limit: number = 10) => requestJson<ApiKeyUsageTopResponse>(`/admin/api-keys/usage/top?limit=${limit}`),
 
   // ============================================
   // Organizations
@@ -703,6 +707,22 @@ export const api = {
       };
     });
     return { entries: mapped, total, limit, offset };
+  },
+
+  // ============================================
+  // Error Breakdown (10.4)
+  // ============================================
+  getErrorBreakdown: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/errors/breakdown${queryParams ? `?${queryParams}` : ''}`);
+  },
+
+  // ============================================
+  // Rate Limit Summary (10.5)
+  // ============================================
+  getRateLimitSummary: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/rate-limits/summary${queryParams ? `?${queryParams}` : ''}`);
   },
 
   // ============================================

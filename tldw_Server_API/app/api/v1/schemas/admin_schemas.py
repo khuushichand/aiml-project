@@ -449,6 +449,64 @@ class AuditLogResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Error Breakdown Schemas
+
+class ErrorBreakdownItem(BaseModel):
+    """A single row in the error breakdown aggregation."""
+    endpoint: str
+    status_code: int
+    count: int
+    last_occurred: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ErrorBreakdownResponse(BaseModel):
+    """Aggregated error breakdown over a recent period."""
+    items: list[ErrorBreakdownItem]
+    total_errors: int
+    period: str = "24h"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Rate Limit Summary Schemas
+
+class RateLimitThrottledEntity(BaseModel):
+    """A frequently throttled user/IP/entity."""
+    entity: str
+    rejections: int
+    last_rejected_at: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateLimitPolicyHeadroom(BaseModel):
+    """Headroom utilization for a single policy."""
+    policy_id: str
+    resource_type: str | None = None
+    scope: str | None = None
+    total_decisions: int = 0
+    total_denials: int = 0
+    utilization_pct: float = 0.0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateLimitSummaryResponse(BaseModel):
+    """Aggregated rate limit summary for a period."""
+    total_throttle_events: int
+    period: str = "24h"
+    top_throttled_entities: list[RateLimitThrottledEntity]
+    policy_headroom: list[RateLimitPolicyHeadroom]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # Data Ops Schemas (Backups, Retention, Exports)
 
 class BackupItem(BaseModel):
@@ -2253,6 +2311,44 @@ class AdminCircuitBreakerListFilters(BaseModel):
     name_prefix: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Per-API-Key Usage Attribution
+
+class ApiKeyDailySnapshot(BaseModel):
+    """A single day's usage snapshot for an API key."""
+    date: str
+    requests: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class ApiKeyUsageSummary(BaseModel):
+    """Aggregated usage summary for a single API key."""
+    key_id: str
+    request_count: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    last_used_at: str | None = None
+    daily_snapshots: list[ApiKeyDailySnapshot] = Field(default_factory=list)
+
+
+class ApiKeyUsageTopItem(BaseModel):
+    """A ranked entry in the top-keys-by-usage list."""
+    key_id: str
+    request_count: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    last_used_at: str | None = None
+
+
+class ApiKeyUsageTopResponse(BaseModel):
+    """Response for the top-keys-by-usage endpoint."""
+    items: list[ApiKeyUsageTopItem] = Field(default_factory=list)
 
 
 #

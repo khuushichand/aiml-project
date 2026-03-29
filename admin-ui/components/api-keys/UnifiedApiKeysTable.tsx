@@ -7,8 +7,10 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
 import {
+  formatCostUsd,
   formatErrorRate24h,
   formatRequestCount24h,
+  formatTokenCount,
   getKeyAgeIndicator,
   getKeyExpiryIndicator,
   isInactiveKey,
@@ -84,6 +86,11 @@ export const UnifiedApiKeysTable = ({
     (row) => row.requestCount24h !== null || row.errorRate24h !== null
   );
 
+  // Show usage attribution columns when any row has token or cost data
+  const hasUsage = rows.some(
+    (row) => row.totalTokens !== null || row.estimatedCostUsd !== null
+  );
+
   return (
     <Table>
       <TableHeader>
@@ -115,6 +122,8 @@ export const UnifiedApiKeysTable = ({
           </TableHead>
           <TableHead>Expiry</TableHead>
           <TableHead>Activity</TableHead>
+          {hasUsage && <TableHead>Tokens</TableHead>}
+          {hasUsage && <TableHead>Est. Cost</TableHead>}
           {hasTelemetry && <TableHead>Requests (24h)</TableHead>}
           {hasTelemetry && <TableHead>Error Rate (24h)</TableHead>}
           <TableHead className="text-right">Actions</TableHead>
@@ -174,6 +183,8 @@ export const UnifiedApiKeysTable = ({
                   <Badge variant="secondary">Normal</Badge>
                 )}
               </TableCell>
+              {hasUsage && <TableCell>{formatTokenCount(row.totalTokens)}</TableCell>}
+              {hasUsage && <TableCell>{formatCostUsd(row.estimatedCostUsd)}</TableCell>}
               {hasTelemetry && <TableCell>{formatRequestCount24h(row.requestCount24h)}</TableCell>}
               {hasTelemetry && <TableCell>{formatErrorRate24h(row.errorRate24h)}</TableCell>}
               <TableCell className="text-right">

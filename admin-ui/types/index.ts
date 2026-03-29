@@ -114,6 +114,36 @@ export interface ApiKeyMutationResponse {
   key_prefix?: string;
 }
 
+export interface ApiKeyDailySnapshot {
+  date: string;
+  requests: number;
+  tokens: number;
+  cost_usd: number;
+}
+
+export interface ApiKeyUsageSummary {
+  key_id: string;
+  request_count: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost_usd: number;
+  last_used_at: string | null;
+  daily_snapshots: ApiKeyDailySnapshot[];
+}
+
+export interface ApiKeyUsageTopItem {
+  key_id: string;
+  request_count: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  last_used_at: string | null;
+}
+
+export interface ApiKeyUsageTopResponse {
+  items: ApiKeyUsageTopItem[];
+}
+
 export interface Role {
   id: number;
   name: string;

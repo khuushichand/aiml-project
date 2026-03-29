@@ -4,8 +4,10 @@ import {
   buildUnifiedApiKeyRows,
   filterByHygiene,
   filterUnifiedApiKeyRows,
+  formatCostUsd,
   formatErrorRate24h,
   formatRequestCount24h,
+  formatTokenCount,
   getKeyAgeIndicator,
   getKeyExpiryIndicator,
   resolveUnifiedApiKeyStatus,
@@ -102,6 +104,8 @@ describe('filterUnifiedApiKeyRows', () => {
       status: 'active' as const,
       requestCount24h: null,
       errorRate24h: null,
+      totalTokens: null,
+      estimatedCostUsd: null,
     },
     {
       keyId: '102',
@@ -115,6 +119,8 @@ describe('filterUnifiedApiKeyRows', () => {
       status: 'revoked' as const,
       requestCount24h: null,
       errorRate24h: null,
+      totalTokens: null,
+      estimatedCostUsd: null,
     },
   ];
 
@@ -168,6 +174,8 @@ describe('stage 2 hygiene helpers', () => {
         status: 'active',
         requestCount24h: null,
         errorRate24h: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
       },
       {
         keyId: '2',
@@ -181,6 +189,8 @@ describe('stage 2 hygiene helpers', () => {
         status: 'active',
         requestCount24h: null,
         errorRate24h: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
       },
     ], now);
 
@@ -206,6 +216,8 @@ describe('filterByHygiene', () => {
     status: 'active',
     requestCount24h: null,
     errorRate24h: null,
+    totalTokens: null,
+    estimatedCostUsd: null,
     ...overrides,
   });
 
@@ -237,5 +249,91 @@ describe('filterByHygiene', () => {
     const result = filterByHygiene(rows, 'inactive', now);
     expect(result).toHaveLength(1);
     expect(result[0].keyId).toBe('inactive');
+  });
+});
+
+describe('usage attribution', () => {
+  it('enriches rows with usage data when usageByKeyId is provided', () => {
+    const users: UserWithKeyCount[] = [
+      {
+        id: 1,
+        uuid: 'u1',
+        username: 'alice',
+        email: 'alice@example.com',
+        role: 'admin',
+        is_active: true,
+        is_verified: true,
+        storage_quota_mb: 1024,
+        storage_used_mb: 20,
+        created_at: '2026-02-01T00:00:00Z',
+        updated_at: '2026-02-01T00:00:00Z',
+      },
+    ];
+
+    const keysByUserId: Record<number, ApiKeyMetadataLike[]> = {
+      1: [
+        {
+          id: 101,
+          key_prefix: 'sk-alice',
+          status: 'active',
+          created_at: '2026-02-16T00:00:00Z',
+        },
+      ],
+    };
+
+    const usageByKeyId = {
+      '101': { key_id: '101', total_tokens: 50000, estimated_cost_usd: 1.23 },
+    };
+
+    const rows = buildUnifiedApiKeyRows(users, keysByUserId, usageByKeyId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].totalTokens).toBe(50000);
+    expect(rows[0].estimatedCostUsd).toBe(1.23);
+  });
+
+  it('sets usage fields to null when no usage data is provided', () => {
+    const users: UserWithKeyCount[] = [
+      {
+        id: 1,
+        uuid: 'u1',
+        username: 'alice',
+        email: 'alice@example.com',
+        role: 'admin',
+        is_active: true,
+        is_verified: true,
+        storage_quota_mb: 1024,
+        storage_used_mb: 20,
+        created_at: '2026-02-01T00:00:00Z',
+        updated_at: '2026-02-01T00:00:00Z',
+      },
+    ];
+
+    const keysByUserId: Record<number, ApiKeyMetadataLike[]> = {
+      1: [
+        { id: 101, key_prefix: 'sk-alice', status: 'active', created_at: '2026-02-16T00:00:00Z' },
+      ],
+    };
+
+    const rows = buildUnifiedApiKeyRows(users, keysByUserId);
+    expect(rows[0].totalTokens).toBeNull();
+    expect(rows[0].estimatedCostUsd).toBeNull();
+  });
+});
+
+describe('usage formatters', () => {
+  it('formats token counts with abbreviated suffixes', () => {
+    expect(formatTokenCount(null)).toBe('--');
+    expect(formatTokenCount(0)).toBe('0');
+    expect(formatTokenCount(500)).toBe('500');
+    expect(formatTokenCount(1500)).toBe('1.5K');
+    expect(formatTokenCount(1_500_000)).toBe('1.5M');
+  });
+
+  it('formats cost values as USD strings', () => {
+    expect(formatCostUsd(null)).toBe('--');
+    expect(formatCostUsd(0)).toBe('$0.00');
+    expect(formatCostUsd(0.005)).toBe('<$0.01');
+    expect(formatCostUsd(1.5)).toBe('$1.50');
+    expect(formatCostUsd(123.456)).toBe('$123.46');
   });
 });

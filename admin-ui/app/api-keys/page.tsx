@@ -24,6 +24,7 @@ import {
   filterUnifiedApiKeyRows,
   getKeyExpiryIndicator,
   type ApiKeyMetadataLike,
+  type ApiKeyUsageLike,
   type HygieneFilter,
   type UnifiedApiKeyStatus,
 } from '@/lib/api-keys-hub';
@@ -133,7 +134,21 @@ function ApiKeysPageContent() {
         }
       });
 
-      setRows(buildUnifiedApiKeyRows(users, keysByUserId));
+      // Fetch per-key usage attribution (best-effort; does not block key listing)
+      let usageByKeyId: Record<string, ApiKeyUsageLike> | undefined;
+      try {
+        const topUsage = await api.getTopApiKeyUsage(200);
+        if (topUsage?.items?.length) {
+          usageByKeyId = {};
+          for (const item of topUsage.items) {
+            usageByKeyId[String(item.key_id)] = item;
+          }
+        }
+      } catch {
+        // Usage data is non-critical; proceed without it
+      }
+
+      setRows(buildUnifiedApiKeyRows(users, keysByUserId, usageByKeyId));
 
       if (failedUsers.length > 0) {
         setPartialLoadWarning(
@@ -430,7 +445,7 @@ function ApiKeysPageContent() {
                 <div>
                   <h3 className="font-semibold">Unified Key Management</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Per-key request and error rate metrics will appear automatically once backend telemetry is available.
+                    Per-key token consumption and estimated cost appear automatically when usage data is available.
                   </p>
                 </div>
               </div>

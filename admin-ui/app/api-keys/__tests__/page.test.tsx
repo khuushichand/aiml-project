@@ -61,6 +61,7 @@ vi.mock('@/lib/api-client', () => ({
     getUserApiKeys: vi.fn(),
     rotateApiKey: vi.fn(),
     createApiKey: vi.fn(),
+    getTopApiKeyUsage: vi.fn(),
   },
 }));
 
@@ -69,6 +70,7 @@ type ApiMock = {
   getUserApiKeys: ReturnType<typeof vi.fn>;
   rotateApiKey: ReturnType<typeof vi.fn>;
   createApiKey: ReturnType<typeof vi.fn>;
+  getTopApiKeyUsage: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -112,6 +114,7 @@ beforeEach(() => {
 
   apiMock.rotateApiKey.mockResolvedValue({ status: 'stored' });
   apiMock.createApiKey.mockResolvedValue({ key: 'sk-new-test-key-123' });
+  apiMock.getTopApiKeyUsage.mockResolvedValue({ items: [] });
 });
 
 afterEach(() => {

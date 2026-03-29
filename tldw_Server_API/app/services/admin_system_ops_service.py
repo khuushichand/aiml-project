@@ -1782,3 +1782,107 @@ def resend_invitation(*, invitation_id: str) -> dict[str, Any]:
 
                 return _normalize_invitation_record(inv)
     raise ValueError("not_found")
+
+
+#######################################################################################################################
+#
+# Per-API-Key Usage Attribution
+#
+# Stores usage counters (request count, tokens, cost) per API key in the
+# JSON ops store. Daily snapshots are capped at 90 entries per key.
+
+_API_KEY_USAGE_DAILY_CAP = 90
+
+
+def _default_key_usage(key_id: str) -> dict[str, Any]:
+    return {
+        "key_id": str(key_id),
+        "request_count": 0,
+        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "last_used_at": None,
+        "daily_snapshots": [],
+    }
+
+
+def record_api_key_usage(
+    key_id: str,
+    *,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cost_usd: float = 0.0,
+) -> dict[str, Any]:
+    """Increment usage counters for a single API key and add a daily snapshot entry.
+
+    Returns the updated usage record.
+    """
+    key_id = str(key_id)
+    total_tokens = prompt_tokens + completion_tokens
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    with _locked_store(write=True) as store:
+        usage_map: dict[str, Any] = store.setdefault("api_key_usage", {})
+        entry = usage_map.get(key_id)
+        if entry is None:
+            entry = _default_key_usage(key_id)
+            usage_map[key_id] = entry
+
+        entry["request_count"] = entry.get("request_count", 0) + 1
+        entry["total_tokens"] = entry.get("total_tokens", 0) + total_tokens
+        entry["prompt_tokens"] = entry.get("prompt_tokens", 0) + prompt_tokens
+        entry["completion_tokens"] = entry.get("completion_tokens", 0) + completion_tokens
+        entry["estimated_cost_usd"] = round(
+            entry.get("estimated_cost_usd", 0.0) + cost_usd, 6
+        )
+        entry["last_used_at"] = _now_iso()
+
+        # Update or append daily snapshot
+        snapshots: list[dict[str, Any]] = entry.setdefault("daily_snapshots", [])
+        if snapshots and snapshots[-1].get("date") == today:
+            snap = snapshots[-1]
+            snap["requests"] = snap.get("requests", 0) + 1
+            snap["tokens"] = snap.get("tokens", 0) + total_tokens
+            snap["cost_usd"] = round(snap.get("cost_usd", 0.0) + cost_usd, 6)
+        else:
+            snapshots.append({
+                "date": today,
+                "requests": 1,
+                "tokens": total_tokens,
+                "cost_usd": round(cost_usd, 6),
+            })
+
+        # Cap daily snapshots at 90 days
+        if len(snapshots) > _API_KEY_USAGE_DAILY_CAP:
+            entry["daily_snapshots"] = snapshots[-_API_KEY_USAGE_DAILY_CAP:]
+
+        return dict(entry)
+
+
+def get_api_key_usage(key_id: str) -> dict[str, Any]:
+    """Return the usage summary for a single API key.
+
+    Returns a default (zeroed) record if no usage has been recorded.
+    """
+    key_id = str(key_id)
+    with _locked_store() as store:
+        usage_map: dict[str, Any] = store.get("api_key_usage", {})
+        entry = usage_map.get(key_id)
+        if entry is None:
+            return _default_key_usage(key_id)
+        return dict(entry)
+
+
+def list_api_key_usage(*, limit: int = 10) -> list[dict[str, Any]]:
+    """Return top API keys ranked by total token consumption.
+
+    Args:
+        limit: Maximum number of entries to return (default 10).
+    """
+    with _locked_store() as store:
+        usage_map: dict[str, Any] = store.get("api_key_usage", {})
+        items = list(usage_map.values())
+
+    items.sort(key=lambda item: item.get("total_tokens", 0), reverse=True)
+    return items[:max(1, limit)]
