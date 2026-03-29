@@ -191,14 +191,21 @@ All recipes should share a common scoring contract:
 
 ### Recommendation Set
 
-Every recipe report should produce:
+Every recipe report should produce these mandatory recommendation slots:
 
 - `best overall`
-- `best quality`
 - `best cheap`
 - `best local`
 
-Recipes may add more views, but these common recommendation categories keep reports readable and reusable.
+Recipes may also expose optional recipe-specific recommendation slots such as:
+
+- `best quality`
+- `best fast`
+- `best grounded`
+
+This keeps the report shell stable while still allowing recipe-specific emphasis.
+
+If no candidate qualifies for a mandatory slot, or if the data needed to compute that slot is unavailable, the report must emit `null` for that slot plus a machine-readable `reason_code` and user-facing explanation. The system must not fabricate a winner for `best overall`, `best cheap`, or `best local`.
 
 ### Confidence Model
 
@@ -221,22 +228,64 @@ Recipes should be able to disqualify candidates that cross unacceptable threshol
 
 ## Dataset Model
 
-Every recipe should use a common canonical dataset envelope with recipe-specific validation rules.
+Every recipe should use a common canonical dataset envelope plus a recipe-specific payload schema.
+
+The shared layer should not try to flatten all recipe data into one generic row shape. Instead:
+
+- the common envelope defines identity, provenance, and reproducibility
+- the recipe payload defines the task-specific structure
+
+### Core Envelope
 
 Recommended common fields:
 
+- `dataset_id`
+- `dataset_version`
+- `recipe_id`
+- `schema_version`
+- `metadata`
+- `split`
+- `items` or `payload`
+
+Each item should support shared metadata such as:
+
+- `item_id`
 - `input`
 - `source` or `context`
 - `reference` or `labels` when available
 - `metadata`
-- `split`
-- `dataset_id`
-- `dataset_version`
+
+### Recipe-Specific Payload
+
+Each recipe then validates an explicit task schema on top of the core envelope.
+
+Examples:
+
+- embeddings retrieval labeled:
+  - `queries[]`
+  - `query_id`
+  - `expected_doc_ids` or `expected_chunk_ids`
+- embeddings clustering labeled:
+  - `item_id`
+  - `cluster_id` or pairwise labels
+- summarization labeled:
+  - `document_id`
+  - `source_text`
+  - `reference_summaries[]`
+  - optional `preference_pairs[]`
+- summarization unlabeled:
+  - `document_id`
+  - `source_text`
+  - optional `importance_annotations`
+  - optional `review_samples`
+
+This avoids turning the shared model into an untyped metadata bucket.
 
 Each run should snapshot:
 
 - recipe id and version
 - dataset id and version
+- dataset content hash or immutable snapshot reference
 - candidate model list
 - prompts and judge configuration
 - scoring weights and thresholds
@@ -245,11 +294,20 @@ Each run should snapshot:
 
 This is required for reproducibility and auditability.
 
+Dataset versioning should therefore use a two-layer model:
+
+- the shared dataset record owns the logical `dataset_id` and `dataset_version`
+- each recipe run owns an immutable snapshot reference or content hash captured at run creation time
+
+This keeps reusable datasets possible while still making individual runs reproducible even if the source dataset is later edited.
+
 ## Built-In V1 Recipes
 
 ### Recipe 1: Embeddings Model Selection
 
 This recipe is a task selector, not a single metric pack.
+
+The recipe framework should eventually support four embeddings goals, but the first implementation milestone should ship `retrieval / RAG` as the only fully supported path. `Clustering / dedup` and `classification` are future or experimental work and should not be part of the first delivery milestone.
 
 The wizard should ask:
 
@@ -259,12 +317,15 @@ The wizard should ask:
 4. Which models should compete?
 5. What constraints matter?
 
-Supported goals:
+Future framework goal set:
 
 - `retrieval / RAG`
+- `weighted scorecard` layered on retrieval metrics
+
+Future or experimental goals, explicitly out of scope for the first milestone:
+
 - `clustering / dedup`
 - `classification`
-- `weighted scorecard`
 
 #### Retrieval Mode
 
@@ -279,6 +340,8 @@ Unlabeled mode:
 - user provides corpus and optionally example queries
 - system can synthesize candidate queries
 - weak labels come from relevance judging plus human spot checks
+
+In unlabeled mode, every run should automatically reserve a human spot-check sample. The run may auto-complete when confidence is above threshold, but low-confidence runs or close-call winners should remain marked as requiring review until that spot-check sample is completed.
 
 Important design rule:
 
@@ -316,13 +379,22 @@ Unlabeled mode:
 
 The report should include:
 
-- recommended overall
-- best local
-- best cheap
-- best fast
+- `best overall`
+- `best cheap`
+- `best local`
+- optional `best quality`
+- optional `best fast`
 - weighted leaderboard
 - notable failure cases
 - exportable run configuration
+
+#### Embeddings V1 Acceptance Criteria
+
+- Users can run a retrieval-focused embeddings comparison on their own dataset through the wizard.
+- The system supports both labeled and unlabeled retrieval runs.
+- The report returns `best overall`, `best cheap`, and `best local`.
+- The run captures enough configuration to be rerun on the same dataset version.
+- Clustering and classification are either deferred or clearly marked experimental.
 
 ### Recipe 2: Summarization Quality
 
@@ -353,6 +425,8 @@ If the user has references or preference pairs:
 
 Use source-grounded judging by default, then pairwise comparison among the strongest candidates.
 
+In unlabeled mode, every run should automatically reserve a human spot-check sample. The run may auto-complete when confidence is above threshold, but low-confidence runs or close-call winners should remain marked as requiring review until that spot-check sample is completed.
+
 Recommended V1 execution pattern:
 
 1. run all candidates on a stratified sample
@@ -362,19 +436,44 @@ Recommended V1 execution pattern:
 
 The system should keep prompt and formatting instructions fixed across candidates inside a run.
 
+#### Source Normalization And Context Policy
+
+Summarization runs must define a single preprocessing and context-budget policy before any candidate is executed.
+
+That policy should freeze:
+
+- source normalization rules
+- segmentation or chunking rules
+- ordering rules
+- map-reduce or single-pass strategy
+- aggregation prompts
+- maximum source budget per stage
+
+All candidates in the run must receive equivalent normalized inputs under that same policy. The system must not silently compare one model on the full source and another on a truncated or differently segmented source.
+
+If a candidate cannot satisfy the run-wide context policy, it should be excluded up front or clearly marked ineligible rather than being compared on a weaker input.
+
 #### Summarization Output Contract
 
 The report should include:
 
-- recommended overall
-- best quality
-- best cheap
-- best local
+- `best overall`
+- `best cheap`
+- `best local`
+- optional `best quality`
 - rubric breakdown by candidate
 - side-by-side example summaries
 - flagged failure cases
 
 Candidates that fail a grounding threshold must not win overall.
+
+#### Summarization V1 Acceptance Criteria
+
+- Users can run a rubric-based summarization comparison on their own source documents.
+- The system supports both labeled and unlabeled summarization runs.
+- A run-wide source normalization and context policy is captured and reused for every candidate in that run.
+- Candidates that fail grounding thresholds cannot win overall.
+- The report returns `best overall`, `best cheap`, and `best local`, with `best quality` when the recipe exposes it.
 
 ## Repo Integration
 
@@ -404,6 +503,18 @@ Per the repo's scheduler vs jobs guidance, recipe execution should use `Jobs` be
 
 The existing low-level eval run machinery can remain implementation detail under the user-facing recipe run abstraction.
 
+The user-facing recipe run should be the parent object. A single recipe run may fan out into multiple internal eval runs or candidate executions, but only the recipe-run id should be the public orchestration identity exposed to the wizard and reports.
+
+Recipe runs should reuse the existing evaluations run status model of `pending`, `running`, `completed`, `failed`, and `cancelled` rather than inventing a second status enum. Any post-run human review requirement should be represented through separate review metadata such as `review_state` or report flags, not through a conflicting lifecycle status vocabulary.
+
+Recipe runs should also have explicit idempotency and reuse semantics:
+
+- each run request should produce a deterministic config hash from recipe version, dataset version, resolved immutable model identifiers, versioned judge configuration, prompts, weights, and execution policy
+- identical submissions should be able to reuse cached artifacts or return the prior completed run unless the caller sets `force_rerun`
+- partial or failed runs should be resumable only when their intermediate artifacts are valid for reuse
+
+This matters immediately for expensive judge-based runs and for embeddings preprocessing that can be reused across repeated comparisons.
+
 ### Frontend
 
 The shared WebUI implementation should live under:
@@ -415,6 +526,8 @@ so both the web page and extension continue sharing a single experience.
 The recipe wizard should become the primary entry path.
 
 The existing generic tabs should remain secondary and should not be the foundation for the new UX until they are stabilized.
+
+In the first implementation milestone, generic history and runs pages should remain secondary and explicitly out of scope for recipe-aware parity. The first ship target is the guided wizard plus report flow.
 
 ### Migration Strategy
 
@@ -431,7 +544,7 @@ The recipe framework should be introduced incrementally:
 - Mark low-confidence runs clearly rather than presenting weak winners as authoritative.
 - Preserve source-grounding failures as blocking signals for summarization.
 - Persist artifacts for auditability.
-- Keep a human-review sample in every "easy mode" run.
+- In `Simple mode`, unlabeled runs should always create a human-review sample automatically. Labeled runs do not require manual review by default, but may still surface optional review samples or require review when confidence falls below threshold.
 - Make local-first and hosted-judge choices explicit in the run configuration.
 - Warn when retrieval-stack settings differ across candidates in ways that would invalidate comparisons.
 
@@ -470,13 +583,11 @@ The existing evaluations UI gaps make frontend coverage particularly important f
 - Judge-based unlabeled evals can look precise while still being noisy. Confidence and spot checks are mandatory.
 - Retrieval evaluation can become misleading if embeddings are compared under non-equivalent stack settings.
 - Summarization scoring is vulnerable to over-trusting single-judge outputs. Pairwise judging and grounding gates are more stable than a single absolute score.
-- Supporting both local-first and hosted judging improves flexibility, but increases the configuration surface. Simple mode must keep this manageable.
+- Supporting both local-first and hosted judging improves flexibility, but increases the configuration surface. `Simple mode` must keep this manageable.
 
 ## Open Questions Deferred To Planning
 
-- Whether recipe runs should always map one-to-one to lower-level eval runs or may fan out into multiple internal runs.
 - How much of the existing embeddings A/B infrastructure can be safely reused without carrying forward current Chroma-related instability.
-- Whether dataset versioning should live inside the existing datasets model or a recipe-specific dataset snapshot layer.
 - Whether generic history and runs pages should be upgraded to understand recipe runs in V1 or remain secondary.
 
 ## Implementation Recommendation
