@@ -8,6 +8,7 @@ import type {
 import { applyWorkspaceSourceTransfer } from "../workspace-source-transfer"
 
 const now = new Date("2026-03-28T12:00:00.000Z")
+const sourceFolderFallbackName = "Untitled Folder"
 
 const createSource = (
   overrides: Partial<WorkspaceSource> &
@@ -82,6 +83,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: {},
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -123,6 +125,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1", "origin-s2"],
       conflictResolutions: {},
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -167,6 +170,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: {},
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -225,6 +229,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: { 101: "replace-transferred-folders" },
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -282,6 +287,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: { 101: "merge-folders" },
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -322,6 +328,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: { 101: "skip" },
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -370,6 +377,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: {},
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 
@@ -408,6 +416,7 @@ describe("applyWorkspaceSourceTransfer", () => {
       selectedSourceIds: ["origin-s1"],
       conflictResolutions: {},
       emptyFolderPolicy: "keep",
+      sourceFolderFallbackName,
       generateId: createIdFactory()
     })
 

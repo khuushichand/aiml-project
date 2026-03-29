@@ -115,6 +115,8 @@ from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
 # Functions:
 
 _SUPPORTED_FLASHCARD_SCHEDULERS = {"sm2_plus", "fsrs"}
+_SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES = {"lined", "grid", "cornell"}
+_SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES = {"off", "accented"}
 
 
 def _coerce_scheduler_type(value: Any) -> str:
@@ -5513,6 +5515,59 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for statement in statements:
             self.backend.execute(statement, connection=conn)
 
+    def _ensure_note_studio_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure the Studio sidecar table exists for SQLite deployments."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_studio_documents(
+                  note_id                 TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  payload_json            TEXT NOT NULL,
+                  template_type           TEXT NOT NULL CHECK(template_type IN ('lined', 'grid', 'cornell')),
+                  handwriting_mode        TEXT NOT NULL CHECK(handwriting_mode IN ('off', 'accented')),
+                  source_note_id          TEXT REFERENCES notes(id) ON DELETE SET NULL ON UPDATE CASCADE,
+                  excerpt_snapshot        TEXT,
+                  excerpt_hash            TEXT,
+                  diagram_manifest_json   TEXT,
+                  companion_content_hash  TEXT,
+                  render_version          INTEGER NOT NULL DEFAULT 1 CHECK(render_version >= 1),
+                  created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_studio_documents_source_note_id ON note_studio_documents(source_note_id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite note studio schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_note_studio_schema_postgres(self, conn: Any) -> None:
+        """Ensure the Studio sidecar table exists for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_studio_documents(
+              note_id                 TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              payload_json            TEXT NOT NULL,
+              template_type           TEXT NOT NULL CHECK(template_type IN ('lined', 'grid', 'cornell')),
+              handwriting_mode        TEXT NOT NULL CHECK(handwriting_mode IN ('off', 'accented')),
+              source_note_id          TEXT REFERENCES notes(id) ON DELETE SET NULL ON UPDATE CASCADE,
+              excerpt_snapshot        TEXT,
+              excerpt_hash            TEXT,
+              diagram_manifest_json   TEXT,
+              companion_content_hash  TEXT,
+              render_version          INTEGER NOT NULL DEFAULT 1 CHECK(render_version >= 1),
+              created_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_studio_documents_source_note_id ON note_studio_documents(source_note_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
     def _ensure_workspace_subresource_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure workspace settings columns and sub-resource tables exist for SQLite."""
         try:
@@ -5857,6 +5912,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_recent_persona_schema_sqlite(conn)
                     self._ensure_recent_voice_command_schema_sqlite(conn)
                     self._ensure_note_folder_schema_sqlite(conn)
+                    self._ensure_note_studio_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -6402,6 +6458,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
                 self._ensure_note_folder_schema_sqlite(conn)
+                self._ensure_note_studio_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -7648,6 +7705,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_recent_persona_schema_postgres(conn)
             self._ensure_recent_voice_command_schema_postgres(conn)
             self._ensure_note_folder_schema_postgres(conn)
+            self._ensure_note_studio_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
 
             if current_version < target_version:
@@ -18659,7 +18717,209 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
 
-    def get_note_by_id(self, note_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
+    @staticmethod
+    def _serialize_note_studio_json_field(value: Any, field_name: str, *, required: bool) -> str | None:
+        if value is None:
+            if required:
+                raise InputError(f"{field_name} cannot be None.")  # noqa: TRY003
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                if required:
+                    raise InputError(f"{field_name} cannot be empty.")  # noqa: TRY003
+                return None
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise InputError(f"{field_name} must be valid JSON.") from exc  # noqa: TRY003
+            return stripped
+        try:
+            return json.dumps(value)
+        except TypeError as exc:
+            raise InputError(f"{field_name} must be JSON serializable.") from exc  # noqa: TRY003
+
+    @staticmethod
+    def _build_note_studio_summary(document: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "note_id": document["note_id"],
+            "template_type": document["template_type"],
+            "handwriting_mode": document["handwriting_mode"],
+            "source_note_id": document.get("source_note_id"),
+            "excerpt_hash": document.get("excerpt_hash"),
+            "companion_content_hash": document.get("companion_content_hash"),
+            "render_version": document.get("render_version", 1),
+        }
+
+    def _fetch_note_studio_document_row(self, note_id: str) -> dict[str, Any] | None:
+        query = "SELECT * FROM note_studio_documents WHERE note_id = ?"
+        cursor = self.execute_query(query, (note_id,))
+        row = cursor.fetchone()
+        return self._deserialize_row_fields(row, ["payload_json", "diagram_manifest_json"]) if row else None
+
+    def get_note_studio_document(self, note_id: str) -> dict[str, Any] | None:
+        return self._fetch_note_studio_document_row(note_id)
+
+    def _write_note_studio_document(
+        self,
+        *,
+        note_id: str,
+        payload_json: dict[str, Any] | list[Any] | str,
+        template_type: str,
+        handwriting_mode: str,
+        source_note_id: str | None,
+        excerpt_snapshot: str | None,
+        excerpt_hash: str | None,
+        diagram_manifest_json: dict[str, Any] | list[Any] | str | None,
+        companion_content_hash: str | None,
+        render_version: int,
+        conn: sqlite3.Connection | None,
+        upsert: bool,
+    ) -> dict[str, Any]:
+        normalized_note_id = str(note_id).strip()
+        if not normalized_note_id:
+            raise InputError("note_id cannot be empty.")  # noqa: TRY003
+        if template_type not in _SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES:
+            raise InputError(
+                f"template_type must be one of {sorted(_SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES)}."
+            )  # noqa: TRY003
+        if handwriting_mode not in _SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES:
+            raise InputError(
+                f"handwriting_mode must be one of {sorted(_SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES)}."
+            )  # noqa: TRY003
+        if not isinstance(render_version, int) or render_version < 1:
+            raise InputError("render_version must be an integer >= 1.")  # noqa: TRY003
+
+        payload_json_str = self._serialize_note_studio_json_field(payload_json, "payload_json", required=True)
+        diagram_manifest_json_str = self._serialize_note_studio_json_field(
+            diagram_manifest_json,
+            "diagram_manifest_json",
+            required=False,
+        )
+        now = self._get_current_utc_timestamp_iso()
+
+        if upsert:
+            query = (
+                "INSERT INTO note_studio_documents ("
+                "note_id, payload_json, template_type, handwriting_mode, source_note_id, "
+                "excerpt_snapshot, excerpt_hash, diagram_manifest_json, companion_content_hash, "
+                "render_version, created_at, last_modified"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(note_id) DO UPDATE SET "
+                "payload_json = excluded.payload_json, "
+                "template_type = excluded.template_type, "
+                "handwriting_mode = excluded.handwriting_mode, "
+                "source_note_id = excluded.source_note_id, "
+                "excerpt_snapshot = excluded.excerpt_snapshot, "
+                "excerpt_hash = excluded.excerpt_hash, "
+                "diagram_manifest_json = excluded.diagram_manifest_json, "
+                "companion_content_hash = excluded.companion_content_hash, "
+                "render_version = excluded.render_version, "
+                "last_modified = excluded.last_modified"
+            )
+        else:
+            query = (
+                "INSERT INTO note_studio_documents ("
+                "note_id, payload_json, template_type, handwriting_mode, source_note_id, "
+                "excerpt_snapshot, excerpt_hash, diagram_manifest_json, companion_content_hash, "
+                "render_version, created_at, last_modified"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+
+        params = (
+            normalized_note_id,
+            payload_json_str,
+            template_type,
+            handwriting_mode,
+            source_note_id,
+            excerpt_snapshot,
+            excerpt_hash,
+            diagram_manifest_json_str,
+            companion_content_hash,
+            render_version,
+            now,
+            now,
+        )
+
+        def _execute(inner_conn: sqlite3.Connection) -> dict[str, Any]:
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            inner_conn.execute(prepared_query, prepared_params or ())
+            document = self._fetch_note_studio_document_row(normalized_note_id)
+            if not document:
+                raise CharactersRAGDBError(f"Failed to read note studio document for note ID '{normalized_note_id}'.")
+            return document
+
+        if conn is None:
+            with self.transaction() as transaction_conn:
+                return _execute(transaction_conn)
+        return _execute(conn)
+
+    def create_note_studio_document(
+        self,
+        *,
+        note_id: str,
+        payload_json: dict[str, Any] | list[Any] | str,
+        template_type: str,
+        handwriting_mode: str,
+        source_note_id: str | None = None,
+        excerpt_snapshot: str | None = None,
+        excerpt_hash: str | None = None,
+        diagram_manifest_json: dict[str, Any] | list[Any] | str | None = None,
+        companion_content_hash: str | None = None,
+        render_version: int,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        return self._write_note_studio_document(
+            note_id=note_id,
+            payload_json=payload_json,
+            template_type=template_type,
+            handwriting_mode=handwriting_mode,
+            source_note_id=source_note_id,
+            excerpt_snapshot=excerpt_snapshot,
+            excerpt_hash=excerpt_hash,
+            diagram_manifest_json=diagram_manifest_json,
+            companion_content_hash=companion_content_hash,
+            render_version=render_version,
+            conn=conn,
+            upsert=False,
+        )
+
+    def upsert_note_studio_document(
+        self,
+        *,
+        note_id: str,
+        payload_json: dict[str, Any] | list[Any] | str,
+        template_type: str,
+        handwriting_mode: str,
+        source_note_id: str | None = None,
+        excerpt_snapshot: str | None = None,
+        excerpt_hash: str | None = None,
+        diagram_manifest_json: dict[str, Any] | list[Any] | str | None = None,
+        companion_content_hash: str | None = None,
+        render_version: int,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        return self._write_note_studio_document(
+            note_id=note_id,
+            payload_json=payload_json,
+            template_type=template_type,
+            handwriting_mode=handwriting_mode,
+            source_note_id=source_note_id,
+            excerpt_snapshot=excerpt_snapshot,
+            excerpt_hash=excerpt_hash,
+            diagram_manifest_json=diagram_manifest_json,
+            companion_content_hash=companion_content_hash,
+            render_version=render_version,
+            conn=conn,
+            upsert=True,
+        )
+
+    def get_note_by_id(
+        self,
+        note_id: str,
+        include_deleted: bool = False,
+        include_studio_summary: bool = False,
+    ) -> dict[str, Any] | None:
         query = "SELECT * FROM notes WHERE id = ?"
         params: list[Any] = [note_id]
         if not include_deleted:
@@ -18667,7 +18927,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
         cursor = self.execute_query(query, tuple(params))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        note = dict(row) if row else None
+        if note and include_studio_summary:
+            studio_document = self.get_note_studio_document(note_id)
+            if studio_document:
+                note["studio"] = self._build_note_studio_summary(studio_document)
+        return note
 
     def list_notes(
         self,
@@ -18877,6 +19142,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cur_ver = int(row["version"])
                 deleted = bool(row["deleted"])
                 if hard_delete:
+                    conn.execute("DELETE FROM note_studio_documents WHERE note_id = ?", (note_id,))
                     conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
                     return True
                 if deleted:

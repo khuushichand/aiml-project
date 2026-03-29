@@ -75,6 +75,7 @@ export interface WorkspaceSourceTransferInput {
   selectedSourceIds: string[]
   conflictResolutions: Record<number, WorkspaceSourceTransferConflictResolution>
   emptyFolderPolicy: WorkspaceSourceTransferEmptyFolderPolicy
+  sourceFolderFallbackName: string
   generateId: (kind: WorkspaceSourceTransferIdKind) => string
 }
 

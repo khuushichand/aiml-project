@@ -7,18 +7,19 @@ import type {
   WorkspaceSourceTransferSnapshot
 } from "@/types/workspace"
 
-const normalizeSourceFolderName = (name: string): string => {
+const normalizeSourceFolderName = (name: string, fallbackName: string): string => {
   const trimmedName = name.trim()
-  return trimmedName || "Untitled Folder"
+  return trimmedName || fallbackName.trim()
 }
 
 const getUniqueSourceFolderName = (
   folders: WorkspaceSourceFolder[],
   name: string,
   parentFolderId: string | null,
+  fallbackName: string,
   excludeFolderId?: string
 ): string => {
-  const normalizedName = normalizeSourceFolderName(name)
+  const normalizedName = normalizeSourceFolderName(name, fallbackName)
   const siblingNames = new Set(
     folders
       .filter(
@@ -73,9 +74,10 @@ const findMatchingSiblingFolder = (
   folders: WorkspaceSourceFolder[],
   parentFolderId: string | null,
   name: string,
+  fallbackName: string,
   excludeFolderId?: string
 ): WorkspaceSourceFolder | null => {
-  const normalizedName = normalizeSourceFolderName(name).toLowerCase()
+  const normalizedName = normalizeSourceFolderName(name, fallbackName).toLowerCase()
   return (
     folders.find(
       (folder) =>
@@ -153,7 +155,8 @@ export const applyWorkspaceSourceTransfer = (
     const matchingFolder = findMatchingSiblingFolder(
       destinationSnapshot.sourceFolders,
       mappedParentFolderId,
-      originFolder.name
+      originFolder.name,
+      input.sourceFolderFallbackName
     )
     if (matchingFolder) {
       folderIdMap.set(originFolderId, matchingFolder.id)
@@ -167,7 +170,8 @@ export const applyWorkspaceSourceTransfer = (
       name: getUniqueSourceFolderName(
         destinationSnapshot.sourceFolders,
         originFolder.name,
-        mappedParentFolderId
+        mappedParentFolderId,
+        input.sourceFolderFallbackName
       ),
       parentFolderId: mappedParentFolderId
     }
