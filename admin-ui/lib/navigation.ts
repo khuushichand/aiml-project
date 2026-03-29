@@ -30,6 +30,7 @@ import {
   UserCog,
   Users,
   Wallet,
+  Webhook,
 } from 'lucide-react';
 
 export type NavigationItem = {
@@ -87,6 +88,7 @@ const navigationItems = {
   subscriptions: { name: 'Subscriptions', href: '/subscriptions', icon: Receipt, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'payments', 'invoices'], billingOnly: true },
   revenueAnalytics: { name: 'Revenue Analytics', href: '/billing/analytics', icon: BarChart3, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'mrr', 'revenue', 'metrics', 'analytics'], billingOnly: true },
   featureRegistry: { name: 'Feature Registry', href: '/feature-registry', icon: Grid3X3, role: ['admin', 'super_admin', 'owner'], keywords: ['gating', 'entitlements', 'open core'], billingOnly: true },
+  webhooks: { name: 'Webhooks', href: '/webhooks', icon: Webhook, role: ['admin', 'super_admin', 'owner'], keywords: ['hooks', 'notifications', 'events', 'integrations'] },
 } satisfies Record<string, NavigationItem>;
 
 // Grouped navigation for sidebar sections
@@ -150,6 +152,12 @@ export const navigationSections: NavigationSection[] = [
       navigationItems.security,
       navigationItems.flags,
       navigationItems.dataOps,
+    ],
+  },
+  {
+    title: 'Integrations',
+    items: [
+      navigationItems.webhooks,
     ],
   },
   {

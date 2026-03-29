@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
@@ -20,6 +21,15 @@ _INCIDENT_SEVERITIES = {"low", "medium", "high", "critical"}
 _INCIDENT_ACTION_ITEM_LIMIT = 25
 _INCIDENT_ACTION_ITEM_TEXT_MAX_LENGTH = 500
 _UNSET = object()
+
+_WEBHOOK_EVENTS = {
+    "user.created",
+    "user.deleted",
+    "incident.created",
+    "incident.updated",
+    "incident.resolved",
+}
+_WEBHOOK_MAX_URL_LENGTH = 2048
 
 _STORE_LOCK = Lock()
 _STORE_PATH = Path(get_database_dir()) / "system_ops.json"
@@ -113,6 +123,7 @@ def _default_store() -> dict[str, Any]:
         },
         "feature_flags": [],
         "incidents": [],
+        "webhooks": [],
     }
 
 
@@ -191,6 +202,7 @@ def _load_store() -> dict[str, Any]:
     data.setdefault("maintenance", _default_store()["maintenance"])
     data.setdefault("feature_flags", [])
     data.setdefault("incidents", [])
+    data.setdefault("webhooks", [])
     return data
 
 
@@ -734,3 +746,131 @@ def delete_incident(*, incident_id: str) -> None:
         if len(remaining) == len(incidents):
             raise ValueError("not_found")
         store["incidents"] = remaining
+
+
+# -----------------------------------------------------------------------------------------------------------------
+# Webhooks
+# -----------------------------------------------------------------------------------------------------------------
+
+
+def _normalize_webhook_record(value: Any) -> dict[str, Any]:
+    """Normalize a raw webhook dict from the store."""
+    if not isinstance(value, dict):
+        raise ValueError("invalid_webhook")
+    return {
+        "id": str(value.get("id") or ""),
+        "url": str(value.get("url") or ""),
+        "events": list(value.get("events") or []),
+        "enabled": bool(value.get("enabled", True)),
+        "created_at": value.get("created_at"),
+        "updated_at": value.get("updated_at"),
+    }
+
+
+def _redact_webhook(webhook: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the webhook with the secret removed (for list responses)."""
+    result = dict(webhook)
+    result.pop("secret", None)
+    return result
+
+
+def list_webhooks() -> list[dict[str, Any]]:
+    """Return all webhooks with secrets redacted."""
+    with _locked_store() as store:
+        webhooks_raw = list(store.get("webhooks", []))
+    webhooks = []
+    for webhook in webhooks_raw:
+        try:
+            webhooks.append(_redact_webhook(_normalize_webhook_record(webhook)))
+        except ValueError:
+            continue
+    webhooks.sort(key=lambda item: item.get("created_at") or "")
+    return webhooks
+
+
+def create_webhook(
+    *,
+    url: str,
+    events: list[str],
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Create a new webhook and return it with the secret included (shown once)."""
+    url_norm = (url or "").strip()
+    if not url_norm:
+        raise ValueError("invalid_url")
+    if len(url_norm) > _WEBHOOK_MAX_URL_LENGTH:
+        raise ValueError("invalid_url")
+    if not url_norm.startswith(("http://", "https://")):
+        raise ValueError("invalid_url")
+
+    events_norm = sorted({e.strip().lower() for e in (events or []) if e and e.strip()})
+    if not events_norm:
+        raise ValueError("invalid_events")
+    invalid_events = set(events_norm) - _WEBHOOK_EVENTS
+    if invalid_events:
+        raise ValueError("invalid_events")
+
+    now = _now_iso()
+    webhook_id = f"wh_{uuid4().hex[:10]}"
+    secret = secrets.token_hex(32)
+    webhook = {
+        "id": webhook_id,
+        "url": url_norm,
+        "secret": secret,
+        "events": events_norm,
+        "enabled": bool(enabled),
+        "created_at": now,
+        "updated_at": now,
+    }
+    with _locked_store(write=True) as store:
+        store.setdefault("webhooks", []).append(webhook)
+    # Return with secret so caller can show it once
+    return dict(webhook)
+
+
+def update_webhook(
+    *,
+    webhook_id: str,
+    url: str | None = None,
+    events: list[str] | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    """Update a webhook. Returns the webhook with secret redacted."""
+    now = _now_iso()
+    with _locked_store(write=True) as store:
+        webhooks = store.get("webhooks", [])
+        for webhook in webhooks:
+            if webhook.get("id") != webhook_id:
+                continue
+            if url is not None:
+                url_norm = url.strip()
+                if not url_norm:
+                    raise ValueError("invalid_url")
+                if len(url_norm) > _WEBHOOK_MAX_URL_LENGTH:
+                    raise ValueError("invalid_url")
+                if not url_norm.startswith(("http://", "https://")):
+                    raise ValueError("invalid_url")
+                webhook["url"] = url_norm
+            if events is not None:
+                events_norm = sorted({e.strip().lower() for e in events if e and e.strip()})
+                if not events_norm:
+                    raise ValueError("invalid_events")
+                invalid = set(events_norm) - _WEBHOOK_EVENTS
+                if invalid:
+                    raise ValueError("invalid_events")
+                webhook["events"] = events_norm
+            if enabled is not None:
+                webhook["enabled"] = bool(enabled)
+            webhook["updated_at"] = now
+            return _redact_webhook(_normalize_webhook_record(webhook))
+    raise ValueError("not_found")
+
+
+def delete_webhook(*, webhook_id: str) -> None:
+    """Delete a webhook by ID."""
+    with _locked_store(write=True) as store:
+        webhooks = store.get("webhooks", [])
+        remaining = [item for item in webhooks if item.get("id") != webhook_id]
+        if len(remaining) == len(webhooks):
+            raise ValueError("not_found")
+        store["webhooks"] = remaining

@@ -17,6 +17,7 @@ describe('navigation information architecture', () => {
       'Operations',
       'Cost & Usage',
       'Security & Compliance',
+      'Integrations',
       'Advanced',
     ]);
   });
@@ -33,6 +34,9 @@ describe('navigation information architecture', () => {
     expect(costUsage?.items.map((item) => item.href)).toContain('/resource-governor');
     expect(securityCompliance?.items.map((item) => item.href)).toContain('/security');
     expect(advanced?.items.map((item) => item.href)).toContain('/config');
+
+    const integrations = navigationSections.find((section) => section.title === 'Integrations');
+    expect(integrations?.items.map((item) => item.href)).toContain('/webhooks');
   });
 });
 

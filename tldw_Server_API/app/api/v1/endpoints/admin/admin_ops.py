@@ -24,6 +24,11 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     MaintenanceRotationRunListResponse,
     MaintenanceState,
     MaintenanceUpdateRequest,
+    WebhookCreateRequest,
+    WebhookCreateResponse,
+    WebhookItem,
+    WebhookListResponse,
+    WebhookUpdateRequest,
 )
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
@@ -66,6 +71,18 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     upsert_feature_flag as svc_upsert_feature_flag,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    create_webhook as svc_create_webhook,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    delete_webhook as svc_delete_webhook,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    list_webhooks as svc_list_webhooks,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    update_webhook as svc_update_webhook,
 )
 
 if TYPE_CHECKING:
@@ -704,6 +721,120 @@ async def delete_incident(
         metadata={},
     )
     return MessageResponse(message="incident_deleted")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Webhooks
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@router.get("/webhooks", response_model=WebhookListResponse)
+async def list_webhooks(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> WebhookListResponse:
+    """List all configured webhooks (secrets redacted)."""
+    _require_platform_admin(principal)
+    items = svc_list_webhooks()
+    return WebhookListResponse(
+        items=[WebhookItem(**item) for item in items],
+        total=len(items),
+    )
+
+
+@router.post("/webhooks", response_model=WebhookCreateResponse)
+async def create_webhook(
+    payload: WebhookCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> WebhookCreateResponse:
+    """Create a new webhook. The secret is returned once in this response."""
+    _require_platform_admin(principal)
+    try:
+        webhook = svc_create_webhook(
+            url=payload.url,
+            events=payload.events,
+            enabled=payload.enabled,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail in {"invalid_url", "invalid_events"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_webhook") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="webhook",
+        resource_id=webhook.get("id"),
+        action="webhook.create",
+        metadata={"url": webhook.get("url"), "events": webhook.get("events")},
+    )
+    return WebhookCreateResponse(**webhook)
+
+
+@router.patch("/webhooks/{webhook_id}", response_model=WebhookItem)
+async def update_webhook(
+    webhook_id: str,
+    payload: WebhookUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> WebhookItem:
+    """Update a webhook. Secret is never returned after creation."""
+    _require_platform_admin(principal)
+    try:
+        webhook = svc_update_webhook(
+            webhook_id=webhook_id,
+            url=payload.url,
+            events=payload.events,
+            enabled=payload.enabled,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="webhook_not_found") from exc
+        if detail in {"invalid_url", "invalid_events"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_webhook") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="webhook",
+        resource_id=webhook_id,
+        action="webhook.update",
+        metadata={"url": webhook.get("url"), "events": webhook.get("events")},
+    )
+    return WebhookItem(**webhook)
+
+
+@router.delete("/webhooks/{webhook_id}", response_model=MessageResponse)
+async def delete_webhook(
+    webhook_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    """Delete a webhook."""
+    _require_platform_admin(principal)
+    try:
+        svc_delete_webhook(webhook_id=webhook_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="webhook_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_webhook") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="webhook",
+        resource_id=webhook_id,
+        action="webhook.delete",
+        metadata={},
+    )
+    return MessageResponse(message="webhook_deleted")
 
 
 # ---------------------------------------------------------------------------------------------------------------------

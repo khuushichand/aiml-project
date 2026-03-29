@@ -46,6 +46,9 @@ import type {
   VoiceSession,
   VoiceSessionListResponse,
   WatchlistSettings,
+  WebhookCreateResponse,
+  WebhookItem,
+  WebhookListResponse,
 } from '@/types';
 export { ApiError };
 
@@ -595,6 +598,25 @@ export const api = {
     }>('/admin/incidents/metrics/sla'),
 
   // ============================================
+  // Webhooks
+  // ============================================
+  getWebhooks: () => requestJson<WebhookListResponse>('/admin/webhooks'),
+  createWebhook: (data: { url: string; events: string[]; enabled?: boolean }) =>
+    requestJson<WebhookCreateResponse>('/admin/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateWebhook: (webhookId: string, data: { url?: string; events?: string[]; enabled?: boolean }) =>
+    requestJson<WebhookItem>(`/admin/webhooks/${encodeURIComponent(webhookId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteWebhook: (webhookId: string) =>
+    requestJson(`/admin/webhooks/${encodeURIComponent(webhookId)}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
   // Audit Logs
   // ============================================
   getAuditLogs: async (params?: Record<string, string>) => {
@@ -1047,6 +1069,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  deleteJobSlaPolicy: (data: { domain: string; queue: string; job_type: string }) =>
+    requestJson('/admin/jobs/sla/policy', {
+      method: 'DELETE',
+      body: JSON.stringify(data),
+    }),
+  getJobSlaBreaches: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/jobs/sla/breaches${queryParams ? `?${queryParams}` : ''}`);
+  },
   getJobAttachments: (jobId: string | number, params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/jobs/${encodeURIComponent(String(jobId))}/attachments${queryParams ? `?${queryParams}` : ''}`);
