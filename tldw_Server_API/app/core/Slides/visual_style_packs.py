@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 
@@ -150,6 +152,7 @@ _VISUAL_STYLE_PACKS: tuple[VisualStylePack, ...] = (
 )
 
 _VISUAL_STYLE_PACKS_BY_ID = {pack.pack_id: pack for pack in _VISUAL_STYLE_PACKS}
+_STYLE_PACKS_DIR = Path(__file__).resolve().parent / "style_packs"
 
 
 def _clone_pack(pack: VisualStylePack) -> VisualStylePack:
@@ -208,16 +211,24 @@ def resolve_pack_settings(
     return resolved
 
 
-def render_pack_custom_css(
+@lru_cache(maxsize=None)
+def _load_pack_css(pack_id: str) -> str:
+    """Read the static stylesheet for a built-in pack."""
+
+    css_path = _STYLE_PACKS_DIR / f"{pack_id}.css"
+    if not css_path.exists():
+        return ""
+    return css_path.read_text(encoding="utf-8").strip()
+
+
+def _render_token_block(
     *,
-    style_id: str,
+    selector: str,
     pack_id: str,
     token_overrides: dict[str, Any],
 ) -> str:
-    """Render safe CSS for a built-in style pack."""
-
     lines = [
-        f'.reveal[data-visual-style="{style_id}"] {{',
+        f"{selector} {{",
         f"  --visual-style-pack: {pack_id};",
     ]
     for key in sorted(token_overrides):
@@ -231,3 +242,27 @@ def render_pack_custom_css(
         lines.append(f"  --{css_key}: {css_value};")
     lines.append("}")
     return "\n".join(lines)
+
+
+def render_pack_custom_css(
+    *,
+    style_id: str,
+    pack_id: str,
+    token_overrides: dict[str, Any],
+) -> str:
+    """Render safe CSS for a built-in style pack."""
+
+    parts = [
+        _load_pack_css(pack_id),
+        _render_token_block(
+            selector=f'.reveal[data-style-pack="{pack_id}"]',
+            pack_id=pack_id,
+            token_overrides=token_overrides,
+        ),
+        _render_token_block(
+            selector=f'.reveal[data-visual-style="{style_id}"]',
+            pack_id=pack_id,
+            token_overrides=token_overrides,
+        ),
+    ]
+    return "\n\n".join(part for part in parts if part.strip())

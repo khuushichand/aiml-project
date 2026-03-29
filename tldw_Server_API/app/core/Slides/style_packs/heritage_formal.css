@@ -1,0 +1,10 @@
+.reveal[data-style-pack="heritage_formal"] {
+  background-color: var(--surface, #fffbf5);
+  color: var(--text, #3f2a14);
+  font-family: "Baskerville", "Times New Roman", serif;
+}
+
+.reveal[data-style-pack="heritage_formal"] .slides section {
+  border-top: 5px solid var(--rule, #b45309);
+  border-bottom: 1px solid rgba(107, 79, 42, 0.2);
+}

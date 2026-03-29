@@ -45,6 +45,7 @@ from tldw_Server_API.app.core.Slides.slides_assets import (
     resolve_slide_asset,
 )
 from tldw_Server_API.app.core.Slides.slides_images import SlidesImageError, validate_images_payload
+from tldw_Server_API.app.core.Slides.visual_style_packs import render_pack_custom_css
 from tldw_Server_API.app.core.testing import is_truthy
 
 
@@ -117,12 +118,24 @@ _ALLOWED_HTML_ATTRS = {
 _ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 _ALLOWED_CSS_PROPERTIES = [
+    "--accent",
+    "--border",
+    "--glow",
+    "--grid",
+    "--pixel",
+    "--rule",
+    "--shadow",
+    "--surface",
+    "--text",
+    "--visual-style-pack",
     "align-content",
     "align-items",
     "align-self",
     "background",
     "background-color",
+    "backdrop-filter",
     "border",
+    "border-collapse",
     "border-color",
     "border-radius",
     "border-style",
@@ -435,6 +448,319 @@ def _sanitize_custom_css(css_text: str | None) -> str | None:
     return cleaned or None
 
 
+def _normalize_text_block(text: str | None) -> str:
+    if not text:
+        return ""
+    lines = [" ".join(line.split()) for line in str(text).splitlines()]
+    normalized = "\n".join(line for line in lines if line)
+    return normalized.strip()
+
+
+def _extract_visual_blocks(slide: Any) -> list[dict[str, Any]]:
+    metadata = _get_slide_value(slide, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        return []
+    blocks = metadata.get("visual_blocks")
+    if not isinstance(blocks, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for block in blocks:
+        if isinstance(block, dict):
+            normalized.append(dict(block))
+    return normalized
+
+
+def _compile_visual_block_fallback(block: dict[str, Any]) -> list[str]:
+    block_type = str(block.get("type") or "").strip()
+    if block_type == "timeline":
+        items = block.get("items")
+        if not isinstance(items, list):
+            return []
+        lines: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or item.get("date") or item.get("year") or "").strip()
+            title = str(item.get("title") or item.get("name") or "").strip()
+            description = str(item.get("description") or item.get("summary") or "").strip()
+            headline = ": ".join(part for part in (label, title) if part)
+            if not headline:
+                headline = "Timeline event"
+            line = f"- {headline}"
+            if description:
+                line += f" - {description}"
+            lines.append(line)
+        return lines
+    if block_type == "comparison_matrix":
+        rows = block.get("rows")
+        if not isinstance(rows, list):
+            return []
+        lines = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or row.get("name") or row.get("topic") or "").strip()
+            values = row.get("values")
+            summary = str(row.get("summary") or row.get("description") or "").strip()
+            value_text = ", ".join(str(item) for item in values) if isinstance(values, list) else ""
+            details = summary or value_text
+            headline = label or "Comparison"
+            line = f"- {headline}"
+            if details:
+                line += f": {details}"
+            lines.append(line)
+        return lines
+    if block_type == "process_flow":
+        steps = block.get("steps")
+        if not isinstance(steps, list):
+            return []
+        lines = []
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, dict):
+                continue
+            title = str(step.get("title") or step.get("name") or f"Step {index}").strip()
+            description = str(step.get("description") or step.get("summary") or "").strip()
+            line = f"{index}. {title}"
+            if description:
+                line += f" - {description}"
+            lines.append(line)
+        return lines
+    if block_type == "stat_group":
+        items = block.get("items")
+        if not isinstance(items, list):
+            return []
+        lines = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or item.get("name") or "Metric").strip()
+            value = str(item.get("value") or item.get("stat") or "").strip()
+            context = str(item.get("context") or item.get("description") or "").strip()
+            line = f"- {label}"
+            if value:
+                line += f": {value}"
+            if context:
+                line += f" - {context}"
+            lines.append(line)
+        return lines
+    return []
+
+
+def _render_timeline_block(block: dict[str, Any]) -> str:
+    items = block.get("items")
+    if not isinstance(items, list):
+        return ""
+    rendered_items: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        label = escape(str(item.get("label") or item.get("date") or item.get("year") or "").strip())
+        title = escape(str(item.get("title") or item.get("name") or "").strip())
+        description = escape(str(item.get("description") or item.get("summary") or "").strip())
+        if not (label or title or description):
+            continue
+        parts = ['<li class="visual-block-item">']
+        if label:
+            parts.append(f'<p class="visual-block-label">{label}</p>')
+        if title:
+            parts.append(f"<h3>{title}</h3>")
+        if description:
+            parts.append(f"<p>{description}</p>")
+        parts.append("</li>")
+        rendered_items.append("".join(parts))
+    if not rendered_items:
+        return ""
+    return (
+        '<div class="visual-block visual-block--timeline" data-visual-block-type="timeline">'
+        '<ol class="visual-block-list">'
+        + "".join(rendered_items)
+        + "</ol></div>"
+    )
+
+
+def _render_comparison_matrix_block(block: dict[str, Any]) -> str:
+    rows = block.get("rows")
+    if not isinstance(rows, list):
+        return ""
+    rendered_rows: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = escape(str(row.get("label") or row.get("name") or row.get("topic") or "").strip())
+        values = row.get("values")
+        summary = escape(str(row.get("summary") or row.get("description") or "").strip())
+        value_cells = []
+        if isinstance(values, list):
+            value_cells = [f"<td>{escape(str(value).strip())}</td>" for value in values if str(value).strip()]
+        if summary:
+            value_cells.append(f"<td>{summary}</td>")
+        if not label and not value_cells:
+            continue
+        heading = f"<th>{label or 'Comparison'}</th>"
+        rendered_rows.append(f"<tr>{heading}{''.join(value_cells)}</tr>")
+    if not rendered_rows:
+        return ""
+    return (
+        '<div class="visual-block visual-block--comparison" data-visual-block-type="comparison_matrix">'
+        '<table class="visual-block-table"><tbody>'
+        + "".join(rendered_rows)
+        + "</tbody></table></div>"
+    )
+
+
+def _render_process_flow_block(block: dict[str, Any]) -> str:
+    steps = block.get("steps")
+    if not isinstance(steps, list):
+        return ""
+    rendered_steps: list[str] = []
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        title = escape(str(step.get("title") or step.get("name") or f"Step {index}").strip())
+        description = escape(str(step.get("description") or step.get("summary") or "").strip())
+        parts = ['<li class="visual-block-item">', f"<h3>{title}</h3>"]
+        if description:
+            parts.append(f"<p>{description}</p>")
+        parts.append("</li>")
+        rendered_steps.append("".join(parts))
+    if not rendered_steps:
+        return ""
+    return (
+        '<div class="visual-block visual-block--process" data-visual-block-type="process_flow">'
+        '<ol class="visual-block-list">'
+        + "".join(rendered_steps)
+        + "</ol></div>"
+    )
+
+
+def _render_stat_group_block(block: dict[str, Any]) -> str:
+    items = block.get("items")
+    if not isinstance(items, list):
+        return ""
+    rendered_items: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        label = escape(str(item.get("label") or item.get("name") or "Metric").strip())
+        value = escape(str(item.get("value") or item.get("stat") or "").strip())
+        context = escape(str(item.get("context") or item.get("description") or "").strip())
+        if not (label or value or context):
+            continue
+        parts = ['<div class="visual-block-item">']
+        if label:
+            parts.append(f"<dt>{label}</dt>")
+        if value:
+            parts.append(f"<dd>{value}</dd>")
+        if context:
+            parts.append(f"<p>{context}</p>")
+        parts.append("</div>")
+        rendered_items.append("".join(parts))
+    if not rendered_items:
+        return ""
+    return (
+        '<div class="visual-block visual-block--stats" data-visual-block-type="stat_group">'
+        '<dl class="visual-block-stats">'
+        + "".join(rendered_items)
+        + "</dl></div>"
+    )
+
+
+def _render_visual_blocks_html(blocks: list[dict[str, Any]]) -> tuple[str, bool, str]:
+    if not blocks:
+        return "", False, ""
+    rendered_html: list[str] = []
+    fallback_lines: list[str] = []
+    rendered_count = 0
+    for block in blocks:
+        fallback_lines.extend(_compile_visual_block_fallback(block))
+        block_type = str(block.get("type") or "").strip()
+        if block_type == "timeline":
+            html = _render_timeline_block(block)
+        elif block_type == "comparison_matrix":
+            html = _render_comparison_matrix_block(block)
+        elif block_type == "process_flow":
+            html = _render_process_flow_block(block)
+        elif block_type == "stat_group":
+            html = _render_stat_group_block(block)
+        else:
+            html = ""
+        if html:
+            rendered_html.append(html)
+            rendered_count += 1
+    return "\n".join(rendered_html), rendered_count == len(blocks) and bool(rendered_html), "\n".join(fallback_lines)
+
+
+def _content_is_structured_fallback(content: Any, fallback_text: str) -> bool:
+    normalized_content = _normalize_text_block(str(content or ""))
+    normalized_fallback = _normalize_text_block(fallback_text)
+    if not normalized_fallback:
+        return False
+    return normalized_content == normalized_fallback
+
+
+def _render_style_shell_attrs(visual_style_snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(visual_style_snapshot, dict):
+        return ""
+    resolution = visual_style_snapshot.get("resolution")
+    if not isinstance(resolution, dict):
+        return ""
+    style_id = str(visual_style_snapshot.get("id") or "").strip()
+    style_pack = str(resolution.get("style_pack") or "").strip()
+    attrs: list[str] = []
+    if style_id:
+        attrs.append(f'data-visual-style="{escape(style_id)}"')
+    if style_pack:
+        attrs.append(f'data-style-pack="{escape(style_pack)}"')
+    if not attrs:
+        return ""
+    return " " + " ".join(attrs)
+
+
+def _compose_export_css(
+    *,
+    custom_css: str | None,
+    visual_style_snapshot: dict[str, Any] | None,
+) -> str | None:
+    built_in_css = None
+    if isinstance(visual_style_snapshot, dict):
+        resolution = visual_style_snapshot.get("resolution")
+        if isinstance(resolution, dict):
+            style_id = str(visual_style_snapshot.get("id") or "").strip()
+            style_pack = str(resolution.get("style_pack") or "").strip()
+            token_overrides = resolution.get("token_overrides")
+            if style_id and style_pack and isinstance(token_overrides, dict):
+                built_in_css = render_pack_custom_css(
+                    style_id=style_id,
+                    pack_id=style_pack,
+                    token_overrides=token_overrides,
+                )
+
+    shared_css = """
+.reveal .content > * + * { margin-top: 1rem; }
+.reveal .visual-block { margin-top: 1rem; padding: 1rem; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 1rem; }
+.reveal .visual-block-table { width: 100%; }
+.reveal .visual-block-table th,
+.reveal .visual-block-table td { padding: 0.6rem; border: 1px solid rgba(148, 163, 184, 0.25); text-align: left; }
+.reveal .visual-block-list { margin: 0; padding-left: 1.25rem; }
+.reveal .visual-block-item + .visual-block-item { margin-top: 0.75rem; }
+.reveal .visual-block-item h3,
+.reveal .visual-block-item p,
+.reveal .visual-block-label,
+.reveal .visual-block-stats dt,
+.reveal .visual-block-stats dd { margin: 0; }
+.reveal .visual-block-stats .visual-block-item + .visual-block-item { margin-top: 0.75rem; }
+.reveal .visual-block-stats dd { font-weight: 700; }
+""".strip()
+
+    parts = [shared_css]
+    if built_in_css and not (custom_css and built_in_css.strip() in custom_css):
+        parts.append(built_in_css)
+    if custom_css:
+        parts.append(custom_css)
+    merged = "\n\n".join(part.strip() for part in parts if part and part.strip())
+    return merged or None
+
+
 def _resolve_assets_dir(assets_dir: Path | str | None) -> Path:
     if assets_dir:
         return Path(assets_dir).expanduser().resolve()
@@ -502,11 +828,14 @@ def _render_sections(
         content = _get_slide_value(slide, "content", "")
         notes = _get_slide_value(slide, "speaker_notes")
         images = _extract_images(slide, asset_resolver=asset_resolver)
+        visual_blocks = _extract_visual_blocks(slide)
         images_html = _render_images_html(images)
+        visual_blocks_html, rendered_all_blocks, fallback_text = _render_visual_blocks_html(visual_blocks)
 
         title_html = f"<h2>{escape(str(title))}</h2>" if title else ""
-        content_html = _sanitize_markdown(str(content or "")) if content else ""
-        body_html = f"{content_html}{images_html}" if content_html or images_html else ""
+        suppress_content = rendered_all_blocks and _content_is_structured_fallback(content, fallback_text)
+        content_html = _sanitize_markdown(str(content or "")) if content and not suppress_content else ""
+        body_html = "".join(part for part in (content_html, visual_blocks_html, images_html) if part)
         notes_html = f"<aside class=\"notes\">{escape(str(notes))}</aside>" if notes else ""
 
         section = (
@@ -527,11 +856,13 @@ def _render_index_html(
     theme: str,
     settings_json: str,
     include_custom_css: bool,
+    visual_style_snapshot: dict[str, Any] | None = None,
     asset_resolver: SlideAssetResolver | None = None,
 ) -> str:
     css_link = "  <link rel=\"stylesheet\" href=\"assets/custom.css\">\n" if include_custom_css else ""
     title_html = escape(title or "Presentation")
     sections_html = _render_sections(slides, asset_resolver=asset_resolver)
+    reveal_attrs = _render_style_shell_attrs(visual_style_snapshot)
     return (
         "<!DOCTYPE html>\n"
         "<html>\n"
@@ -543,7 +874,7 @@ def _render_index_html(
         f"{css_link}"
         "</head>\n"
         "<body>\n"
-        "  <div class=\"reveal\">\n"
+        f"  <div class=\"reveal\"{reveal_attrs}>\n"
         "    <div class=\"slides\">\n"
         f"{sections_html}\n"
         "    </div>\n"
@@ -567,19 +898,23 @@ def export_presentation_bundle(
     theme: str,
     settings: dict[str, Any] | None,
     custom_css: str | None,
+    visual_style_snapshot: dict[str, Any] | None = None,
     assets_dir: Path | str | None = None,
     asset_resolver: SlideAssetResolver | None = None,
 ) -> bytes:
     resolved_assets = _resolve_assets_dir(assets_dir)
     _validate_reveal_assets(resolved_assets, theme)
     settings_json = json.dumps(settings or {}, ensure_ascii=True)
-    sanitized_css = _sanitize_custom_css(custom_css)
+    sanitized_css = _sanitize_custom_css(
+        _compose_export_css(custom_css=custom_css, visual_style_snapshot=visual_style_snapshot)
+    )
     index_html = _render_index_html(
         title=title,
         slides=slides,
         theme=theme,
         settings_json=settings_json,
         include_custom_css=bool(sanitized_css),
+        visual_style_snapshot=visual_style_snapshot,
         asset_resolver=asset_resolver,
     )
 
@@ -661,6 +996,7 @@ def export_presentation_pdf(
     theme: str,
     settings: dict[str, Any] | None,
     custom_css: str | None,
+    visual_style_snapshot: dict[str, Any] | None = None,
     assets_dir: Path | str | None = None,
     pdf_options: dict[str, Any] | None = None,
     asset_resolver: SlideAssetResolver | None = None,
@@ -673,13 +1009,16 @@ def export_presentation_pdf(
     resolved_assets = _resolve_assets_dir(assets_dir)
     _validate_reveal_assets(resolved_assets, theme)
     settings_json = json.dumps(settings or {}, ensure_ascii=True)
-    sanitized_css = _sanitize_custom_css(custom_css)
+    sanitized_css = _sanitize_custom_css(
+        _compose_export_css(custom_css=custom_css, visual_style_snapshot=visual_style_snapshot)
+    )
     index_html = _render_index_html(
         title=title,
         slides=slides_list,
         theme=theme,
         settings_json=settings_json,
         include_custom_css=bool(sanitized_css),
+        visual_style_snapshot=visual_style_snapshot,
         asset_resolver=asset_resolver,
     )
     if max_html_bytes and len(index_html.encode("utf-8")) > max_html_bytes:

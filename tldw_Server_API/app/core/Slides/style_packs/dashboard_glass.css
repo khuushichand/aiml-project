@@ -1,0 +1,15 @@
+.reveal[data-style-pack="dashboard_glass"] {
+  background-color: #0f172a;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.92));
+  color: var(--text, #f8fafc);
+  font-family: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+}
+
+.reveal[data-style-pack="dashboard_glass"] .slides section,
+.reveal[data-style-pack="dashboard_glass"] .visual-block {
+  background-color: var(--surface, rgba(15, 23, 42, 0.72));
+  border: 1px solid rgba(103, 232, 249, 0.28);
+  border-radius: 20px;
+  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.35);
+  backdrop-filter: blur(18px);
+}
