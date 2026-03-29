@@ -8,7 +8,12 @@ vi.mock("@/services/background-proxy", () => ({
   bgRequest: (...args: unknown[]) => mocks.bgRequest(...args)
 }))
 
-import { deriveNoteStudio, getNoteStudioState } from "@/services/notes-studio"
+import {
+  deriveNoteStudio,
+  getNoteStudioState,
+  regenerateNoteStudio,
+  updateNoteStudioDiagrams
+} from "@/services/notes-studio"
 
 describe("notes-studio service", () => {
   beforeEach(() => {
@@ -46,6 +51,37 @@ describe("notes-studio service", () => {
     expect(mocks.bgRequest).toHaveBeenCalledWith({
       path: "/api/v1/notes/derived-1/studio",
       method: "GET"
+    })
+  })
+
+  it("posts regenerate requests for a selected studio note", async () => {
+    mocks.bgRequest.mockResolvedValue({ note: { id: "derived-1" } })
+
+    await regenerateNoteStudio("derived-1")
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith({
+      path: "/api/v1/notes/derived-1/studio/regenerate",
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    })
+  })
+
+  it("posts diagram manifest updates for a selected studio note", async () => {
+    mocks.bgRequest.mockResolvedValue({ note: { id: "derived-1" } })
+
+    await updateNoteStudioDiagrams("derived-1", {
+      diagram_type: "flowchart",
+      source_section_ids: ["notes-1"]
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith({
+      path: "/api/v1/notes/derived-1/studio/diagrams",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        diagram_type: "flowchart",
+        source_section_ids: ["notes-1"]
+      }
     })
   })
 })

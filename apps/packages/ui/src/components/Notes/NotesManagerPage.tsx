@@ -32,7 +32,7 @@ import {
 import type { NoteListItem } from "@/components/Notes/notes-manager-types"
 import { clearSetting, getSetting } from "@/services/settings/registry"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
-import { deriveNoteStudio, getNoteStudioState } from "@/services/notes-studio"
+import { deriveNoteStudio, getNoteStudioState, regenerateNoteStudio } from "@/services/notes-studio"
 import { useMobile } from "@/hooks/useMediaQuery"
 import {
   LAST_NOTE_ID_SETTING,
@@ -48,8 +48,10 @@ import type {
 import type {
   NoteStudioState,
   NotesStudioHandwritingMode,
+  NotesStudioPaperSize,
   NotesStudioTemplateType,
 } from './notes-studio-types'
+import { getDefaultStudioPaperSizeFromLocale } from './export-utils'
 import {
   normalizeConversationId,
   toConversationLabel,
@@ -252,6 +254,10 @@ const NotesManagerPage: React.FC = () => {
   const [notesStudioHandwritingMode, setNotesStudioHandwritingMode] =
     React.useState<NotesStudioHandwritingMode>('accented')
   const [selectedStudioState, setSelectedStudioState] = React.useState<NoteStudioState | null>(null)
+  const [notesStudioRegenerating, setNotesStudioRegenerating] = React.useState(false)
+  const [selectedStudioPaperSize, setSelectedStudioPaperSize] = React.useState<NotesStudioPaperSize>(() =>
+    getDefaultStudioPaperSizeFromLocale(typeof navigator !== 'undefined' ? navigator.language : '')
+  )
 
   // Wire the keyword hook's cross-cutting refs now that editor is available
   setIsDirtyRef.current = ed.setIsDirty
@@ -274,9 +280,15 @@ const NotesManagerPage: React.FC = () => {
   )
 
   const selectedStudioSummaryNoteId = ed.selectedStudioSummary?.note_id ?? null
+  const currentNoteStudioSummary =
+    ed.selectedId != null &&
+    selectedStudioSummaryNoteId != null &&
+    String(selectedStudioSummaryNoteId) === String(ed.selectedId)
+      ? ed.selectedStudioSummary
+      : null
 
   React.useEffect(() => {
-    if (ed.selectedId == null || !selectedStudioSummaryNoteId) {
+    if (ed.selectedId == null || !currentNoteStudioSummary?.note_id) {
       setSelectedStudioState(null)
       return
     }
@@ -286,6 +298,7 @@ const NotesManagerPage: React.FC = () => {
       .then((studioState) => {
         if (cancelled) return
         setSelectedStudioState(studioState)
+        ed.setEditorMode('preview')
       })
       .catch(() => {
         if (cancelled) return
@@ -295,7 +308,22 @@ const NotesManagerPage: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [ed.selectedId, selectedStudioSummaryNoteId])
+  }, [currentNoteStudioSummary?.note_id, ed.selectedId])
+
+  const effectiveStudioState = React.useMemo(() => {
+    if (!selectedStudioState || ed.selectedId == null) return null
+    if (String(selectedStudioState.note.id) !== String(ed.selectedId)) {
+      return null
+    }
+    if (String(ed.content || '') === String(selectedStudioState.note.content || '')) {
+      return selectedStudioState
+    }
+    return {
+      ...selectedStudioState,
+      is_stale: true,
+      stale_reason: selectedStudioState.stale_reason || 'companion_content_hash_mismatch'
+    }
+  }, [ed.content, ed.selectedId, selectedStudioState])
 
   // ---- Note graph neighbors ----
   const {
@@ -499,6 +527,8 @@ const NotesManagerPage: React.FC = () => {
     title: ed.title,
     content: ed.content,
     editorKeywords: kw.editorKeywords,
+    selectedStudioState: effectiveStudioState,
+    studioPaperSize: selectedStudioPaperSize,
   })
 
   // ---- Import hook ----
@@ -1461,10 +1491,12 @@ const NotesManagerPage: React.FC = () => {
         template_type: notesStudioTemplateType,
         handwriting_mode: notesStudioHandwritingMode,
       })
-      setSelectedStudioState(studioState)
       closeNotesStudioCreateModal()
       await list.refetch()
-      await ed.handleSelectNote(studioState.note.id)
+      const opened = await ed.handleSelectNote(studioState.note.id)
+      if (!opened) return
+      setSelectedStudioState(studioState)
+      ed.setEditorMode('preview')
     } catch (error: any) {
       message.error(
         error?.message || t('option:notesSearch.notesStudioCreateError', {
@@ -1484,6 +1516,23 @@ const NotesManagerPage: React.FC = () => {
     notesStudioTemplateType,
     t,
   ])
+
+  const handleRegenerateStudioView = React.useCallback(async () => {
+    if (ed.selectedId == null) return
+    setNotesStudioRegenerating(true)
+    try {
+      const refreshed = await regenerateNoteStudio(String(ed.selectedId))
+      setSelectedStudioState(refreshed)
+    } catch (error: any) {
+      message.error(
+        error?.message || t('option:notesSearch.notesStudioRegenerateError', {
+          defaultValue: 'Failed to regenerate Notes Studio view.'
+        })
+      )
+    } finally {
+      setNotesStudioRegenerating(false)
+    }
+  }, [ed.selectedId, message, t])
 
   // Flashcards
   const handleGenerateFlashcardsFromNote = React.useCallback(() => {
@@ -1928,10 +1977,17 @@ const NotesManagerPage: React.FC = () => {
         canSwitchTitleStrategy={ed.canSwitchTitleStrategy}
         effectiveTitleSuggestStrategy={ed.effectiveTitleSuggestStrategy}
         titleStrategyOptions={ed.titleStrategyOptions}
-        studioBadgeLabel={selectedStudioState || ed.selectedStudioSummary ? t('option:notesSearch.notesStudioAction', {
+        studioBadgeLabel={effectiveStudioState || currentNoteStudioSummary ? t('option:notesSearch.notesStudioAction', {
           defaultValue: 'Notes Studio'
         }) : null}
         showStudioMarkdownOnlyNotice={notesStudioMarkdownOnlyNoticeOpen}
+        selectedStudioState={effectiveStudioState}
+        studioPaperSize={selectedStudioPaperSize}
+        onStudioPaperSizeChange={setSelectedStudioPaperSize}
+        onRegenerateStudioView={() => {
+          void handleRegenerateStudioView()
+        }}
+        studioRegenerating={notesStudioRegenerating}
         setTitleSuggestStrategy={ed.setTitleSuggestStrategy}
         manualLinkTargetId={ed.manualLinkTargetId}
         setManualLinkTargetId={ed.setManualLinkTargetId}

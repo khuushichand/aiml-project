@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import NotesEditorHeader from '@/components/Notes/NotesEditorHeader'
+import NotesStudioView from '@/components/Notes/NotesStudioView'
 import type { ActiveWikilinkQuery, WikilinkCandidate } from '@/components/Notes/wikilinks'
 import type {
   SaveIndicatorState,
@@ -26,6 +27,7 @@ import type {
   MarkdownToolbarAction,
 } from './notes-manager-types'
 import type { SingleNoteCopyMode, SingleNoteExportFormat } from './export-utils'
+import type { NoteStudioState, NotesStudioPaperSize } from './notes-studio-types'
 import type { NotesTitleSuggestStrategy } from '@/services/settings/ui-settings'
 import {
   NOTES_EDITOR_REGION_ID,
@@ -109,6 +111,11 @@ export interface NotesEditorPaneProps {
   titleStrategyOptions: Array<{ label: string; value: string }>
   studioBadgeLabel?: string | null
   showStudioMarkdownOnlyNotice?: boolean
+  selectedStudioState?: NoteStudioState | null
+  studioPaperSize?: NotesStudioPaperSize
+  onStudioPaperSizeChange?: (paperSize: NotesStudioPaperSize) => void
+  onRegenerateStudioView?: () => void
+  studioRegenerating?: boolean
 
   // Title strategy state setter
   setTitleSuggestStrategy: (strategy: NotesTitleSuggestStrategy) => void
@@ -246,6 +253,11 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   titleStrategyOptions,
   studioBadgeLabel = null,
   showStudioMarkdownOnlyNotice = false,
+  selectedStudioState = null,
+  studioPaperSize = 'A4',
+  onStudioPaperSizeChange = () => {},
+  onRegenerateStudioView = () => {},
+  studioRegenerating = false,
   setTitleSuggestStrategy,
   manualLinkTargetId,
   setManualLinkTargetId,
@@ -460,6 +472,23 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             </span>
           </div>
         )}
+        {selectedStudioState && editorMode !== 'edit' ? (
+          <NotesStudioView
+            note={selectedStudioState.note}
+            studioDocument={selectedStudioState.studio_document}
+            isStale={selectedStudioState.is_stale}
+            staleReason={selectedStudioState.stale_reason}
+            paperSize={studioPaperSize}
+            onPaperSizeChange={onStudioPaperSizeChange}
+            onRegenerate={onRegenerateStudioView}
+            regenerating={studioRegenerating}
+            onContinueEditingPlainNote={() => {
+              handleEditorInputModeChange('markdown')
+              setEditorMode('edit')
+            }}
+          />
+        ) : (
+          <>
         <div className="flex items-center gap-2">
           <Input
             placeholder={t('option:notesSearch.titlePlaceholder', {
@@ -1360,6 +1389,8 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             </div>
           )}
         </div>
+          </>
+        )}
         <div className="mt-2 border-t border-border pt-2">
           <Typography.Text
             type="secondary"

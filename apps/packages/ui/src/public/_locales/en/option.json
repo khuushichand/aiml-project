@@ -1268,6 +1268,48 @@
   "notesSearch_notesStudioLoadError": {
     "message": "Failed to load Notes Studio state."
   },
+  "notesSearch_notesStudioStaleWarning": {
+    "message": "This Studio view is stale because the markdown companion changed."
+  },
+  "notesSearch_notesStudioRegenerateAction": {
+    "message": "Regenerate Studio view from current Markdown"
+  },
+  "notesSearch_notesStudioContinuePlainAction": {
+    "message": "Continue editing plain note"
+  },
+  "notesSearch_notesStudioPaperSizeLabel": {
+    "message": "Paper size"
+  },
+  "notesSearch_notesStudioDiagramHeading": {
+    "message": "Diagram"
+  },
+  "notesSearch_notesStudioRegenerateError": {
+    "message": "Failed to regenerate Notes Studio view."
+  },
+  "notesSearch_notesStudioUntitledPrintNote": {
+    "message": "Untitled note"
+  },
+  "notesSearch_notesStudioPrintTitleSuffix": {
+    "message": "Notes Studio Print"
+  },
+  "notesSearch_notesStudioExportedLabel": {
+    "message": "Exported"
+  },
+  "notesSearch_notesStudioTemplateMetaLabel": {
+    "message": "Template"
+  },
+  "notesSearch_notesStudioPaperMetaLabel": {
+    "message": "Paper"
+  },
+  "notesSearch_notesPrintUnavailable": {
+    "message": "Print is not available in this environment"
+  },
+  "notesSearch_notesPrintPopupError": {
+    "message": "Unable to open print view. Please allow pop-ups and try again."
+  },
+  "notesSearch_notesPrintOpened": {
+    "message": "Opened print view. Use Save as PDF in your browser to export PDF."
+  },
   "tts_playground": {
     "message": "TTS Playground"
   },

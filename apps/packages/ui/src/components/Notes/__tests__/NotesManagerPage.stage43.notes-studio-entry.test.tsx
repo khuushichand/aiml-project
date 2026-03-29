@@ -364,7 +364,9 @@ describe("NotesManagerPage stage 43 notes studio entry", () => {
       ).toBe(true)
     })
 
-    expect(await screen.findByRole("heading", { name: "Source note Study Notes" })).toBeInTheDocument()
+    expect(await screen.findByTestId("notes-studio-heading")).toHaveTextContent(
+      "Source note Study Notes"
+    )
     expect((await screen.findAllByText("Notes Studio")).length).toBeGreaterThan(0)
 
     await waitFor(() => {

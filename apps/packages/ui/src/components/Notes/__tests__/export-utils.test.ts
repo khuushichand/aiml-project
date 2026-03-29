@@ -4,6 +4,8 @@ import {
   buildSingleNoteJson,
   buildSingleNoteMarkdown,
   buildSingleNotePrintableHtml,
+  buildStudioPrintableHtml,
+  getDefaultStudioPaperSizeFromLocale,
   SINGLE_NOTE_PRINT_STYLES
 } from "../export-utils"
 
@@ -152,5 +154,99 @@ describe("notes export utils", () => {
           }
         "
     `)
+  })
+
+  it("builds Studio printable HTML with explicit paper size, template chrome, Cornell layout, and SVG diagrams", () => {
+    const html = buildStudioPrintableHtml(
+      {
+        id: "studio-1",
+        title: "Studio printable note",
+        content: "Markdown companion body",
+        keywords: ["study"]
+      },
+      {
+        note_id: "studio-1",
+        template_type: "cornell",
+        handwriting_mode: "accented",
+        source_note_id: "source-1",
+        excerpt_hash: "sha256:excerpt",
+        companion_content_hash: "sha256:companion",
+        render_version: 1,
+        created_at: "2026-03-28T10:00:00Z",
+        last_modified: "2026-03-28T10:00:00Z",
+        payload_json: {
+          layout: {
+            template_type: "cornell",
+            handwriting_mode: "accented",
+            render_version: 1
+          },
+          sections: [
+            {
+              id: "cue-1",
+              kind: "cue",
+              title: "Cue",
+              items: ["Prompt"]
+            },
+            {
+              id: "notes-1",
+              kind: "notes",
+              title: "Notes",
+              content: "Main notes body"
+            },
+            {
+              id: "prompt-1",
+              kind: "prompt",
+              title: "Try it yourself",
+              content: "Sketch the notebook from memory."
+            },
+            {
+              id: "summary-1",
+              kind: "summary",
+              title: "Summary",
+              content: "Summary content"
+            }
+          ]
+        },
+        diagram_manifest_json: {
+          diagram_type: "flowchart",
+          source_section_ids: ["notes-1"],
+          source_graph: "graph TD;A-->B;",
+          cached_svg:
+            '<svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">Diagram</text></svg>',
+          render_hash: "hash-1",
+          generation_status: "ready"
+        }
+      },
+      {
+        paperSize: "A4",
+        generatedAtIso: "2026-03-29T00:00:00.000Z",
+        labels: {
+          untitledNote: "Untitled note",
+          printTitleSuffix: "Notes Studio Print",
+          exportedLabel: "Exported",
+          templateLabel: "Template",
+          paperLabel: "Paper",
+          diagramHeading: "Diagram"
+        }
+      }
+    )
+
+    expect(html).toContain('data-paper-size="A4"')
+    expect(html).toContain("studio-template-cornell")
+    expect(html).toContain("studio-cornell-layout")
+    expect(html).toContain(".studio-cornell-layout .studio-sections")
+    expect(html).toContain("grid-template-columns")
+    expect(html).toContain("<svg")
+    expect(html).toContain("notebook-font-fallback")
+    expect(html).toContain("studio-section-content studio-handwriting-accent")
+    expect(html).toContain("2026-03-29T00:00:00.000Z")
+  })
+
+  it("returns locale-driven default Studio paper sizes", () => {
+    expect(getDefaultStudioPaperSizeFromLocale("en-US")).toBe("US Letter")
+    expect(getDefaultStudioPaperSizeFromLocale("es-US")).toBe("US Letter")
+    expect(getDefaultStudioPaperSizeFromLocale("en-CA")).toBe("A4")
+    expect(getDefaultStudioPaperSizeFromLocale("de-DE")).toBe("A4")
+    expect(getDefaultStudioPaperSizeFromLocale("")).toBe("A4")
   })
 })

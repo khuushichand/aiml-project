@@ -13,12 +13,15 @@ import {
   buildSingleNoteJson,
   buildSingleNoteMarkdown,
   buildSingleNotePrintableHtml,
+  buildStudioPrintableHtml,
+  getDefaultStudioPaperSizeFromLocale,
   type SingleNoteCopyMode,
   type SingleNoteExportFormat,
 } from '../export-utils'
 import { translateMessage } from '@/i18n/translateMessage'
 import { formatFileSize } from '@/utils/format'
 import type { ConfirmDangerOptions } from '@/components/Common/confirm-danger'
+import type { NoteStudioState, NotesStudioPaperSize } from '../notes-studio-types'
 
 type ConfirmDanger = (options: ConfirmDangerOptions) => Promise<boolean>
 
@@ -45,6 +48,8 @@ export interface UseNotesExportDeps {
   title: string
   content: string
   editorKeywords: string[]
+  selectedStudioState?: NoteStudioState | null
+  studioPaperSize?: NotesStudioPaperSize
 }
 
 export function useNotesExport(deps: UseNotesExportDeps) {
@@ -64,6 +69,8 @@ export function useNotesExport(deps: UseNotesExportDeps) {
     title,
     content,
     editorKeywords,
+    selectedStudioState = null,
+    studioPaperSize,
   } = deps
 
   const [exportProgress, setExportProgress] = React.useState<ExportProgressState | null>(null)
@@ -340,21 +347,78 @@ export function useNotesExport(deps: UseNotesExportDeps) {
 
   const printSelected = React.useCallback(() => {
     if (typeof window === 'undefined') {
-      message.error('Print is not available in this environment')
+      message.error(
+        t('option:notesSearch.notesPrintUnavailable', {
+          defaultValue: 'Print is not available in this environment'
+        })
+      )
       return
     }
     const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768')
     if (!printWindow) {
-      message.error('Unable to open print view. Please allow pop-ups and try again.')
+      message.error(
+        t('option:notesSearch.notesPrintPopupError', {
+          defaultValue: 'Unable to open print view. Please allow pop-ups and try again.'
+        })
+      )
       return
     }
 
-    const printableHtml = buildSingleNotePrintableHtml({
-      id: selectedId,
-      title,
-      content,
-      keywords: editorKeywords
-    })
+    let printableHtml = ''
+    if (selectedStudioState?.studio_document && !selectedStudioState.is_stale) {
+      try {
+        printableHtml = buildStudioPrintableHtml(
+          {
+            id: selectedId,
+            title,
+            content,
+            keywords: editorKeywords
+          },
+          selectedStudioState.studio_document,
+          {
+            paperSize:
+              studioPaperSize ??
+              getDefaultStudioPaperSizeFromLocale(
+                typeof navigator !== 'undefined' ? navigator.language : ''
+              ),
+            labels: {
+              untitledNote: t('option:notesSearch.notesStudioUntitledPrintNote', {
+                defaultValue: 'Untitled note'
+              }),
+              printTitleSuffix: t('option:notesSearch.notesStudioPrintTitleSuffix', {
+                defaultValue: 'Notes Studio Print'
+              }),
+              exportedLabel: t('option:notesSearch.notesStudioExportedLabel', {
+                defaultValue: 'Exported'
+              }),
+              templateLabel: t('option:notesSearch.notesStudioTemplateMetaLabel', {
+                defaultValue: 'Template'
+              }),
+              paperLabel: t('option:notesSearch.notesStudioPaperMetaLabel', {
+                defaultValue: 'Paper'
+              }),
+              diagramHeading: t('option:notesSearch.notesStudioDiagramHeading', {
+                defaultValue: 'Diagram'
+              })
+            }
+          }
+        )
+      } catch {
+        printableHtml = buildSingleNotePrintableHtml({
+          id: selectedId,
+          title,
+          content,
+          keywords: editorKeywords
+        })
+      }
+    } else {
+      printableHtml = buildSingleNotePrintableHtml({
+        id: selectedId,
+        title,
+        content,
+        keywords: editorKeywords
+      })
+    }
 
     printWindow.document.open()
     printWindow.document.write(printableHtml)
@@ -362,8 +426,12 @@ export function useNotesExport(deps: UseNotesExportDeps) {
     printWindow.focus()
     printWindow.print()
 
-    message.success('Opened print view. Use Save as PDF in your browser to export PDF.')
-  }, [content, editorKeywords, message, selectedId, title])
+    message.success(
+      t('option:notesSearch.notesPrintOpened', {
+        defaultValue: 'Opened print view. Use Save as PDF in your browser to export PDF.'
+      })
+    )
+  }, [content, editorKeywords, message, selectedId, selectedStudioState, studioPaperSize, title])
 
   const exportSelected = React.useCallback((format: SingleNoteExportFormat = 'md') => {
     if (format === 'print') {
