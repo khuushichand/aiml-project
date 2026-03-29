@@ -128,6 +128,7 @@ def _default_store() -> dict[str, Any]:
         "webhooks": [],
         "webhook_deliveries": [],
         "invitations": [],
+        "dependency_health_history": [],
     }
 
 
@@ -209,6 +210,7 @@ def _load_store() -> dict[str, Any]:
     data.setdefault("webhooks", [])
     data.setdefault("webhook_deliveries", [])
     data.setdefault("invitations", [])
+    data.setdefault("dependency_health_history", [])
     return data
 
 
@@ -1183,3 +1185,176 @@ def accept_invitation(*, invitation_id: str) -> dict[str, Any]:
                 inv["accepted_at"] = _now_iso()
                 return _normalize_invitation_record(inv)
     raise ValueError("not_found")
+
+
+# ---------------------------------------------------------------------------
+# Dependency Health History
+# ---------------------------------------------------------------------------
+
+_HEALTH_HISTORY_RETENTION_DAYS = 90
+_HEALTH_HISTORY_MAX_PER_DEPENDENCY = 10_000
+_HEALTH_HISTORY_DEDUP_SECONDS = 3600  # hourly granularity
+
+
+def _prune_health_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove entries older than retention and cap per-dependency."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_HEALTH_HISTORY_RETENTION_DAYS)
+    cutoff_iso = cutoff.isoformat()
+
+    # First pass: drop expired entries
+    fresh = [e for e in entries if (e.get("checked_at") or "") >= cutoff_iso]
+
+    # Second pass: cap per dependency (keep newest)
+    from collections import Counter
+    counts: Counter[str] = Counter()
+    for entry in fresh:
+        counts[entry.get("dependency_name", "")] += 1
+
+    over_limit = {name for name, count in counts.items() if count > _HEALTH_HISTORY_MAX_PER_DEPENDENCY}
+    if not over_limit:
+        return fresh
+
+    # For over-limit deps, sort by checked_at descending and keep only the newest
+    result: list[dict[str, Any]] = []
+    kept: Counter[str] = Counter()
+    for entry in reversed(fresh):
+        dep_name = entry.get("dependency_name", "")
+        if dep_name in over_limit:
+            if kept[dep_name] >= _HEALTH_HISTORY_MAX_PER_DEPENDENCY:
+                continue
+            kept[dep_name] += 1
+        result.append(entry)
+    result.reverse()
+    return result
+
+
+def record_health_snapshot(results: list[dict[str, Any]]) -> int:
+    """Append health check results to the history store.
+
+    Each item in *results* should have at least ``name``, ``status``, and
+    ``latency_ms`` keys (the shape returned by ``_check_dep`` in admin_ops).
+
+    Returns the number of entries actually recorded (skipping duplicates
+    that would violate hourly dedup).
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    recorded = 0
+
+    with _locked_store(write=True) as store:
+        history: list[dict[str, Any]] = store.get("dependency_health_history", [])
+
+        # Build a lookup of the latest checked_at per dependency for dedup
+        latest_by_dep: dict[str, str] = {}
+        for entry in reversed(history):
+            dep_name = entry.get("dependency_name", "")
+            if dep_name not in latest_by_dep:
+                latest_by_dep[dep_name] = entry.get("checked_at", "")
+
+        for item in results:
+            dep_name = str(item.get("name", "")).strip()
+            if not dep_name:
+                continue
+
+            # Dedup: skip if last entry for this dep was within the dedup window
+            last_ts = latest_by_dep.get(dep_name)
+            if last_ts:
+                try:
+                    last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    if (now - last_dt).total_seconds() < _HEALTH_HISTORY_DEDUP_SECONDS:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            entry = {
+                "dependency_name": dep_name,
+                "status": str(item.get("status", "unknown")),
+                "latency_ms": item.get("latency_ms"),
+                "checked_at": now_iso,
+            }
+            history.append(entry)
+            latest_by_dep[dep_name] = now_iso
+            recorded += 1
+
+        history = _prune_health_history(history)
+        store["dependency_health_history"] = history
+
+    return recorded
+
+
+def get_uptime_stats(dependency_name: str, days: int = 30) -> dict[str, Any]:
+    """Compute uptime statistics for a single dependency over the given window.
+
+    Returns a dict with:
+      - dependency_name, days, total_checks, healthy_checks, uptime_pct,
+        avg_latency_ms, downtime_minutes, sparkline (hourly 0/1 for last 7 days)
+    """
+    if days < 1:
+        days = 1
+    if days > 90:
+        days = 90
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=days)
+    window_start_iso = window_start.isoformat()
+
+    with _locked_store() as store:
+        history: list[dict[str, Any]] = store.get("dependency_health_history", [])
+
+    # Filter to the requested dependency and time window
+    entries = [
+        e for e in history
+        if e.get("dependency_name") == dependency_name
+        and (e.get("checked_at") or "") >= window_start_iso
+    ]
+
+    total_checks = len(entries)
+    healthy_checks = sum(1 for e in entries if e.get("status") == "healthy")
+
+    uptime_pct = round((healthy_checks / total_checks) * 100, 2) if total_checks > 0 else 100.0
+
+    latencies = [
+        e["latency_ms"] for e in entries
+        if isinstance(e.get("latency_ms"), (int, float))
+    ]
+    avg_latency_ms = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+
+    # Estimate downtime in minutes: each unhealthy check represents ~60 min (hourly granularity)
+    unhealthy_checks = total_checks - healthy_checks
+    downtime_minutes = unhealthy_checks * 60
+
+    # Sparkline: hourly slots for the last 7 days (168 values)
+    sparkline_hours = min(days, 7) * 24
+    sparkline_start = now - timedelta(hours=sparkline_hours)
+    slots: list[int | None] = [None] * sparkline_hours  # None = no data, 1 = healthy, 0 = not
+
+    for e in entries:
+        ts_str = e.get("checked_at", "")
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        if ts < sparkline_start:
+            continue
+        slot_index = int((ts - sparkline_start).total_seconds() / 3600)
+        if 0 <= slot_index < sparkline_hours:
+            is_healthy = 1 if e.get("status") == "healthy" else 0
+            # If multiple checks in one hour, degrade wins (take worst)
+            if slots[slot_index] is None:
+                slots[slot_index] = is_healthy
+            else:
+                slots[slot_index] = min(slots[slot_index], is_healthy)
+
+    # Replace None (no data) with 1 (assume healthy if no check was done)
+    sparkline = [s if s is not None else 1 for s in slots]
+
+    return {
+        "dependency_name": dependency_name,
+        "days": days,
+        "total_checks": total_checks,
+        "healthy_checks": healthy_checks,
+        "uptime_pct": uptime_pct,
+        "avg_latency_ms": avg_latency_ms,
+        "downtime_minutes": downtime_minutes,
+        "sparkline": sparkline,
+    }

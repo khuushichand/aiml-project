@@ -35,6 +35,7 @@ import type {
   SecurityAlertStatus,
   SecurityHealthData,
   Subscription,
+  DependencyUptimeStats,
   SystemDependenciesResponse,
   Team,
   TeamMembership,
@@ -1019,6 +1020,8 @@ export const api = {
   // System Dependencies Health
   // ============================================
   getSystemDependencies: () => requestJson<SystemDependenciesResponse>('/admin/dependencies'),
+  getDependencyUptime: (name: string, days: number = 7) =>
+    requestJson<DependencyUptimeStats>(`/admin/dependencies/${encodeURIComponent(name)}/uptime?days=${days}`),
 
   // ============================================
   // Virtual API Keys

@@ -93,6 +93,12 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 from tldw_Server_API.app.services.admin_system_ops_service import (
     send_test_webhook as svc_send_test_webhook,
 )
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    get_uptime_stats as svc_get_uptime_stats,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    record_health_snapshot as svc_record_health_snapshot,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
@@ -1311,7 +1317,32 @@ async def get_all_dependencies(
 
     results = await asyncio.gather(*[_check_dep(name, fn) for name, fn in checks])
 
+    # Record health snapshot for historical uptime tracking (fire-and-forget)
+    try:
+        await asyncio.to_thread(svc_record_health_snapshot, list(results))
+    except _OPS_NONCRITICAL_EXCEPTIONS:
+        pass
+
     return {
         "items": list(results),
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/dependencies/{name}/uptime")
+async def get_dependency_uptime(
+    name: str,
+    days: int = Query(default=30, ge=1, le=90),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Historical uptime statistics for a single system dependency.
+
+    Returns uptime percentage, average latency, downtime estimate,
+    and an hourly sparkline for the last *days* (or 7 days if shorter).
+    """
+    _require_platform_admin(principal)
+    try:
+        stats = await asyncio.to_thread(svc_get_uptime_stats, name, days)
+    except _OPS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return stats

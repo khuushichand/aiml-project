@@ -24,6 +24,7 @@ vi.mock('@/lib/api-client', () => ({
     getMetricsText: vi.fn(),
     testLLMProvider: vi.fn(),
     getSystemDependencies: vi.fn(),
+    getDependencyUptime: vi.fn(),
   },
 }));
 
@@ -33,6 +34,7 @@ type ApiMock = {
   getMetricsText: ReturnType<typeof vi.fn>;
   testLLMProvider: ReturnType<typeof vi.fn>;
   getSystemDependencies: ReturnType<typeof vi.fn>;
+  getDependencyUptime: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -93,6 +95,19 @@ beforeEach(() => {
   });
 
   apiMock.getSystemDependencies.mockResolvedValue(SYSTEM_DEPS_FIXTURE);
+
+  apiMock.getDependencyUptime.mockImplementation(async (name: string) => ({
+    dependency_name: name,
+    days: 7,
+    total_checks: 168,
+    healthy_checks: name === 'Embeddings Service' ? 150 : 168,
+    uptime_pct: name === 'Embeddings Service' ? 89.3 : 100.0,
+    avg_latency_ms: 2.5,
+    downtime_minutes: name === 'Embeddings Service' ? 1080 : 0,
+    sparkline: Array.from({ length: 168 }, (_, i) =>
+      name === 'Embeddings Service' && i > 150 ? 0 : 1,
+    ),
+  }));
 });
 
 afterEach(() => {
@@ -338,6 +353,68 @@ describe('DependenciesPage', () => {
 
     await waitFor(() => {
       expect(apiMock.getSystemDependencies).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // --- Uptime History tests ---
+
+  it('fetches uptime stats for each system dependency after load', async () => {
+    render(<DependenciesPage />);
+
+    await screen.findByText('AuthNZ Database');
+
+    await waitFor(() => {
+      expect(apiMock.getDependencyUptime).toHaveBeenCalledTimes(5);
+    });
+
+    expect(apiMock.getDependencyUptime).toHaveBeenCalledWith('AuthNZ Database', 7);
+    expect(apiMock.getDependencyUptime).toHaveBeenCalledWith('ChaChaNotes', 7);
+    expect(apiMock.getDependencyUptime).toHaveBeenCalledWith('Embeddings Service', 7);
+  });
+
+  it('shows 7-day uptime percentage badges for system dependencies', async () => {
+    render(<DependenciesPage />);
+
+    // Wait for uptime badges to appear -- 100.0% appears for multiple deps + LLM sparklines
+    await waitFor(() => {
+      const allUptimeBadges = screen.getAllByText('100.0%');
+      // At least 4 system deps with 100% uptime (all except Embeddings Service)
+      expect(allUptimeBadges.length).toBeGreaterThanOrEqual(4);
+    });
+    expect(screen.getByText('89.3%')).toBeInTheDocument();
+  });
+
+  it('renders uptime sparkline SVGs for system dependencies', async () => {
+    render(<DependenciesPage />);
+
+    await screen.findByText('AuthNZ Database');
+
+    await waitFor(() => {
+      const sparklines = screen.getAllByRole('img', { name: /uptime sparkline/i });
+      expect(sparklines.length).toBe(5);
+    });
+  });
+
+  it('shows table headers for uptime columns', async () => {
+    render(<DependenciesPage />);
+
+    await screen.findByText('AuthNZ Database');
+
+    expect(screen.getByText('7d Uptime')).toBeInTheDocument();
+    expect(screen.getByText('Trend')).toBeInTheDocument();
+  });
+
+  it('gracefully handles uptime endpoint failures', async () => {
+    apiMock.getDependencyUptime.mockRejectedValue(new Error('Not available'));
+
+    render(<DependenciesPage />);
+
+    // System deps should still render
+    expect(await screen.findByText('AuthNZ Database')).toBeInTheDocument();
+
+    // No uptime badges should appear, but no crash
+    await waitFor(() => {
+      expect(apiMock.getDependencyUptime).toHaveBeenCalled();
     });
   });
 });

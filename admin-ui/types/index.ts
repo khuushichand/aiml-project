@@ -376,6 +376,17 @@ export interface SystemDependenciesResponse {
   checked_at: string;
 }
 
+export interface DependencyUptimeStats {
+  dependency_name: string;
+  days: number;
+  total_checks: number;
+  healthy_checks: number;
+  uptime_pct: number;
+  avg_latency_ms: number;
+  downtime_minutes: number;
+  sparkline: number[];
+}
+
 export interface EffectivePermissionsResponse {
   user_id: number;
   permissions: string[];

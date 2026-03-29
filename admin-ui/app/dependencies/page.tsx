@@ -23,7 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api-client';
 import { buildRecentUtcDayKeys, buildSparklinePoints } from '@/lib/provider-token-trends';
-import type { SystemDependencyItem, SystemDependencyStatus } from '@/types';
+import type { DependencyUptimeStats, SystemDependencyItem, SystemDependencyStatus } from '@/types';
 
 type ProviderHealthStatus = 'reachable' | 'unreachable' | 'unknown';
 
@@ -282,6 +282,46 @@ function AvailabilitySparkline({
   );
 }
 
+function UptimeBar({ sparkline, label }: { sparkline: number[]; label: string }) {
+  if (!Array.isArray(sparkline) || sparkline.length === 0) {
+    return <span className="text-xs text-muted-foreground">No history</span>;
+  }
+
+  // Downsample to ~56 buckets (one per 3-hour block) for compact display
+  const bucketSize = Math.max(1, Math.floor(sparkline.length / 56));
+  const buckets: number[] = [];
+  for (let i = 0; i < sparkline.length; i += bucketSize) {
+    const slice = sparkline.slice(i, i + bucketSize);
+    const healthy = slice.filter((v) => v === 1).length;
+    buckets.push(healthy / slice.length);
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <svg
+        role="img"
+        aria-label={`${label} uptime sparkline`}
+        viewBox={`0 0 ${buckets.length * 2} 12`}
+        className="h-3"
+        style={{ width: `${Math.min(buckets.length * 2, 112)}px` }}
+      >
+        {buckets.map((ratio, i) => (
+          <rect
+            key={i}
+            x={i * 2}
+            y={0}
+            width={1.5}
+            height={12}
+            rx={0.5}
+            fill={ratio >= 1 ? '#22c55e' : ratio > 0 ? '#eab308' : '#ef4444'}
+            opacity={ratio >= 1 ? 0.8 : 1}
+          />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 export default function DependenciesPage() {
   const [loading, setLoading] = useState(true);
   const [runningAllChecks, setRunningAllChecks] = useState(false);
@@ -295,6 +335,7 @@ export default function DependenciesPage() {
   const [systemDeps, setSystemDeps] = useState<SystemDependencyItem[]>([]);
   const [systemDepsCheckedAt, setSystemDepsCheckedAt] = useState<string | null>(null);
   const [systemDepsLoading, setSystemDepsLoading] = useState(false);
+  const [uptimeByDep, setUptimeByDep] = useState<Record<string, DependencyUptimeStats>>({});
 
   const runProviderCheck = useCallback(async (provider: Provider): Promise<Omit<ProviderHealthCheck, 'testing'>> => {
     const started = performance.now();
@@ -476,8 +517,21 @@ export default function DependenciesPage() {
     setSystemDepsLoading(true);
     try {
       const result = await api.getSystemDependencies();
-      setSystemDeps(Array.isArray(result.items) ? result.items : []);
+      const items = Array.isArray(result.items) ? result.items : [];
+      setSystemDeps(items);
       setSystemDepsCheckedAt(result.checked_at ?? new Date().toISOString());
+
+      // Fetch 7-day uptime stats for each dependency (best-effort)
+      const uptimeResults = await Promise.allSettled(
+        items.map((dep) => api.getDependencyUptime(dep.name, 7)),
+      );
+      const nextUptime: Record<string, DependencyUptimeStats> = {};
+      uptimeResults.forEach((settledResult, index) => {
+        if (settledResult.status === 'fulfilled' && settledResult.value) {
+          nextUptime[items[index].name] = settledResult.value;
+        }
+      });
+      setUptimeByDep(nextUptime);
     } catch {
       setSystemDeps([]);
     } finally {
@@ -682,45 +736,68 @@ export default function DependenciesPage() {
                       <TableHead>Component</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Latency</TableHead>
+                      <TableHead>7d Uptime</TableHead>
+                      <TableHead>Trend</TableHead>
                       <TableHead>Error</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {systemDeps.map((dep) => (
-                      <TableRow
-                        key={dep.name}
-                        className={dep.status === 'down' ? 'bg-red-50/60' : undefined}
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            {dep.name.toLowerCase().includes('database') ? (
-                              <Database className="h-4 w-4 text-muted-foreground" />
+                    {systemDeps.map((dep) => {
+                      const uptime = uptimeByDep[dep.name];
+                      return (
+                        <TableRow
+                          key={dep.name}
+                          className={dep.status === 'down' ? 'bg-red-50/60' : undefined}
+                        >
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              {dep.name.toLowerCase().includes('database') ? (
+                                <Database className="h-4 w-4 text-muted-foreground" />
+                              ) : (
+                                <Server className="h-4 w-4 text-muted-foreground" />
+                              )}
+                              <span className="font-medium">{dep.name}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={sysDepStatusVariant(dep.status)}>
+                              {sysDepStatusIcon(dep.status)}
+                              {sysDepStatusLabel(dep.status)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {dep.latency_ms !== null && dep.latency_ms !== undefined
+                              ? `${dep.latency_ms} ms`
+                              : '\u2014'}
+                          </TableCell>
+                          <TableCell>
+                            {uptime ? (
+                              <Badge
+                                variant={uptime.uptime_pct >= 99 ? 'default' : uptime.uptime_pct >= 95 ? 'secondary' : 'destructive'}
+                              >
+                                {uptime.uptime_pct.toFixed(1)}%
+                              </Badge>
                             ) : (
-                              <Server className="h-4 w-4 text-muted-foreground" />
+                              <span className="text-xs text-muted-foreground">{'\u2014'}</span>
                             )}
-                            <span className="font-medium">{dep.name}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={sysDepStatusVariant(dep.status)}>
-                            {sysDepStatusIcon(dep.status)}
-                            {sysDepStatusLabel(dep.status)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {dep.latency_ms !== null && dep.latency_ms !== undefined
-                            ? `${dep.latency_ms} ms`
-                            : '\u2014'}
-                        </TableCell>
-                        <TableCell>
-                          {dep.error ? (
-                            <span className="text-sm text-red-700">{dep.error}</span>
-                          ) : (
-                            <span className="text-sm text-muted-foreground">{'\u2014'}</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+                          <TableCell>
+                            {uptime ? (
+                              <UptimeBar sparkline={uptime.sparkline} label={dep.name} />
+                            ) : (
+                              <span className="text-xs text-muted-foreground">{'\u2014'}</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {dep.error ? (
+                              <span className="text-sm text-red-700">{dep.error}</span>
+                            ) : (
+                              <span className="text-sm text-muted-foreground">{'\u2014'}</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
