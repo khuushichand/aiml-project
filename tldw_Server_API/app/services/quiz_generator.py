@@ -672,6 +672,7 @@ async def generate_quiz_from_sources(
             quiz_title=quiz_title,
             quiz_description=quiz_description,
             primary_media_id=primary_media_id,
+            workspace_id=workspace_id,
             workspace_tag=workspace_tag,
         )
 

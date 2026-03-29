@@ -109,9 +109,21 @@ def _implicit_credential_ref(slot_name: str | None) -> str:
     return "slot" if str(slot_name or "").strip() else "server"
 
 
-def _normalize_credential_ref(credential_ref: str | None, *, slot_name: str | None = None) -> str:
+def _normalize_credential_ref(
+    credential_ref: Any,
+    *,
+    default_ref: str | None = None,
+    slot_name: str | None = None,
+) -> str:
     value = str(credential_ref or "").strip().lower()
-    return value or _implicit_credential_ref(slot_name)
+    if not value:
+        value = default_ref or _implicit_credential_ref(slot_name)
+    if value in {"server", "slot"}:
+        return value
+    managed_secret_ref_id = parse_managed_secret_ref_id(value)
+    if managed_secret_ref_id is not None:
+        return encode_managed_secret_credential_ref(managed_secret_ref_id)
+    raise ValueError(f"Invalid credential_ref: {credential_ref}")
 
 
 def _normalize_credential_slot_privilege_class(privilege_class: str | None) -> str:
@@ -135,18 +147,6 @@ def encode_managed_secret_credential_ref(secret_ref_id: int) -> str:
     if int(secret_ref_id) <= 0:
         raise ValueError("managed_secret_ref_id must be positive")
     return f"{_MANAGED_SECRET_REF_PREFIX}{int(secret_ref_id)}"
-
-
-def _normalize_credential_ref(credential_ref: Any, *, default_ref: str) -> str:
-    value = str(credential_ref or "").strip().lower()
-    if not value:
-        value = default_ref
-    if value in {"server", "slot"}:
-        return value
-    managed_secret_ref_id = parse_managed_secret_ref_id(value)
-    if managed_secret_ref_id is not None:
-        return encode_managed_secret_credential_ref(managed_secret_ref_id)
-    raise ValueError(f"Invalid credential_ref: {credential_ref}")
 
 
 def _load_json_dict(raw: Any) -> dict[str, Any]:
@@ -4199,14 +4199,11 @@ class McpHubRepo:
         if server.get("superseded_by_server_id"):
             raise ValueError("credential bindings cannot target superseded external servers")
         normalized_slot_name = _normalize_slot_name(slot_name, allow_blank=True)
-        normalized_credential_ref = _normalize_credential_ref(
-            credential_ref,
-            slot_name=normalized_slot_name,
-        )
         implicit_credential_ref = _implicit_credential_ref(normalized_slot_name)
+        raw_credential_ref = str(credential_ref or "").strip().lower()
         if (
             normalized_binding_mode == "disable"
-            and normalized_credential_ref != implicit_credential_ref
+            and raw_credential_ref not in {"", implicit_credential_ref}
         ):
             raise ValueError("disable bindings may not store explicit credential refs")
         if normalized_slot_name:
@@ -4220,16 +4217,10 @@ class McpHubRepo:
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         usage = dict(usage_rules or {})
-        default_credential_ref = "slot" if normalized_slot_name else "server"
         normalized_credential_ref = _normalize_credential_ref(
             credential_ref,
-            default_ref=default_credential_ref,
+            slot_name=normalized_slot_name,
         )
-        if (
-            normalized_binding_mode == "disable"
-            and normalized_credential_ref != default_credential_ref
-        ):
-            raise ValueError("disable bindings may not store explicit credential refs")
 
         await self.db_pool.execute(
             """

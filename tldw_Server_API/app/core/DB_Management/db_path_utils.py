@@ -7,6 +7,7 @@ Ensures consistent database file locations across the application.
 import hashlib
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -23,10 +24,20 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SAFE_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_TEST_FALLBACK_RUN_TAG = uuid.uuid4().hex[:8]
 
 
 def _is_test_context() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+
+
+def _get_test_fallback_run_tag() -> str:
+    explicit_tag = str(os.getenv("TLDW_TEST_RUN_ID") or "").strip()
+    if explicit_tag:
+        return explicit_tag
+
+    worker_tag = str(os.getenv("PYTEST_XDIST_WORKER") or "").strip() or "default"
+    return f"{worker_tag}-{_TEST_FALLBACK_RUN_TAG}"
 
 
 def _normalize_user_id(user_id: UserId) -> str:
@@ -238,12 +249,22 @@ class DatabasePaths:
     def get_user_db_base_dir(*, allow_legacy_alias: bool = False) -> Path:
         env_user_db_base = os.getenv("USER_DB_BASE_DIR")
         settings_user_db_base = settings.get("USER_DB_BASE_DIR")
-        if _is_test_context() and env_user_db_base:
-            user_db_base = env_user_db_base
-        else:
-            user_db_base = settings_user_db_base or env_user_db_base
         project_root = Path(get_project_root())
         default_base = (project_root / "Databases" / "user_databases").resolve()
+        user_db_base = settings_user_db_base or env_user_db_base
+        if _is_test_context() and env_user_db_base:
+            try:
+                settings_candidate = Path(settings_user_db_base) if settings_user_db_base else None
+                if settings_candidate is not None:
+                    settings_candidate = settings_candidate.expanduser()
+                    if not settings_candidate.is_absolute():
+                        settings_candidate = (project_root / settings_candidate).resolve()
+                    else:
+                        settings_candidate = settings_candidate.resolve()
+            except Exception:
+                settings_candidate = None
+            if settings_candidate is None or settings_candidate == default_base:
+                user_db_base = env_user_db_base
         if _is_test_context() and not env_user_db_base:
             try:
                 candidate = Path(settings_user_db_base) if settings_user_db_base else None
@@ -269,11 +290,7 @@ class DatabasePaths:
             if _is_test_context():
                 import tempfile
 
-                run_tag = (
-                    os.getenv("TLDW_TEST_RUN_ID")
-                    or os.getenv("PYTEST_XDIST_WORKER")
-                    or "default"
-                )
+                run_tag = _get_test_fallback_run_tag()
                 safe_run_tag = "".join(
                     ch if ch.isalnum() or ch in "-_." else "_"
                     for ch in str(run_tag)

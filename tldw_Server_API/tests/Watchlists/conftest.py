@@ -58,6 +58,7 @@ def enable_full_app_for_watchlists():
     orig_minimal = os.getenv("MINIMAL_TEST_APP")
     orig_disable = os.getenv("ROUTES_DISABLE")
     orig_enable = os.getenv("ROUTES_ENABLE")
+    previous_main = sys.modules.get("tldw_Server_API.app.main")
 
     # Force full router set so /api/v1/watchlists/* endpoints are available
     os.environ["MINIMAL_TEST_APP"] = "0"
@@ -97,4 +98,6 @@ def enable_full_app_for_watchlists():
         os.environ["ROUTES_ENABLE"] = orig_enable
 
     sys.modules.pop("tldw_Server_API.app.main", None)
+    if previous_main is not None:
+        sys.modules["tldw_Server_API.app.main"] = previous_main
     importlib.invalidate_caches()

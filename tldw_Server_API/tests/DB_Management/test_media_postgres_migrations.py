@@ -217,11 +217,11 @@ def test_media_postgres_migration_reaches_v9_and_restores_visibility_owner_colum
                 connection=conn,
             )
             backend.execute(
-                "ALTER TABLE media DROP COLUMN IF EXISTS owner_user_id",
+                "ALTER TABLE media DROP COLUMN IF EXISTS owner_user_id CASCADE",
                 connection=conn,
             )
             backend.execute(
-                "ALTER TABLE media DROP COLUMN IF EXISTS visibility",
+                "ALTER TABLE media DROP COLUMN IF EXISTS visibility CASCADE",
                 connection=conn,
             )
             backend.execute(

@@ -249,7 +249,7 @@ async def test_media_ingest_schedule_embeddings_marks_error_on_failure(monkeypat
 @pytest.mark.asyncio
 async def test_media_ingest_schedule_embeddings_retries_conflict_without_marking_error(monkeypatch):
     import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError
+    from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError
 
     class _DummyDB:
         def __init__(self) -> None:

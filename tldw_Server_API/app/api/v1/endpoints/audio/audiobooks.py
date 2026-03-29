@@ -126,6 +126,39 @@ def _resolve_subtitle_persist(request: SubtitleExportRequest) -> bool:
     return bool(resolved) if resolved is not None else False
 
 
+def _record_has_tts_hint(record: dict[str, Any] | None) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if record.get("tts_provider") or record.get("tts_model"):
+        return True
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get("tts_provider") or metadata.get("tts_model"))
+
+
+def _apply_default_audiobook_tts_hints(payload: dict[str, Any]) -> None:
+    # Keep the persisted job payload aligned with the API schema:
+    # when subtitles are requested without an explicit TTS hint, the request
+    # follows the Kokoro/alignment-capable path by default.
+    if payload.get("subtitles") is not None and not _record_has_tts_hint(payload):
+        payload["tts_model"] = "kokoro"
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return
+
+    inherited_has_tts_hint = _record_has_tts_hint(payload)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("subtitles") is None:
+            continue
+        if inherited_has_tts_hint or _record_has_tts_hint(item):
+            continue
+        item["tts_model"] = "kokoro"
+
+
 def _resolve_subtitle_ttl_hours(request: SubtitleExportRequest) -> int | None:
     if request.cache_ttl_hours is not None:
         return int(request.cache_ttl_hours)
@@ -543,6 +576,7 @@ async def create_audiobook_job(
         priority = 10
 
     payload = request.model_dump()
+    _apply_default_audiobook_tts_hints(payload)
     payload["project_id"] = project_id
     if request.items:
         # Preserve per-item subtitle overrides only when explicitly set.

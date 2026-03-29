@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
+
+
+def test_admin_monitoring_repo_coerces_iso_timestamp_strings_for_postgres() -> None:
+    from tldw_Server_API.app.core.AuthNZ.repos.admin_monitoring_repo import (
+        AuthnzAdminMonitoringRepo,
+    )
+
+    coerced = AuthnzAdminMonitoringRepo._coerce_timestamp_input("2026-03-10T11:00:00Z")
+
+    assert coerced == datetime(2026, 3, 10, 11, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio

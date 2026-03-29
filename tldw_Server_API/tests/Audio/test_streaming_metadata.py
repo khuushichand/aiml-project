@@ -1,31 +1,29 @@
+import importlib
+
 import numpy as np
 import pytest
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
-    ParakeetStreamingTranscriber,
-    StreamingConfig,
-)
+
+def _reload_unified_module():
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+
+    return importlib.reload(unified)
 
 
 @pytest.mark.asyncio
 async def test_transcriber_emits_segment_metadata(monkeypatch):
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.load_parakeet_model",
-        lambda variant: object(),
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.transcribe_with_parakeet",
-        lambda audio, sr, variant: "test segment",
-    )
+    unified = _reload_unified_module()
+    monkeypatch.setattr(unified, "load_parakeet_model", lambda variant: object())
+    monkeypatch.setattr(unified, "transcribe_with_parakeet", lambda audio, sr, variant: "test segment")
 
-    config = StreamingConfig(
+    config = unified.StreamingConfig(
         model_variant="standard",
         sample_rate=16000,
         chunk_duration=1.0,
         overlap_duration=0.25,
         enable_partial=False,
     )
-    transcriber = ParakeetStreamingTranscriber(config)
+    transcriber = unified.ParakeetStreamingTranscriber(config)
     transcriber.initialize()
 
     chunk_samples = int(config.sample_rate * config.chunk_duration)
@@ -57,6 +55,8 @@ async def test_transcriber_emits_segment_metadata(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mlx_transcriber_uses_native_stream_session_when_available(monkeypatch):
+    unified = _reload_unified_module()
+
     class _StubSession:
         def __init__(self):
             self.calls = 0
@@ -82,23 +82,21 @@ async def test_mlx_transcriber_uses_native_stream_session_when_available(monkeyp
 
     session = _StubSession()
 
+    monkeypatch.setattr(unified, "create_parakeet_mlx_streaming_session", lambda **kwargs: session)
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.create_parakeet_mlx_streaming_session",
-        lambda **kwargs: session,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.transcribe_with_parakeet_mlx",
+        unified,
+        "transcribe_with_parakeet_mlx",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy MLX path should not be used")),
     )
 
-    config = StreamingConfig(
+    config = unified.StreamingConfig(
         model_variant="mlx",
         sample_rate=16000,
         chunk_duration=1.0,
         overlap_duration=0.25,
         enable_partial=False,
     )
-    transcriber = ParakeetStreamingTranscriber(config)
+    transcriber = unified.ParakeetStreamingTranscriber(config)
     transcriber.initialize()
 
     chunk_samples = int(config.sample_rate * config.chunk_duration)

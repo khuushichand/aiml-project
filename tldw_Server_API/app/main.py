@@ -6552,7 +6552,11 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Notifications endpoint not available: {_e}")
     _reading_import_enabled = True
-    if _EXPLICIT_PYTEST_RUNTIME and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING"):
+    if (
+        _EXPLICIT_PYTEST_RUNTIME
+        and _MINIMAL_TEST_APP
+        and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING")
+    ):
         _reading_import_enabled = False
         logger.info("Skipping reading endpoint imports in pytest startup (set MINIMAL_TEST_INCLUDE_READING=1 to enable)")
     if _reading_import_enabled:

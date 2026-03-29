@@ -3,6 +3,9 @@ import importlib
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.tests.DB_Management._media_db_legacy_stub import (
+    install_legacy_media_db_stub,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -10,9 +13,7 @@ pytestmark = pytest.mark.unit
 def test_media_update_lib_imports_check_media_exists_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     media_update_lib = importlib.import_module(
         "tldw_Server_API.app.core.Ingestion_Media_Processing.Media_Update_lib"
     )
@@ -35,9 +36,7 @@ def test_media_update_lib_imports_check_media_exists_from_media_db_api(
 def test_media_update_lib_imports_document_version_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     media_update_lib = importlib.import_module(
         "tldw_Server_API.app.core.Ingestion_Media_Processing.Media_Update_lib"
     )
@@ -60,9 +59,7 @@ def test_media_update_lib_imports_document_version_from_media_db_api(
 def test_media_update_lib_does_not_bind_media_database_from_media_db_v2(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     media_update_lib = importlib.import_module(
         "tldw_Server_API.app.core.Ingestion_Media_Processing.Media_Update_lib"
     )

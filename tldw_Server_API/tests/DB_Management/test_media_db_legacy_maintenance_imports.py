@@ -4,12 +4,13 @@ from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
+from tldw_Server_API.tests.DB_Management._media_db_legacy_stub import (
+    install_legacy_media_db_stub,
+)
 
 
-def test_legacy_maintenance_callers_no_longer_depend_on_media_db_v2_exports() -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+def test_legacy_maintenance_callers_no_longer_depend_on_media_db_v2_exports(monkeypatch) -> None:
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
 
     assert not hasattr(media_db_v2, "permanently_delete_item")
     assert not hasattr(media_db_v2, "empty_trash")

@@ -1025,8 +1025,11 @@ def check_media_exists(
 
 
 def permanently_delete_item(db: MediaDbLike, media_id: int) -> bool:
-    """Permanently delete a trashed media row through the package-level helper."""
-    return legacy_maintenance.permanently_delete_item(db_instance=db, media_id=media_id)
+    """Permanently delete a media item through the maintenance helper facade."""
+    return legacy_maintenance.permanently_delete_item(
+        db_instance=db,
+        media_id=media_id,
+    )
 
 
 def get_latest_transcription(db: MediaDbLike, media_id: int) -> str | None:
