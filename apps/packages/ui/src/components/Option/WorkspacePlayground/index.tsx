@@ -1359,7 +1359,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   )
 
   const handleOpenSplitWorkspace = React.useCallback(() => {
-    if (effectiveSelectedSourceEntries.length === 0) {
+    if (readyEffectiveSelectedSourceEntries.length === 0) {
       focusWorkspacePane("sources")
       messageApi.info(
         t(

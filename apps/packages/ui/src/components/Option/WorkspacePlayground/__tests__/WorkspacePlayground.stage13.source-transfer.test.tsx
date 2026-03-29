@@ -480,6 +480,37 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
     expect(mockMessageApi.info).not.toHaveBeenCalled()
   })
 
+  it("treats an all-ineligible header selection like no transferable selection", async () => {
+    const originalMatchMedia = window.matchMedia
+    try {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+
+      testState.selectedSourceIds = ["source-c"]
+      testState.leftPaneCollapsed = true
+
+      render(<WorkspacePlayground />)
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Split workspace" })
+      )
+
+      expect(mockSetLeftPaneCollapsed).toHaveBeenCalledWith(false)
+      expect(mockMessageApi.info).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole("dialog", { name: "Transfer sources" })).toBeNull()
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+  })
+
   it("reveals the Sources pane and shows an info message when nothing is selected on desktop", async () => {
     const originalMatchMedia = window.matchMedia
     try {
