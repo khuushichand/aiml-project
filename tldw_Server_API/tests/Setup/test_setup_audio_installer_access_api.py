@@ -52,19 +52,21 @@ def _shared_audio_setup(monkeypatch):
     monkeypatch.setattr(
         setup_endpoint.install_manager,
         "execute_audio_bundle",
-        lambda bundle_id, resource_profile, safe_rerun=False: {
+        lambda bundle_id, resource_profile, tts_choice=None, safe_rerun=False: {
             "status": "completed",
             "bundle_id": bundle_id,
             "resource_profile": resource_profile,
+            "tts_choice": tts_choice,
             "safe_rerun": safe_rerun,
         },
     )
 
-    async def _fake_verify_audio_bundle_async(bundle_id, resource_profile):
+    async def _fake_verify_audio_bundle_async(bundle_id, resource_profile, tts_choice=None):
         return {
             "status": "ready",
             "bundle_id": bundle_id,
             "resource_profile": resource_profile,
+            "tts_choice": tts_choice,
         }
 
     monkeypatch.setattr(

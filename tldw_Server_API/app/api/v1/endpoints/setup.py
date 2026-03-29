@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -23,6 +24,19 @@ from tldw_Server_API.app.api.v1.API_Deps.setup_deps import (
     require_local_setup_access,
     require_shared_audio_installer_access,
 )
+from tldw_Server_API.app.api.v1.schemas.setup_schemas import (
+    AudioBundleOperationResponse,
+    AudioPackExportResponse,
+    AudioPackImportResponse,
+    AudioReadinessResetResponse,
+    AudioRecommendationsResponse,
+    SetupAssistantResponse,
+    SetupCompleteResponse,
+    SetupConfigUpdateResponse,
+    SetupInstallStatusResponse,
+    SetupResetResponse,
+    SetupStatusResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
@@ -30,8 +44,10 @@ from tldw_Server_API.app.core.Setup import audio_pack_service
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    DEFAULT_AUDIO_RESOURCE_PROFILE,
     get_audio_bundle_catalog,
 )
+from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.services.auth_service import mark_user_verified
@@ -309,10 +325,10 @@ async def provision_audio_bundle(
 ) -> AudioBundleOperationResponse:
     """Expand and provision a curated audio bundle."""
 
-    return _execute_audio_bundle_provision(payload)
+    return await _execute_audio_bundle_provision(payload)
 
 
-def _execute_audio_bundle_provision(
+async def _execute_audio_bundle_provision(
     payload: AudioBundleProvisionRequest,
     *,
     allow_completed_when_disabled: bool = False,
@@ -407,7 +423,7 @@ async def provision_admin_audio_bundle(
 ) -> dict[str, Any]:
     """Provision a curated audio bundle through the shared admin installer UI."""
 
-    return _execute_audio_bundle_provision(payload, allow_completed_when_disabled=True)
+    return await _execute_audio_bundle_provision(payload, allow_completed_when_disabled=True)
 
 
 @router.post("/admin/audio/verify")
