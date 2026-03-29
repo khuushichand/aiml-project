@@ -72,3 +72,42 @@ def test_recipe_run_children_default_to_empty_list(tmp_path) -> None:
     db.set_recipe_run_children(parent_run_id, [])
 
     assert db.list_recipe_run_children(parent_run_id) == []
+
+
+def test_set_recipe_run_children_rejects_missing_parent(tmp_path) -> None:
+    db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
+
+    with pytest.raises(ValueError, match="parent recipe run does not exist"):
+        db.set_recipe_run_children("missing-parent", ["child-a"])
+
+
+def test_create_recipe_run_rolls_back_when_child_links_fail(tmp_path) -> None:
+    db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
+
+    with pytest.raises(Exception):
+        db.create_recipe_run(
+            run_id="recipe-run-atomic",
+            recipe_id="embeddings_model_selection",
+            recipe_version="2026.03.29",
+            status=RunStatus.PENDING,
+            dataset_content_hash="sha256:atomic",
+            child_run_ids=["child-a", "child-a"],
+        )
+
+    assert db.get_recipe_run("recipe-run-atomic") is None
+
+
+def test_create_recipe_run_rejects_raw_none_recommendation_slots(tmp_path) -> None:
+    db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
+
+    with pytest.raises(ValueError, match="RecommendationSlot"):
+        db.create_recipe_run(
+            run_id="recipe-run-none-slot",
+            recipe_id="summarization_quality",
+            recipe_version="2026.03.29",
+            status=RunStatus.PENDING,
+            dataset_snapshot_ref="snapshot://dataset-123@v1",
+            recommendation_slots={"best_overall": None},
+        )
+
+    assert db.get_recipe_run("recipe-run-none-slot") is None

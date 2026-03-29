@@ -1872,42 +1872,47 @@ class EvaluationsDatabase:
         review_value = self._coerce_review_state(review_state)
         if not dataset_snapshot_ref and not dataset_content_hash:
             raise ValueError("A recipe run requires dataset_snapshot_ref or dataset_content_hash")
+        recommendation_slots_payload = self._normalize_recommendation_slots(recommendation_slots)
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO evaluation_recipe_runs (
-                    run_id,
-                    recipe_id,
-                    recipe_version,
-                    status,
-                    review_state,
-                    dataset_snapshot_ref,
-                    dataset_content_hash,
-                    confidence_summary_json,
-                    recommendation_slots_json,
-                    metadata_json
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO evaluation_recipe_runs (
+                        run_id,
+                        recipe_id,
+                        recipe_version,
+                        status,
+                        review_state,
+                        dataset_snapshot_ref,
+                        dataset_content_hash,
+                        confidence_summary_json,
+                        recommendation_slots_json,
+                        metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        recipe_id,
+                        recipe_version,
+                        status_value,
+                        review_value,
+                        dataset_snapshot_ref,
+                        dataset_content_hash,
+                        self._json_dump_value(confidence_summary),
+                        self._json_dump_mapping(recommendation_slots_payload),
+                        self._json_dump_mapping(metadata or {}),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    recipe_id,
-                    recipe_version,
-                    status_value,
-                    review_value,
-                    dataset_snapshot_ref,
-                    dataset_content_hash,
-                    self._json_dump_value(confidence_summary),
-                    self._json_dump_mapping(recommendation_slots or {}),
-                    self._json_dump_mapping(metadata or {}),
-                ),
-            )
-            conn.commit()
-
-        if child_run_ids is not None:
-            self.set_recipe_run_children(run_id, child_run_ids)
+                if child_run_ids is not None:
+                    self._replace_recipe_run_children(cursor, run_id, child_run_ids)
+                conn.commit()
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
 
         return run_id
 
@@ -1950,23 +1955,14 @@ class EvaluationsDatabase:
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM evaluation_recipe_run_children WHERE parent_run_id = ?",
-                (parent_run_id,),
-            )
-            for child_order, child_run_id in enumerate(child_run_ids):
-                cursor.execute(
-                    """
-                    INSERT INTO evaluation_recipe_run_children (
-                        parent_run_id,
-                        child_run_id,
-                        child_order
-                    )
-                    VALUES (?, ?, ?)
-                    """,
-                    (parent_run_id, child_run_id, child_order),
-                )
-            conn.commit()
+            try:
+                self._ensure_recipe_run_exists(cursor, parent_run_id)
+                self._replace_recipe_run_children(cursor, parent_run_id, child_run_ids)
+                conn.commit()
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
 
     # ============= Helper Methods =============
 
@@ -1979,6 +1975,47 @@ class EvaluationsDatabase:
         if isinstance(review_state, ReviewState):
             return review_state.value
         return ReviewState(str(review_state)).value
+
+    def _ensure_recipe_run_exists(self, cursor: Any, run_id: str) -> None:
+        cursor.execute(
+            "SELECT 1 FROM evaluation_recipe_runs WHERE run_id = ?",
+            (run_id,),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("parent recipe run does not exist")
+
+    def _replace_recipe_run_children(self, cursor: Any, parent_run_id: str, child_run_ids: list[str]) -> None:
+        cursor.execute(
+            "DELETE FROM evaluation_recipe_run_children WHERE parent_run_id = ?",
+            (parent_run_id,),
+        )
+        for child_order, child_run_id in enumerate(child_run_ids):
+            cursor.execute(
+                """
+                INSERT INTO evaluation_recipe_run_children (
+                    parent_run_id,
+                    child_run_id,
+                    child_order
+                )
+                VALUES (?, ?, ?)
+                """,
+                (parent_run_id, child_run_id, child_order),
+            )
+
+    def _normalize_recommendation_slots(
+        self,
+        recommendation_slots: Optional[dict[str, RecommendationSlot | dict[str, Any] | None]],
+    ) -> Optional[dict[str, RecommendationSlot | dict[str, Any]]]:
+        if recommendation_slots is None:
+            return None
+        normalized: dict[str, RecommendationSlot | dict[str, Any]] = {}
+        for slot_name, slot_value in recommendation_slots.items():
+            if slot_value is None:
+                raise ValueError(
+                    "RecommendationSlot values cannot be None; use RecommendationSlot(candidate_run_id=None, reason_code=...)"
+                )
+            normalized[slot_name] = slot_value
+        return normalized
 
     def _json_dump_value(self, value: Any) -> Optional[str]:
         if value is None:
