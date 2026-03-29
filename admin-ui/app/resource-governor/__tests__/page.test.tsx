@@ -266,4 +266,65 @@ describe('ResourceGovernor policy form', () => {
     expect(within(row as HTMLElement).getByText('chat.default')).toBeInTheDocument();
     expect(within(row as HTMLElement).getByText(/^5$/)).toBeInTheDocument();
   });
+
+  it('renders rate limit analytics section with throttle count badge', async () => {
+    apiMock.getRateLimitSummary.mockResolvedValueOnce({
+      total_throttle_events: 12,
+      period: '24h',
+      top_throttled_entities: [
+        { entity: 'user:42', rejections: 8, last_rejected_at: '2026-02-17T11:00:00Z' },
+      ],
+      policy_headroom: [
+        { policy_id: 'chat.default', resource_type: 'llm', utilization_pct: 85, total_denials: 12, total_decisions: 100 },
+      ],
+    });
+    apiMock.getRateLimitEvents.mockResolvedValueOnce({
+      items: [
+        {
+          user_id: 42,
+          policy_id: 'chat.default',
+          rejections_24h: 8,
+          last_rejection_at: '2026-02-17T11:00:00Z',
+        },
+      ],
+    });
+
+    render(<ResourceGovernorPage />);
+
+    const analyticsCard = await screen.findByTestId('rate-limit-analytics-card');
+    expect(analyticsCard).toBeInTheDocument();
+    expect(screen.getByText('Rate Limit Analytics')).toBeInTheDocument();
+    expect(screen.getByTestId('total-throttle-events').textContent).toBe('12');
+
+    // Throttle event count badge
+    const badge = await screen.findByTestId('throttle-event-count');
+    expect(badge).toBeInTheDocument();
+    expect(badge.textContent).toContain('rejections');
+  });
+
+  it('renders user autocomplete Select for policy resolution when users are loaded', async () => {
+    const user = userEvent.setup();
+    render(<ResourceGovernorPage />);
+
+    // Wait for scope context to finish loading
+    await waitFor(() => {
+      expect(screen.queryByText('Loading scope context...')).not.toBeInTheDocument();
+    });
+
+    // The resolution section should render a <select> (design system Select) populated with users
+    const userSelect = screen.getByLabelText('User');
+    expect(userSelect.tagName).toBe('SELECT');
+
+    // Verify the user options are populated from getUsersPage mock
+    const options = within(userSelect as HTMLElement).getAllByRole('option');
+    // First option is the placeholder "Select a user..."
+    expect(options.length).toBeGreaterThanOrEqual(3);
+    expect(options[0].textContent).toContain('Select a user');
+    expect(options[1].textContent).toContain('alice');
+    expect(options[2].textContent).toContain('bob');
+
+    // Selecting a user should update the value
+    await user.selectOptions(userSelect, '42');
+    expect((userSelect as HTMLSelectElement).value).toBe('42');
+  });
 });
