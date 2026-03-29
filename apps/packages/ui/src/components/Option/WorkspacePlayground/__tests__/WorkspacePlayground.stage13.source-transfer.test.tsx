@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
@@ -411,18 +411,27 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
 
     expect(screen.getByText("Alpha Source")).toBeInTheDocument()
     expect(screen.getByText("Beta Source")).toBeInTheDocument()
-    expect(screen.getByRole("radio", { name: "Skip" })).toBeInTheDocument()
-    expect(
-      screen.getByRole("radio", { name: "Merge folder memberships" })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("radio", {
-        name: "Replace transferred folder memberships"
-      })
-    ).toBeInTheDocument()
     expect(
       screen.getByRole("checkbox", {
         name: "Apply to all remaining conflicts"
+      })
+    ).toBeInTheDocument()
+
+    const alphaConflictCard = screen.getByText("Alpha Source").closest("div")
+    expect(alphaConflictCard).not.toBeNull()
+    expect(
+      within(alphaConflictCard as HTMLElement).getByRole("radio", {
+        name: "Skip"
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(alphaConflictCard as HTMLElement).getByRole("radio", {
+        name: "Merge folder memberships"
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(alphaConflictCard as HTMLElement).getByRole("radio", {
+        name: "Replace transferred folder memberships"
       })
     ).toBeInTheDocument()
 
@@ -432,7 +441,9 @@ describe("WorkspacePlayground stage 13 source transfer", () => {
       })
     )
     fireEvent.click(
-      screen.getAllByRole("radio", { name: "Merge folder memberships" })[0]
+      within(alphaConflictCard as HTMLElement).getByRole("radio", {
+        name: "Merge folder memberships"
+      })
     )
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
 
