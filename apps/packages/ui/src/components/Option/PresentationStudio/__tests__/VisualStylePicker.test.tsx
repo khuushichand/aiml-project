@@ -10,13 +10,28 @@ const styles = [
     scope: "builtin",
     name: "Minimal Academic",
     description: "Structured, restrained, study-first slides.",
-    category: "Educational and Explainer",
+    category: "educational",
     guide_number: 1,
     tags: ["study", "notes"],
     best_for: ["exam prep", "course notes"],
     generation_rules: {},
     artifact_preferences: [],
     appearance_defaults: { theme: "white" },
+    fallback_policy: {},
+    version: 1
+  },
+  {
+    id: "notebooklm-blueprint",
+    scope: "builtin",
+    name: "Blueprint",
+    description: "Technical diagrams and systems breakdowns.",
+    category: "technical",
+    guide_number: 12,
+    tags: ["architecture", "systems"],
+    best_for: ["engineering review"],
+    generation_rules: {},
+    artifact_preferences: [],
+    appearance_defaults: { theme: "night" },
     fallback_policy: {},
     version: 1
   },
@@ -47,10 +62,13 @@ describe("VisualStylePicker", () => {
     )
 
     expect(screen.getByRole("searchbox", { name: "Search visual styles" })).toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: "Educational and Explainer" })).toBeInTheDocument()
+    expect(screen.getAllByRole("heading").map((node) => node.textContent)).toEqual([
+      "Educational and Explainer",
+      "Technical and Engineering",
+      "Custom styles"
+    ])
     expect(screen.getByText("Guide 1")).toBeInTheDocument()
-    expect(screen.getByText("Best for")).toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: "Custom styles" })).toBeInTheDocument()
+    expect(screen.getAllByText("Best for")).toHaveLength(2)
     expect(
       screen.getByRole("button", { name: /Minimal Academic/ })
     ).toHaveAttribute("aria-pressed", "true")

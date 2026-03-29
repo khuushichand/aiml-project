@@ -2205,6 +2205,9 @@ async def export_presentation(
     slides = [_slide_from_obj(item) for item in slides_raw]
     slides = _normalize_slides(slides)
     settings = _deserialize_settings(row.settings)
+    visual_style_snapshot = _deserialize_visual_style_snapshot(
+        getattr(row, "visual_style_snapshot", None)
+    )
     try:
         user_id = int(db.client_id)
     except (TypeError, ValueError) as exc:
@@ -2277,6 +2280,7 @@ async def export_presentation(
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                visual_style_snapshot=visual_style_snapshot,
                 pdf_options=pdf_options,
                 asset_resolver=_asset_resolver,
             )
@@ -2307,6 +2311,7 @@ async def export_presentation(
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                visual_style_snapshot=visual_style_snapshot,
                 asset_resolver=_asset_resolver,
             )
         except SlidesAssetsMissingError as exc:

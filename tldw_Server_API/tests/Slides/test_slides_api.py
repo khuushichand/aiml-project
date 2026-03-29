@@ -574,6 +574,41 @@ def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
         assert "alt=\"Logo\"" in index_html
 
 
+def test_slides_export_reveal_passes_visual_style_snapshot(slides_client, monkeypatch):
+    captured = {}
+
+    def _stub_export(**kwargs):
+        captured["visual_style_snapshot"] = kwargs.get("visual_style_snapshot")
+        return b"PK\x03\x04stub"
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_bundle",
+        _stub_export,
+    )
+    payload = {
+        "title": "Styled Deck",
+        "description": None,
+        "theme": "black",
+        "visual_style_id": "notebooklm-blueprint",
+        "visual_style_scope": "builtin",
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201, resp.text
+
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=revealjs"
+    )
+
+    assert export_resp.status_code == 200, export_resp.text
+    assert captured["visual_style_snapshot"]["id"] == "notebooklm-blueprint"
+    assert captured["visual_style_snapshot"]["resolution"]["style_pack"] == "technical_grid"
+
+
 def test_slides_export_markdown_marp_override(slides_client):
     payload = {
         "title": "Deck",
@@ -624,6 +659,38 @@ def test_slides_export_pdf(slides_client, monkeypatch):
     assert options.get("format") == "Letter"
     assert options.get("landscape") is True
     assert (options.get("margin") or {}).get("top") == "0.2in"
+
+
+def test_slides_export_pdf_passes_visual_style_snapshot(slides_client, monkeypatch):
+    captured = {}
+
+    def _stub_export(**kwargs):
+        captured["visual_style_snapshot"] = kwargs.get("visual_style_snapshot")
+        return b"%PDF-1.4\n%stub"
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_pdf", _stub_export)
+    payload = {
+        "title": "Styled Deck",
+        "description": None,
+        "theme": "black",
+        "visual_style_id": "notebooklm-blueprint",
+        "visual_style_scope": "builtin",
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201, resp.text
+
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=pdf"
+    )
+
+    assert export_resp.status_code == 200, export_resp.text
+    assert captured["visual_style_snapshot"]["id"] == "notebooklm-blueprint"
+    assert captured["visual_style_snapshot"]["resolution"]["style_pack"] == "technical_grid"
 
 
 def test_slides_export_pdf_input_error(slides_client, monkeypatch):

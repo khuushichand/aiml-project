@@ -17,6 +17,24 @@ type ParsedStyleValue = {
   visualStyleScope: string | null
 }
 
+const BUILTIN_CATEGORY_ORDER = [
+  "legacy",
+  "educational",
+  "technical",
+  "narrative",
+  "playful",
+  "nostalgic"
+] as const
+
+const BUILTIN_CATEGORY_LABELS: Record<(typeof BUILTIN_CATEGORY_ORDER)[number], string> = {
+  legacy: "Existing built-ins",
+  educational: "Educational and Explainer",
+  technical: "Technical and Engineering",
+  narrative: "Narrative and Strategic",
+  playful: "Playful and Tactile",
+  nostalgic: "Nostalgic and Artistic"
+}
+
 const encodeVisualStyleValue = (styleId: string | null, styleScope: string | null): string =>
   styleId && styleScope ? `${styleScope}::${styleId}` : ""
 
@@ -46,6 +64,36 @@ const normalizeSearchText = (value: unknown): string => {
   return ""
 }
 
+const normalizeCategoryKey = (value: string | null | undefined): string | null => {
+  if (typeof value !== "string") {
+    return null
+  }
+  const normalized = value.trim().toLowerCase()
+  return normalized.length > 0 ? normalized : null
+}
+
+const getBuiltInCategoryLabel = (category: string | null | undefined): string => {
+  const normalized = normalizeCategoryKey(category)
+  if (!normalized) {
+    return "Built-in styles"
+  }
+  return (
+    BUILTIN_CATEGORY_LABELS[normalized as keyof typeof BUILTIN_CATEGORY_LABELS] ||
+    (typeof category === "string" ? category.trim() : "Built-in styles")
+  )
+}
+
+const getBuiltInCategoryOrder = (category: string | null | undefined): number => {
+  const normalized = normalizeCategoryKey(category)
+  if (!normalized) {
+    return BUILTIN_CATEGORY_ORDER.length
+  }
+  const index = BUILTIN_CATEGORY_ORDER.indexOf(
+    normalized as (typeof BUILTIN_CATEGORY_ORDER)[number]
+  )
+  return index === -1 ? BUILTIN_CATEGORY_ORDER.length : index
+}
+
 const buildSearchText = (style: VisualStyleRecord): string => {
   const pieces = [
     style.id,
@@ -53,6 +101,7 @@ const buildSearchText = (style: VisualStyleRecord): string => {
     style.scope,
     style.description || "",
     style.category || "",
+    style.scope === "builtin" ? getBuiltInCategoryLabel(style.category) : "",
     style.guide_number ?? "",
     ...(style.tags || []),
     ...(style.best_for || [])
@@ -75,7 +124,7 @@ const renderChips = (style: VisualStyleRecord): React.ReactNode => {
     chips.push({ key: "scope", label: "Custom" })
   }
   if (style.scope === "builtin" && style.category) {
-    chips.push({ key: "category", label: style.category })
+    chips.push({ key: "category", label: getBuiltInCategoryLabel(style.category) })
   }
   if (style.scope === "builtin" && typeof style.guide_number === "number") {
     chips.push({ key: "guide_number", label: `Guide ${style.guide_number}` })
@@ -93,19 +142,33 @@ const renderChips = (style: VisualStyleRecord): React.ReactNode => {
   ))
 }
 
-const groupBuiltInStyles = (styles: VisualStyleRecord[]): Array<[string, VisualStyleRecord[]]> => {
-  const groups = new Map<string, VisualStyleRecord[]>()
+type BuiltInStyleGroup = {
+  categoryKey: string | null
+  label: string
+  styles: VisualStyleRecord[]
+}
+
+const groupBuiltInStyles = (styles: VisualStyleRecord[]): BuiltInStyleGroup[] => {
+  const groups = new Map<string, BuiltInStyleGroup>()
   for (const style of styles) {
-    const category = style.category?.trim() || "Built-in styles"
-    const entries = groups.get(category) || []
-    entries.push(style)
-    groups.set(category, entries)
+    const categoryKey = normalizeCategoryKey(style.category)
+    const groupKey = categoryKey || "__uncategorized__"
+    const existingGroup = groups.get(groupKey)
+    if (existingGroup) {
+      existingGroup.styles.push(style)
+      continue
+    }
+    groups.set(groupKey, {
+      categoryKey,
+      label: getBuiltInCategoryLabel(style.category),
+      styles: [style]
+    })
   }
 
-  return [...groups.entries()]
-    .map(([category, entries]) => [
-      category,
-      [...entries].sort((left, right) => {
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      styles: [...group.styles].sort((left, right) => {
         const leftGuide = typeof left.guide_number === "number" ? left.guide_number : Number.POSITIVE_INFINITY
         const rightGuide = typeof right.guide_number === "number" ? right.guide_number : Number.POSITIVE_INFINITY
         if (leftGuide !== rightGuide) {
@@ -113,8 +176,15 @@ const groupBuiltInStyles = (styles: VisualStyleRecord[]): Array<[string, VisualS
         }
         return left.name.localeCompare(right.name)
       })
-    ] as [string, VisualStyleRecord[]])
-    .sort(([leftCategory], [rightCategory]) => leftCategory.localeCompare(rightCategory))
+    }))
+    .sort((leftGroup, rightGroup) => {
+      const orderDelta =
+        getBuiltInCategoryOrder(leftGroup.categoryKey) - getBuiltInCategoryOrder(rightGroup.categoryKey)
+      if (orderDelta !== 0) {
+        return orderDelta
+      }
+      return leftGroup.label.localeCompare(rightGroup.label)
+    })
 }
 
 const toDomIdFragment = (value: string): string =>
@@ -240,26 +310,26 @@ export const VisualStylePicker: React.FC<VisualStylePickerProps> = ({
             </p>
           ) : (
             <>
-              {groupedBuiltInStyles.map(([category, categoryStyles]) => (
+              {groupedBuiltInStyles.map((group) => (
                 <section
-                  key={category}
+                  key={group.categoryKey || group.label}
                   role="region"
-                  aria-labelledby={`visual-style-picker-${toDomIdFragment(category)}`}
+                  aria-labelledby={`visual-style-picker-${toDomIdFragment(group.label)}`}
                   className="space-y-3"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <h3
-                      id={`visual-style-picker-${toDomIdFragment(category)}`}
+                      id={`visual-style-picker-${toDomIdFragment(group.label)}`}
                       className="text-sm font-semibold text-slate-900"
                     >
-                      {category}
+                      {group.label}
                     </h3>
                     <span className="text-xs uppercase tracking-wide text-slate-500">
-                      {categoryStyles.length} style{categoryStyles.length === 1 ? "" : "s"}
+                      {group.styles.length} style{group.styles.length === 1 ? "" : "s"}
                     </span>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2">
-                    {categoryStyles.map((style) => {
+                    {group.styles.map((style) => {
                       const isSelected =
                         selectedValue.visualStyleId === style.id &&
                         selectedValue.visualStyleScope === style.scope
