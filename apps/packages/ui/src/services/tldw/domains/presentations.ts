@@ -53,8 +53,9 @@ const toFiniteNumber = (value: unknown, fallback = 0): number => {
 }
 
 const toStringArray = (value: unknown): string[] => {
-  if (!Array.isArray(value)) return []
-  return value.filter((v) => typeof v === "string").map(String)
+  if (Array.isArray(value)) return value.filter((v) => typeof v === "string").map(String)
+  if (typeof value === "string" && value.trim().length > 0) return [value.trim()]
+  return []
 }
 
 const normalizeVisualStyleSnapshot = (
@@ -75,6 +76,10 @@ const normalizeVisualStyleSnapshot = (
     scope,
     name,
     description: toOptionalString(snapshot.description),
+    category: toOptionalString(snapshot.category),
+    guide_number: toOptionalNumber(snapshot.guide_number),
+    tags: toStringArray(snapshot.tags),
+    best_for: toStringArray(snapshot.best_for),
     generation_rules: toRecord(snapshot.generation_rules),
     artifact_preferences: toStringArray(snapshot.artifact_preferences),
     appearance_defaults: toRecord(snapshot.appearance_defaults),
@@ -92,6 +97,10 @@ const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
     name: String(record.name ?? ""),
     scope: String(record.scope ?? ""),
     description: toOptionalString(record.description),
+    category: toOptionalString(record.category),
+    guide_number: toOptionalNumber(record.guide_number),
+    tags: toStringArray(record.tags),
+    best_for: toStringArray(record.best_for),
     generation_rules: toRecord(record.generation_rules),
     artifact_preferences: toStringArray(record.artifact_preferences),
     appearance_defaults: toRecord(record.appearance_defaults),

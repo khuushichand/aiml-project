@@ -180,12 +180,15 @@ const toOptionalNumber = (value: unknown): number | null => {
 }
 
 const toStringArray = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return []
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      .map((entry) => entry.trim())
   }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => entry.trim())
+  if (typeof value === "string" && value.trim().length > 0) {
+    return [value.trim()]
+  }
+  return []
 }
 
 export const normalizeIngestionSourceSyncSummary = (
@@ -388,6 +391,10 @@ export type PresentationVisualStyleSnapshot = {
   scope: string
   name: string
   description?: string | null
+  category?: string | null
+  guide_number?: number | null
+  tags?: string[]
+  best_for?: string[]
   generation_rules?: Record<string, any>
   artifact_preferences?: string[]
   appearance_defaults?: Record<string, any>
@@ -400,6 +407,10 @@ export type VisualStyleRecord = {
   name: string
   scope: string
   description?: string | null
+  category?: string | null
+  guide_number?: number | null
+  tags: string[]
+  best_for: string[]
   generation_rules: Record<string, any>
   artifact_preferences: string[]
   appearance_defaults: Record<string, any>
@@ -458,6 +469,10 @@ export const clonePresentationVisualStyleSnapshot = (
     scope: snapshot.scope,
     name: snapshot.name,
     description: snapshot.description ?? null,
+    category: snapshot.category ?? null,
+    guide_number: snapshot.guide_number ?? null,
+    tags: [...(snapshot.tags || [])],
+    best_for: [...(snapshot.best_for || [])],
     generation_rules: cloneVisualStyleObject(snapshot.generation_rules),
     artifact_preferences: [...(snapshot.artifact_preferences || [])],
     appearance_defaults: cloneVisualStyleObject(snapshot.appearance_defaults),
@@ -473,6 +488,10 @@ export const buildPresentationVisualStyleSnapshot = (
     | "scope"
     | "name"
     | "description"
+    | "category"
+    | "guide_number"
+    | "tags"
+    | "best_for"
     | "generation_rules"
     | "artifact_preferences"
     | "appearance_defaults"
@@ -485,6 +504,10 @@ export const buildPresentationVisualStyleSnapshot = (
     scope: style.scope,
     name: style.name,
     description: style.description ?? null,
+    category: style.category ?? null,
+    guide_number: style.guide_number ?? null,
+    tags: [...(style.tags || [])],
+    best_for: [...(style.best_for || [])],
     generation_rules: cloneVisualStyleObject(style.generation_rules),
     artifact_preferences: [...(style.artifact_preferences || [])],
     appearance_defaults: cloneVisualStyleObject(style.appearance_defaults),
@@ -564,6 +587,10 @@ const normalizeVisualStyleSnapshot = (
     scope,
     name,
     description: toOptionalString(snapshot.description),
+    category: toOptionalString(snapshot.category),
+    guide_number: toOptionalNumber(snapshot.guide_number),
+    tags: toStringArray(snapshot.tags),
+    best_for: toStringArray(snapshot.best_for),
     generation_rules: toRecord(snapshot.generation_rules),
     artifact_preferences: toStringArray(snapshot.artifact_preferences),
     appearance_defaults: toRecord(snapshot.appearance_defaults),
@@ -581,6 +608,10 @@ const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
     name: String(record.name ?? ""),
     scope: String(record.scope ?? ""),
     description: toOptionalString(record.description),
+    category: toOptionalString(record.category),
+    guide_number: toOptionalNumber(record.guide_number),
+    tags: toStringArray(record.tags),
+    best_for: toStringArray(record.best_for),
     generation_rules: toRecord(record.generation_rules),
     artifact_preferences: toStringArray(record.artifact_preferences),
     appearance_defaults: toRecord(record.appearance_defaults),
