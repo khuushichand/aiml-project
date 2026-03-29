@@ -13,6 +13,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
     RecipeRunRecord,
 )
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import (
@@ -177,6 +178,7 @@ class RecipeRunsService:
                 "reuse_hash": reuse_hash,
                 "dataset_mode": validation["dataset_mode"],
                 "dataset_id": dataset_id,
+                "owner_user_id": self.user_id,
             },
         )
         self._record_reuse_mapping(run_id, reuse_hash)
@@ -266,8 +268,19 @@ class RecipeRunsService:
         for row in rows:
             run_id = str(row["run_id"]) if isinstance(row, dict) else str(row[0])
             record = self.db.get_recipe_run(run_id)
-            if record is not None and record.metadata.get("reuse_hash") == reuse_hash:
-                return record
+            if record is None:
+                continue
+            if record.metadata.get("reuse_hash") != reuse_hash:
+                continue
+            owner_user_id = record.metadata.get("owner_user_id")
+            if owner_user_id:
+                if self.user_id and owner_user_id != self.user_id:
+                    continue
+                if not self.user_id:
+                    continue
+            elif self.user_id and not is_single_user_mode():
+                continue
+            return record
         return None
 
     def _resolve_dataset(

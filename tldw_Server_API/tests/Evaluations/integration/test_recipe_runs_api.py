@@ -11,7 +11,11 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-from tldw_Server_API.app.core.Evaluations.recipe_runs_service import RECIPE_RUN_REUSE_ENTITY_TYPE
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
+    RECIPE_RUN_REUSE_ENTITY_TYPE,
+    RecipeRunsService,
+)
+from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import build_dataset_content_hash
 
 pytestmark = [pytest.mark.integration]
 
@@ -65,6 +69,26 @@ def _mark_recipe_run_completed(db: EvaluationsDatabase, run_id: str) -> None:
             WHERE run_id = ?
             """,
             (RunStatus.COMPLETED.value, run_id),
+        )
+        conn.commit()
+
+
+def _set_reuse_mapping(
+    db: EvaluationsDatabase,
+    *,
+    reuse_hash: str,
+    user_id: str,
+    run_id: str,
+) -> None:
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE idempotency_keys
+            SET entity_id = ?
+            WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
+            """,
+            (run_id, user_id, RECIPE_RUN_REUSE_ENTITY_TYPE, reuse_hash),
         )
         conn.commit()
 
@@ -133,6 +157,7 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
     created = create_response.json()
     assert created["status"] == "pending"
     assert created["metadata"]["run_config"] == payload["run_config"]
+    assert created["metadata"]["owner_user_id"]
 
     run_id = created["run_id"]
 
@@ -274,6 +299,12 @@ async def test_recipe_run_endpoint_repairs_stale_reuse_mapping_to_latest_complet
     assert forced_response.status_code == 201
     forced_run = forced_response.json()
     _mark_recipe_run_completed(db, forced_run["run_id"])
+    _set_reuse_mapping(
+        db,
+        reuse_hash=reuse_hash,
+        user_id=user_id,
+        run_id=first_run["run_id"],
+    )
 
     reused_response = await async_api_client.post(
         "/api/v1/evaluations/recipes/summarization_quality/runs",
@@ -296,3 +327,91 @@ async def test_recipe_run_endpoint_repairs_stale_reuse_mapping_to_latest_complet
         )
         == forced_run["run_id"]
     )
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_endpoint_does_not_reuse_completed_run_from_other_user(
+    async_api_client,
+    auth_headers,
+) -> None:
+    db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
+    db = EvaluationsDatabase(db_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+    current_user_id = get_single_user_instance().id_str
+    reuse_hash = RecipeRunsService(db=db, user_id=current_user_id).build_reuse_hash(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    other_user_run_id = db.create_recipe_run(
+        recipe_id="summarization_quality",
+        recipe_version="1",
+        status=RunStatus.COMPLETED,
+        dataset_content_hash=build_dataset_content_hash(dataset),
+        metadata={
+            "run_config": run_config,
+            "reuse_hash": reuse_hash,
+            "owner_user_id": "other-user",
+        },
+    )
+    _mark_recipe_run_completed(db, other_user_run_id)
+
+    reused_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert reused_response.status_code == 201
+    reused = reused_response.json()
+    assert reused["run_id"] != other_user_run_id
+    assert reused["metadata"]["owner_user_id"] == current_user_id
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_endpoint_reuses_legacy_completed_run_without_owner_in_single_user_mode(
+    async_api_client,
+    auth_headers,
+) -> None:
+    db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
+    db = EvaluationsDatabase(db_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+    reuse_hash = RecipeRunsService(
+        db=db,
+        user_id=get_single_user_instance().id_str,
+    ).build_reuse_hash(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    legacy_run_id = db.create_recipe_run(
+        recipe_id="summarization_quality",
+        recipe_version="1",
+        status=RunStatus.COMPLETED,
+        dataset_content_hash=build_dataset_content_hash(dataset),
+        metadata={
+            "run_config": run_config,
+            "reuse_hash": reuse_hash,
+        },
+    )
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    reused = response.json()
+    assert reused["run_id"] == legacy_run_id
+    assert reused["status"] == "completed"

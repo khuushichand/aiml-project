@@ -83,6 +83,26 @@ def _mark_recipe_run_completed(db: EvaluationsDatabase, run_id: str) -> None:
         conn.commit()
 
 
+def _set_reuse_mapping(
+    db: EvaluationsDatabase,
+    *,
+    reuse_hash: str,
+    user_id: str,
+    run_id: str,
+) -> None:
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE idempotency_keys
+            SET entity_id = ?
+            WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
+            """,
+            (run_id, user_id, RECIPE_RUN_REUSE_ENTITY_TYPE, reuse_hash),
+        )
+        conn.commit()
+
+
 def test_recipe_service_lists_and_fetches_builtin_manifests(tmp_path) -> None:
     _, service, _ = _service(tmp_path)
 
@@ -130,6 +150,7 @@ def test_recipe_service_creates_parent_run_and_normalized_report_shell(tmp_path)
     assert record.dataset_content_hash == build_dataset_content_hash(dataset)
     assert record.metadata["run_config"] == run_config
     assert "reuse_hash" in record.metadata
+    assert record.metadata["owner_user_id"]
 
     fetched = service.get_run(record.run_id)
     assert fetched is not None
@@ -224,6 +245,12 @@ def test_recipe_service_repairs_stale_reuse_mapping_to_latest_completed_run(tmp_
         force_rerun=True,
     )
     _mark_recipe_run_completed(db, forced_run.run_id)
+    _set_reuse_mapping(
+        db,
+        reuse_hash=reuse_hash,
+        user_id=user_id,
+        run_id=first_run.run_id,
+    )
 
     reused = service.create_run(
         "summarization_quality",
@@ -241,3 +268,57 @@ def test_recipe_service_repairs_stale_reuse_mapping_to_latest_completed_run(tmp_
         )
         == forced_run.run_id
     )
+
+
+def test_recipe_service_does_not_reuse_completed_run_from_other_user(tmp_path) -> None:
+    db, service, _ = _service(tmp_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+
+    other_user_service = RecipeRunsService(db=db, user_id="other-user")
+    other_user_run = other_user_service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+    _mark_recipe_run_completed(db, other_user_run.run_id)
+
+    created = service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    assert created.run_id != other_user_run.run_id
+    assert created.status is RunStatus.PENDING
+
+
+def test_recipe_service_reuses_legacy_completed_run_without_owner_in_single_user_mode(tmp_path) -> None:
+    db, service, _ = _service(tmp_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+    reuse_hash = service.build_reuse_hash(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    legacy_run_id = db.create_recipe_run(
+        recipe_id="summarization_quality",
+        recipe_version="1",
+        status=RunStatus.COMPLETED,
+        dataset_content_hash=build_dataset_content_hash(dataset),
+        metadata={
+            "run_config": run_config,
+            "reuse_hash": reuse_hash,
+        },
+    )
+
+    reused = service.create_run(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    assert reused.run_id == legacy_run_id
+    assert reused.status is RunStatus.COMPLETED
