@@ -7,12 +7,17 @@ before any tests import the FastAPI app.
 """
 
 import os
-import sys
 import importlib
 import types
 import importlib.machinery
 
 import pytest
+
+from tldw_Server_API.tests.helpers.app_main_state import (
+    clear_app_main,
+    restore_app_main,
+    snapshot_app_main,
+)
 
 # Stub heavyweight audio deps before importing full app modules in this suite.
 if "torch" not in sys.modules:
@@ -58,7 +63,7 @@ def enable_full_app_for_watchlists():
     orig_minimal = os.getenv("MINIMAL_TEST_APP")
     orig_disable = os.getenv("ROUTES_DISABLE")
     orig_enable = os.getenv("ROUTES_ENABLE")
-    previous_main = sys.modules.get("tldw_Server_API.app.main")
+    previous_main = snapshot_app_main()
 
     # Force full router set so /api/v1/watchlists/* endpoints are available
     os.environ["MINIMAL_TEST_APP"] = "0"
@@ -76,7 +81,7 @@ def enable_full_app_for_watchlists():
     os.environ["ROUTES_ENABLE"] = ",".join(dict.fromkeys(enable_parts))
 
     # Reload app module so the new env is observed even if it was imported earlier
-    sys.modules.pop("tldw_Server_API.app.main", None)
+    clear_app_main()
     importlib.invalidate_caches()
 
     yield
@@ -97,7 +102,5 @@ def enable_full_app_for_watchlists():
     else:
         os.environ["ROUTES_ENABLE"] = orig_enable
 
-    sys.modules.pop("tldw_Server_API.app.main", None)
-    if previous_main is not None:
-        sys.modules["tldw_Server_API.app.main"] = previous_main
+    restore_app_main(previous_main)
     importlib.invalidate_caches()
