@@ -296,6 +296,36 @@ describe("NotesManagerPage stage 43 notes studio entry", () => {
     })
   })
 
+  it("requires saving dirty notes before opening Notes Studio", async () => {
+    renderPage()
+
+    const textarea = (await screen.findByPlaceholderText(
+      "Write your note here... (Markdown supported)"
+    )) as HTMLTextAreaElement
+
+    fireEvent.change(textarea, {
+      target: { value: `${sourceNote.content}\n\nUnsaved local-only sentence.` }
+    })
+
+    const selectionStart = textarea.value.indexOf("Unsaved local-only sentence.")
+    const selectionEnd = selectionStart + "Unsaved local-only sentence.".length
+    textarea.focus()
+    textarea.setSelectionRange(selectionStart, selectionEnd)
+    fireEvent.select(textarea)
+
+    fireEvent.click(screen.getByTestId("notes-overflow-menu-button"))
+    fireEvent.click(await screen.findByText("Notes Studio"))
+
+    await waitFor(() => {
+      expect(mockMessageWarning).toHaveBeenCalledWith("Save this note before opening Notes Studio.")
+    })
+
+    expect(screen.queryByTestId("notes-studio-create-modal")).not.toBeInTheDocument()
+    expect(
+      mockBgRequest.mock.calls.some(([request]) => (request as { path?: string }).path === "/api/v1/notes/studio/derive")
+    ).toBe(false)
+  })
+
   it("captures studio options, derives a note, and reloads selected studio state", async () => {
     renderPage()
 

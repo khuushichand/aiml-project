@@ -1413,6 +1413,12 @@ const NotesManagerPage: React.FC = () => {
 
   const handleOpenNotesStudio = React.useCallback(() => {
     if (editorDisabled || ed.selectedId == null) return
+    if (ed.isDirty) {
+      message.warning(t('option:notesSearch.notesStudioSaveFirstWarning', {
+        defaultValue: 'Save this note before opening Notes Studio.'
+      }))
+      return
+    }
     if (ed.editorInputMode !== 'markdown') {
       setNotesStudioMarkdownOnlyNoticeOpen(true)
       return

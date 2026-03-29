@@ -799,6 +799,7 @@
     "notesStudioExcerptLabel": "Selected excerpt",
     "notesStudioCreateAction": "Create Notes Studio note",
     "notesStudioSelectionRequired": "Select Markdown text before opening Notes Studio.",
+    "notesStudioSaveFirstWarning": "Save this note before opening Notes Studio.",
     "notesStudioMarkdownOnlyNotice": "Notes Studio works from Markdown selections only.",
     "notesStudioSwitchToMarkdown": "Switch to Markdown",
     "notesStudioTemplateLined": "Lined",

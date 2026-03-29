@@ -1238,6 +1238,9 @@
   "notesSearch_notesStudioSelectionRequired": {
     "message": "Select Markdown text before opening Notes Studio."
   },
+  "notesSearch_notesStudioSaveFirstWarning": {
+    "message": "Save this note before opening Notes Studio."
+  },
   "notesSearch_notesStudioMarkdownOnlyNotice": {
     "message": "Notes Studio works from Markdown selections only."
   },
