@@ -167,6 +167,21 @@ class BuiltinVisualStyleDefinition:
 
 The public API should continue returning `VisualStyleResponse`, but the response should be derived from this richer catalog definition.
 
+### Important constraint: separate list metadata from resolved appearance payloads
+
+The current frontend eagerly loads all visual styles when opening Presentation Studio. Returning fully resolved CSS for all 44 built-in styles in that list response would create unnecessarily large payloads and slow the picker.
+
+Preferred API behavior:
+
+- list endpoint returns summary metadata only
+- built-in detail resolution happens:
+  - when a style is selected
+  - when a presentation is created
+  - when a presentation-level style is changed
+  - when an export is generated
+
+If the API keeps a single response model, built-in list responses should still omit or null out heavy resolved fields such as expanded `custom_css`.
+
 ## Style Pack Layer
 
 Introduce reusable style packs that can be compiled into safe `custom_css`.
@@ -246,6 +261,23 @@ Resolution order:
 7. persist the resolved snapshot and presentation-level appearance fields
 
 This keeps exports deterministic and decouples catalog authoring from persisted deck state.
+
+### Important constraint: persist compact style resolution, not large CSS blobs
+
+The current implementation stores full presentation snapshots in version history. Because Presentation Studio can autosave frequently, storing fully expanded CSS in every built-in style snapshot would duplicate the same large blob across many `presentations_versions` rows.
+
+For that reason:
+
+- do not return fully expanded `custom_css` for every built-in style in list responses
+- do not store fully expanded CSS inside `visual_style_snapshot`
+- instead, persist a compact immutable style-resolution payload such as:
+  - `base_theme`
+  - `style_pack`
+  - `style_pack_version`
+  - `token_overrides`
+  - `resolved_settings`
+
+The presentation row may still persist resolved `custom_css` when the deck appearance is explicitly applied, but the visual-style snapshot should remain compact.
 
 ## Proposed File Structure
 
@@ -390,6 +422,19 @@ The `custom_css` should be produced by concatenating:
 
 No external fonts, images, or imported stylesheets should be used.
 
+### Deck-level style changes must re-resolve appearance fields
+
+Under the current Presentation Studio behavior, changing a deck-level visual style updates only the visual-style metadata. If the implementation stops there, existing presentations will retain stale `theme`, `settings`, and `custom_css`, so exports will not visually match the newly selected style.
+
+To avoid that mismatch, built-in style changes in create and detail flows must atomically re-resolve:
+
+- `theme`
+- `settings`
+- `custom_css`
+- `visual_style_snapshot`
+
+Changing style should still avoid rewriting slide bodies, layouts, or notes. The update is presentation-level appearance and future-generation strategy only.
+
 ## HTML Hooks
 
 Enhance export HTML generation to stamp stable style hooks on the document so CSS remains namespaced and testable.
@@ -415,6 +460,12 @@ Rules:
 - render structured HTML blocks in export bundle / PDF HTML
 - keep `slide.content` textual fallback for Markdown and resilience
 - if structured block rendering fails, fall back to current content rendering
+
+Precedence rule:
+
+- HTML / PDF exports must render either the structured block or its textual fallback, not both
+- Markdown export continues using textual fallback only
+- if `slide.content` already contains the compiled fallback for a supported block type, HTML / PDF rendering should suppress duplicate fallback text when the richer block renderer succeeds
 
 This is a renderer enhancement, not a new artifact system.
 
@@ -444,6 +495,8 @@ Possible additions to evaluate:
 
 Any expansion should be conservative and covered by export tests.
 
+Properties such as `backdrop-filter` should be treated as progressive enhancement only. Every style pack that depends on them must also define a visually acceptable fallback that survives CSS sanitization and Chromium print rendering.
+
 ## API Design
 
 Extend `VisualStyleResponse` with optional fields for built-in browsing and display:
@@ -462,6 +515,8 @@ The persisted presentation model can remain unchanged, but the built-in snapshot
 - `tags`
 
 This preserves useful display metadata when a built-in catalog entry later evolves.
+
+For performance, the list response used by the picker should be summary-oriented. If necessary, introduce a separate summary schema for list surfaces instead of reusing the full detail payload everywhere.
 
 ## Frontend Design
 
