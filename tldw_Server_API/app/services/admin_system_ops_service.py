@@ -5,7 +5,7 @@ import os
 import secrets
 import time
 from contextlib import contextmanager, suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -124,6 +124,7 @@ def _default_store() -> dict[str, Any]:
         "feature_flags": [],
         "incidents": [],
         "webhooks": [],
+        "invitations": [],
     }
 
 
@@ -203,6 +204,7 @@ def _load_store() -> dict[str, Any]:
     data.setdefault("feature_flags", [])
     data.setdefault("incidents", [])
     data.setdefault("webhooks", [])
+    data.setdefault("invitations", [])
     return data
 
 
@@ -874,3 +876,177 @@ def delete_webhook(*, webhook_id: str) -> None:
         if len(remaining) == len(webhooks):
             raise ValueError("not_found")
         store["webhooks"] = remaining
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# User Invitations
+# ──────────────────────────────────────────────────────────────────────────────
+
+_INVITATION_STATUSES = {"pending", "accepted", "expired", "revoked"}
+_INVITATION_ROLES = {"user", "admin", "service", "viewer"}
+_INVITATION_DEFAULT_EXPIRY_DAYS = 7
+_INVITATION_MAX_PENDING = 200
+
+
+def _normalize_invitation_record(value: Any) -> dict[str, Any]:
+    """Normalize and validate an invitation record."""
+    if not isinstance(value, dict):
+        raise ValueError("invalid_invitation")
+    invitation = dict(value)
+    invitation.setdefault("id", uuid4().hex[:16])
+    invitation.setdefault("status", "pending")
+    invitation.setdefault("created_at", _now_iso())
+    invitation.setdefault("accepted_at", None)
+    invitation.setdefault("email_sent", False)
+    invitation.setdefault("email_error", None)
+    return invitation
+
+
+def list_invitations(
+    *,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """List all user invitations, optionally filtered by status."""
+    with _locked_store() as store:
+        invitations_raw = list(store.get("invitations", []))
+
+    invitations = []
+    now = datetime.now(timezone.utc)
+    for inv in invitations_raw:
+        try:
+            record = _normalize_invitation_record(inv)
+        except ValueError:
+            continue
+        # Auto-expire pending invitations past their expiry date
+        if record["status"] == "pending":
+            expires_at = record.get("expires_at")
+            if expires_at:
+                expiry_dt = _parse_iso(expires_at)
+                if expiry_dt < now:
+                    record["status"] = "expired"
+        invitations.append(record)
+
+    if status:
+        status_norm = status.strip().lower()
+        if status_norm in _INVITATION_STATUSES:
+            invitations = [inv for inv in invitations if inv.get("status") == status_norm]
+
+    invitations.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return invitations
+
+
+def create_invitation(
+    *,
+    email: str,
+    role: str = "user",
+    invited_by: str | None = None,
+    expiry_days: int = _INVITATION_DEFAULT_EXPIRY_DAYS,
+) -> dict[str, Any]:
+    """Create a new user invitation."""
+    email_norm = (email or "").strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("invalid_email")
+
+    role_norm = (role or "user").strip().lower()
+    if role_norm not in _INVITATION_ROLES:
+        raise ValueError("invalid_role")
+
+    if expiry_days < 1 or expiry_days > 365:
+        expiry_days = _INVITATION_DEFAULT_EXPIRY_DAYS
+
+    token = secrets.token_urlsafe(32)
+    now = _now_iso()
+    now_dt = datetime.now(timezone.utc)
+    expires_at = (now_dt + timedelta(days=expiry_days)).isoformat()
+
+    invitation = {
+        "id": uuid4().hex[:16],
+        "email": email_norm,
+        "role": role_norm,
+        "status": "pending",
+        "token": token,
+        "invited_by": invited_by,
+        "created_at": now,
+        "expires_at": expires_at,
+        "accepted_at": None,
+        "email_sent": False,
+        "email_error": None,
+    }
+
+    with _locked_store(write=True) as store:
+        invitations = store.get("invitations", [])
+
+        # Check for duplicate pending invitation to same email
+        for existing in invitations:
+            if (
+                existing.get("email") == email_norm
+                and existing.get("status") == "pending"
+            ):
+                expires_at_existing = existing.get("expires_at")
+                if expires_at_existing:
+                    expiry_dt = _parse_iso(expires_at_existing)
+                    if expiry_dt > now_dt:
+                        raise ValueError("duplicate_pending_invitation")
+
+        # Cap total pending invitations
+        pending_count = sum(1 for inv in invitations if inv.get("status") == "pending")
+        if pending_count >= _INVITATION_MAX_PENDING:
+            raise ValueError("too_many_pending_invitations")
+
+        invitations.append(invitation)
+        store["invitations"] = invitations
+
+    return invitation
+
+
+def get_invitation_by_token(*, token: str) -> dict[str, Any] | None:
+    """Look up an invitation by its token."""
+    with _locked_store() as store:
+        for inv in store.get("invitations", []):
+            if inv.get("token") == token:
+                return _normalize_invitation_record(inv)
+    return None
+
+
+def update_invitation_email_status(
+    *,
+    invitation_id: str,
+    email_sent: bool,
+    email_error: str | None = None,
+) -> dict[str, Any] | None:
+    """Update the email delivery status for an invitation."""
+    with _locked_store(write=True) as store:
+        invitations = store.get("invitations", [])
+        for inv in invitations:
+            if inv.get("id") == invitation_id:
+                inv["email_sent"] = email_sent
+                inv["email_error"] = email_error
+                return _normalize_invitation_record(inv)
+    return None
+
+
+def revoke_invitation(*, invitation_id: str) -> dict[str, Any]:
+    """Revoke a pending invitation."""
+    with _locked_store(write=True) as store:
+        invitations = store.get("invitations", [])
+        for inv in invitations:
+            if inv.get("id") == invitation_id:
+                if inv.get("status") != "pending":
+                    raise ValueError("not_pending")
+                inv["status"] = "revoked"
+                return _normalize_invitation_record(inv)
+    raise ValueError("not_found")
+
+
+def accept_invitation(*, invitation_id: str) -> dict[str, Any]:
+    """Mark an invitation as accepted."""
+    with _locked_store(write=True) as store:
+        invitations = store.get("invitations", [])
+        for inv in invitations:
+            if inv.get("id") == invitation_id:
+                if inv.get("status") != "pending":
+                    raise ValueError("not_pending")
+                inv["status"] = "accepted"
+                inv["accepted_at"] = _now_iso()
+                return _normalize_invitation_record(inv)
+    raise ValueError("not_found")

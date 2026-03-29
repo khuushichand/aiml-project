@@ -114,6 +114,10 @@ vi.mock('@/lib/api-client', () => ({
     createUser: vi.fn(),
     resetUserPassword: vi.fn(),
     setUserMfaRequirement: vi.fn(),
+    getUserMfaStatus: vi.fn(),
+    inviteUser: vi.fn(),
+    getInvitations: vi.fn(),
+    revokeInvitation: vi.fn(),
   },
 }));
 
@@ -194,6 +198,35 @@ beforeEach(() => {
   apiMock.createUser.mockResolvedValue({});
   apiMock.resetUserPassword.mockResolvedValue({});
   apiMock.setUserMfaRequirement.mockResolvedValue({});
+  apiMock.getUserMfaStatus.mockResolvedValue({ enabled: false });
+  apiMock.getInvitations.mockResolvedValue({
+    items: [
+      {
+        id: 'inv-001',
+        email: 'invited@example.com',
+        role: 'user',
+        status: 'pending',
+        invited_by: 'Alice',
+        created_at: '2026-03-20T10:00:00Z',
+        expires_at: '2026-03-27T10:00:00Z',
+        email_sent: true,
+        email_error: null,
+      },
+    ],
+    total: 1,
+  });
+  apiMock.inviteUser.mockResolvedValue({
+    id: 'inv-new',
+    email: 'new@example.com',
+    role: 'user',
+    status: 'pending',
+    email_sent: true,
+    email_error: null,
+  });
+  apiMock.revokeInvitation.mockResolvedValue({
+    id: 'inv-001',
+    status: 'revoked',
+  });
 });
 
 afterEach(() => {
@@ -205,7 +238,7 @@ describe('UsersPage', () => {
   it('has no critical/serious axe violations in the default state', async () => {
     const { container } = render(<UsersPage />);
 
-    await screen.findByText('Invitations');
+    await screen.findByText('Organization Invitations');
     const violations = await getCriticalAndSeriousAxeViolations(container);
     expect(violations, formatAxeViolations(violations)).toEqual([]);
   });
@@ -213,7 +246,7 @@ describe('UsersPage', () => {
   it('renders invitation funnel metrics and mixed invitation statuses', async () => {
     render(<UsersPage />);
 
-    await screen.findByText('Invitations');
+    await screen.findByText('Organization Invitations');
     expect(screen.getByTestId('invitation-total-sent').textContent).toContain('3');
     expect(screen.getByTestId('invitation-total-accepted').textContent).toContain('1');
     expect(screen.getByTestId('invitation-conversion-rate').textContent).toContain('33.3%');
@@ -381,5 +414,73 @@ describe('UsersPage', () => {
     await waitFor(() => {
       expect(getScopedItem('admin_users_saved_views') ?? '').not.toContain('Bob only');
     });
+  });
+
+  it('renders the Pending Invitations section with direct invitations', async () => {
+    render(<UsersPage />);
+
+    await screen.findByText('Pending Invitations');
+    expect(screen.getByText('invited@example.com')).toBeInTheDocument();
+    expect(screen.getByTestId('direct-invitation-row-inv-001')).toBeInTheDocument();
+  });
+
+  it('shows the Invite User button and opens the invite dialog', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    const inviteButton = await screen.findByRole('button', { name: /invite user/i });
+    expect(inviteButton).toBeInTheDocument();
+
+    await user.click(inviteButton);
+    expect(await screen.findByText('Invite user')).toBeInTheDocument();
+    expect(screen.getByLabelText('Email address')).toBeInTheDocument();
+    expect(screen.getByLabelText('Role')).toBeInTheDocument();
+  });
+
+  it('sends an invitation when the invite form is submitted', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    await user.click(await screen.findByRole('button', { name: /invite user/i }));
+    await user.type(screen.getByLabelText('Email address'), 'new@example.com');
+    await user.click(screen.getByRole('button', { name: /send invitation/i }));
+
+    await waitFor(() => {
+      expect(apiMock.inviteUser).toHaveBeenCalledWith({
+        email: 'new@example.com',
+        role: 'user',
+      });
+    });
+    await waitFor(() => {
+      expect(toastSuccessMock).toHaveBeenCalled();
+    });
+  });
+
+  it('revokes an invitation when the revoke button is clicked', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    await screen.findByText('Pending Invitations');
+    const row = screen.getByTestId('direct-invitation-row-inv-001');
+    const revokeButton = within(row).getByTitle('Revoke invitation');
+
+    await user.click(revokeButton);
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Revoke invitation' })
+      );
+    });
+    await waitFor(() => {
+      expect(apiMock.revokeInvitation).toHaveBeenCalledWith('inv-001');
+    });
+  });
+
+  it('shows empty state when no direct invitations exist', async () => {
+    apiMock.getInvitations.mockResolvedValue({ items: [], total: 0 });
+    render(<UsersPage />);
+
+    await screen.findByText('Pending Invitations');
+    expect(screen.getByText('No invitations')).toBeInTheDocument();
   });
 });

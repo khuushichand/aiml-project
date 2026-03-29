@@ -272,6 +272,69 @@ Use this link to complete your admin reauthentication (expires in {{ expiry_minu
 If you did not request this, ignore this email.
 """
     },
+    "user_invitation": {
+        "subject": "You've been invited to {{ app_name }}",
+        "html": """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #2563eb; color: white; padding: 20px; text-align: center; }
+        .content { background-color: #f8f9fa; padding: 30px; margin-top: 20px; }
+        .button { display: inline-block; padding: 12px 30px; background-color: #2563eb;
+                  color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;
+                  font-size: 0.9em; color: #6c757d; }
+        .note { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 10px;
+                margin: 16px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+        </div>
+        <div class="content">
+            <h2>You're Invited!</h2>
+            <p>Hello,</p>
+            <p>You have been invited to join <strong>{{ app_name }}</strong> as a <strong>{{ role }}</strong>.</p>
+            <p>Click the button below to create your account:</p>
+            <center>
+                <a href="{{ invite_url }}" class="button">Accept Invitation</a>
+            </center>
+            <p>Or copy and paste this link into your browser:</p>
+            <p style="word-break: break-all; background: #fff; padding: 10px; border: 1px solid #dee2e6;">
+                {{ invite_url }}
+            </p>
+            <div class="note">
+                <strong>Note:</strong> This invitation expires in {{ expiry_days }} day(s).
+            </div>
+        </div>
+        <div class="footer">
+            <p>If you did not expect this invitation, you can safely ignore this email.</p>
+            <p>This is an automated message from {{ app_name }}.</p>
+        </div>
+    </div>
+</body>
+</html>
+""",
+        "text": """
+You're Invited to {{ app_name }}!
+
+Hello,
+
+You have been invited to join {{ app_name }} as a {{ role }}.
+
+To accept your invitation and create your account, visit:
+{{ invite_url }}
+
+This invitation expires in {{ expiry_days }} day(s).
+
+If you did not expect this invitation, you can safely ignore this email.
+"""
+    },
     "mfa_enabled": {
         "subject": "Two-Factor Authentication Enabled - {{ app_name }}",
         "html": """
@@ -771,6 +834,40 @@ class EmailService:
             text_body,
             redact_mock_tokens=True,
         )
+
+    async def send_user_invitation_email(
+        self,
+        *,
+        to_email: str,
+        invite_token: str,
+        role: str = "user",
+        expiry_days: int = 7,
+        base_url: Optional[str] = None,
+    ) -> bool:
+        """Send a user invitation email with a registration link."""
+        invite_url = self._resolve_public_web_base_url(
+            base_url=base_url,
+            hosted_default_path="/register",
+            legacy_default_path="/register",
+            configured_public_path=self._read_setting_text("PUBLIC_REGISTRATION_PATH"),
+            token=invite_token,
+        )
+
+        template_data = {
+            "app_name": self.app_name,
+            "invite_url": invite_url,
+            "role": role,
+            "expiry_days": expiry_days,
+        }
+
+        html_template = Template(EMAIL_TEMPLATES["user_invitation"]["html"])
+        text_template = Template(EMAIL_TEMPLATES["user_invitation"]["text"])
+
+        html_body = html_template.render(**template_data)
+        text_body = text_template.render(**template_data)
+        subject = Template(EMAIL_TEMPLATES["user_invitation"]["subject"]).render(**template_data)
+
+        return await self.send_email(to_email, subject, html_body, text_body)
 
     async def send_mfa_enabled_email(
         self,

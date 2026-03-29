@@ -23,11 +23,13 @@ import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form'
 import {
   Eye,
   Key,
+  Mail,
   Search,
   Plus,
   Trash2,
   UserCheck,
   UserX,
+  XCircle,
   BookmarkPlus,
   BookmarkX,
 } from 'lucide-react';
@@ -172,6 +174,26 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
+  const [showInviteUserDialog, setShowInviteUserDialog] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('user');
+  const [invitingUser, setInvitingUser] = useState(false);
+  const [inviteUserError, setInviteUserError] = useState('');
+  type DirectInvitation = {
+    id: string;
+    email: string;
+    role: string;
+    status: string;
+    invited_by: string | null;
+    created_at: string | null;
+    expires_at: string | null;
+    email_sent: boolean;
+    email_error: string | null;
+  };
+  const [directInvitations, setDirectInvitations] = useState<DirectInvitation[]>([]);
+  const [directInvitesLoading, setDirectInvitesLoading] = useState(true);
+  const [directInvitesError, setDirectInvitesError] = useState('');
+  const [revokingInviteIds, setRevokingInviteIds] = useState<Set<string>>(new Set());
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(true);
   const [invitesError, setInvitesError] = useState('');
@@ -220,6 +242,91 @@ function UsersPageContent() {
       setCreateUserError('');
     }
   }, [createUserForm, showCreateUserDialog]);
+
+  useEffect(() => {
+    if (!showInviteUserDialog) {
+      setInviteEmail('');
+      setInviteRole('user');
+      setInviteUserError('');
+    }
+  }, [showInviteUserDialog]);
+
+  const loadDirectInvitations = useCallback(async () => {
+    try {
+      setDirectInvitesLoading(true);
+      setDirectInvitesError('');
+      const response = await api.getInvitations() as { items?: DirectInvitation[] };
+      setDirectInvitations(Array.isArray(response?.items) ? response.items : []);
+    } catch (err: unknown) {
+      logger.error('Failed to load direct invitations', { component: 'UsersPage', error: err instanceof Error ? err.message : String(err) });
+      setDirectInvitesError(err instanceof Error ? err.message : 'Failed to load invitations');
+      setDirectInvitations([]);
+    } finally {
+      setDirectInvitesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDirectInvitations();
+  }, [loadDirectInvitations]);
+
+  const handleInviteUser = async () => {
+    setInviteUserError('');
+    if (!inviteEmail.trim()) {
+      setInviteUserError('Email is required');
+      return;
+    }
+    try {
+      setInvitingUser(true);
+      const result = await api.inviteUser({
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      }) as { email_sent?: boolean; email_error?: string | null };
+      if (result.email_sent) {
+        success('Invitation sent', `Invite email sent to ${inviteEmail.trim()}.`);
+      } else {
+        success(
+          'Invitation created',
+          `Invitation created for ${inviteEmail.trim()}, but email could not be sent. ${result.email_error || 'Check email configuration.'}`,
+        );
+      }
+      setShowInviteUserDialog(false);
+      void loadDirectInvitations();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to send invitation';
+      setInviteUserError(message);
+      showError('Invite failed', message);
+    } finally {
+      setInvitingUser(false);
+    }
+  };
+
+  const handleRevokeInvitation = async (invitationId: string) => {
+    const confirmed = await confirm({
+      title: 'Revoke invitation',
+      message: 'Revoke this pending invitation? The invite link will no longer work.',
+      confirmText: 'Revoke',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      setRevokingInviteIds((prev) => new Set(prev).add(invitationId));
+      await api.revokeInvitation(invitationId);
+      success('Invitation revoked', 'The invitation has been revoked.');
+      void loadDirectInvitations();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to revoke invitation';
+      showError('Revoke failed', message);
+    } finally {
+      setRevokingInviteIds((prev) => {
+        const next = new Set(prev);
+        next.delete(invitationId);
+        return next;
+      });
+    }
+  };
 
   const loadUsersResource = useCallback(async () => {
     const params: Record<string, string> = { limit: '200' };
@@ -898,6 +1005,69 @@ function UsersPageContent() {
                     </FormProvider>
                   </DialogContent>
                 </Dialog>
+                <Dialog open={showInviteUserDialog} onOpenChange={setShowInviteUserDialog}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline">
+                      <Mail className="mr-2 h-4 w-4" />
+                      Invite User
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Invite user</DialogTitle>
+                      <DialogDescription>Send an invitation email to a new user.</DialogDescription>
+                    </DialogHeader>
+                    {inviteUserError && (
+                      <Alert variant="destructive">
+                        <AlertDescription>{inviteUserError}</AlertDescription>
+                      </Alert>
+                    )}
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="invite-email">Email address</Label>
+                        <Input
+                          id="invite-email"
+                          type="email"
+                          placeholder="user@example.com"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          disabled={invitingUser}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="invite-role">Role</Label>
+                        <Select
+                          id="invite-role"
+                          value={inviteRole}
+                          onChange={(e) => setInviteRole(e.target.value)}
+                          disabled={invitingUser}
+                        >
+                          <option value="user">User</option>
+                          <option value="admin">Admin</option>
+                          <option value="viewer">Viewer</option>
+                          <option value="service">Service</option>
+                        </Select>
+                      </div>
+                    </div>
+                    <DialogFooter className="gap-2 sm:gap-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setShowInviteUserDialog(false)}
+                        disabled={invitingUser}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleInviteUser}
+                        loading={invitingUser}
+                        loadingText="Sending..."
+                      >
+                        Send invitation
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </div>
             </div>
 
@@ -1044,7 +1214,96 @@ function UsersPageContent() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Invitations</CardTitle>
+                <CardTitle>Pending Invitations</CardTitle>
+                <CardDescription>
+                  Direct email invitations sent to prospective users.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {directInvitesError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{directInvitesError}</AlertDescription>
+                  </Alert>
+                )}
+                {directInvitesLoading ? (
+                  <div className="text-sm text-muted-foreground">Loading invitations...</div>
+                ) : directInvitations.length === 0 ? (
+                  <EmptyState
+                    icon={Mail}
+                    title="No invitations"
+                    description="Use the Invite User button to send email invitations."
+                  />
+                ) : (
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Email</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>Invited by</TableHead>
+                          <TableHead>Email Sent</TableHead>
+                          <TableHead>Created</TableHead>
+                          <TableHead>Expires</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {directInvitations.map((inv) => (
+                          <TableRow key={inv.id} data-testid={`direct-invitation-row-${inv.id}`}>
+                            <TableCell>
+                              <Badge variant={
+                                inv.status === 'accepted' ? 'default'
+                                : inv.status === 'revoked' || inv.status === 'expired' ? 'destructive'
+                                : 'secondary'
+                              }>
+                                {inv.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{inv.email}</TableCell>
+                            <TableCell>{inv.role}</TableCell>
+                            <TableCell>{inv.invited_by || '\u2014'}</TableCell>
+                            <TableCell>
+                              {inv.email_sent ? (
+                                <Badge variant="default">Sent</Badge>
+                              ) : (
+                                <Badge variant="destructive" title={inv.email_error || 'Not sent'}>
+                                  Not sent
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {inv.created_at ? new Date(inv.created_at).toLocaleDateString() : '\u2014'}
+                            </TableCell>
+                            <TableCell>
+                              {inv.expires_at ? new Date(inv.expires_at).toLocaleDateString() : '\u2014'}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {inv.status === 'pending' && (
+                                <AccessibleIconButton
+                                  icon={XCircle}
+                                  label="Revoke invitation"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleRevokeInvitation(inv.id)}
+                                  disabled={revokingInviteIds.has(inv.id)}
+                                  loading={revokingInviteIds.has(inv.id)}
+                                  className="text-destructive hover:text-destructive"
+                                />
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Organization Invitations</CardTitle>
                 <CardDescription>
                   Onboarding invitation visibility across organizations.
                 </CardDescription>
