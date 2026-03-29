@@ -5,8 +5,9 @@
 # It intentionally preserves the same service names and mount targets so the
 # runtime behavior stays aligned with the default quickstart.
 # WARNING: Default credentials in this file are for local development only.
-# Override SINGLE_USER_API_KEY and POSTGRES_PASSWORD in your .env or secret
-# manager before using this compose stack anywhere beyond local testing.
+# Override SINGLE_USER_API_KEY, POSTGRES_PASSWORD, and configure Redis
+# authentication (requirepass or ACLs) before using this compose stack anywhere
+# beyond local testing.
 
 services:
   app:
@@ -27,7 +28,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ../docker-data/app:/app/Databases
-      - ../docker-data/user_data:/app/Databases/user_databases
     depends_on:
       redis:
         condition: service_healthy
