@@ -1220,6 +1220,51 @@
   "notesSearch_tagsHelp": {
     "message": "Keywords help you find this note using the keyword filter on the left."
   },
+  "notesSearch_notesStudioAction": {
+    "message": "Notes Studio"
+  },
+  "notesSearch_notesStudioTemplateLabel": {
+    "message": "Choose notebook template"
+  },
+  "notesSearch_notesStudioHandwritingLabel": {
+    "message": "Handwriting treatment"
+  },
+  "notesSearch_notesStudioExcerptLabel": {
+    "message": "Selected excerpt"
+  },
+  "notesSearch_notesStudioCreateAction": {
+    "message": "Create Notes Studio note"
+  },
+  "notesSearch_notesStudioSelectionRequired": {
+    "message": "Select Markdown text before opening Notes Studio."
+  },
+  "notesSearch_notesStudioMarkdownOnlyNotice": {
+    "message": "Notes Studio works from Markdown selections only."
+  },
+  "notesSearch_notesStudioSwitchToMarkdown": {
+    "message": "Switch to Markdown"
+  },
+  "notesSearch_notesStudioTemplateLined": {
+    "message": "Lined"
+  },
+  "notesSearch_notesStudioTemplateGrid": {
+    "message": "Grid"
+  },
+  "notesSearch_notesStudioTemplateCornell": {
+    "message": "Cornell"
+  },
+  "notesSearch_notesStudioHandwritingAccented": {
+    "message": "Accented"
+  },
+  "notesSearch_notesStudioHandwritingOff": {
+    "message": "Off"
+  },
+  "notesSearch_notesStudioCreateError": {
+    "message": "Failed to create Notes Studio note."
+  },
+  "notesSearch_notesStudioLoadError": {
+    "message": "Failed to load Notes Studio state."
+  },
   "tts_playground": {
     "message": "TTS Playground"
   },

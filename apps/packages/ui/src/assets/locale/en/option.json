@@ -792,7 +792,22 @@
     "collapseSidebar": "Collapse sidebar",
     "titlePlaceholder": "Title",
     "keywordsEditorPlaceholder": "Keywords (tags)",
-    "tagsHelp": "Keywords help you find this note using the keyword filter on the left."
+    "tagsHelp": "Keywords help you find this note using the keyword filter on the left.",
+    "notesStudioAction": "Notes Studio",
+    "notesStudioTemplateLabel": "Choose notebook template",
+    "notesStudioHandwritingLabel": "Handwriting treatment",
+    "notesStudioExcerptLabel": "Selected excerpt",
+    "notesStudioCreateAction": "Create Notes Studio note",
+    "notesStudioSelectionRequired": "Select Markdown text before opening Notes Studio.",
+    "notesStudioMarkdownOnlyNotice": "Notes Studio works from Markdown selections only.",
+    "notesStudioSwitchToMarkdown": "Switch to Markdown",
+    "notesStudioTemplateLined": "Lined",
+    "notesStudioTemplateGrid": "Grid",
+    "notesStudioTemplateCornell": "Cornell",
+    "notesStudioHandwritingAccented": "Accented",
+    "notesStudioHandwritingOff": "Off",
+    "notesStudioCreateError": "Failed to create Notes Studio note.",
+    "notesStudioLoadError": "Failed to load Notes Studio state."
   },
   "tts": {
     "playground": "TTS Playground"
