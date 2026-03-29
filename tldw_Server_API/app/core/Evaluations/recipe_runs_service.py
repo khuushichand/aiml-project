@@ -1,0 +1,360 @@
+"""Minimal parent recipe-run service for the Task 2 service/API slice."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from typing import Any
+
+from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
+    RecommendationSlot,
+    RecipeManifest,
+    RecipeRunRecord,
+)
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
+from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import (
+    build_dataset_content_hash,
+    build_dataset_snapshot_ref,
+)
+from tldw_Server_API.app.core.Evaluations.recipes.registry import (
+    RecipeRegistry,
+    get_builtin_recipe_registry,
+)
+from tldw_Server_API.app.core.Evaluations.recipes.reporting import RecipeRunReport
+
+RECIPE_RUN_REUSE_ENTITY_TYPE = "recipe_run_reuse"
+REQUIRED_RECOMMENDATION_SLOTS: tuple[str, ...] = (
+    "best_overall",
+    "best_cheap",
+    "best_local",
+)
+
+
+class RecipeDefinitionNotFoundError(LookupError):
+    """Raised when a requested recipe manifest is not registered."""
+
+
+class RecipeRunNotFoundError(LookupError):
+    """Raised when a recipe run cannot be found."""
+
+
+class RecipeRunsService:
+    """Thin orchestration service around Task 1 recipe-run persistence."""
+
+    def __init__(
+        self,
+        *,
+        db: EvaluationsDatabase,
+        user_id: str | None = None,
+        recipe_registry: RecipeRegistry | None = None,
+    ) -> None:
+        self.db = db
+        self.user_id = (user_id or "").strip()
+        self.recipe_registry = recipe_registry or get_builtin_recipe_registry()
+
+    def list_manifests(self) -> list[RecipeManifest]:
+        """Return all manifests in stable recipe-id order."""
+        manifests = self.recipe_registry.list_manifests().values()
+        return sorted(manifests, key=lambda manifest: manifest.recipe_id)
+
+    def get_manifest(self, recipe_id: str) -> RecipeManifest:
+        """Return one manifest or raise a domain-specific lookup error."""
+        try:
+            return self.recipe_registry.get_manifest(recipe_id)
+        except KeyError as exc:
+            raise RecipeDefinitionNotFoundError(recipe_id) from exc
+
+    def validate_dataset(
+        self,
+        recipe_id: str,
+        *,
+        dataset_id: str | None = None,
+        dataset: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Lightweight dataset validation that is real enough to gate launch."""
+        manifest = self.get_manifest(recipe_id)
+        errors: list[str] = []
+        resolved = self._resolve_dataset(dataset_id=dataset_id, dataset=dataset, errors=errors)
+        dataset_mode = self._detect_dataset_mode(resolved["samples"], errors)
+
+        if dataset_mode in {"labeled", "unlabeled"} and dataset_mode not in manifest.supported_modes:
+            errors.append(
+                f"Recipe '{recipe_id}' does not support dataset mode '{dataset_mode}'. "
+                f"Supported modes: {', '.join(manifest.supported_modes)}."
+            )
+
+        for index, sample in enumerate(resolved["samples"]):
+            input_value = sample.get("input")
+            if input_value is None:
+                errors.append(f"Dataset sample {index} must include an input value.")
+                continue
+            if isinstance(input_value, str) and not input_value.strip():
+                errors.append(f"Dataset sample {index} input must not be empty.")
+
+        return {
+            "valid": not errors,
+            "errors": errors,
+            "dataset_mode": dataset_mode,
+            "sample_count": len(resolved["samples"]),
+            "dataset_snapshot_ref": resolved["dataset_snapshot_ref"],
+            "dataset_content_hash": resolved["dataset_content_hash"],
+        }
+
+    def build_reuse_hash(
+        self,
+        recipe_id: str,
+        *,
+        dataset_id: str | None = None,
+        dataset: list[dict[str, Any]] | None = None,
+        run_config: dict[str, Any],
+    ) -> str:
+        """Build the explicit reuse hash inputs required for recipe-run reuse."""
+        manifest = self.get_manifest(recipe_id)
+        validation = self.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+        if not validation["valid"]:
+            joined = "; ".join(validation["errors"])
+            raise ValueError(f"Dataset validation failed: {joined}")
+
+        normalized_run_config = self._normalize_run_config(run_config)
+        payload = {
+            "recipe_id": manifest.recipe_id,
+            "recipe_version": manifest.recipe_version,
+            "dataset_snapshot_ref": validation["dataset_snapshot_ref"],
+            "dataset_content_hash": validation["dataset_content_hash"],
+            "candidate_model_ids": sorted(normalized_run_config["candidate_model_ids"]),
+            "judge_config": normalized_run_config["judge_config"],
+            "prompts": normalized_run_config["prompts"],
+            "weights": normalized_run_config["weights"],
+            "comparison_mode": normalized_run_config["comparison_mode"],
+            "source_normalization": normalized_run_config["source_normalization"],
+            "context_policy": normalized_run_config["context_policy"],
+            "execution_policy": normalized_run_config["execution_policy"],
+        }
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def create_run(
+        self,
+        recipe_id: str,
+        *,
+        dataset_id: str | None = None,
+        dataset: list[dict[str, Any]] | None = None,
+        run_config: dict[str, Any],
+        force_rerun: bool = False,
+    ) -> RecipeRunRecord:
+        """Create a pending parent run or reuse a completed run when eligible."""
+        manifest = self.get_manifest(recipe_id)
+        validation = self.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+        if not validation["valid"]:
+            joined = "; ".join(validation["errors"])
+            raise ValueError(f"Dataset validation failed: {joined}")
+
+        normalized_run_config = self._normalize_run_config(run_config)
+        reuse_hash = self.build_reuse_hash(
+            recipe_id,
+            dataset_id=dataset_id,
+            dataset=dataset,
+            run_config=normalized_run_config,
+        )
+
+        if not force_rerun:
+            reusable = self._get_reusable_completed_run(reuse_hash)
+            if reusable is not None:
+                return reusable
+
+        run_id = self.db.create_recipe_run(
+            recipe_id=manifest.recipe_id,
+            recipe_version=manifest.recipe_version,
+            status=RunStatus.PENDING,
+            dataset_snapshot_ref=validation["dataset_snapshot_ref"],
+            dataset_content_hash=validation["dataset_content_hash"],
+            metadata={
+                "run_config": normalized_run_config,
+                "reuse_hash": reuse_hash,
+                "dataset_mode": validation["dataset_mode"],
+                "dataset_id": dataset_id,
+            },
+        )
+        return self.get_run(run_id)
+
+    def get_run(self, run_id: str) -> RecipeRunRecord:
+        """Fetch one persisted recipe run."""
+        record = self.db.get_recipe_run(run_id)
+        if record is None:
+            raise RecipeRunNotFoundError(run_id)
+        return record
+
+    def get_report(self, run_id: str) -> RecipeRunReport:
+        """Fetch a normalized report shell for a recipe run."""
+        record = self.get_run(run_id)
+        return RecipeRunReport(
+            run=record,
+            confidence_summary=record.confidence_summary,
+            recommendation_slots=self._normalize_report_slots(record.recommendation_slots),
+        )
+
+    def _get_reusable_completed_run(self, reuse_hash: str) -> RecipeRunRecord | None:
+        reusable_run_id = self.db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            self.user_id,
+        )
+        if not reusable_run_id:
+            return None
+        record = self.db.get_recipe_run(reusable_run_id)
+        if record is None or record.status is not RunStatus.COMPLETED:
+            return None
+        return record
+
+    def _resolve_dataset(
+        self,
+        *,
+        dataset_id: str | None,
+        dataset: list[dict[str, Any]] | None,
+        errors: list[str],
+    ) -> dict[str, Any]:
+        if dataset_id and dataset is not None:
+            errors.append("Provide either dataset_id or dataset, not both.")
+            return {
+                "samples": [],
+                "dataset_snapshot_ref": None,
+                "dataset_content_hash": None,
+            }
+        if dataset_id:
+            dataset_row = self.db.get_dataset(dataset_id, created_by=self.user_id or None)
+            if not dataset_row:
+                errors.append(f"Dataset '{dataset_id}' was not found.")
+                return {
+                    "samples": [],
+                    "dataset_snapshot_ref": None,
+                    "dataset_content_hash": None,
+                }
+            samples = self._normalize_dataset_samples(dataset_row.get("samples"))
+            created_value = dataset_row.get("created") or dataset_row.get("created_at") or "unknown"
+            return {
+                "samples": samples,
+                "dataset_snapshot_ref": build_dataset_snapshot_ref(dataset_id, created_value),
+                "dataset_content_hash": build_dataset_content_hash(samples),
+            }
+        if dataset is None:
+            errors.append("A dataset_id or inline dataset is required.")
+            return {
+                "samples": [],
+                "dataset_snapshot_ref": None,
+                "dataset_content_hash": None,
+            }
+        samples = self._normalize_dataset_samples(dataset)
+        return {
+            "samples": samples,
+            "dataset_snapshot_ref": None,
+            "dataset_content_hash": build_dataset_content_hash(samples),
+        }
+
+    def _normalize_dataset_samples(self, samples: Any) -> list[dict[str, Any]]:
+        if samples is None:
+            return []
+        return [dict(sample) for sample in list(samples)]
+
+    def _detect_dataset_mode(self, samples: list[dict[str, Any]], errors: list[str]) -> str | None:
+        if not samples:
+            errors.append("Dataset must contain at least one sample.")
+            return None
+
+        has_expected = [
+            sample.get("expected") is not None
+            for sample in samples
+        ]
+        if all(has_expected):
+            return "labeled"
+        if not any(has_expected):
+            return "unlabeled"
+
+        errors.append(
+            "Dataset must use a consistent labeling mode; do not mix labeled and unlabeled samples."
+        )
+        return "mixed"
+
+    def _normalize_run_config(self, run_config: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(run_config, dict):
+            raise ValueError("run_config must be an object.")
+
+        candidate_model_ids = run_config.get("candidate_model_ids") or []
+        if not isinstance(candidate_model_ids, list) or not candidate_model_ids:
+            raise ValueError("run_config.candidate_model_ids must contain at least one model id.")
+
+        normalized_candidate_model_ids: list[str] = []
+        seen_model_ids: set[str] = set()
+        for model_id in candidate_model_ids:
+            normalized_model_id = str(model_id).strip()
+            if not normalized_model_id or normalized_model_id in seen_model_ids:
+                continue
+            seen_model_ids.add(normalized_model_id)
+            normalized_candidate_model_ids.append(normalized_model_id)
+        if not normalized_candidate_model_ids:
+            raise ValueError("run_config.candidate_model_ids must contain at least one model id.")
+
+        comparison_mode = str(run_config.get("comparison_mode") or "").strip()
+        if not comparison_mode:
+            raise ValueError("run_config.comparison_mode is required.")
+
+        weights = run_config.get("weights") or {}
+        if not isinstance(weights, dict):
+            raise ValueError("run_config.weights must be an object.")
+        normalized_weights = {
+            str(key): float(value)
+            for key, value in weights.items()
+        }
+
+        return {
+            "candidate_model_ids": normalized_candidate_model_ids,
+            "judge_config": self._normalize_mapping(run_config.get("judge_config")),
+            "prompts": {
+                str(key): str(value)
+                for key, value in self._normalize_mapping(run_config.get("prompts")).items()
+            },
+            "weights": normalized_weights,
+            "comparison_mode": comparison_mode,
+            "source_normalization": self._normalize_mapping(run_config.get("source_normalization")),
+            "context_policy": self._normalize_mapping(run_config.get("context_policy")),
+            "execution_policy": self._normalize_mapping(run_config.get("execution_policy")),
+        }
+
+    def _normalize_mapping(self, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("Recipe run config sections must be objects when provided.")
+        return dict(value)
+
+    def _normalize_report_slots(
+        self,
+        recommendation_slots: dict[str, RecommendationSlot] | dict[str, dict[str, Any]],
+    ) -> dict[str, RecommendationSlot]:
+        normalized = {
+            slot_name: RecommendationSlot.model_validate(slot_value)
+            for slot_name, slot_value in recommendation_slots.items()
+        }
+        for slot_name in REQUIRED_RECOMMENDATION_SLOTS:
+            normalized.setdefault(
+                slot_name,
+                RecommendationSlot(
+                    candidate_run_id=None,
+                    reason_code="not_available",
+                    explanation=f"No recommendation has been recorded for '{slot_name}'.",
+                ),
+            )
+        return normalized
+
+
+def get_recipe_runs_service_for_user(user_id: str | int | None) -> RecipeRunsService:
+    """Build a recipe-runs service bound to the appropriate evaluations database."""
+    db_path = os.getenv("EVALUATIONS_TEST_DB_PATH")
+    if not db_path:
+        db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
+    return RecipeRunsService(
+        db=EvaluationsDatabase(db_path),
+        user_id=str(user_id) if user_id is not None else None,
+    )
