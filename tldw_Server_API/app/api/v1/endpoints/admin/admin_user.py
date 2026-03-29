@@ -59,6 +59,7 @@ async def list_users(
     role: str | None = None,
     admin_capable: bool = Query(False, description="Restrict to admin-capable assignees"),
     is_active: bool | None = None,
+    mfa_enabled: bool | None = Query(None, description="Filter by MFA status: true=enabled, false=disabled"),
     search: str | None = None,
     org_id: int | None = Query(None, description="Restrict to a specific organization"),
 ) -> UserListResponse:
@@ -102,6 +103,7 @@ async def list_users(
             role=role,
             admin_capable=admin_capable,
             is_active=is_active,
+            mfa_enabled=mfa_enabled,
             search=search,
             org_id=org_id,
         )

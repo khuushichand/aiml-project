@@ -21,6 +21,7 @@ const permissionUser = vi.hoisted(() => ({
   role: 'admin',
   is_active: true,
   is_verified: true,
+  mfa_enabled: true,
   storage_quota_mb: 100,
   storage_used_mb: 12,
   created_at: '2024-01-01T00:00:00Z',
@@ -108,7 +109,6 @@ vi.mock('@/lib/api-client', () => ({
     getUsers: vi.fn(),
     getOrganizations: vi.fn(),
     getOrgInvites: vi.fn(),
-    getUserMfaStatus: vi.fn(),
     deleteUser: vi.fn(),
     updateUser: vi.fn(),
     createUser: vi.fn(),
@@ -127,6 +127,7 @@ const makeUser = (overrides: Partial<Record<string, unknown>> = {}) => ({
   role: 'admin',
   is_active: true,
   is_verified: true,
+  mfa_enabled: false,
   storage_quota_mb: 100,
   storage_used_mb: 12,
   created_at: '2024-01-01T00:00:00Z',
@@ -144,9 +145,9 @@ beforeEach(() => {
   toastErrorMock.mockClear();
 
   apiMock.getUsers.mockResolvedValue([
-    makeUser({ id: 1, username: 'Alice', email: 'alice@example.com', role: 'admin', is_active: true, is_verified: true }),
-    makeUser({ id: 2, uuid: 'user-2', username: 'Bob', email: 'bob@example.com', role: 'user', is_active: false, is_verified: true }),
-    makeUser({ id: 3, uuid: 'user-3', username: 'Carol', email: 'carol@example.com', role: 'service', is_active: true, is_verified: false }),
+    makeUser({ id: 1, username: 'Alice', email: 'alice@example.com', role: 'admin', is_active: true, is_verified: true, mfa_enabled: true }),
+    makeUser({ id: 2, uuid: 'user-2', username: 'Bob', email: 'bob@example.com', role: 'user', is_active: false, is_verified: true, mfa_enabled: false }),
+    makeUser({ id: 3, uuid: 'user-3', username: 'Carol', email: 'carol@example.com', role: 'service', is_active: true, is_verified: false, mfa_enabled: true }),
   ]);
   apiMock.getOrganizations.mockResolvedValue([
     { id: 11, name: 'Core Org' },
@@ -187,11 +188,6 @@ beforeEach(() => {
         uses_count: 0,
       },
     ],
-  });
-  apiMock.getUserMfaStatus.mockImplementation(async (userId: string) => {
-    if (userId === '2') return { enabled: false };
-    if (userId === '3') return { enabled: true };
-    return { enabled: true };
   });
   apiMock.deleteUser.mockResolvedValue({});
   apiMock.updateUser.mockResolvedValue({});

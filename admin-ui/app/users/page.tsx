@@ -172,8 +172,6 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
-  const [mfaByUserId, setMfaByUserId] = useState<Record<number, boolean>>({});
-  const [mfaLoading, setMfaLoading] = useState(false);
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(true);
   const [invitesError, setInvitesError] = useState('');
@@ -331,48 +329,6 @@ function UsersPageContent() {
     });
   }, [currentUserId, users]);
 
-  useEffect(() => {
-    if (mfaFilter === 'all') return;
-    const missingIds = users
-      .map((user) => user.id)
-      .filter((id) => mfaByUserId[id] === undefined);
-    if (missingIds.length === 0) return;
-
-    let cancelled = false;
-    const loadMfaStatus = async () => {
-      try {
-        setMfaLoading(true);
-        const results = await Promise.allSettled(
-          missingIds.map(async (id) => {
-            const status = await api.getUserMfaStatus(String(id)) as { enabled?: boolean };
-            return { id, enabled: Boolean(status?.enabled) };
-          })
-        );
-        if (cancelled) return;
-        setMfaByUserId((prev) => {
-          const next = { ...prev };
-          results.forEach((result) => {
-            if (result.status === 'fulfilled') {
-              next[result.value.id] = result.value.enabled;
-            }
-          });
-          return next;
-        });
-      } catch (err) {
-        logger.error('Failed to load MFA status for users', { component: 'UsersPage', error: err instanceof Error ? err.message : String(err) });
-      } finally {
-        if (!cancelled) {
-          setMfaLoading(false);
-        }
-      }
-    };
-    void loadMfaStatus();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [mfaByUserId, mfaFilter, users]);
-
   const filteredUsers = users.filter((user) => {
     const query = (searchQuery || '').toLowerCase();
     if (
@@ -393,10 +349,8 @@ function UsersPageContent() {
     if (verifiedFilter === 'unverified' && user.is_verified) return false;
 
     if (mfaFilter !== 'all') {
-      const hasMfa = mfaByUserId[user.id];
-      if (hasMfa === undefined) return false;
-      if (mfaFilter === 'enabled' && !hasMfa) return false;
-      if (mfaFilter === 'disabled' && hasMfa) return false;
+      if (mfaFilter === 'enabled' && !user.mfa_enabled) return false;
+      if (mfaFilter === 'disabled' && user.mfa_enabled) return false;
     }
 
     return true;
@@ -1083,9 +1037,6 @@ function UsersPageContent() {
                     >
                       Clear filters
                     </Button>
-                    {mfaFilter !== 'all' && mfaLoading && (
-                      <span className="text-xs text-muted-foreground">Loading MFA status...</span>
-                    )}
                   </div>
                 </div>
               </CardContent>
@@ -1199,7 +1150,7 @@ function UsersPageContent() {
                 />
                 {loading ? (
                   <div className="py-4">
-                    <TableSkeleton rows={5} columns={9} />
+                    <TableSkeleton rows={5} columns={10} />
                   </div>
                 ) : filteredUsers.length === 0 ? (
                   <EmptyState
@@ -1242,6 +1193,7 @@ function UsersPageContent() {
                           <TableHead>Email</TableHead>
                           <TableHead>Role</TableHead>
                           <TableHead>Status</TableHead>
+                          <TableHead>MFA</TableHead>
                           <TableHead>Storage</TableHead>
                           <TableHead>Created At</TableHead>
                           <TableHead>Last Login</TableHead>
@@ -1282,6 +1234,13 @@ function UsersPageContent() {
                                   <Badge variant="outline" className="ml-1">
                                     Verified
                                   </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {user.mfa_enabled ? (
+                                  <span className="text-green-600" title="MFA enabled" aria-label="MFA enabled">&#10003;</span>
+                                ) : (
+                                  <span className="text-gray-400" title="MFA disabled" aria-label="MFA disabled">&#8212;</span>
                                 )}
                               </TableCell>
                               <TableCell>

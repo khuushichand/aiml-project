@@ -9,6 +9,7 @@ export interface User {
   roles?: string[];
   is_active: boolean;
   is_verified: boolean;
+  mfa_enabled: boolean;
   storage_quota_mb: number;
   storage_used_mb: number;
   created_at: string;
@@ -446,6 +447,7 @@ export interface VoiceAnalyticsSummary {
 }
 
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';
+export type { WebhookItem, WebhookCreateResponse, WebhookListResponse } from './webhooks';
 
 // ============================================
 // Billing & Subscription Types

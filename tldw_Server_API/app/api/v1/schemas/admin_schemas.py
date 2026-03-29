@@ -141,6 +141,7 @@ class UserSummary(BaseModel):
     role: str
     is_active: bool
     is_verified: bool
+    mfa_enabled: bool = False
     created_at: datetime
     last_login: datetime | None = None
     storage_quota_mb: int
@@ -1224,6 +1225,62 @@ class IncidentUpdateRequest(BaseModel):
 class IncidentEventCreateRequest(BaseModel):
     """Request to append a timeline entry."""
     message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Webhook Schemas
+
+
+class WebhookItem(BaseModel):
+    """Webhook summary (secret redacted)."""
+    id: str
+    url: str
+    events: list[str] = []
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreateResponse(BaseModel):
+    """Response for webhook creation, includes the secret (shown once)."""
+    id: str
+    url: str
+    secret: str
+    events: list[str] = []
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookListResponse(BaseModel):
+    """Response for webhook listing."""
+    items: list[WebhookItem]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreateRequest(BaseModel):
+    """Request to create a webhook."""
+    url: str
+    events: list[str]
+    enabled: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookUpdateRequest(BaseModel):
+    """Request to update a webhook (partial update)."""
+    url: str | None = None
+    events: list[str] | None = None
+    enabled: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
