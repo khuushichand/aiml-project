@@ -42,8 +42,7 @@ def migrate_to_evaluation_recipes(db_path: str) -> bool:
                     child_order INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (parent_run_id, child_run_id),
-                    FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id),
-                    FOREIGN KEY (child_run_id) REFERENCES evaluation_recipe_runs(run_id)
+                    FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id)
                 )
                 """
             )

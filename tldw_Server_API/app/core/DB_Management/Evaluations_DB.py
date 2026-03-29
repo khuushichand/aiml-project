@@ -360,8 +360,7 @@ class EvaluationsDatabase:
                     child_order INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (parent_run_id, child_run_id),
-                    FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id),
-                    FOREIGN KEY (child_run_id) REFERENCES evaluation_recipe_runs(run_id)
+                    FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id)
                 )
             """)
 
@@ -622,8 +621,7 @@ class EvaluationsDatabase:
             child_order INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             PRIMARY KEY (parent_run_id, child_run_id),
-            FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id),
-            FOREIGN KEY (child_run_id) REFERENCES evaluation_recipe_runs(run_id)
+            FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id)
         );
         -- Unified evaluations table (enabled by default on PostgreSQL)
         CREATE TABLE IF NOT EXISTS evaluations_unified (
@@ -1872,6 +1870,8 @@ class EvaluationsDatabase:
         run_id = run_id or f"recipe_run_{uuid.uuid4().hex[:12]}"
         status_value = self._coerce_recipe_run_status(status)
         review_value = self._coerce_review_state(review_state)
+        if not dataset_snapshot_ref and not dataset_content_hash:
+            raise ValueError("A recipe run requires dataset_snapshot_ref or dataset_content_hash")
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
