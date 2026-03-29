@@ -4,6 +4,11 @@ import pytest
 
 from tldw_Server_API.app.core.Slides.slides_db import ConflictError, SlidesDatabase
 from tldw_Server_API.app.core.Slides.visual_styles import list_builtin_visual_styles
+from tldw_Server_API.app.core.Slides.visual_style_catalog import (
+    get_builtin_visual_style_definition,
+    list_builtin_visual_style_definitions,
+)
+from tldw_Server_API.app.core.Slides.visual_style_packs import get_visual_style_pack
 
 
 def test_slides_db_initializes_visual_styles_table(tmp_path):
@@ -25,10 +30,53 @@ def test_visual_style_registry_includes_expected_builtins():
     styles = list_builtin_visual_styles()
     style_ids = [style.style_id for style in styles]
 
-    assert len(styles) >= 8
+    assert len(styles) == 44
     assert len(style_ids) == len(set(style_ids))
     assert "timeline" in style_ids
     assert "exam-focused-bullet" in style_ids
+    assert "notebooklm-chalkboard" in style_ids
+    assert "notebooklm-blueprint" in style_ids
+    assert "notebooklm-swiss-design" in style_ids
+    assert "notebooklm-brutalist-design" in style_ids
+
+
+def test_visual_style_registry_returns_defensive_copies():
+    definition = get_builtin_visual_style_definition("notebooklm-whiteboard")
+    assert definition is not None
+    definition.appearance_overrides["token_overrides"]["surface"] = "#000000"
+    definition.generation_rules["instructional_bias"] = "low"
+
+    pack = get_visual_style_pack("hand_drawn_surface")
+    assert pack is not None
+    pack.default_token_overrides["surface"] = "#000000"
+
+    fresh_definition = get_builtin_visual_style_definition("notebooklm-whiteboard")
+    fresh_pack = get_visual_style_pack("hand_drawn_surface")
+    assert fresh_definition is not None
+    assert fresh_pack is not None
+    assert fresh_definition.appearance_overrides["token_overrides"]["surface"] == "#fdfdfb"
+    assert fresh_definition.generation_rules["instructional_bias"] == "high"
+    assert fresh_pack.default_token_overrides["surface"] == "#101418"
+
+
+def test_visual_style_registry_references_are_valid():
+    definitions = list_builtin_visual_style_definitions()
+    assert len(definitions) == 44
+    for definition in definitions:
+        assert get_visual_style_pack(definition.style_pack) is not None
+        assert definition.prompt_profile in {
+            "instructional_hand_drawn",
+            "fine_art_human",
+            "tactile_playful",
+            "technical_precision",
+            "metric_first",
+            "narrative_journey",
+            "corporate_strategy",
+            "design_editorial",
+            "playful_approachable",
+            "retro_synthetic",
+            "high_energy_marketing",
+        }
 
 
 def test_slides_db_visual_style_crud(tmp_path):
