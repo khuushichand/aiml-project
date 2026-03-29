@@ -2546,6 +2546,44 @@
         }
       ],
       "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chat/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
       "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.update_chat_conversation",
       "methods": [
         "PATCH"
@@ -2973,6 +3011,45 @@
         "chat.conversations.list"
       ],
       "summary": "List/search conversations with filters and ranking [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chats/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata [alias]",
       "tags": [
         "chat",
         "chat"
@@ -3557,6 +3634,44 @@
         }
       ],
       "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chat/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
       "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_conversations",
       "methods": [
         "GET"
@@ -3567,6 +3682,45 @@
         "chat.conversations.list"
       ],
       "summary": "List/search conversations with filters and ranking [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chats/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata [alias]",
       "tags": [
         "chat",
         "chat"

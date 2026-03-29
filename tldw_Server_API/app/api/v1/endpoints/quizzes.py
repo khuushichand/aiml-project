@@ -38,6 +38,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_quiz_attempt_question_context,
     generate_study_assistant_reply,
@@ -249,8 +250,6 @@ def update_quiz(
         update_data = updates.model_dump(exclude_unset=True)
         if "workspace_id" in update_data:
             _ensure_workspace_exists(db, update_data["workspace_id"])
-            if update_data["workspace_id"] is None and "workspace_tag" not in update_data:
-                update_data["workspace_tag"] = None
         ok = db.update_quiz(quiz_id, update_data)
         if not ok:
             raise HTTPException(status_code=404, detail="Quiz not found")
@@ -603,6 +602,7 @@ async def generate_quiz(
             difficulty=request.difficulty,
             focus_topics=request.focus_topics,
             model=request.model,
+            api_provider=request.api_provider,
             workspace_id=request.workspace_id,
             workspace_tag=request.workspace_tag,
         )

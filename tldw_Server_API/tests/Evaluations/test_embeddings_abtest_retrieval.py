@@ -67,6 +67,11 @@ class _StubMediaDB:
         return None
 
 
+class _FailIfChromaInitialized:
+    def __init__(self, user_id, user_embedding_config):
+        raise AssertionError("ChromaDBManager should not be initialized for hybrid search")
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_abtest_hybrid_results_are_recorded(tmp_path, monkeypatch):
@@ -106,6 +111,7 @@ async def test_abtest_hybrid_results_are_recorded(tmp_path, monkeypatch):
     import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as unified_pipeline
 
     monkeypatch.setattr(service, "_embed_texts", _fake_embed)
+    monkeypatch.setattr(service, "ChromaDBManager", _FailIfChromaInitialized)
     monkeypatch.setattr(unified_pipeline, "unified_rag_pipeline", _fake_unified)
 
     await run_vector_search_and_score(
