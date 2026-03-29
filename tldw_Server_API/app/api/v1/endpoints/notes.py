@@ -74,6 +74,12 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     TitleSuggestRequest,
     TitleSuggestResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.notes_studio import (
+    NoteStudioDeriveRequest,
+    NoteStudioDiagramRequest,
+    NoteStudioDiagramResponse,
+    NoteStudioStateResponse,
+)
 from tldw_Server_API.app.api.v1.schemas.notes_moodboards import (
     MoodboardCreate,
     MoodboardListResponse,
@@ -97,6 +103,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Notes.studio_service import NotesStudioService
 from tldw_Server_API.app.core.Personalization import (
     build_note_bulk_import_activity,
     record_companion_activity_events_bulk,
@@ -186,6 +193,9 @@ def _resolve_notes_attachment_max_bytes() -> int:
 
 
 _NOTES_ATTACHMENT_MAX_BYTES = _resolve_notes_attachment_max_bytes()
+
+NoteStudioStateResponse.model_rebuild(_types_namespace={"NoteResponse": NoteResponse})
+NoteStudioDiagramResponse.model_rebuild(_types_namespace={"NoteResponse": NoteResponse})
 
 
 def _ensure_note_exists_or_404(db: CharactersRAGDB, note_id: str) -> None:
@@ -2764,6 +2774,164 @@ async def list_moodboard_notes_endpoint(
 
 
 @router.get(
+    "/studio/{note_id}",
+    response_model=NoteStudioStateResponse,
+    summary="Fetch Notes Studio state for a note",
+    tags=["notes"],
+    responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}},
+)
+async def get_note_studio_state_endpoint(
+        note_id: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.get")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.get")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.get",
+                headers={"Retry-After": str(meta.get("retry_after", 60))},
+            )
+
+        studio_state = await NotesStudioService(db=db).get_note_studio_state(note_id=note_id)
+        studio_state["note"] = _attach_keywords_inline(db, studio_state["note"])
+        studio_state["note"] = _attach_folders_inline(db, studio_state["note"])
+        return studio_state
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note studio")
+
+
+@router.post(
+    "/studio/derive",
+    response_model=NoteStudioStateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a derived Notes Studio note from a source excerpt",
+    tags=["notes"],
+)
+async def derive_note_studio_endpoint(
+        studio_in: NoteStudioDeriveRequest,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.create")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.create")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.create",
+                headers={"Retry-After": str(meta.get("retry_after", 60))},
+            )
+
+        studio_state = await NotesStudioService(db=db).derive_from_excerpt(
+            source_note_id=studio_in.source_note_id,
+            excerpt_text=studio_in.excerpt_text,
+            template_type=studio_in.template_type,
+            handwriting_mode=studio_in.handwriting_mode,
+            provider=studio_in.provider,
+            model=studio_in.model,
+        )
+        studio_state["note"] = _attach_keywords_inline(db, studio_state["note"])
+        studio_state["note"] = _attach_folders_inline(db, studio_state["note"])
+        record_note_created(user_id=current_user.id, note=studio_state["note"])
+        return studio_state
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note studio")
+
+
+@router.post(
+    "/studio/{note_id}/regenerate",
+    response_model=NoteStudioStateResponse,
+    summary="Regenerate the Markdown companion from the canonical Notes Studio payload",
+    tags=["notes"],
+    responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}},
+)
+async def regenerate_note_studio_endpoint(
+        note_id: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.update")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.update",
+                headers={"Retry-After": str(meta.get("retry_after", 60))},
+            )
+
+        studio_state = await NotesStudioService(db=db).regenerate_note_markdown(note_id=note_id)
+        studio_state["note"] = _attach_keywords_inline(db, studio_state["note"])
+        studio_state["note"] = _attach_folders_inline(db, studio_state["note"])
+        record_note_updated(
+            user_id=current_user.id,
+            note=studio_state["note"],
+            route=f"/api/v1/notes/studio/{note_id}/regenerate",
+            action="regenerate",
+            patch={"regenerated": True},
+        )
+        return studio_state
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note studio")
+
+
+@router.post(
+    "/studio/{note_id}/diagram",
+    response_model=NoteStudioDiagramResponse,
+    summary="Store a Notes Studio diagram manifest",
+    tags=["notes"],
+    responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}},
+)
+async def update_note_studio_diagram_endpoint(
+        note_id: str,
+        diagram_in: NoteStudioDiagramRequest,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.update")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.update",
+                headers={"Retry-After": str(meta.get("retry_after", 60))},
+            )
+
+        studio_state = await NotesStudioService(db=db).update_diagram_manifest(
+            note_id=note_id,
+            diagram_type=diagram_in.diagram_type,
+            source_section_ids=diagram_in.source_section_ids,
+            provider=diagram_in.provider,
+            model=diagram_in.model,
+        )
+        studio_state["note"] = _attach_keywords_inline(db, studio_state["note"])
+        studio_state["note"] = _attach_folders_inline(db, studio_state["note"])
+        return studio_state
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note studio")
+
+
+@router.get(
     "/{note_id}",
     response_model=NoteResponse,
     summary="Get a specific note by ID",
@@ -2787,7 +2955,7 @@ async def get_note(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.get",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
-        note_data = db.get_note_by_id(note_id=note_id)
+        note_data = db.get_note_by_id(note_id=note_id, include_studio_summary=True)
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:  # Catch DB errors from get_note_by_id
         handle_db_errors(e, "note")  # This will reraise appropriately
 

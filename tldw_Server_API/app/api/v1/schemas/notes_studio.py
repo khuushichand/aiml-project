@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from .notes_schemas import NoteResponse
 
 NoteStudioTemplateType = Literal["lined", "grid", "cornell"]
 NoteStudioHandwritingMode = Literal["off", "accented"]
@@ -70,3 +73,42 @@ class NoteStudioDocumentResponse(NoteStudioDocumentBase):
     last_modified: datetime = Field(..., description="Last modification timestamp.")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class NoteStudioDeriveRequest(BaseModel):
+    source_note_id: str = Field(..., description="Source note identifier used for derivation.")
+    excerpt_text: str = Field(..., description="Selected source excerpt used for Studio generation.")
+    template_type: NoteStudioTemplateType = Field(
+        "lined",
+        description="Notebook template to use for the derived Studio note.",
+    )
+    handwriting_mode: NoteStudioHandwritingMode = Field(
+        "accented",
+        description="Handwriting accent mode for the derived Studio note.",
+    )
+    provider: str | None = Field(default=None, description="Optional provider override for structured generation.")
+    model: str | None = Field(default=None, description="Optional model override for structured generation.")
+
+
+class NoteStudioDiagramRequest(BaseModel):
+    diagram_type: Literal["flowchart", "sequence", "class", "state", "er", "gantt", "pie"] = Field(
+        "flowchart",
+        description="Diagram type to generate for the Studio note.",
+    )
+    source_section_ids: list[str] = Field(
+        default_factory=list,
+        description="Canonical Studio section identifiers used as diagram sources.",
+    )
+    provider: str | None = Field(default=None, description="Optional provider override for diagram generation.")
+    model: str | None = Field(default=None, description="Optional model override for diagram generation.")
+
+
+class NoteStudioStateResponse(BaseModel):
+    note: "NoteResponse" = Field(..., description="The current note payload for the Studio note.")
+    studio_document: NoteStudioDocumentResponse = Field(..., description="Canonical Studio sidecar document.")
+    is_stale: bool = Field(..., description="Whether note Markdown drifted from the canonical Studio payload.")
+    stale_reason: str | None = Field(default=None, description="Reason the note is currently marked stale.")
+
+
+class NoteStudioDiagramResponse(NoteStudioStateResponse):
+    """Response envelope for diagram manifest updates."""

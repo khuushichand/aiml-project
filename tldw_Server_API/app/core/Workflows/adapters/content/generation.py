@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     GlossaryExtractConfig,
     MindmapGenerateConfig,
     NewsletterGenerateConfig,
+    NotesStudioGenerateConfig,
     OutlineGenerateConfig,
     QuizGenerateConfig,
     ReportGenerateConfig,
@@ -53,6 +54,82 @@ _GENERATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     json.JSONDecodeError,
 )
+
+
+def _build_notes_studio_payload(
+    *,
+    excerpt_text: str,
+    source_note_id: str | None,
+    source_title: str | None,
+    derived_title: str | None,
+    template_type: str,
+) -> dict[str, Any]:
+    excerpt = str(excerpt_text or "").strip()
+    source_title_text = str(source_title or "").strip()
+    note_title = str(derived_title or "").strip() or "Untitled Study Notes"
+
+    summary_text = excerpt.splitlines()[0].strip() if excerpt else ""
+    if not summary_text:
+        summary_text = "Review the source excerpt and restate it in your own words."
+
+    cue_items = [
+        f"What is the main idea of '{source_title_text or 'this excerpt'}'?",
+        "Which detail should you be able to explain without rereading the source?",
+    ]
+    if str(template_type).strip().lower() == "cornell":
+        cue_items.append("Recall prompt: Explain the key idea from memory before checking the notes.")
+        cue_items.append("Fill in the blank: ______ is the central concept highlighted by this excerpt.")
+
+    return {
+        "meta": {
+            "source_note_id": source_note_id,
+            "source_title": source_title_text or None,
+            "title": note_title,
+            "template_type": template_type,
+        },
+        "sections": [
+            {
+                "id": "cue-1",
+                "kind": "cue",
+                "title": "Key Questions",
+                "items": cue_items,
+            },
+            {
+                "id": "notes-1",
+                "kind": "notes",
+                "title": "Notes",
+                "content": excerpt,
+            },
+            {
+                "id": "summary-1",
+                "kind": "summary",
+                "title": "Summary",
+                "content": summary_text,
+            },
+        ],
+    }
+
+
+def _build_fallback_diagram(content: str, diagram_type: str) -> str:
+    lines = [line.strip(" -") for line in str(content or "").splitlines() if line.strip()]
+    labels = lines[:3] or ["Key idea", "Supporting detail", "Summary"]
+    sanitized = [label.replace('"', "'") for label in labels]
+    mermaid_lines = [f"flowchart TD", f'    A["{sanitized[0]}"]']
+    for index, label in enumerate(sanitized[1:], start=1):
+        node_id = chr(ord("A") + index)
+        mermaid_lines.append(f'    A --> {node_id}["{label}"]')
+    if diagram_type == "sequence":
+        return "\n".join(
+            [
+                "sequenceDiagram",
+                f'    participant Source as "{sanitized[0]}"',
+                f'    participant Notes as "{sanitized[1] if len(sanitized) > 1 else "Notes"}"',
+                '    Source->>Notes: "Explain the relationship"',
+            ]
+        )
+    return "\n".join(mermaid_lines)
+
+
 @registry.register(
     "flashcard_generate",
     category="content",
@@ -586,6 +663,67 @@ Include a header, brief intro, main content sections, and a closing."""
 
 
 @registry.register(
+    "notes_studio_generate",
+    category="content",
+    description="Generate structured Notes Studio payloads",
+    parallelizable=True,
+    tags=["content", "notes", "education"],
+    config_model=NotesStudioGenerateConfig,
+)
+async def run_notes_studio_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Generate a stable Notes Studio payload, with deterministic fallback by default."""
+    if callable(context.get("is_cancelled")) and context["is_cancelled"]():
+        return {"__status__": "cancelled"}
+
+    excerpt_text = str(config.get("excerpt_text") or "").strip()
+    if not excerpt_text:
+        prev = context.get("prev") or context.get("last") or {}
+        if isinstance(prev, dict):
+            excerpt_text = str(prev.get("excerpt_text") or prev.get("text") or "").strip()
+    if not excerpt_text:
+        return {"payload": {}, "error": "missing_excerpt_text"}
+
+    fallback_payload = _build_notes_studio_payload(
+        excerpt_text=excerpt_text,
+        source_note_id=config.get("source_note_id"),
+        source_title=config.get("source_title"),
+        derived_title=config.get("derived_title"),
+        template_type=str(config.get("template_type") or "lined"),
+    )
+
+    provider = config.get("provider")
+    model = config.get("model")
+    if not provider or not model:
+        return {"payload": fallback_payload, "source": "deterministic_fallback"}
+
+    try:
+        prompt = (
+            "Return JSON with shape "
+            '{"meta":{"source_note_id":"...","title":"..."},"sections":[{"id":"cue-1","kind":"cue","title":"Key Questions","items":[]},{"id":"notes-1","kind":"notes","title":"Notes","content":"..."},{"id":"summary-1","kind":"summary","title":"Summary","content":"..."}]} '
+            f"from this excerpt:\n\n{excerpt_text[:4000]}"
+        )
+        response = await perform_chat_api_call_async(
+            messages=[{"role": "user", "content": prompt}],
+            api_provider=provider,
+            model=model,
+            system_message="Generate structured study-note JSON only.",
+            max_tokens=2000,
+            temperature=0.2,
+        )
+        response_text = extract_openai_content(response) or ""
+        json_match = re.search(r"\{[\s\S]*\}", response_text)
+        payload = json.loads(json_match.group()) if json_match else fallback_payload
+        if not isinstance(payload, dict):
+            payload = fallback_payload
+        payload.setdefault("meta", fallback_payload["meta"])
+        payload.setdefault("sections", fallback_payload["sections"])
+        return {"payload": payload, "source": "llm"}
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
+        logger.warning(f"Notes Studio generate fallback engaged: {e}")
+        return {"payload": fallback_payload, "source": "deterministic_fallback", "warning": str(e)}
+
+
+@registry.register(
     "diagram_generate",
     category="content",
     description="Generate diagrams",
@@ -624,6 +762,12 @@ async def run_diagram_generate_adapter(config: dict[str, Any], context: dict[str
     diagram_type = config.get("diagram_type", "flowchart")
     output_format = config.get("format", "mermaid")
 
+    provider = config.get("provider")
+    model = config.get("model")
+    if not provider or not model:
+        diagram = _build_fallback_diagram(str(content), str(diagram_type))
+        return {"diagram": diagram.strip(), "format": output_format, "diagram_type": diagram_type}
+
     try:
         format_examples = {
             "mermaid": "```mermaid\nflowchart TD\n    A --> B\n```",
@@ -643,8 +787,8 @@ Content:
         messages = [{"role": "user", "content": prompt}]
         response = await perform_chat_api_call_async(
             messages=messages,
-            api_provider=config.get("provider"),
-            model=config.get("model"),
+            api_provider=provider,
+            model=model,
             system_message=f"Generate {output_format} diagrams. Return only diagram code.",
             max_tokens=1500,
             temperature=0.3,
