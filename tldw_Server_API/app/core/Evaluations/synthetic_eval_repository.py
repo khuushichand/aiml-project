@@ -138,7 +138,60 @@ class SyntheticEvalRepository:
         payload = _row_to_dict(row)
         payload["sample_payload"] = _json_load(payload.pop("sample_payload_json", None)) or {}
         payload["sample_metadata"] = _json_load(payload.pop("sample_metadata_json", None)) or {}
+        payload.pop("review_summary_json", None)
         return payload
+
+    def list_draft_samples(
+        self,
+        *,
+        recipe_kind: str | None = None,
+        review_state: str | SyntheticEvalReviewState | None = None,
+        source_kind: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persisted synthetic draft samples with simple filters."""
+
+        query = "SELECT * FROM synthetic_eval_draft_samples WHERE 1=1"
+        params: list[Any] = []
+        if recipe_kind:
+            query += " AND recipe_kind = ?"
+            params.append(recipe_kind)
+        if review_state:
+            normalized_state = (
+                review_state.value
+                if isinstance(review_state, SyntheticEvalReviewState)
+                else str(review_state)
+            )
+            query += " AND review_state = ?"
+            params.append(normalized_state)
+        if source_kind:
+            query += " AND source_kind = ?"
+            params.append(source_kind)
+        query += " ORDER BY created_at DESC, sample_id DESC LIMIT ? OFFSET ?"
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+
+        with self._db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _row_to_dict(row)
+            payload["sample_payload"] = _json_load(payload.pop("sample_payload_json", None)) or {}
+            payload["sample_metadata"] = _json_load(payload.pop("sample_metadata_json", None)) or {}
+            payload.pop("review_summary_json", None)
+            results.append(payload)
+        return results
+
+    def get_draft_samples(self, sample_ids: list[str]) -> list[dict[str, Any]]:
+        """Fetch multiple draft samples in caller-provided order."""
+
+        ordered: list[dict[str, Any]] = []
+        for sample_id in sample_ids:
+            ordered.append(self.require_draft_sample(sample_id))
+        return ordered
 
     def require_draft_sample(self, sample_id: str) -> dict[str, Any]:
         """Return a sample or raise when it does not exist."""

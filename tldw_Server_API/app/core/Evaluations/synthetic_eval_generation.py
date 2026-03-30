@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -68,7 +69,7 @@ class SyntheticEvalGenerationPlan:
 
 
 def resolve_corpus_scope(
-    corpus_scope: SyntheticEvalCorpusScope | Sequence[str] | None,
+    corpus_scope: SyntheticEvalCorpusScope | Mapping[str, Any] | Sequence[str] | None,
 ) -> SyntheticEvalCorpusScope:
     """Normalize a corpus scope into a stable tuple-based scope."""
 
@@ -79,6 +80,29 @@ def resolve_corpus_scope(
             sources=_dedupe_tuple(corpus_scope.sources) or _DEFAULT_SOURCES,
             recipe_kind=corpus_scope.recipe_kind,
             corpus_name=corpus_scope.corpus_name,
+        )
+    if isinstance(corpus_scope, Mapping):
+        sources = corpus_scope.get("sources")
+        if isinstance(sources, str):
+            normalized_sources = _dedupe_tuple((sources.strip(),))
+        elif isinstance(sources, Sequence):
+            normalized_sources = _dedupe_tuple(
+                tuple(str(source).strip() for source in sources if str(source).strip())
+            )
+        else:
+            normalized_sources = _DEFAULT_SOURCES
+        return SyntheticEvalCorpusScope(
+            sources=normalized_sources or _DEFAULT_SOURCES,
+            recipe_kind=(
+                str(corpus_scope.get("recipe_kind")).strip()
+                if corpus_scope.get("recipe_kind") is not None
+                else None
+            ),
+            corpus_name=(
+                str(corpus_scope.get("corpus_name")).strip()
+                if corpus_scope.get("corpus_name") is not None
+                else None
+            ),
         )
     normalized_sources = _dedupe_tuple(tuple(str(source).strip() for source in corpus_scope if str(source).strip()))
     return SyntheticEvalCorpusScope(sources=normalized_sources or _DEFAULT_SOURCES)

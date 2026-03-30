@@ -248,6 +248,36 @@ def test_recipe_service_validates_rag_retrieval_tuning_dataset(tmp_path) -> None
     assert result["corpus_scope"]["sources"] == ["media_db", "notes"]
 
 
+def test_recipe_runs_ignore_unapproved_synthetic_drafts(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+
+    result = service.validate_dataset(
+        "rag_retrieval_tuning",
+        dataset=[
+            {
+                "sample_id": "synthetic-draft-1",
+                "query": "find the architecture note",
+                "targets": {
+                    "relevant_media_ids": [{"id": 10, "grade": 3}],
+                },
+                "metadata": {
+                    "synthetic_eval": {
+                        "sample_id": "synthetic-draft-1",
+                        "review_state": "draft",
+                        "promotion_state": "not_promoted",
+                        "provenance": "synthetic_from_corpus",
+                    }
+                },
+            }
+        ],
+        run_config=_rag_run_config(),
+    )
+
+    assert result["valid"] is False
+    assert result["sample_count"] == 0
+    assert any("Dataset must contain at least one sample." in error for error in result["errors"])
+
+
 def test_recipe_service_creates_rag_retrieval_tuning_run(tmp_path) -> None:
     _, service, _ = _service(tmp_path)
 

@@ -421,7 +421,26 @@ class RecipeRunsService:
     def _normalize_dataset_samples(self, samples: Any) -> list[dict[str, Any]]:
         if samples is None:
             return []
-        return [dict(sample) for sample in list(samples)]
+        normalized_samples = [dict(sample) for sample in list(samples)]
+        return [
+            sample for sample in normalized_samples
+            if self._synthetic_sample_is_active(sample)
+        ]
+
+    def _synthetic_sample_is_active(self, sample: dict[str, Any]) -> bool:
+        metadata = sample.get("metadata")
+        synthetic_eval = sample.get("synthetic_eval")
+        if synthetic_eval is None and isinstance(metadata, dict):
+            synthetic_eval = metadata.get("synthetic_eval")
+        if not isinstance(synthetic_eval, dict):
+            return True
+        review_state = str(synthetic_eval.get("review_state") or "").strip().lower()
+        promotion_state = str(synthetic_eval.get("promotion_state") or "").strip().lower()
+        if review_state != "approved":
+            return False
+        if promotion_state != "promoted":
+            return False
+        return True
 
     def _detect_dataset_mode(self, samples: list[dict[str, Any]], errors: list[str]) -> str | None:
         if not samples:

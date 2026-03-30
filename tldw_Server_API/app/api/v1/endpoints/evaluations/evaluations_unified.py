@@ -109,6 +109,7 @@ from .evaluations_auth import (
     verify_api_key,
 )
 from .evaluations_recipes import recipes_router
+from .evaluations_synthetic import synthetic_router
 
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
@@ -688,6 +689,7 @@ router.include_router(benchmarks_router)
 router.include_router(pipeline_router)
 router.include_router(datasets_router)
 router.include_router(webhooks_router)
+router.include_router(synthetic_router)
 router.include_router(recipes_router)
 router.include_router(crud_router)
 # ============= Health & Metrics Endpoints =============
