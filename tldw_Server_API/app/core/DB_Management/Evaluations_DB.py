@@ -246,6 +246,8 @@ class EvaluationsDatabase:
                 sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
             conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
             conn.row_factory = sqlite3.Row
+            with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                conn.execute("PRAGMA foreign_keys = ON")
             try:
                 yield conn
             finally:
@@ -364,6 +366,50 @@ class EvaluationsDatabase:
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_eval_draft_samples (
+                    sample_id TEXT PRIMARY KEY,
+                    recipe_kind TEXT NOT NULL,
+                    provenance TEXT NOT NULL,
+                    review_state TEXT NOT NULL DEFAULT 'draft',
+                    sample_payload_json TEXT NOT NULL,
+                    sample_metadata_json TEXT,
+                    source_kind TEXT,
+                    created_by TEXT,
+                    review_summary_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_eval_review_actions (
+                    action_id TEXT PRIMARY KEY,
+                    sample_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    reviewer_id TEXT,
+                    notes TEXT,
+                    action_payload_json TEXT,
+                    resulting_review_state TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_eval_promotions (
+                    promotion_id TEXT PRIMARY KEY,
+                    sample_id TEXT NOT NULL,
+                    dataset_id TEXT,
+                    dataset_snapshot_ref TEXT,
+                    promoted_by TEXT,
+                    promotion_reason TEXT,
+                    promotion_metadata_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+                )
+            """)
+
             # Internal evaluations table (for tldw-specific evaluations)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS internal_evaluations (
@@ -436,6 +482,13 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_created_at ON evaluation_recipe_runs(created_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_parent ON evaluation_recipe_run_children(parent_run_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_child ON evaluation_recipe_run_children(child_run_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_recipe ON synthetic_eval_draft_samples(recipe_kind)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_provenance ON synthetic_eval_draft_samples(provenance)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_review_state ON synthetic_eval_draft_samples(review_state)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_created_at ON synthetic_eval_draft_samples(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_actions_sample_created ON synthetic_eval_review_actions(sample_id, created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_sample_created ON synthetic_eval_promotions(sample_id, created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_dataset ON synthetic_eval_promotions(dataset_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_registrations(active)")
@@ -623,6 +676,41 @@ class EvaluationsDatabase:
             PRIMARY KEY (parent_run_id, child_run_id),
             FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id)
         );
+        CREATE TABLE IF NOT EXISTS synthetic_eval_draft_samples (
+            sample_id TEXT PRIMARY KEY,
+            recipe_kind TEXT NOT NULL,
+            provenance TEXT NOT NULL,
+            review_state TEXT NOT NULL DEFAULT 'draft',
+            sample_payload_json JSONB NOT NULL,
+            sample_metadata_json JSONB,
+            source_kind TEXT,
+            created_by TEXT,
+            review_summary_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS synthetic_eval_review_actions (
+            action_id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reviewer_id TEXT,
+            notes TEXT,
+            action_payload_json JSONB,
+            resulting_review_state TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+        );
+        CREATE TABLE IF NOT EXISTS synthetic_eval_promotions (
+            promotion_id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            dataset_id TEXT,
+            dataset_snapshot_ref TEXT,
+            promoted_by TEXT,
+            promotion_reason TEXT,
+            promotion_metadata_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+        );
         -- Unified evaluations table (enabled by default on PostgreSQL)
         CREATE TABLE IF NOT EXISTS evaluations_unified (
             id TEXT PRIMARY KEY,
@@ -750,6 +838,13 @@ class EvaluationsDatabase:
         CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_created_at ON evaluation_recipe_runs(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_parent ON evaluation_recipe_run_children(parent_run_id);
         CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_child ON evaluation_recipe_run_children(child_run_id);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_recipe ON synthetic_eval_draft_samples(recipe_kind);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_provenance ON synthetic_eval_draft_samples(provenance);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_review_state ON synthetic_eval_draft_samples(review_state);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_created_at ON synthetic_eval_draft_samples(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_actions_sample_created ON synthetic_eval_review_actions(sample_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_sample_created ON synthetic_eval_promotions(sample_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_dataset ON synthetic_eval_promotions(dataset_id);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_created ON evaluations_unified(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_status ON evaluations_unified(status);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_type ON evaluations_unified(evaluation_type);
@@ -781,6 +876,9 @@ class EvaluationsDatabase:
             from tldw_Server_API.app.core.DB_Management.migrations_v6_evaluation_recipes import (
                 migrate_to_evaluation_recipes,
             )
+            from tldw_Server_API.app.core.DB_Management.migrations_v7_synthetic_eval_workflow import (
+                migrate_to_synthetic_eval_workflow,
+            )
 
             # Apply the unified evaluations migration
             if migrate_to_unified_evaluations(self.db_path):
@@ -792,6 +890,10 @@ class EvaluationsDatabase:
                 logger.info("Applied evaluation recipe migration successfully")
             else:
                 logger.warning("Evaluation recipe migration already applied or failed")
+            if migrate_to_synthetic_eval_workflow(self.db_path):
+                logger.info("Applied synthetic eval workflow migration successfully")
+            else:
+                logger.warning("Synthetic eval workflow migration already applied or failed")
         except ImportError:
             logger.warning("Migration module not found, skipping")
         except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
