@@ -6,36 +6,17 @@ from collections.abc import Iterable
 
 from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeManifest
 
-from .base import RecipeDefinition, StaticRecipeDefinition
+from .base import RecipeDefinition
 from .embeddings_retrieval import EmbeddingsRetrievalRecipe
+from .rag_retrieval_tuning import RAGRetrievalTuningRecipe
 from .summarization_quality import SummarizationQualityRecipe
-
-_RAG_RETRIEVAL_TUNING_RECIPE = StaticRecipeDefinition(
-    manifest=RecipeManifest(
-        recipe_id="rag_retrieval_tuning",
-        recipe_version="1",
-        name="RAG Retrieval Tuning",
-        description="Tune retrieval candidates across labeled and unlabeled corpora.",
-        launchable=False,
-        supported_modes=["labeled", "unlabeled"],
-        tags=["rag", "retrieval", "tuning", "recipe-v1"],
-        capabilities={
-            "corpus_sources": ["media_db", "notes"],
-            "candidate_creation_modes": ["auto_sweep", "manual"],
-        },
-        default_run_config={
-            "corpus_sources": ["media_db", "notes"],
-            "candidate_creation_mode": "auto_sweep",
-        },
-    )
-)
 
 
 def _default_builtin_recipes() -> tuple[RecipeDefinition, ...]:
     return (
         EmbeddingsRetrievalRecipe(),
         SummarizationQualityRecipe(),
-        _RAG_RETRIEVAL_TUNING_RECIPE,
+        RAGRetrievalTuningRecipe(),
     )
 
 
