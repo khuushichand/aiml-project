@@ -150,6 +150,8 @@ async def validate_recipe_dataset(
             dataset_id=payload.get("dataset_id"),
             dataset=payload.get("dataset"),
         )
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
     except RecipeDefinitionNotLaunchableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
@@ -200,6 +202,8 @@ async def create_recipe_run(
         if response is not None:
             response.headers["Location"] = f"/api/v1/evaluations/recipe-runs/{record.run_id}"
         return record
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
     except RecipeDefinitionNotLaunchableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:

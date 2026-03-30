@@ -259,6 +259,21 @@ async def test_recipe_validate_dataset_endpoint_returns_errors(async_api_client,
 
 
 @pytest.mark.asyncio
+async def test_recipe_validate_dataset_endpoint_returns_404_for_unknown_recipe(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/not_a_real_recipe/validate-dataset",
+        json={"dataset": _inline_dataset()},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Recipe not found"
+
+
+@pytest.mark.asyncio
 async def test_recipe_validate_dataset_endpoint_rejects_stub_manifest(
     async_api_client,
     auth_headers,
@@ -318,6 +333,24 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
     for slot in report["recommendation_slots"].values():
         assert slot["candidate_run_id"] is None
         assert slot["reason_code"] is not None
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_returns_404_for_unknown_recipe(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/not_a_real_recipe/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Recipe not found"
 
 
 @pytest.mark.asyncio
