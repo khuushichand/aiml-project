@@ -58,6 +58,8 @@ class RecipeManifest(BaseModel):
     description: str
     supported_modes: list[Literal["labeled", "unlabeled"]] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    default_run_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class RecipeLaunchReadiness(BaseModel):
