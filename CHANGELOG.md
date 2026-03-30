@@ -10,6 +10,16 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+
+## [0.1.29] 2026-03-29
+### Added
+
 - Shared workspace cloning and "Shared With Me" flows, backed by new sharing APIs, privilege-aware workspace sharing rules, and clone-service support. (PR #903)
 - ACP workspaces gained workspace discovery and health services for workspace-entity orchestration surfaces. (PR #912)
 - Deep Research now includes jobs-backed run persistence, provider-backed collection/synthesis, replayable SSE progress, checkpoint review, chat handoff and follow-up flows, and workflow launch/wait/bundle steps. (PR #831)
