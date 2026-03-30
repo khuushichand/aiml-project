@@ -101,6 +101,43 @@ def _embeddings_dataset() -> list[dict[str, Any]]:
     ]
 
 
+def _rag_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "q-1",
+            "query": "find the architecture note",
+            "targets": {
+                "relevant_media_ids": [{"id": 10, "grade": 3}],
+                "relevant_note_ids": [{"id": "note-7", "grade": 2}],
+            },
+        }
+    ]
+
+
+def _rag_run_config() -> dict[str, Any]:
+    return {
+        "candidate_creation_mode": "manual",
+        "corpus_scope": {
+            "sources": ["media_db", "notes"],
+            "media_ids": [10],
+            "note_ids": ["note-7"],
+            "indexing_fixed": True,
+        },
+        "candidates": [
+            {
+                "candidate_id": "baseline",
+                "retrieval_config": {
+                    "search_mode": "hybrid",
+                    "top_k": 5,
+                    "hybrid_alpha": 0.7,
+                    "enable_reranking": False,
+                },
+                "indexing_config": {"chunking_preset": "fixed_index"},
+            }
+        ],
+    }
+
+
 def _mark_recipe_run_completed(db: EvaluationsDatabase, run_id: str) -> None:
     with db.get_connection() as conn:
         cursor = conn.cursor()
@@ -156,7 +193,7 @@ async def test_recipe_manifest_endpoints(async_api_client, auth_headers) -> None
     rag_manifest = next(
         item for item in manifests if item["recipe_id"] == "rag_retrieval_tuning"
     )
-    assert rag_manifest["launchable"] is False
+    assert rag_manifest["launchable"] is True
     assert rag_manifest["capabilities"]["corpus_sources"] == ["media_db", "notes"]
     assert rag_manifest["default_run_config"]["candidate_creation_mode"] == "auto_sweep"
 
@@ -168,9 +205,9 @@ async def test_recipe_manifest_endpoints(async_api_client, auth_headers) -> None
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["recipe_id"] == "rag_retrieval_tuning"
-    assert detail["launchable"] is False
+    assert detail["launchable"] is True
     assert detail["capabilities"]["candidate_creation_modes"] == ["auto_sweep", "manual"]
-    assert detail["default_run_config"]["corpus_sources"] == ["media_db", "notes"]
+    assert detail["default_run_config"]["corpus_scope"]["sources"] == ["media_db", "notes"]
 
 
 @pytest.mark.asyncio
@@ -218,7 +255,7 @@ async def test_recipe_launch_readiness_endpoint_reports_worker_enabled(
 
 
 @pytest.mark.asyncio
-async def test_recipe_launch_readiness_endpoint_rejects_stub_manifest(
+async def test_recipe_launch_readiness_endpoint_reports_rag_worker_disabled_state(
     async_api_client,
     auth_headers,
 ) -> None:
@@ -232,11 +269,8 @@ async def test_recipe_launch_readiness_endpoint_rejects_stub_manifest(
     assert body["recipe_id"] == "rag_retrieval_tuning"
     assert body["ready"] is False
     assert body["can_enqueue_runs"] is False
-    assert body["can_reuse_completed_runs"] is False
-    assert body["message"] == (
-        "Recipe 'rag_retrieval_tuning' is not launchable yet. "
-        "It is exposed as a stub manifest only."
-    )
+    assert body["can_reuse_completed_runs"] is True
+    assert "recipe worker is not running" in body["message"]
 
 
 @pytest.mark.asyncio
@@ -274,18 +308,21 @@ async def test_recipe_validate_dataset_endpoint_returns_404_for_unknown_recipe(
 
 
 @pytest.mark.asyncio
-async def test_recipe_validate_dataset_endpoint_rejects_stub_manifest(
+async def test_recipe_validate_dataset_endpoint_accepts_rag_retrieval_tuning(
     async_api_client,
     auth_headers,
 ) -> None:
     response = await async_api_client.post(
         "/api/v1/evaluations/recipes/rag_retrieval_tuning/validate-dataset",
-        json={"dataset": _inline_dataset()},
+        json={"dataset": _rag_dataset(), "run_config": _rag_run_config()},
         headers=auth_headers,
     )
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Recipe 'rag_retrieval_tuning' is not launchable yet."
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["dataset_mode"] == "labeled"
+    assert body["corpus_scope"]["sources"] == ["media_db", "notes"]
 
 
 @pytest.mark.asyncio
@@ -354,21 +391,24 @@ async def test_recipe_run_create_endpoint_returns_404_for_unknown_recipe(
 
 
 @pytest.mark.asyncio
-async def test_recipe_run_create_endpoint_rejects_stub_manifest(
+async def test_recipe_run_create_endpoint_accepts_rag_retrieval_tuning(
     async_api_client,
     auth_headers,
 ) -> None:
     response = await async_api_client.post(
         "/api/v1/evaluations/recipes/rag_retrieval_tuning/runs",
         json={
-            "dataset": _inline_dataset(),
-            "run_config": _run_config(),
+            "dataset": _rag_dataset(),
+            "run_config": _rag_run_config(),
         },
         headers=auth_headers,
     )
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Recipe 'rag_retrieval_tuning' is not launchable yet."
+    assert response.status_code == 202
+    body = response.json()
+    assert body["recipe_id"] == "rag_retrieval_tuning"
+    assert body["metadata"]["run_config"]["corpus_scope"]["sources"] == ["media_db", "notes"]
+    assert body["metadata"]["inline_dataset"] == _rag_dataset()
 
 
 @pytest.mark.asyncio

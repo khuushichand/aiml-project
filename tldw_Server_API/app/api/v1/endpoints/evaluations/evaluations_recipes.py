@@ -149,6 +149,7 @@ async def validate_recipe_dataset(
             recipe_id,
             dataset_id=payload.get("dataset_id"),
             dataset=payload.get("dataset"),
+            run_config=payload.get("run_config"),
         )
     except RecipeDefinitionNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc

@@ -66,6 +66,55 @@ def _run_config() -> dict[str, Any]:
     }
 
 
+def _rag_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "q-1",
+            "query": "find the architecture note",
+            "targets": {
+                "relevant_media_ids": [{"id": 10, "grade": 3}],
+                "relevant_note_ids": [{"id": "note-7", "grade": 2}],
+            },
+        }
+    ]
+
+
+def _rag_run_config() -> dict[str, Any]:
+    return {
+        "candidate_creation_mode": "manual",
+        "corpus_scope": {
+            "sources": ["media_db", "notes"],
+            "media_ids": [10],
+            "note_ids": ["note-7"],
+            "indexing_fixed": True,
+        },
+        "candidates": [
+            {
+                "candidate_id": "baseline",
+                "retrieval_config": {
+                    "search_mode": "hybrid",
+                    "top_k": 5,
+                    "hybrid_alpha": 0.7,
+                    "enable_reranking": False,
+                },
+                "indexing_config": {"chunking_preset": "fixed_index"},
+            },
+            {
+                "candidate_id": "rerank",
+                "retrieval_config": {
+                    "search_mode": "hybrid",
+                    "top_k": 5,
+                    "hybrid_alpha": 0.7,
+                    "enable_reranking": True,
+                    "reranking_strategy": "cross_encoder",
+                    "rerank_top_k": 3,
+                },
+                "indexing_config": {"chunking_preset": "fixed_index"},
+            },
+        ],
+    }
+
+
 def _service(tmp_path) -> tuple[EvaluationsDatabase, RecipeRunsService, str]:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     user_id = get_single_user_instance().id_str
@@ -122,31 +171,32 @@ def test_recipe_service_lists_and_fetches_builtin_manifests(tmp_path) -> None:
     assert manifest.recipe_version == "1"
 
 
-def test_recipe_service_rejects_non_launchable_stub_in_validate_dataset(tmp_path) -> None:
+def test_recipe_service_validates_rag_retrieval_tuning_dataset(tmp_path) -> None:
     _, service, _ = _service(tmp_path)
 
-    with pytest.raises(
-        RecipeDefinitionNotLaunchableError,
-        match="rag_retrieval_tuning",
-    ):
-        service.validate_dataset(
-            "rag_retrieval_tuning",
-            dataset=[{"input": "find alpha", "expected": "alpha"}],
-        )
+    result = service.validate_dataset(
+        "rag_retrieval_tuning",
+        dataset=_rag_dataset(),
+        run_config=_rag_run_config(),
+    )
+
+    assert result["valid"] is True
+    assert result["dataset_mode"] == "labeled"
+    assert result["corpus_scope"]["sources"] == ["media_db", "notes"]
 
 
-def test_recipe_service_rejects_non_launchable_stub_in_create_run(tmp_path) -> None:
+def test_recipe_service_creates_rag_retrieval_tuning_run(tmp_path) -> None:
     _, service, _ = _service(tmp_path)
 
-    with pytest.raises(
-        RecipeDefinitionNotLaunchableError,
-        match="rag_retrieval_tuning",
-    ):
-        service.create_run(
-            "rag_retrieval_tuning",
-            dataset=[{"input": "find alpha", "expected": "alpha"}],
-            run_config={},
-        )
+    record = service.create_run(
+        "rag_retrieval_tuning",
+        dataset=_rag_dataset(),
+        run_config=_rag_run_config(),
+    )
+
+    assert record.status is RunStatus.PENDING
+    assert record.metadata["run_config"]["corpus_scope"]["sources"] == ["media_db", "notes"]
+    assert record.metadata["recipe_validation"]["corpus_scope"]["media_ids"] == ["10"]
 
 
 def test_recipe_service_validates_dataset_shape_and_labeling_mode(tmp_path) -> None:
@@ -198,6 +248,32 @@ def test_recipe_service_creates_parent_run_and_normalized_report_shell(tmp_path)
     for slot in report.recommendation_slots.values():
         assert slot.candidate_run_id is None
         assert slot.reason_code is not None
+
+
+def test_build_reuse_hash_for_rag_retrieval_tuning_includes_corpus_scope(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+    dataset = _rag_dataset()
+    run_config_a = _rag_run_config()
+    run_config_b = {
+        **_rag_run_config(),
+        "corpus_scope": {
+            **_rag_run_config()["corpus_scope"],
+            "media_ids": [10, 11],
+        },
+    }
+
+    reuse_hash_a = service.build_reuse_hash(
+        "rag_retrieval_tuning",
+        dataset=dataset,
+        run_config=run_config_a,
+    )
+    reuse_hash_b = service.build_reuse_hash(
+        "rag_retrieval_tuning",
+        dataset=dataset,
+        run_config=run_config_b,
+    )
+
+    assert reuse_hash_a != reuse_hash_b
 
 
 def test_recipe_service_uses_embeddings_recipe_validation_and_normalization(tmp_path) -> None:
@@ -413,6 +489,60 @@ def test_recipe_service_builds_summarization_report_from_stored_recipe_inputs(tm
     assert report.recommendation_slots["best_overall"].candidate_run_id == "cand-openai"
     assert report.recommendation_slots["best_local"].candidate_run_id == "cand-local"
     assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "cand-openai"
+
+
+def test_recipe_service_builds_rag_report_from_stored_recipe_inputs(tmp_path) -> None:
+    db, service, _ = _service(tmp_path)
+    record = service.create_run(
+        "rag_retrieval_tuning",
+        dataset=_rag_dataset(),
+        run_config=_rag_run_config(),
+    )
+
+    db.update_recipe_run(
+        record.run_id,
+        metadata={
+            **record.metadata,
+            "recipe_report_inputs": {
+                "dataset_mode": "labeled",
+                "review_sample": {"required": False, "sample_size": 0, "sample_ids": []},
+                "corpus_scope": _rag_run_config()["corpus_scope"],
+                "candidate_results": [
+                    {
+                        "candidate_id": "baseline",
+                        "candidate_run_id": "baseline",
+                        "latency_ms": 120.0,
+                        "metrics": {
+                            "pre_rerank_recall_at_k": 0.50,
+                            "post_rerank_ndcg_at_k": 0.55,
+                            "first_pass_recall_score": 0.50,
+                            "post_rerank_quality_score": 0.55,
+                        },
+                    },
+                    {
+                        "candidate_id": "rerank",
+                        "candidate_run_id": "rerank",
+                        "is_local": True,
+                        "cost_usd": 0.0,
+                        "latency_ms": 95.0,
+                        "metrics": {
+                            "pre_rerank_recall_at_k": 0.75,
+                            "post_rerank_ndcg_at_k": 0.82,
+                            "first_pass_recall_score": 0.75,
+                            "post_rerank_quality_score": 0.82,
+                        },
+                    },
+                ],
+            },
+        },
+    )
+
+    report = service.get_report(record.run_id)
+
+    assert report.confidence_summary is not None
+    assert report.recommendation_slots["best_overall"].candidate_run_id == "rerank"
+    assert report.recommendation_slots["best_local"].candidate_run_id == "rerank"
+    assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "rerank"
 
 
 def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> None:

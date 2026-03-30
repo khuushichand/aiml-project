@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Mapping
 from typing import Any
 
-from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeManifest
+from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
+    ConfidenceSummary,
+    RecipeManifest,
+    RecommendationSlot,
+)
 from tldw_Server_API.app.core.Evaluations.recipes.base import RecipeDefinition
 
 from .rag_retrieval_tuning_candidates import (
@@ -39,6 +44,7 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _GRADE_MIN = 0
 _GRADE_MAX = 3
+_RECOMMENDATION_SLOTS = ("best_overall", "best_cheap", "best_local")
 
 
 class RAGRetrievalTuningRecipe(RecipeDefinition):
@@ -49,7 +55,7 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
         recipe_version="1",
         name="RAG Retrieval Tuning",
         description="Tune retrieval candidates against run-level media_db and notes corpora.",
-        launchable=False,
+        launchable=True,
         supported_modes=["labeled", "unlabeled"],
         tags=["rag", "retrieval", "tuning", "recipe-v1"],
         capabilities={
@@ -210,6 +216,97 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
             reranked_hits=reranked_hits,
         )
 
+    def build_report(
+        self,
+        *,
+        dataset_mode: str,
+        review_sample: dict[str, Any],
+        corpus_scope: dict[str, Any],
+        candidate_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        candidate_summaries = [
+            self._summarize_candidate(candidate_result)
+            for candidate_result in candidate_results
+        ]
+        candidate_summaries = [summary for summary in candidate_summaries if summary is not None]
+        candidate_summaries.sort(
+            key=lambda summary: (
+                -float(summary["metrics"]["retrieval_quality_score"]),
+                float(summary["latency_ms"] or 0.0),
+                str(summary["candidate_id"]),
+            )
+        )
+
+        best_overall = self._pick_best_overall(candidate_summaries)
+        best_cheap = self._pick_best_cheap(candidate_summaries)
+        best_local = self._pick_best_local(candidate_summaries)
+
+        quality_scores = [
+            float(summary["metrics"]["retrieval_quality_score"])
+            for summary in candidate_summaries
+        ]
+        sample_count = min(
+            (int(summary["sample_count"]) for summary in candidate_summaries),
+            default=0,
+        )
+        spread = statistics.pstdev(quality_scores) if len(quality_scores) > 1 else 0.0
+        winner_margin = self._winner_margin(candidate_summaries)
+        confidence_summary = ConfidenceSummary(
+            kind="aggregate",
+            confidence=self._confidence_score(
+                sample_count=sample_count,
+                spread=spread,
+                winner_margin=winner_margin,
+            ),
+            sample_count=sample_count,
+            spread=spread,
+            margin=winner_margin,
+            notes=(
+                "Unlabeled run reserves review sample."
+                if dataset_mode == "unlabeled"
+                else None
+            ),
+        )
+
+        recommendation_slots = {
+            "best_overall": self._build_slot(
+                "best_overall",
+                best_overall,
+                reason_code="highest_retrieval_quality",
+                confidence=confidence_summary.confidence,
+            ),
+            "best_cheap": self._build_slot(
+                "best_cheap",
+                best_cheap,
+                reason_code="lowest_cost",
+            ),
+            "best_local": self._build_slot(
+                "best_local",
+                best_local,
+                reason_code="best_local_retrieval_quality",
+            ),
+        }
+        for slot_name in _RECOMMENDATION_SLOTS:
+            recommendation_slots.setdefault(
+                slot_name,
+                self._build_slot(slot_name, None, reason_code="not_available"),
+            )
+
+        return {
+            "dataset_mode": dataset_mode,
+            "review_sample": review_sample,
+            "corpus_scope": corpus_scope,
+            "candidates": candidate_summaries,
+            "best_overall": best_overall,
+            "best_cheap": best_cheap,
+            "best_local": best_local,
+            "recommendation_slots": {
+                slot_name: slot.model_dump(mode="json")
+                for slot_name, slot in recommendation_slots.items()
+            },
+            "confidence_summary": confidence_summary.model_dump(mode="json"),
+        }
+
     def _build_validation_result(
         self,
         *,
@@ -231,6 +328,147 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
             "weak_supervision_budget": weak_supervision_budget,
             "graded_relevance": {"min": _GRADE_MIN, "max": _GRADE_MAX},
         }
+
+    def _summarize_candidate(self, candidate_result: dict[str, Any]) -> dict[str, Any] | None:
+        metrics = dict(candidate_result.get("metrics") or {})
+        query_results = [
+            dict(query_result)
+            for query_result in (candidate_result.get("query_results") or [])
+            if isinstance(query_result, dict)
+        ]
+        pre_rerank = metrics.get("first_pass_recall_score", metrics.get("pre_rerank_recall_at_k"))
+        post_rerank = metrics.get(
+            "post_rerank_quality_score",
+            metrics.get("post_rerank_ndcg_at_k"),
+        )
+
+        if pre_rerank is None or post_rerank is None:
+            pre_values = []
+            post_values = []
+            latency_values = []
+            for query_result in query_results:
+                query_metrics = dict(query_result.get("metrics") or {})
+                if query_metrics.get("first_pass_recall_score") is not None:
+                    pre_values.append(float(query_metrics["first_pass_recall_score"]))
+                elif query_metrics.get("pre_rerank_recall_at_k") is not None:
+                    pre_values.append(float(query_metrics["pre_rerank_recall_at_k"]))
+                if query_metrics.get("post_rerank_quality_score") is not None:
+                    post_values.append(float(query_metrics["post_rerank_quality_score"]))
+                elif query_metrics.get("post_rerank_ndcg_at_k") is not None:
+                    post_values.append(float(query_metrics["post_rerank_ndcg_at_k"]))
+                if query_result.get("latency_ms") is not None:
+                    latency_values.append(float(query_result["latency_ms"]))
+            if pre_rerank is None:
+                pre_rerank = statistics.mean(pre_values) if pre_values else 0.0
+            if post_rerank is None:
+                post_rerank = statistics.mean(post_values) if post_values else 0.0
+            latency_ms = (
+                float(candidate_result["latency_ms"])
+                if candidate_result.get("latency_ms") is not None
+                else (statistics.mean(latency_values) if latency_values else None)
+            )
+        else:
+            latency_ms = (
+                float(candidate_result["latency_ms"])
+                if candidate_result.get("latency_ms") is not None
+                else None
+            )
+
+        pre_rerank = float(pre_rerank)
+        post_rerank = float(post_rerank)
+        retrieval_quality_score = (0.6 * pre_rerank) + (0.4 * post_rerank)
+        sample_count = len(query_results) or int(candidate_result.get("sample_count") or 0)
+
+        return {
+            "candidate_id": candidate_result.get("candidate_id"),
+            "candidate_run_id": candidate_result.get("candidate_run_id"),
+            "provider": candidate_result.get("provider"),
+            "model": candidate_result.get("model"),
+            "is_local": bool(candidate_result.get("is_local")),
+            "cost_usd": candidate_result.get("cost_usd"),
+            "sample_count": sample_count,
+            "latency_ms": latency_ms,
+            "metrics": {
+                "pre_rerank_recall_at_k": pre_rerank,
+                "post_rerank_ndcg_at_k": post_rerank,
+                "retrieval_quality_score": retrieval_quality_score,
+            },
+        }
+
+    def _pick_best_overall(self, candidate_summaries: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not candidate_summaries:
+            return None
+        return max(
+            candidate_summaries,
+            key=lambda summary: (
+                float(summary["metrics"]["retrieval_quality_score"]),
+                -float(summary["latency_ms"] or 0.0),
+            ),
+        )
+
+    def _pick_best_cheap(self, candidate_summaries: list[dict[str, Any]]) -> dict[str, Any] | None:
+        priced = [summary for summary in candidate_summaries if summary.get("cost_usd") is not None]
+        if not priced:
+            return None
+        return min(
+            priced,
+            key=lambda summary: (
+                float(summary["cost_usd"]),
+                -float(summary["metrics"]["retrieval_quality_score"]),
+                float(summary["latency_ms"] or 0.0),
+            ),
+        )
+
+    def _pick_best_local(self, candidate_summaries: list[dict[str, Any]]) -> dict[str, Any] | None:
+        local_candidates = [summary for summary in candidate_summaries if summary.get("is_local")]
+        if not local_candidates:
+            return None
+        return max(
+            local_candidates,
+            key=lambda summary: (
+                float(summary["metrics"]["retrieval_quality_score"]),
+                -float(summary["latency_ms"] or 0.0),
+            ),
+        )
+
+    def _winner_margin(self, candidate_summaries: list[dict[str, Any]]) -> float:
+        if len(candidate_summaries) < 2:
+            return 1.0 if candidate_summaries else 0.0
+        ordered = sorted(
+            float(summary["metrics"]["retrieval_quality_score"])
+            for summary in candidate_summaries
+        )
+        return ordered[-1] - ordered[-2]
+
+    def _confidence_score(self, *, sample_count: int, spread: float, winner_margin: float) -> float:
+        sample_factor = min(sample_count / 25.0, 1.0)
+        margin_factor = min(max(winner_margin, 0.0) / 0.25, 1.0)
+        spread_penalty = min(max(spread, 0.0), 0.5)
+        return round(max(0.0, min(1.0, (0.5 * sample_factor) + (0.5 * margin_factor) - (0.25 * spread_penalty))), 3)
+
+    def _build_slot(
+        self,
+        slot_name: str,
+        summary: dict[str, Any] | None,
+        *,
+        reason_code: str,
+        confidence: float | None = None,
+    ) -> RecommendationSlot:
+        if summary is None:
+            return RecommendationSlot(
+                candidate_run_id=None,
+                reason_code="not_available",
+                explanation=f"No recommendation is available for '{slot_name}'.",
+            )
+        return RecommendationSlot(
+            candidate_run_id=summary.get("candidate_run_id"),
+            reason_code=reason_code,
+            explanation=(
+                f"Selected '{summary.get('candidate_id')}' for {slot_name} "
+                f"with retrieval quality {summary['metrics']['retrieval_quality_score']:.3f}."
+            ),
+            confidence=confidence,
+        )
 
     def _normalize_corpus_scope(
         self,

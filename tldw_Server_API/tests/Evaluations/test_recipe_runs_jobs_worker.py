@@ -71,6 +71,43 @@ def _embeddings_run_config() -> dict[str, Any]:
     }
 
 
+def _rag_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "q-1",
+            "query": "find the architecture note",
+            "targets": {
+                "relevant_media_ids": [{"id": 10, "grade": 3}],
+                "relevant_note_ids": [{"id": "note-7", "grade": 2}],
+            },
+        }
+    ]
+
+
+def _rag_run_config() -> dict[str, Any]:
+    return {
+        "candidate_creation_mode": "manual",
+        "corpus_scope": {
+            "sources": ["media_db", "notes"],
+            "media_ids": [10],
+            "note_ids": ["note-7"],
+            "indexing_fixed": True,
+        },
+        "candidates": [
+            {
+                "candidate_id": "baseline",
+                "retrieval_config": {
+                    "search_mode": "hybrid",
+                    "top_k": 5,
+                    "hybrid_alpha": 0.7,
+                    "enable_reranking": False,
+                },
+                "indexing_config": {"chunking_preset": "fixed_index"},
+            }
+        ],
+    }
+
+
 def _service(tmp_path) -> tuple[EvaluationsDatabase, RecipeRunsService, str]:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     user_id = get_single_user_instance().id_str
@@ -201,6 +238,129 @@ def test_handle_recipe_run_job_marks_run_completed_with_normalized_report(tmp_pa
     }
     assert refreshed.metadata["jobs"]["job_id"] == "job-42"
     assert refreshed.metadata["jobs"]["worker_state"] == "completed"
+
+
+def test_handle_recipe_run_job_executes_rag_retrieval_tuning_and_persists_report(tmp_path) -> None:
+    db, service, user_id = _service(tmp_path)
+    record = service.create_run(
+        "rag_retrieval_tuning",
+        dataset=_rag_dataset(),
+        run_config=_rag_run_config(),
+    )
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    captured: dict[str, Any] = {}
+
+    def _fake_execute(*, record, db, user_id, service):
+        del db, service
+        captured["run_id"] = record.run_id
+        captured["user_id"] = user_id
+        captured["inline_dataset"] = record.metadata.get("inline_dataset")
+        return {
+            "child_run_ids": ["candidate-rerank"],
+            "metadata": {
+                "candidate_results": [
+                    {
+                        "candidate_id": "candidate-rerank",
+                        "candidate_run_id": "candidate-rerank",
+                        "is_local": True,
+                        "metrics": {
+                            "pre_rerank_recall_at_k": 0.75,
+                            "post_rerank_ndcg_at_k": 0.82,
+                            "first_pass_recall_score": 0.75,
+                            "post_rerank_quality_score": 0.82,
+                        },
+                    }
+                ],
+                "recipe_report_inputs": {
+                    "dataset_mode": record.metadata["dataset_mode"],
+                    "review_sample": record.metadata["review_sample"],
+                    "corpus_scope": record.metadata["run_config"]["corpus_scope"],
+                    "candidate_results": [
+                        {
+                            "candidate_id": "candidate-rerank",
+                            "candidate_run_id": "candidate-rerank",
+                            "is_local": True,
+                            "metrics": {
+                                "pre_rerank_recall_at_k": 0.75,
+                                "post_rerank_ndcg_at_k": 0.82,
+                                "first_pass_recall_score": 0.75,
+                                "post_rerank_quality_score": 0.82,
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(worker, "_execute_rag_retrieval_tuning_recipe_run", _fake_execute)
+
+    try:
+        result = handle_recipe_run_job(
+            {
+                "id": "job-rag-1",
+                "payload": build_recipe_run_job_payload(
+                    run_id=record.run_id,
+                    recipe_id=record.recipe_id,
+                    owner_user_id=user_id,
+                ),
+            },
+            db=db,
+            user_id=user_id,
+        )
+    finally:
+        monkeypatch.undo()
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert result["status"] == "completed"
+    assert captured["run_id"] == record.run_id
+    assert captured["inline_dataset"] == _rag_dataset()
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.COMPLETED
+    assert refreshed.child_run_ids == ["candidate-rerank"]
+    assert refreshed.metadata["recipe_report_inputs"]["corpus_scope"]["sources"] == ["media_db", "notes"]
+    assert refreshed.metadata["jobs"]["worker_state"] == "completed"
+    assert refreshed.recommendation_slots["best_overall"].candidate_run_id == "candidate-rerank"
+
+
+def test_normalize_rag_targets_preserves_chunk_labels_for_scoring() -> None:
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    normalized = worker._normalize_rag_targets(
+        {
+            "targets": {
+                "relevant_chunk_ids": [{"id": "chunk-1", "grade": 2}],
+            }
+        }
+    )
+
+    assert normalized["chunks"]["chunk-1"] == 2
+    assert worker._grade_rag_document(
+        {
+            "id": "chunk-1",
+            "metadata": {"chunk_id": "chunk-1"},
+        },
+        normalized,
+    ) == 2
+
+
+def test_extract_ranked_documents_prefers_pipeline_snapshots_when_present() -> None:
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    first_pass_docs, reranked_docs = worker._extract_ranked_documents(
+        {
+            "documents": [{"id": "fallback-doc"}],
+            "metadata": {
+                "pre_rerank_documents": [{"id": "pre-doc"}],
+                "reranked_documents": [{"id": "post-doc"}],
+            },
+        }
+    )
+
+    assert [doc["id"] for doc in first_pass_docs] == ["pre-doc"]
+    assert [doc["id"] for doc in reranked_docs] == ["post-doc"]
 
 
 def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_path) -> None:

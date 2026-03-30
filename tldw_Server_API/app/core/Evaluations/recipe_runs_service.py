@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 from typing import Any
@@ -83,6 +84,7 @@ class RecipeRunsService:
         *,
         dataset_id: str | None = None,
         dataset: list[dict[str, Any]] | None = None,
+        run_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Lightweight dataset validation that is real enough to gate launch."""
         manifest = self.get_manifest(recipe_id)
@@ -92,11 +94,23 @@ class RecipeRunsService:
         resolved = self._resolve_dataset(dataset_id=dataset_id, dataset=dataset, errors=errors)
         review_payload: dict[str, Any] = {}
         sample_count = len(resolved["samples"])
+        normalized_run_config: dict[str, Any] | None = None
 
         if not errors:
+            if run_config is not None:
+                normalized_run_config = self._normalize_run_config(recipe_id, run_config)
             validator = getattr(recipe, "validate_dataset", None)
             if callable(validator):
-                validation = dict(validator(resolved["samples"]))
+                validator_signature = inspect.signature(validator)
+                if "run_config" in validator_signature.parameters:
+                    validation = dict(
+                        validator(
+                            resolved["samples"],
+                            run_config=normalized_run_config or run_config,
+                        )
+                    )
+                else:
+                    validation = dict(validator(resolved["samples"]))
                 errors.extend(validation.get("errors") or [])
                 dataset_mode = validation.get("dataset_mode")
                 sample_count = int(validation.get("sample_count") or sample_count)
@@ -146,12 +160,16 @@ class RecipeRunsService:
         """Build the explicit reuse hash inputs required for recipe-run reuse."""
         manifest = self.get_manifest(recipe_id)
         self._ensure_launchable(manifest)
-        validation = self.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
+        validation = self.validate_dataset(
+            recipe_id,
+            dataset_id=dataset_id,
+            dataset=dataset,
+            run_config=normalized_run_config,
+        )
         if not validation["valid"]:
             joined = "; ".join(validation["errors"])
             raise ValueError(f"Dataset validation failed: {joined}")
-
-        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
         payload = {
             "recipe_id": manifest.recipe_id,
             "recipe_version": manifest.recipe_version,
@@ -174,7 +192,13 @@ class RecipeRunsService:
         """Create a pending parent run or reuse a completed run when eligible."""
         manifest = self.get_manifest(recipe_id)
         self._ensure_launchable(manifest)
-        validation = self.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
+        validation = self.validate_dataset(
+            recipe_id,
+            dataset_id=dataset_id,
+            dataset=dataset,
+            run_config=normalized_run_config,
+        )
         if not validation["valid"]:
             joined = "; ".join(validation["errors"])
             raise ValueError(f"Dataset validation failed: {joined}")
@@ -191,8 +215,6 @@ class RecipeRunsService:
                 "dataset_content_hash",
             }
         }
-
-        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
         reuse_hash = self.build_reuse_hash(
             recipe_id,
             dataset_id=dataset_id,
