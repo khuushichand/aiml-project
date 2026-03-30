@@ -573,6 +573,8 @@ class TTSInputValidator:
                 min_duration = self._coerce_float(request.extra_params.get("reference_duration_min"))
 
             # Provider-specific validations for Qwen3-TTS
+            skip_voice_reference_validation = False
+
             if provider == "qwen3_tts":
                 model_name = (getattr(request, "model", None) or "").strip().lower()
                 extras = request.extra_params or {}
@@ -647,6 +649,11 @@ class TTSInputValidator:
                 if min_duration is None:
                     min_duration = self._coerce_float(duration_limits.get("min"))
                 max_duration = self._coerce_float(duration_limits.get("max"))
+                skip_voice_reference_validation = bool(
+                    voice.startswith("custom:")
+                    and isinstance(extras, dict)
+                    and extras.get("pocket_tts_cpp_voice_path")
+                )
 
             # Validate parameters (provider-aware)
             self._validate_parameters(request, provider)
@@ -659,7 +666,7 @@ class TTSInputValidator:
                 )
 
             # Validate voice reference if provided
-            if request.voice_reference:
+            if request.voice_reference and not skip_voice_reference_validation:
                 self._validate_voice_reference(
                     request.voice_reference,
                     min_duration=min_duration,
