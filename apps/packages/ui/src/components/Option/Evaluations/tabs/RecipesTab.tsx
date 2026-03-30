@@ -30,6 +30,7 @@ import {
   useValidateRecipeDataset
 } from "../hooks/useRecipes"
 import { JsonEditor } from "../components"
+import { RagAnswerQualityConfig } from "./recipe-configs/RagAnswerQualityConfig"
 import { RagRetrievalTuningConfig } from "./recipe-configs/RagRetrievalTuningConfig"
 import type {
   DatasetSample,
@@ -67,6 +68,17 @@ const DEFAULT_INLINE_DATASETS: Record<string, string> = {
       {
         sample_id: "sample-1",
         query: ""
+      }
+    ],
+    null,
+    2
+  ),
+  rag_answer_quality: JSON.stringify(
+    [
+      {
+        sample_id: "sample-1",
+        query: "",
+        expected_behavior: "answer"
       }
     ],
     null,
@@ -146,6 +158,23 @@ const DEFAULT_RUN_CONFIGS: Record<string, string> = {
       indexing_config: {
         chunking_preset: "baseline"
       }
+    },
+    null,
+    2
+  ),
+  rag_answer_quality: JSON.stringify(
+    {
+      evaluation_mode: "fixed_context",
+      supervision_mode: "rubric",
+      context_snapshot_ref: "",
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          generation_model: "openai:gpt-4.1-mini",
+          prompt_variant: "default",
+          formatting_citation_mode: "citations_required"
+        }
+      ]
     },
     null,
     2
@@ -1220,6 +1249,14 @@ export const RecipesTab: React.FC = () => {
                         onDatasetChange={replaceInlineDataset}
                         onRunConfigChange={replaceRunConfig}
                       />
+                    ) : selectedManifest.recipe_id === "rag_answer_quality" ? (
+                      <RagAnswerQualityConfig
+                        datasetSource="inline"
+                        dataset={parsedInlineDataset || defaultInlineDatasetForRecipe(selectedRecipeId)}
+                        runConfig={parsedRunConfig || defaultRunConfigForRecipe(selectedRecipeId)}
+                        onDatasetChange={replaceInlineDataset}
+                        onRunConfigChange={replaceRunConfig}
+                      />
                     ) : (
                       <div className="space-y-3">
                         <div>
@@ -1303,6 +1340,14 @@ export const RecipesTab: React.FC = () => {
                   )}
                   {selectedManifest.recipe_id === "rag_retrieval_tuning" ? (
                     <RagRetrievalTuningConfig
+                      datasetSource="saved"
+                      dataset={[]}
+                      runConfig={parsedRunConfig || defaultRunConfigForRecipe(selectedRecipeId)}
+                      onDatasetChange={() => {}}
+                      onRunConfigChange={replaceRunConfig}
+                    />
+                  ) : selectedManifest.recipe_id === "rag_answer_quality" ? (
+                    <RagAnswerQualityConfig
                       datasetSource="saved"
                       dataset={[]}
                       runConfig={parsedRunConfig || defaultRunConfigForRecipe(selectedRecipeId)}

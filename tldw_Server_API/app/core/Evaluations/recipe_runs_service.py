@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.Evaluations.recipes.reporting import RecipeRunRepo
 RECIPE_RUN_REUSE_ENTITY_TYPE = "recipe_run_reuse"
 REQUIRED_RECOMMENDATION_SLOTS: tuple[str, ...] = (
     "best_overall",
+    "best_quality",
     "best_cheap",
     "best_local",
 )
@@ -448,7 +449,12 @@ class RecipeRunsService:
         recipe = self.recipe_registry.get_recipe(recipe_id)
         normalizer = getattr(recipe, "normalize_run_config", None)
         if callable(normalizer):
-            return dict(normalizer(run_config))
+            normalized = dict(normalizer(run_config))
+            if recipe_id == "rag_answer_quality":
+                normalized["candidates"] = self._normalize_rag_answer_quality_candidates(
+                    run_config.get("candidates")
+                )
+            return normalized
 
         candidate_model_ids = run_config.get("candidate_model_ids") or []
         if not isinstance(candidate_model_ids, list) or not candidate_model_ids:
@@ -490,6 +496,28 @@ class RecipeRunsService:
             "context_policy": self._normalize_mapping(run_config.get("context_policy")),
             "execution_policy": self._normalize_mapping(run_config.get("execution_policy")),
         }
+
+    def _normalize_rag_answer_quality_candidates(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        normalized_candidates: list[dict[str, Any]] = []
+        for candidate in value:
+            if not isinstance(candidate, dict):
+                continue
+            normalized_candidates.append(
+                {
+                    "candidate_id": candidate.get("candidate_id"),
+                    "provider": candidate.get("provider"),
+                    "model": candidate.get("model"),
+                    "generation_model": candidate.get("generation_model"),
+                    "prompt_variant": candidate.get("prompt_variant"),
+                    "formatting_citation_mode": candidate.get("formatting_citation_mode"),
+                    "is_local": candidate.get("is_local"),
+                    "cost_usd": candidate.get("cost_usd"),
+                    "generation_config": self._normalize_mapping(candidate.get("generation_config")),
+                }
+            )
+        return normalized_candidates
 
     def _normalize_mapping(self, value: Any) -> dict[str, Any]:
         if value is None:

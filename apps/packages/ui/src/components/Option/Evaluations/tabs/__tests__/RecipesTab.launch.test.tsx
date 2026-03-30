@@ -50,6 +50,28 @@ const recipeManifestState = {
             synthetic_query_limit: 20
           }
         }
+      },
+      {
+        recipe_id: "rag_answer_quality",
+        recipe_version: "1",
+        name: "RAG Answer Quality",
+        description: "Compare answer-generation candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["rag", "generation"],
+        launchable: true,
+        capabilities: {
+          evaluation_modes: ["fixed_context", "live_end_to_end"],
+          supervision_modes: ["rubric", "reference_answer", "pairwise", "mixed"],
+          candidate_dimensions: [
+            "generation_model",
+            "prompt_variant",
+            "formatting_citation_mode"
+          ]
+        },
+        default_run_config: {
+          evaluation_mode: "fixed_context",
+          supervision_mode: "rubric"
+        }
       }
     ]
   },
@@ -284,6 +306,28 @@ describe("RecipesTab recipe launch flow", () => {
             min_review_samples: 3,
             synthetic_query_limit: 20
           }
+        }
+      },
+      {
+        recipe_id: "rag_answer_quality",
+        recipe_version: "1",
+        name: "RAG Answer Quality",
+        description: "Compare answer-generation candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["rag", "generation"],
+        launchable: true,
+        capabilities: {
+          evaluation_modes: ["fixed_context", "live_end_to_end"],
+          supervision_modes: ["rubric", "reference_answer", "pairwise", "mixed"],
+          candidate_dimensions: [
+            "generation_model",
+            "prompt_variant",
+            "formatting_citation_mode"
+          ]
+        },
+        default_run_config: {
+          evaluation_mode: "fixed_context",
+          supervision_mode: "rubric"
         }
       }
     ]
@@ -597,6 +641,98 @@ describe("RecipesTab recipe launch flow", () => {
                   chunking_preset: "compact"
                 })
               })
+            ]
+          })
+        })
+      )
+    })
+  })
+
+  it("serializes guided rag answer quality inputs into runnable recipe payloads", async () => {
+    recipeLaunchReadinessState.data = {
+      data: {
+        recipe_id: "rag_answer_quality",
+        ready: true,
+        can_enqueue_runs: true,
+        can_reuse_completed_runs: true,
+        runtime_checks: {
+          recipe_run_worker_enabled: true
+        },
+        message: null
+      }
+    }
+
+    render(<RecipesTab />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use RAG Answer Quality" }))
+    fireEvent.change(screen.getByLabelText("Context snapshot reference"), {
+      target: { value: "ctx-release-2026-03-29" }
+    })
+    fireEvent.change(screen.getByLabelText("Supervision mode"), {
+      target: { value: "mixed" }
+    })
+    fireEvent.change(screen.getByLabelText("Candidate ID 1"), {
+      target: { value: "fixed-best" }
+    })
+    fireEvent.change(screen.getByLabelText("Generation model 1"), {
+      target: { value: "openai:gpt-4.1-mini" }
+    })
+    fireEvent.change(screen.getByLabelText("Prompt variant 1"), {
+      target: { value: "cite-v2" }
+    })
+    fireEvent.change(screen.getByLabelText("Formatting/citation mode 1"), {
+      target: { value: "markdown_citations" }
+    })
+    fireEvent.change(screen.getByLabelText("Sample ID 1"), {
+      target: { value: "sample-42" }
+    })
+    fireEvent.change(screen.getByLabelText("Query text 1"), {
+      target: { value: "What changed in the rollout?" }
+    })
+    fireEvent.change(screen.getByLabelText("Expected behavior 1"), {
+      target: { value: "hedge" }
+    })
+    fireEvent.change(screen.getByLabelText("Retrieved contexts 1"), {
+      target: {
+        value: "Doc A :: Rollout completed on Friday.\nDoc B :: Beta remained invite-only."
+      }
+    })
+    fireEvent.change(screen.getByLabelText("Reference answer 1 (optional)"), {
+      target: {
+        value: "The rollout completed on Friday, while beta access stayed limited."
+      }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
+
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipeId: "rag_answer_quality",
+          dataset: [
+            {
+              sample_id: "sample-42",
+              query: "What changed in the rollout?",
+              expected_behavior: "hedge",
+              retrieved_contexts: [
+                { content: "Doc A :: Rollout completed on Friday." },
+                { content: "Doc B :: Beta remained invite-only." }
+              ],
+              reference_answer:
+                "The rollout completed on Friday, while beta access stayed limited."
+            }
+          ],
+          runConfig: expect.objectContaining({
+            evaluation_mode: "fixed_context",
+            supervision_mode: "mixed",
+            context_snapshot_ref: "ctx-release-2026-03-29",
+            candidates: [
+              {
+                candidate_id: "fixed-best",
+                generation_model: "openai:gpt-4.1-mini",
+                prompt_variant: "cite-v2",
+                formatting_citation_mode: "markdown_citations"
+              }
             ]
           })
         })

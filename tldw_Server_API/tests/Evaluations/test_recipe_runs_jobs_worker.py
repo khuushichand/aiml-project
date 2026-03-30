@@ -108,6 +108,97 @@ def _rag_run_config() -> dict[str, Any]:
     }
 
 
+def _rag_answer_quality_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "aq-1",
+            "query": "What is the capital of France?",
+            "expected_behavior": "answer",
+            "reference_answer": "Paris is the capital of France.",
+            "inline_contexts": [
+                {
+                    "source": "knowledge_base",
+                    "text": "Paris is the capital and most populous city of France.",
+                }
+            ],
+        }
+    ]
+
+
+def _rag_answer_quality_run_config() -> dict[str, Any]:
+    return {
+        "evaluation_mode": "fixed_context",
+        "supervision_mode": "mixed",
+        "context_snapshot_ref": "context-snapshot-1",
+        "weights": {
+            "grounding": 0.4,
+            "answer_relevance": 0.3,
+            "format_style": 0.2,
+            "abstention_behavior": 0.1,
+        },
+        "grounding_threshold": 0.7,
+        "candidates": [
+            {
+                "candidate_id": "openai:gpt-4.1-mini::default::citations",
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "prompt_variant": "default",
+                "formatting_citation_mode": "citations",
+                "is_local": False,
+                "cost_usd": 0.05,
+            },
+            {
+                "candidate_id": "ollama:llama3.1:8b::direct::plain",
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "prompt_variant": "direct",
+                "formatting_citation_mode": "plain",
+                "is_local": True,
+                "cost_usd": 0.0,
+            },
+        ],
+        "judge_config": {"provider": "openai", "model": "gpt-4.1-mini"},
+    }
+
+
+def _rag_answer_quality_live_run_config() -> dict[str, Any]:
+    return {
+        "evaluation_mode": "live_end_to_end",
+        "supervision_mode": "mixed",
+        "retrieval_baseline_ref": "baseline-run-42",
+        "weights": {
+            "grounding": 0.4,
+            "answer_relevance": 0.3,
+            "format_style": 0.2,
+            "abstention_behavior": 0.1,
+        },
+        "grounding_threshold": 0.7,
+        "candidates": [
+            {
+                "candidate_id": "openai:gpt-4.1-mini::default::citations",
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "prompt_variant": "default",
+                "formatting_citation_mode": "citations",
+                "is_local": False,
+                "cost_usd": 0.05,
+            }
+        ],
+        "judge_config": {"provider": "openai", "model": "gpt-4.1-mini"},
+    }
+
+
+def _rag_answer_quality_dataset_without_contexts() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "aq-1",
+            "query": "What is the capital of France?",
+            "expected_behavior": "answer",
+            "reference_answer": "Paris is the capital of France.",
+        }
+    ]
+
+
 def _service(tmp_path) -> tuple[EvaluationsDatabase, RecipeRunsService, str]:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     user_id = get_single_user_instance().id_str
@@ -233,6 +324,7 @@ def test_handle_recipe_run_job_marks_run_completed_with_normalized_report(tmp_pa
     assert refreshed.status is RunStatus.COMPLETED
     assert set(refreshed.recommendation_slots) == {
         "best_overall",
+        "best_quality",
         "best_cheap",
         "best_local",
     }
@@ -323,6 +415,371 @@ def test_handle_recipe_run_job_executes_rag_retrieval_tuning_and_persists_report
     assert refreshed.metadata["recipe_report_inputs"]["corpus_scope"]["sources"] == ["media_db", "notes"]
     assert refreshed.metadata["jobs"]["worker_state"] == "completed"
     assert refreshed.recommendation_slots["best_overall"].candidate_run_id == "candidate-rerank"
+
+
+def test_handle_recipe_run_job_executes_rag_answer_quality_fixed_context_and_persists_report(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, user_id = _service(tmp_path)
+    dataset_id = db.create_dataset(
+        name="rag-answer-quality",
+        samples=_rag_answer_quality_dataset(),
+        created_by=user_id,
+    )
+    record = service.create_run(
+        "rag_answer_quality",
+        dataset_id=dataset_id,
+        run_config=_rag_answer_quality_run_config(),
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+    import tldw_Server_API.app.core.Evaluations.recipes.rag_answer_quality_execution as execution
+
+    def _fake_analyze(
+        provider: str,
+        prompt: str,
+        user_prompt: str,
+        *,
+        api_key=None,
+        system_message=None,
+        temp=None,
+        model_override=None,
+    ) -> str:
+        del prompt, user_prompt, api_key, system_message, temp
+        if provider == "openai" and model_override == "gpt-4.1-mini":
+            return "Paris is the capital of France. [1]"
+        return "I cannot answer from the provided context."
+
+    def _fake_run_geval(**kwargs):
+        summary = kwargs.get("summary") or ""
+        if "[1]" in summary:
+            return {
+                "metrics": {
+                    "consistency": 4.9,
+                    "relevance": 4.8,
+                    "coherence": 4.7,
+                    "fluency": 4.6,
+                }
+            }
+        return {
+            "metrics": {
+                "consistency": 2.4,
+                "relevance": 2.3,
+                "coherence": 2.2,
+                "fluency": 2.1,
+            }
+        }
+
+    monkeypatch.setattr(execution, "analyze", _fake_analyze)
+    monkeypatch.setattr(execution, "run_geval", _fake_run_geval)
+
+    result = worker.handle_recipe_run_job(
+        {
+            "id": "job-rag-answer-quality",
+            "payload": build_recipe_run_job_payload(
+                run_id=record.run_id,
+                recipe_id=record.recipe_id,
+                owner_user_id=user_id,
+            ),
+        },
+        db=db,
+        user_id=user_id,
+    )
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert result["status"] == "completed"
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.COMPLETED
+    assert len(refreshed.metadata["candidate_results"]) == 2
+    assert refreshed.metadata["candidate_results"][0]["sample_results"][0]["answer"]
+    assert refreshed.metadata["candidate_results"][1]["sample_results"][0]["failure_labels"] == [
+        "missed_answer",
+        "bad_abstention",
+    ]
+    assert refreshed.metadata["recipe_report_inputs"]["context_snapshot_ref"] == "context-snapshot-1"
+    assert refreshed.metadata["recipe_report"]["best_overall"]["candidate_id"] == "openai:gpt-4.1-mini::default::citations"
+    assert refreshed.metadata["recipe_report"]["failure_examples"][0]["candidate_id"] == "ollama:llama3.1:8b::direct::plain"
+    assert refreshed.metadata["recipe_report"]["failure_examples"][0]["failure_labels"] == [
+        "missed_answer",
+        "bad_abstention",
+    ]
+    assert refreshed.recommendation_slots["best_overall"].candidate_run_id == "openai:gpt-4.1-mini::default::citations"
+    assert refreshed.metadata["jobs"]["worker_state"] == "completed"
+
+
+def test_handle_recipe_run_job_executes_rag_answer_quality_live_mode_with_frozen_retrieval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, user_id = _service(tmp_path)
+    retrieval_record = service.create_run(
+        "rag_retrieval_tuning",
+        dataset=_rag_dataset(),
+        run_config=_rag_run_config(),
+    )
+    db.update_recipe_run(
+        retrieval_record.run_id,
+        status=RunStatus.COMPLETED,
+        recommendation_slots={
+            "best_overall": {
+                "candidate_run_id": "baseline",
+                "reason_code": "highest_retrieval_quality",
+                "metadata": {},
+            }
+        },
+        metadata={
+            **retrieval_record.metadata,
+            "recipe_report": {
+                "best_overall": {"candidate_id": "baseline"},
+            },
+        },
+    )
+    dataset_id = db.create_dataset(
+        name="rag-answer-quality-live",
+        samples=_rag_answer_quality_dataset(),
+        created_by=user_id,
+    )
+    record = service.create_run(
+        "rag_answer_quality",
+        dataset_id=dataset_id,
+        run_config={
+            **_rag_answer_quality_live_run_config(),
+            "retrieval_baseline_ref": retrieval_record.run_id,
+        },
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+    import tldw_Server_API.app.core.Evaluations.recipes.rag_answer_quality_execution as execution
+
+    captured_request: dict[str, Any] = {}
+
+    async def _fake_unified_rag_pipeline(**kwargs):
+        captured_request.update(kwargs)
+        return {
+            "documents": [
+                {
+                    "source": "knowledge_base",
+                    "text": "Paris is the capital and most populous city of France.",
+                }
+            ],
+            "metadata": {
+                "pre_rerank_documents": [
+                    {
+                        "source": "knowledge_base",
+                        "text": "Paris is the capital and most populous city of France.",
+                    }
+                ],
+                "reranked_documents": [
+                    {
+                        "source": "knowledge_base",
+                        "text": "Paris is the capital and most populous city of France.",
+                    }
+                ],
+            },
+        }
+
+    def _fake_analyze(
+        provider: str,
+        prompt: str,
+        user_prompt: str,
+        *,
+        api_key=None,
+        system_message=None,
+        temp=None,
+        model_override=None,
+    ) -> str:
+        del prompt, user_prompt, api_key, system_message, temp
+        if provider == "openai":
+            assert model_override == "gpt-4.1-mini"
+            return "Paris is the capital of France. [1]"
+        assert provider == "ollama"
+        assert model_override == "llama3.1:8b"
+        return "It appears to be Paris, based on the context."
+
+    def _fake_run_geval(**kwargs):
+        del kwargs
+        return {
+            "metrics": {
+                "consistency": 4.9,
+                "relevance": 4.8,
+                "coherence": 4.7,
+                "fluency": 4.6,
+            }
+        }
+
+    monkeypatch.setattr(execution, "unified_rag_pipeline", _fake_unified_rag_pipeline)
+    monkeypatch.setattr(execution, "analyze", _fake_analyze)
+    monkeypatch.setattr(execution, "run_geval", _fake_run_geval)
+
+    result = worker.handle_recipe_run_job(
+        {
+            "id": "job-rag-answer-quality-live",
+            "payload": build_recipe_run_job_payload(
+                run_id=record.run_id,
+                recipe_id=record.recipe_id,
+                owner_user_id=user_id,
+            ),
+        },
+        db=db,
+        user_id=user_id,
+    )
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert result["status"] == "completed"
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.COMPLETED
+    assert captured_request["search_mode"] == "hybrid"
+    assert captured_request["top_k"] == 5
+    assert captured_request["enable_reranking"] is False
+    assert captured_request["expand_query"] is False
+    assert captured_request["enable_intent_routing"] is False
+    assert captured_request["enable_prf"] is False
+    assert captured_request["enable_hyde"] is False
+    assert captured_request["enable_post_verification"] is False
+    assert captured_request["adaptive_rerun_on_low_confidence"] is False
+    assert captured_request["adaptive_hybrid_weights"] is False
+    assert refreshed.metadata["recipe_report_inputs"]["retrieval_baseline_ref"] == retrieval_record.run_id
+    assert refreshed.metadata["recipe_report_inputs"]["retrieval_preset_hash"]
+    assert refreshed.metadata["candidate_results"][0]["sample_results"][0]["retrieved_contexts"] == [
+        {
+            "source": "knowledge_base",
+            "text": "Paris is the capital and most populous city of France.",
+        }
+    ]
+    sample_hash = refreshed.metadata["candidate_results"][0]["sample_results"][0]["retrieval_preset_hash"]
+    assert refreshed.metadata["candidate_results"][0]["retrieval_preset_hash"] == sample_hash
+    assert refreshed.metadata["recipe_report_inputs"]["retrieval_preset_hash"] == sample_hash
+    assert refreshed.metadata["recipe_report"]["retrieval_baseline_ref"] == retrieval_record.run_id
+    assert refreshed.metadata["recipe_report"]["retrieval_preset_hash"] == sample_hash
+    assert refreshed.metadata["jobs"]["worker_state"] == "completed"
+
+
+def test_handle_recipe_run_job_fails_rag_answer_quality_live_mode_when_baseline_cannot_be_resolved(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, user_id = _service(tmp_path)
+    dataset_id = db.create_dataset(
+        name="rag-answer-quality-live-missing-baseline",
+        samples=_rag_answer_quality_dataset(),
+        created_by=user_id,
+    )
+    record = service.create_run(
+        "rag_answer_quality",
+        dataset_id=dataset_id,
+        run_config=_rag_answer_quality_live_run_config(),
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+    import tldw_Server_API.app.core.Evaluations.recipes.rag_answer_quality_execution as execution
+
+    async def _unexpected_unified_rag_pipeline(**kwargs):
+        raise AssertionError(f"live retrieval should not execute when baseline resolution fails: {kwargs}")
+
+    monkeypatch.setattr(execution, "unified_rag_pipeline", _unexpected_unified_rag_pipeline)
+
+    with pytest.raises(ValueError, match="retrieval_baseline_ref"):
+        worker.handle_recipe_run_job(
+            {
+                "id": "job-rag-answer-quality-live-missing-baseline",
+                "payload": build_recipe_run_job_payload(
+                    run_id=record.run_id,
+                    recipe_id=record.recipe_id,
+                    owner_user_id=user_id,
+                ),
+            },
+            db=db,
+            user_id=user_id,
+        )
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.FAILED
+    assert "retrieval_baseline_ref" in refreshed.metadata["jobs"]["error"]
+
+
+def test_handle_recipe_run_job_executes_rag_answer_quality_fixed_mode_with_run_level_contexts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, user_id = _service(tmp_path)
+    record = service.create_run(
+        "rag_answer_quality",
+        dataset=_rag_answer_quality_dataset_without_contexts(),
+        run_config={
+            **_rag_answer_quality_run_config(),
+            "inline_contexts": [
+                {
+                    "source": "knowledge_base",
+                    "text": "Paris is the capital and most populous city of France.",
+                }
+            ],
+        },
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+    import tldw_Server_API.app.core.Evaluations.recipes.rag_answer_quality_execution as execution
+
+    def _fake_analyze(
+        provider: str,
+        prompt: str,
+        user_prompt: str,
+        *,
+        api_key=None,
+        system_message=None,
+        temp=None,
+        model_override=None,
+    ) -> str:
+        del prompt, user_prompt, api_key, system_message, temp
+        if provider == "openai":
+            assert model_override == "gpt-4.1-mini"
+            return "Paris is the capital of France. [1]"
+        assert provider == "ollama"
+        assert model_override == "llama3.1:8b"
+        return "It appears to be Paris, based on the context."
+
+    def _fake_run_geval(**kwargs):
+        del kwargs
+        return {
+            "metrics": {
+                "consistency": 4.9,
+                "relevance": 4.8,
+                "coherence": 4.7,
+                "fluency": 4.6,
+            }
+        }
+
+    monkeypatch.setattr(execution, "analyze", _fake_analyze)
+    monkeypatch.setattr(execution, "run_geval", _fake_run_geval)
+
+    result = worker.handle_recipe_run_job(
+        {
+            "id": "job-rag-answer-quality-fixed-run-level-contexts",
+            "payload": build_recipe_run_job_payload(
+                run_id=record.run_id,
+                recipe_id=record.recipe_id,
+                owner_user_id=user_id,
+            ),
+        },
+        db=db,
+        user_id=user_id,
+    )
+
+    refreshed = db.get_recipe_run(record.run_id)
+
+    assert result["status"] == "completed"
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.COMPLETED
+    assert refreshed.metadata["candidate_results"][0]["sample_results"][0]["retrieved_contexts"] == [
+        {
+            "source": "knowledge_base",
+            "text": "Paris is the capital and most populous city of France.",
+        }
+    ]
 
 
 def test_normalize_rag_targets_preserves_chunk_labels_for_scoring() -> None:

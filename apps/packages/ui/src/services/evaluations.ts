@@ -157,6 +157,31 @@ export type EvaluationWebhook = {
   failure_count?: number
 }
 
+export type RecipeEvaluationMode = "fixed_context" | "live_end_to_end"
+export type RecipeSupervisionMode =
+  | "rubric"
+  | "reference_answer"
+  | "pairwise"
+  | "mixed"
+export type RecipeCandidateDimension =
+  | "generation_model"
+  | "prompt_variant"
+  | "formatting_citation_mode"
+
+export type RecipeManifestCapabilities = {
+  evaluation_modes?: RecipeEvaluationMode[]
+  supervision_modes?: RecipeSupervisionMode[]
+  candidate_dimensions?: RecipeCandidateDimension[]
+  [key: string]: any
+}
+
+export type RecipeManifestDefaultRunConfig = {
+  evaluation_mode?: RecipeEvaluationMode
+  supervision_mode?: RecipeSupervisionMode
+  candidate_dimensions?: RecipeCandidateDimension[]
+  [key: string]: any
+}
+
 export type RecipeManifest = {
   recipe_id: string
   recipe_version: string
@@ -165,8 +190,8 @@ export type RecipeManifest = {
   supported_modes: Array<"labeled" | "unlabeled">
   tags: string[]
   launchable: boolean
-  capabilities?: Record<string, any>
-  default_run_config?: Record<string, any>
+  capabilities?: RecipeManifestCapabilities
+  default_run_config?: RecipeManifestDefaultRunConfig
 }
 
 export type RecipeLaunchReadiness = {

@@ -115,6 +115,69 @@ def _rag_run_config() -> dict[str, Any]:
     }
 
 
+def _rag_answer_quality_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "aq-1",
+            "query": "What is the capital of France?",
+            "expected_behavior": "answer",
+            "reference_answer": "Paris is the capital of France.",
+            "inline_contexts": [
+                {
+                    "source": "knowledge_base",
+                    "text": "Paris is the capital and most populous city of France.",
+                }
+            ],
+        }
+    ]
+
+
+def _rag_answer_quality_run_config(prompt_variant: str = "default") -> dict[str, Any]:
+    return {
+        "evaluation_mode": "fixed_context",
+        "supervision_mode": "mixed",
+        "candidate_dimensions": [
+            "generation_model",
+            "prompt_variant",
+            "formatting_citation_mode",
+        ],
+        "weights": {
+            "grounding": 0.4,
+            "answer_relevance": 0.3,
+            "format_style": 0.2,
+            "abstention_behavior": 0.1,
+        },
+        "grounding_threshold": 0.7,
+        "context_snapshot_ref": "context-snapshot-1",
+        "candidates": [
+            {
+                "candidate_id": "openai-gpt-4.1-mini",
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "prompt_variant": prompt_variant,
+                "formatting_citation_mode": "citations",
+                "is_local": False,
+                "cost_usd": 0.05,
+            },
+            {
+                "candidate_id": "ollama-llama3.1-8b",
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "prompt_variant": "direct",
+                "formatting_citation_mode": "plain",
+                "is_local": True,
+                "cost_usd": 0.0,
+            },
+        ],
+        "prompts": {
+            "system": "Answer with citations only when grounded.",
+            "user": "Use the provided context and abstain if support is missing.",
+        },
+        "judge_config": {"provider": "openai", "model": "gpt-4.1-mini", "temperature": 0.0},
+        "execution_policy": {"temperature": 0.1},
+    }
+
+
 def _service(tmp_path) -> tuple[EvaluationsDatabase, RecipeRunsService, str]:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     user_id = get_single_user_instance().id_str
@@ -242,6 +305,7 @@ def test_recipe_service_creates_parent_run_and_normalized_report_shell(tmp_path)
     assert report.run.run_id == record.run_id
     assert set(report.recommendation_slots) == {
         "best_overall",
+        "best_quality",
         "best_cheap",
         "best_local",
     }
@@ -543,6 +607,196 @@ def test_recipe_service_builds_rag_report_from_stored_recipe_inputs(tmp_path) ->
     assert report.recommendation_slots["best_overall"].candidate_run_id == "rerank"
     assert report.recommendation_slots["best_local"].candidate_run_id == "rerank"
     assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "rerank"
+
+
+def test_recipe_service_preserves_rag_answer_quality_candidates_and_reports_from_inputs(
+    tmp_path,
+) -> None:
+    db, service, _ = _service(tmp_path)
+    dataset = _rag_answer_quality_dataset()
+    run_config = _rag_answer_quality_run_config(prompt_variant="default")
+
+    record = service.create_run(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    assert record.metadata["run_config"]["candidates"][0]["prompt_variant"] == "default"
+
+    hash_a = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+    hash_b = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=_rag_answer_quality_run_config(prompt_variant="concise"),
+    )
+
+    assert hash_a != hash_b
+
+    db.update_recipe_run(
+        record.run_id,
+        metadata={
+            **record.metadata,
+            "recipe_report_inputs": {
+                "dataset_mode": "labeled",
+                "review_sample": {"required": False, "sample_size": 0, "sample_ids": []},
+                "evaluation_mode": "fixed_context",
+                "supervision_mode": "mixed",
+                "context_snapshot_ref": "context-snapshot-1",
+                "grounding_threshold": 0.7,
+                "weights": {
+                    "grounding": 0.4,
+                    "answer_relevance": 0.3,
+                    "format_style": 0.2,
+                    "abstention_behavior": 0.1,
+                },
+                "candidate_results": [
+                    {
+                        "candidate_id": "openai-gpt-4.1-mini",
+                        "candidate_run_id": "openai-gpt-4.1-mini",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                        "prompt_variant": "default",
+                        "formatting_citation_mode": "citations",
+                        "is_local": False,
+                        "cost_usd": 0.05,
+                        "sample_results": [
+                            {
+                                "sample_id": "aq-1",
+                                "query": "What is the capital of France?",
+                                "answer": "Paris is the capital of France.",
+                                "reference_answer": "Paris is the capital of France.",
+                                "metrics": {
+                                    "grounding": 0.92,
+                                    "answer_relevance": 0.91,
+                                    "format_style": 0.88,
+                                    "abstention_behavior": 0.93,
+                                },
+                                "latency_ms": 110.0,
+                            }
+                        ],
+                    },
+                    {
+                        "candidate_id": "ollama-llama3.1-8b",
+                        "candidate_run_id": "ollama-llama3.1-8b",
+                        "provider": "ollama",
+                        "model": "llama3.1:8b",
+                        "prompt_variant": "direct",
+                        "formatting_citation_mode": "plain",
+                        "is_local": True,
+                        "cost_usd": 0.0,
+                        "sample_results": [
+                            {
+                                "sample_id": "aq-1",
+                                "query": "What is the capital of France?",
+                                "answer": "It appears to be Paris, based on the context.",
+                                "reference_answer": "Paris is the capital of France.",
+                                "metrics": {
+                                    "grounding": 0.75,
+                                    "answer_relevance": 0.74,
+                                    "format_style": 0.80,
+                                    "abstention_behavior": 0.76,
+                                },
+                                "latency_ms": 120.0,
+                            }
+                        ],
+                    },
+                ],
+            },
+        },
+    )
+
+    report = service.get_report(record.run_id)
+
+    assert report.recommendation_slots["best_overall"].candidate_run_id == "openai-gpt-4.1-mini"
+    assert report.recommendation_slots["best_quality"].candidate_run_id == "openai-gpt-4.1-mini"
+    assert report.recommendation_slots["best_local"].candidate_run_id == "ollama-llama3.1-8b"
+    assert report.run.metadata["recipe_report"]["best_overall"]["candidate_id"] == "openai-gpt-4.1-mini"
+
+
+def test_build_reuse_hash_for_rag_answer_quality_includes_prompt_and_judge_settings(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+    dataset = _rag_answer_quality_dataset()
+    base = _rag_answer_quality_run_config()
+    changed_prompts = {
+        **_rag_answer_quality_run_config(),
+        "prompts": {
+            **_rag_answer_quality_run_config()["prompts"],
+            "system": "Use terse grounded answers.",
+        },
+    }
+    changed_judge = {
+        **_rag_answer_quality_run_config(),
+        "judge_config": {"provider": "openai", "model": "gpt-4.1"},
+    }
+
+    base_hash = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=base,
+    )
+    prompt_hash = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=changed_prompts,
+    )
+    judge_hash = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=changed_judge,
+    )
+
+    assert base_hash != prompt_hash
+    assert base_hash != judge_hash
+
+
+def test_build_reuse_hash_for_live_rag_answer_quality_includes_retrieval_settings(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+    dataset = _rag_answer_quality_dataset()
+    base = {
+        **_rag_answer_quality_run_config(),
+        "evaluation_mode": "live_end_to_end",
+        "retrieval_baseline_ref": "baseline-run-42",
+        "search_mode": "hybrid",
+        "top_k": 5,
+    }
+    changed = {
+        **base,
+        "top_k": 12,
+    }
+
+    base_hash = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=base,
+    )
+    changed_hash = service.build_reuse_hash(
+        "rag_answer_quality",
+        dataset=dataset,
+        run_config=changed,
+    )
+
+    assert base_hash != changed_hash
+
+
+def test_recipe_service_rejects_rag_answer_quality_runs_without_candidates(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+
+    with pytest.raises(ValueError, match="run_config.candidates"):
+        service.create_run(
+            "rag_answer_quality",
+            dataset=_rag_answer_quality_dataset(),
+            run_config={
+                "evaluation_mode": "fixed_context",
+                "supervision_mode": "rubric",
+                "context_snapshot_ref": "context-snapshot-1",
+                "candidates": [],
+            },
+        )
 
 
 def test_recipe_service_reuses_completed_run_unless_force_rerun(tmp_path) -> None:

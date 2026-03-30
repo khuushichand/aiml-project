@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,6 +45,31 @@ class RecommendationSlot(BaseModel):
     explanation: str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+RecipeEvaluationMode = Literal["fixed_context", "live_end_to_end"]
+RecipeSupervisionMode = Literal["rubric", "reference_answer", "pairwise", "mixed"]
+RecipeCandidateDimension = Literal[
+    "generation_model",
+    "prompt_variant",
+    "formatting_citation_mode",
+]
+
+
+class RagAnswerQualityCapabilities(TypedDict, total=False):
+    """Launch contract for the answer-quality RAG recipe."""
+
+    evaluation_modes: list[RecipeEvaluationMode]
+    supervision_modes: list[RecipeSupervisionMode]
+    candidate_dimensions: list[RecipeCandidateDimension]
+
+
+class RagAnswerQualityDefaultRunConfig(TypedDict, total=False):
+    """Default run config for the answer-quality RAG recipe."""
+
+    evaluation_mode: RecipeEvaluationMode
+    supervision_mode: RecipeSupervisionMode
+    candidate_dimensions: list[RecipeCandidateDimension]
 
 
 class RecipeManifest(BaseModel):

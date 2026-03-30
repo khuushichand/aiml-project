@@ -364,6 +364,7 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
     assert report["run"]["run_id"] == run_id
     assert set(report["recommendation_slots"]) == {
         "best_overall",
+        "best_quality",
         "best_cheap",
         "best_local",
     }

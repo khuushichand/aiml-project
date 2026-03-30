@@ -31,6 +31,9 @@ from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.recipes.rag_retrieval_tuning_execution import (
     serialize_index_plan,
 )
+from tldw_Server_API.app.core.Evaluations.recipes.rag_answer_quality_execution import (
+    execute_rag_answer_quality_recipe_run,
+)
 from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
     RECIPE_RUN_JOB_DOMAIN,
     parse_recipe_run_job_payload,
@@ -883,6 +886,13 @@ def _execute_recipe_run(
         )
     if record.recipe_id == "rag_retrieval_tuning" and not record.metadata.get("candidate_results"):
         return _execute_rag_retrieval_tuning_recipe_run(
+            record=record,
+            db=db,
+            user_id=user_id,
+            service=service,
+        )
+    if record.recipe_id == "rag_answer_quality" and not record.metadata.get("candidate_results"):
+        return execute_rag_answer_quality_recipe_run(
             record=record,
             db=db,
             user_id=user_id,
