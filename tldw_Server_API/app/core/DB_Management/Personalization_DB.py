@@ -50,17 +50,14 @@ class SemanticMemory:
 class PersonalizationDB:
     @classmethod
     def for_path(cls, db_path: str | Path) -> "PersonalizationDB":
-        return cls(db_path, _trusted_path=True)
+        return cls(Path(db_path))
 
     @classmethod
     def for_user(cls, user_id: str | int) -> "PersonalizationDB":
         return cls.for_path(DatabasePaths.get_personalization_db_path(user_id))
 
-    def __init__(self, db_path: str | Path, *, _trusted_path: bool = False) -> None:
-        if _trusted_path:
-            resolved_path = Path(db_path)
-        else:
-            resolved_path = Path(str(db_path)).expanduser().resolve(strict=False)
+    def __init__(self, db_path: str | Path) -> None:
+        resolved_path = Path(db_path)
         if not resolved_path.parent.exists():
             raise ValueError("PersonalizationDB parent directory must already exist")
         self.db_path = str(resolved_path)

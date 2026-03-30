@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import tldw_Server_API.app.api.v1.API_Deps.personalization_deps as personalization_deps
+import tldw_Server_API.app.core.DB_Management.Personalization_DB as personalization_db_module
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 
 
@@ -54,6 +55,18 @@ def test_personalization_dependency_uses_safe_for_user_factory(monkeypatch):
     )
 
     assert result is sentinel
+
+
+def test_personalization_db_constructor_does_not_resolve_input_path(monkeypatch, tmp_path) -> None:
+    def fail_resolve(self, strict=False):  # pragma: no cover - exercised by failing pre-fix path
+        raise AssertionError("constructor should not call Path.resolve")
+
+    monkeypatch.setattr(personalization_db_module.Path, "resolve", fail_resolve)
+
+    db_path = tmp_path / "personalization.db"
+    db = PersonalizationDB(db_path)
+
+    assert db.db_path == str(db_path)
 
 
 def test_companion_knowledge_card_upsert_updates_existing_card(tmp_path) -> None:
