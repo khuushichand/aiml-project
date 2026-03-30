@@ -140,8 +140,7 @@ def _load_ranked_companion_candidates(
 ) -> dict[str, Any]:
     personalization_db = db
     if personalization_db is None:
-        db_path = DatabasePaths.get_personalization_db_path(user_id)
-        personalization_db = PersonalizationDB(str(db_path))
+        personalization_db = PersonalizationDB.for_user(user_id)
     profile = personalization_db.get_or_create_profile(user_id)
     if not bool(profile.get("enabled", 0)):
         return {

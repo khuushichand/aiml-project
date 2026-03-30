@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import configure_sqlite_connection
 
 
@@ -47,8 +48,16 @@ class SemanticMemory:
 
 
 class PersonalizationDB:
-    def __init__(self, db_path: str) -> None:
-        resolved_path = Path(str(db_path)).expanduser().resolve(strict=False)
+    @classmethod
+    def for_path(cls, db_path: str | Path) -> "PersonalizationDB":
+        return cls(Path(db_path))
+
+    @classmethod
+    def for_user(cls, user_id: str | int) -> "PersonalizationDB":
+        return cls.for_path(DatabasePaths.get_personalization_db_path(user_id))
+
+    def __init__(self, db_path: str | Path) -> None:
+        resolved_path = Path(db_path)
         if not resolved_path.parent.exists():
             raise ValueError("PersonalizationDB parent directory must already exist")
         self.db_path = str(resolved_path)

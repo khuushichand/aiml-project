@@ -78,3 +78,40 @@ def test_user_db_base_dir_update_rejects_relative_escape(monkeypatch, tmp_path):
             {"TTS-Settings": {"USER_DB_BASE_DIR": "../outside"}},
             create_backup=False,
         )
+
+
+def test_normalize_root_path_does_not_resolve_absolute_input(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    absolute_root = tmp_path / "external" / "allowed"
+    original_resolve = Path.resolve
+
+    def _guarded_resolve(self, strict=False):
+        if self == absolute_root:
+            raise AssertionError("absolute allowlist roots should not be resolved before validation")
+        return original_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", _guarded_resolve)
+
+    normalized = setup_manager._normalize_root_path(str(absolute_root), project_root=project_root)
+
+    assert normalized == absolute_root
+
+
+def test_normalize_user_db_base_dir_candidate_does_not_resolve_absolute_input(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    absolute_root = tmp_path / "external" / "user_dbs"
+    original_resolve = Path.resolve
+
+    def _guarded_resolve(self, strict=False):
+        if self == absolute_root:
+            raise AssertionError("absolute USER_DB_BASE_DIR should not be resolved before allowlist checks")
+        return original_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", _guarded_resolve)
+
+    normalized = setup_manager._normalize_user_db_base_dir_candidate(
+        str(absolute_root),
+        project_root=project_root,
+    )
+
+    assert normalized == absolute_root

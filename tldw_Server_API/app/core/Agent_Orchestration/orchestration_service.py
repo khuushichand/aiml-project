@@ -307,4 +307,4 @@ from tldw_Server_API.app.core.DB_Management.Orchestration_DB import Orchestratio
 @functools.lru_cache(maxsize=64)
 def get_orchestration_db(user_id: int) -> OrchestrationDB:
     """Get or create per-user OrchestrationDB instance."""
-    return OrchestrationDB(user_id=user_id)
+    return OrchestrationDB.for_user(user_id)

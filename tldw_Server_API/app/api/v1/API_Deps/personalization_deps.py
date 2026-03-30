@@ -35,8 +35,7 @@ def get_personalization_db_for_user(user: User = Depends(get_request_user)) -> P
             uid = int.from_bytes(digest[:4], byteorder="big", signed=False)
         except Exception:
             uid = 0
-    db_path = DatabasePaths.get_personalization_db_path(uid)
-    return PersonalizationDB(str(db_path))
+    return PersonalizationDB.for_user(uid)
 
 
 @dataclass

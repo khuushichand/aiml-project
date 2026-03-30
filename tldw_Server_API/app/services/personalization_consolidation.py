@@ -213,8 +213,7 @@ class PersonalizationConsolidationService:
     @staticmethod
     def _get_user_db(user_id: str) -> PersonalizationDB:
         uid_int = _resolve_user_id_to_int(user_id)
-        path = DatabasePaths.get_personalization_db_path(uid_int)
-        return PersonalizationDB(str(path))
+        return PersonalizationDB.for_user(uid_int)
 
     @staticmethod
     def _score_topics_from_events(events: list[dict]) -> dict[str, float]:

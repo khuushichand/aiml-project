@@ -12,7 +12,6 @@ Schema versions:
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import configure_sqlite_connection
 
 from tldw_Server_API.app.core.Agent_Orchestration.models import (
@@ -195,13 +195,27 @@ def _col_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 class OrchestrationDB:
     """Per-user SQLite store for orchestration projects, tasks, runs, reviews, workspaces."""
 
-    def __init__(self, user_id: int, db_dir: str | None = None) -> None:
-        self._user_id = user_id
-        self._managed_db_dir = db_dir is None
+    @classmethod
+    def for_user(cls, user_id: int) -> "OrchestrationDB":
+        safe_user_id = int(user_id)
+        safe_db_dir = DatabasePaths.get_user_base_directory(safe_user_id)
+        return cls(user_id=safe_user_id, db_dir=safe_db_dir, _trusted_db_dir=True)
+
+    def __init__(
+        self,
+        user_id: int,
+        db_dir: str | Path | None = None,
+        *,
+        _trusted_db_dir: bool = False,
+    ) -> None:
+        self._user_id = int(user_id)
+        self._managed_db_dir = db_dir is None or _trusted_db_dir
         if db_dir is None:
-            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-            db_dir = DatabasePaths.get_user_base_directory(user_id)
-        db_dir_path = Path(str(db_dir)).expanduser().resolve(strict=False)
+            db_dir_path = DatabasePaths.get_user_base_directory(self._user_id)
+        elif _trusted_db_dir:
+            db_dir_path = Path(db_dir)
+        else:
+            db_dir_path = Path(str(db_dir)).expanduser().resolve(strict=False)
         if not self._managed_db_dir and not db_dir_path.exists():
             raise ValueError("Custom OrchestrationDB db_dir must already exist")
         self._db_dir = db_dir_path
