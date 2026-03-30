@@ -13,6 +13,12 @@ from .rag_retrieval_tuning_candidates import (
     build_auto_sweep,
     normalize_candidate_config,
 )
+from .rag_retrieval_tuning_execution import (
+    CandidateIndexPlan,
+    build_unified_rag_request as build_unified_rag_request_helper,
+    plan_candidate_indexes as plan_candidate_indexes_helper,
+    summarize_candidate_metrics as summarize_candidate_metrics_helper,
+)
 
 _SUPPORTED_CORPUS_SOURCES = {"media_db", "notes"}
 _SUPPORTED_CANDIDATE_CREATION_MODES = {"auto_sweep", "manual"}
@@ -29,6 +35,8 @@ _TARGET_KEYS = {
     "relevant_spans",
 }
 _ALLOWED_SPAN_SOURCES = {"media_db", "notes"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
 _GRADE_MIN = 0
 _GRADE_MAX = 3
 
@@ -67,7 +75,7 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
         sample_count = len(raw_samples)
         errors: list[str] = []
         normalized_scope = self._validate_corpus_scope_for_dataset(run_config, errors)
-        weak_supervision_budget = self._resolve_weak_supervision_budget(run_config)
+        weak_supervision_budget = self._resolve_weak_supervision_budget(run_config, errors=errors)
         if sample_count == 0:
             errors.append("Dataset must contain at least one sample.")
             return self._build_validation_result(
@@ -158,6 +166,50 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
             "candidates": normalized_candidates,
         }
 
+    def plan_candidate_indexes(
+        self,
+        *,
+        corpus_scope: Mapping[str, Any],
+        candidates: list[dict[str, Any]],
+        dataset_content_hash: str,
+        owner_user_id: str,
+    ) -> dict[str, CandidateIndexPlan]:
+        """Plan isolated index keys for execution without mutating the live index."""
+        return plan_candidate_indexes_helper(
+            corpus_scope=corpus_scope,
+            candidates=candidates,
+            dataset_content_hash=dataset_content_hash,
+            owner_user_id=owner_user_id,
+        )
+
+    def build_unified_rag_request(
+        self,
+        *,
+        query: str,
+        corpus_scope: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+        index_key: str | None = None,
+    ) -> Any:
+        """Construct a unified RAG request for a candidate execution."""
+        return build_unified_rag_request_helper(
+            query=query,
+            corpus_scope=corpus_scope,
+            candidate=candidate,
+            index_key=index_key,
+        )
+
+    def summarize_candidate_metrics(
+        self,
+        *,
+        first_pass_hits: list[Mapping[str, Any]],
+        reranked_hits: list[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Summarize first-pass and post-rerank metrics for a candidate."""
+        return summarize_candidate_metrics_helper(
+            first_pass_hits=first_pass_hits,
+            reranked_hits=reranked_hits,
+        )
+
     def _build_validation_result(
         self,
         *,
@@ -228,10 +280,18 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
                 if str(item).strip()
             ]
         if raw_scope.get("indexing_fixed") is not None:
-            normalized_scope["indexing_fixed"] = bool(raw_scope["indexing_fixed"])
+            normalized_scope["indexing_fixed"] = self._parse_bool_value(
+                raw_scope["indexing_fixed"],
+                field_name="run_config.corpus_scope.indexing_fixed",
+            )
         return normalized_scope
 
-    def _resolve_weak_supervision_budget(self, run_config: dict[str, Any] | None) -> dict[str, Any]:
+    def _resolve_weak_supervision_budget(
+        self,
+        run_config: dict[str, Any] | None,
+        *,
+        errors: list[str] | None = None,
+    ) -> dict[str, Any]:
         raw_budget = run_config.get("weak_supervision_budget") if run_config else None
         if not isinstance(raw_budget, dict):
             return dict(_DEFAULT_WEAK_SUPERVISION_BUDGET)
@@ -240,10 +300,18 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
         for key in normalized:
             if raw_budget.get(key) is None:
                 continue
-            if key in {"review_sample_fraction"}:
-                normalized[key] = float(raw_budget[key])
-            else:
-                normalized[key] = int(raw_budget[key])
+            try:
+                if key in {"review_sample_fraction"}:
+                    normalized[key] = float(raw_budget[key])
+                else:
+                    normalized[key] = int(raw_budget[key])
+            except (TypeError, ValueError):
+                if errors is not None:
+                    errors.append(
+                        f"run_config.weak_supervision_budget.{key} must be a numeric value."
+                    )
+                    continue
+                raise
         normalized["review_sample_fraction"] = min(
             1.0,
             max(0.0, float(normalized["review_sample_fraction"])),
@@ -277,6 +345,11 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
             return False
         if not isinstance(targets, dict):
             errors.append(f"Dataset sample {index} targets must be an object when provided.")
+            return False
+        if not targets:
+            errors.append(
+                f"Dataset sample {index} targets must include at least one supported target field."
+            )
             return False
 
         unknown_target_keys = sorted(set(targets) - _TARGET_KEYS)
@@ -316,7 +389,12 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
             )
         if "relevant_chunk_ids" in targets:
             labeled = True
-            if not self._is_fixed_indexing(run_config, normalized_scope):
+            if not self._is_fixed_indexing(
+                run_config,
+                normalized_scope,
+                errors=errors,
+                index=index,
+            ):
                 errors.append(
                     f"Dataset sample {index} chunk-level targets require stable spans or fixed indexing."
                 )
@@ -494,19 +572,69 @@ class RAGRetrievalTuningRecipe(RecipeDefinition):
             errors.append(f"Dataset sample {index} must provide a valid {field_name}.")
             return None
 
+    def _parse_bool_flag(
+        self,
+        value: Any,
+        *,
+        errors: list[str] | None = None,
+        index: int | None = None,
+        field_name: str = "boolean flag",
+    ) -> bool:
+        if value is None:
+            return False
+        try:
+            return self._parse_bool_value(value, field_name=field_name)
+        except ValueError as exc:
+            if errors is not None:
+                prefix = f"Dataset sample {index} " if index is not None else ""
+                errors.append(f"{prefix}{exc}")
+                return False
+            raise
+
+    def _parse_bool_value(self, value: Any, *, field_name: str) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in {0, 1}:
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in _TRUE_VALUES:
+                return True
+            if normalized in _FALSE_VALUES:
+                return False
+        raise ValueError(f"{field_name} must be a boolean value.")
+
     def _is_fixed_indexing(
         self,
         run_config: dict[str, Any],
         normalized_scope: dict[str, Any] | None,
+        *,
+        errors: list[str] | None = None,
+        index: int | None = None,
     ) -> bool:
-        if bool(run_config.get("indexing_fixed")):
+        if self._parse_bool_flag(
+            run_config.get("indexing_fixed"),
+            errors=errors,
+            index=index,
+            field_name="run_config.indexing_fixed",
+        ):
             return True
-        if bool(run_config.get("chunking_fixed")):
+        if self._parse_bool_flag(
+            run_config.get("chunking_fixed"),
+            errors=errors,
+            index=index,
+            field_name="run_config.chunking_fixed",
+        ):
             return True
         if isinstance(run_config.get("indexing_config"), dict):
             if str(run_config["indexing_config"].get("chunking_preset") or "").strip().lower() == "fixed_index":
                 return True
-        if normalized_scope and bool(normalized_scope.get("indexing_fixed")):
+        if normalized_scope and self._parse_bool_flag(
+            normalized_scope.get("indexing_fixed"),
+            errors=errors,
+            index=index,
+            field_name="run_config.corpus_scope.indexing_fixed",
+        ):
             return True
         return False
 
