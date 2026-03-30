@@ -114,6 +114,19 @@ async def test_assign_role_if_missing_sqlite_backend_selection_uses_execute():
 
 
 @pytest.mark.asyncio
+async def test_assign_role_if_missing_sqlite_propagates_commit_failure():
+    class _CommitFailingConn(_SQLiteConnWithFetchvalTrap):
+        async def commit(self) -> None:
+            raise RuntimeError("commit failed")
+
+    conn = _CommitFailingConn(role_row=(7,))
+    repo = AuthnzUsersRepo(db_pool=_PoolStub(conn, postgres=False))
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await repo.assign_role_if_missing(user_id=11, role_name="admin")
+
+
+@pytest.mark.asyncio
 async def test_assign_role_if_missing_postgres_backend_selection_uses_fetchval():
     conn = _PostgresConnWithSqliteTrap(role_id=9)
     repo = AuthnzUsersRepo(db_pool=_PoolStub(conn, postgres=True))
@@ -124,6 +137,19 @@ async def test_assign_role_if_missing_postgres_backend_selection_uses_fetchval()
     assert "select id from roles where name = $1" in conn.fetchval_calls[0][0].lower()
     assert conn.execute_calls
     assert "insert into user_roles" in conn.execute_calls[0][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_ensure_single_user_admin_user_sqlite_propagates_commit_failure():
+    class _CommitFailingConn(_SQLiteConnWithFetchvalTrap):
+        async def commit(self) -> None:
+            raise RuntimeError("commit failed")
+
+    conn = _CommitFailingConn()
+    repo = AuthnzUsersRepo(db_pool=_PoolStub(conn, postgres=False))
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await repo.ensure_single_user_admin_user(user_id=321)
 
 
 @pytest.mark.asyncio
