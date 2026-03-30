@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
 )
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeDefinitionNotFoundError,
+    RecipeDefinitionNotLaunchableError,
     RecipeRunNotFoundError,
     get_recipe_runs_service_for_user,
 )
@@ -47,15 +48,6 @@ def _get_manifest_or_404(service, recipe_id: str) -> RecipeManifest:
         return service.get_manifest(recipe_id)
     except RecipeDefinitionNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
-
-
-def _ensure_launchable_manifest(manifest: RecipeManifest) -> None:
-    if manifest.launchable:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail=f"Recipe '{manifest.recipe_id}' is not launchable yet.",
-    )
 
 
 def get_recipe_run_job_enqueuer() -> Callable[..., str]:
@@ -153,13 +145,13 @@ async def validate_recipe_dataset(
     del user_ctx
     service = _service_for_user(current_user)
     try:
-        manifest = _get_manifest_or_404(service, recipe_id)
-        _ensure_launchable_manifest(manifest)
         return service.validate_dataset(
             recipe_id,
             dataset_id=payload.get("dataset_id"),
             dataset=payload.get("dataset"),
         )
+    except RecipeDefinitionNotLaunchableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -185,8 +177,6 @@ async def create_recipe_run(
     stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
     service = _service_for_user(current_user)
     try:
-        manifest = _get_manifest_or_404(service, recipe_id)
-        _ensure_launchable_manifest(manifest)
         record = service.create_run(
             recipe_id,
             dataset_id=payload.get("dataset_id"),
@@ -206,10 +196,12 @@ async def create_recipe_run(
             if response is not None:
                 response.status_code = status.HTTP_202_ACCEPTED
         elif response is not None:
-                response.status_code = status.HTTP_200_OK
+            response.status_code = status.HTTP_200_OK
         if response is not None:
             response.headers["Location"] = f"/api/v1/evaluations/recipe-runs/{record.run_id}"
         return record
+    except RecipeDefinitionNotLaunchableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         logger.debug("Recipe run creation rejected: {}", exc)
         raise HTTPException(

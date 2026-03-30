@@ -157,14 +157,20 @@ async def test_recipe_manifest_endpoints(async_api_client, auth_headers) -> None
         item for item in manifests if item["recipe_id"] == "rag_retrieval_tuning"
     )
     assert rag_manifest["launchable"] is False
+    assert rag_manifest["capabilities"]["corpus_sources"] == ["media_db", "notes"]
+    assert rag_manifest["default_run_config"]["candidate_creation_mode"] == "auto_sweep"
 
     detail_response = await async_api_client.get(
-        "/api/v1/evaluations/recipes/summarization_quality",
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning",
         headers=auth_headers,
     )
 
     assert detail_response.status_code == 200
-    assert detail_response.json()["recipe_id"] == "summarization_quality"
+    detail = detail_response.json()
+    assert detail["recipe_id"] == "rag_retrieval_tuning"
+    assert detail["launchable"] is False
+    assert detail["capabilities"]["candidate_creation_modes"] == ["auto_sweep", "manual"]
+    assert detail["default_run_config"]["corpus_sources"] == ["media_db", "notes"]
 
 
 @pytest.mark.asyncio
@@ -227,7 +233,10 @@ async def test_recipe_launch_readiness_endpoint_rejects_stub_manifest(
     assert body["ready"] is False
     assert body["can_enqueue_runs"] is False
     assert body["can_reuse_completed_runs"] is False
-    assert "not launchable" in body["message"]
+    assert body["message"] == (
+        "Recipe 'rag_retrieval_tuning' is not launchable yet. "
+        "It is exposed as a stub manifest only."
+    )
 
 
 @pytest.mark.asyncio
@@ -260,8 +269,8 @@ async def test_recipe_validate_dataset_endpoint_rejects_stub_manifest(
         headers=auth_headers,
     )
 
-    assert response.status_code in {400, 409}
-    assert "not launchable" in response.json()["detail"]
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Recipe 'rag_retrieval_tuning' is not launchable yet."
 
 
 @pytest.mark.asyncio
@@ -325,8 +334,8 @@ async def test_recipe_run_create_endpoint_rejects_stub_manifest(
         headers=auth_headers,
     )
 
-    assert response.status_code in {400, 409}
-    assert "not launchable" in response.json()["detail"]
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Recipe 'rag_retrieval_tuning' is not launchable yet."
 
 
 @pytest.mark.asyncio

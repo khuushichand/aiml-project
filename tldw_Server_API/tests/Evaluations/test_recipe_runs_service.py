@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RECIPE_RUN_REUSE_ENTITY_TYPE,
+    RecipeDefinitionNotLaunchableError,
     RecipeRunsService,
 )
 from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import build_dataset_content_hash
@@ -117,6 +120,33 @@ def test_recipe_service_lists_and_fetches_builtin_manifests(tmp_path) -> None:
 
     assert manifest.recipe_id == "summarization_quality"
     assert manifest.recipe_version == "1"
+
+
+def test_recipe_service_rejects_non_launchable_stub_in_validate_dataset(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+
+    with pytest.raises(
+        RecipeDefinitionNotLaunchableError,
+        match="rag_retrieval_tuning",
+    ):
+        service.validate_dataset(
+            "rag_retrieval_tuning",
+            dataset=[{"input": "find alpha", "expected": "alpha"}],
+        )
+
+
+def test_recipe_service_rejects_non_launchable_stub_in_create_run(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+
+    with pytest.raises(
+        RecipeDefinitionNotLaunchableError,
+        match="rag_retrieval_tuning",
+    ):
+        service.create_run(
+            "rag_retrieval_tuning",
+            dataset=[{"input": "find alpha", "expected": "alpha"}],
+            run_config={},
+        )
 
 
 def test_recipe_service_validates_dataset_shape_and_labeling_mode(tmp_path) -> None:

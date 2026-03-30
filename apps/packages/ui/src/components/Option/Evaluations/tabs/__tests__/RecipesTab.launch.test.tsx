@@ -581,14 +581,17 @@ describe("RecipesTab recipe launch flow", () => {
           recipe_launchable: false,
           recipe_run_worker_enabled: false
         },
-        message: null
+        message:
+          "Recipe 'rag_retrieval_tuning' is not launchable yet. It is exposed as a stub manifest only."
       }
     }
 
     render(<RecipesTab />)
 
     expect(
-      screen.getByText("This recipe is not launchable yet.")
+      screen.getByText(
+        "Recipe 'rag_retrieval_tuning' is not launchable yet. It is exposed as a stub manifest only."
+      )
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Validate dataset" })).toBeDisabled()
     expect(screen.getByRole("button", { name: "Run recipe" })).toBeDisabled()

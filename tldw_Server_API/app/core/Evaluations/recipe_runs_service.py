@@ -39,6 +39,14 @@ class RecipeDefinitionNotFoundError(LookupError):
     """Raised when a requested recipe manifest is not registered."""
 
 
+class RecipeDefinitionNotLaunchableError(RuntimeError):
+    """Raised when a requested recipe exists but is not launchable."""
+
+    def __init__(self, recipe_id: str) -> None:
+        self.recipe_id = recipe_id
+        super().__init__(f"Recipe '{recipe_id}' is not launchable yet.")
+
+
 class RecipeRunNotFoundError(LookupError):
     """Raised when a recipe run cannot be found."""
 
@@ -78,6 +86,7 @@ class RecipeRunsService:
     ) -> dict[str, Any]:
         """Lightweight dataset validation that is real enough to gate launch."""
         manifest = self.get_manifest(recipe_id)
+        self._ensure_launchable(manifest)
         recipe = self.recipe_registry.get_recipe(recipe_id)
         errors: list[str] = []
         resolved = self._resolve_dataset(dataset_id=dataset_id, dataset=dataset, errors=errors)
@@ -136,6 +145,7 @@ class RecipeRunsService:
     ) -> str:
         """Build the explicit reuse hash inputs required for recipe-run reuse."""
         manifest = self.get_manifest(recipe_id)
+        self._ensure_launchable(manifest)
         validation = self.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
         if not validation["valid"]:
             joined = "; ".join(validation["errors"])
@@ -163,6 +173,7 @@ class RecipeRunsService:
     ) -> RecipeRunRecord:
         """Create a pending parent run or reuse a completed run when eligible."""
         manifest = self.get_manifest(recipe_id)
+        self._ensure_launchable(manifest)
         validation = self.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
         if not validation["valid"]:
             joined = "; ".join(validation["errors"])
@@ -218,6 +229,11 @@ class RecipeRunsService:
         )
         self._record_reuse_mapping(run_id, reuse_hash)
         return self.get_run(run_id)
+
+    def _ensure_launchable(self, manifest: RecipeManifest) -> None:
+        if manifest.launchable:
+            return
+        raise RecipeDefinitionNotLaunchableError(manifest.recipe_id)
 
     def get_run(self, run_id: str) -> RecipeRunRecord:
         """Fetch one persisted recipe run."""

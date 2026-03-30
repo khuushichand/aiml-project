@@ -248,9 +248,6 @@ export const RecipesTab: React.FC = () => {
   const runConfigEditorInvalid =
     runConfigText.trim().length > 0 && !parsedRunConfig
   const isLaunchable = selectedManifest?.launchable !== false
-  const nonLaunchableMessage = selectedManifest
-    ? "This recipe is not launchable yet."
-    : null
 
   React.useEffect(() => {
     if (!selectedRecipeId && manifests.length > 0) {
@@ -1064,18 +1061,6 @@ export const RecipesTab: React.FC = () => {
             </Paragraph>
 
             <div className="space-y-3">
-              {!isLaunchable && (
-                <Alert
-                  type="info"
-                  showIcon
-                  title={nonLaunchableMessage}
-                  description={t("evaluations:recipeLaunchDisabledDescription", {
-                    defaultValue:
-                      "Validation and run creation are disabled for this stub manifest until the recipe is implemented."
-                  })}
-                />
-              )}
-
               {launchReadiness?.message && (
                 <Alert
                   type="warning"

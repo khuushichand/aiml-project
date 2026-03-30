@@ -29,7 +29,10 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
     enqueue_recipe_run,
     mark_recipe_run_enqueue_failure,
 )
-from tldw_Server_API.app.core.Evaluations.recipe_runs_service import RecipeRunsService
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
+    RecipeDefinitionNotLaunchableError,
+    RecipeRunsService,
+)
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import get_recipe_runs_service_for_user
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -620,7 +623,10 @@ def validate_recipe_dataset(ctx, recipe_id, dataset_id, dataset_json):
     dataset = _load_json_option(dataset_json, option_name="--dataset-json", default=None)
     cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
     service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
-    result = service.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+    try:
+        result = service.validate_dataset(recipe_id, dataset_id=dataset_id, dataset=dataset)
+    except RecipeDefinitionNotLaunchableError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(result, indent=2, default=str))
 
 
@@ -637,13 +643,16 @@ def run_recipe(ctx, recipe_id, dataset_id, dataset_json, run_config_json, force_
     run_config = _load_json_option(run_config_json, option_name="--run-config-json", default={})
     cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
     service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
-    record = service.create_run(
-        recipe_id,
-        dataset_id=dataset_id,
-        dataset=dataset,
-        run_config=run_config,
-        force_rerun=force_rerun,
-    )
+    try:
+        record = service.create_run(
+            recipe_id,
+            dataset_id=dataset_id,
+            dataset=dataset,
+            run_config=run_config,
+            force_rerun=force_rerun,
+        )
+    except RecipeDefinitionNotLaunchableError as exc:
+        raise click.ClickException(str(exc)) from exc
     output = {"run": record.model_dump(mode="json")}
     if getattr(record.status, "value", record.status) == "pending":
         try:

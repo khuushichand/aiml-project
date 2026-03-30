@@ -6,11 +6,19 @@ from tldw_Server_API.cli.evals_cli import main
 
 
 class _Manifest:
-    def __init__(self, recipe_id: str, recipe_version: str, supported_modes: list[str]):
+    def __init__(
+        self,
+        recipe_id: str,
+        recipe_version: str,
+        supported_modes: list[str],
+        *,
+        launchable: bool = True,
+    ):
         self.recipe_id = recipe_id
         self.recipe_version = recipe_version
         self.name = recipe_id.replace("_", " ").title()
         self.description = f"{recipe_id} description"
+        self.launchable = launchable
         self.supported_modes = supported_modes
         self.tags = ["demo"]
 
@@ -21,6 +29,7 @@ class _Manifest:
             "recipe_version": self.recipe_version,
             "name": self.name,
             "description": self.description,
+            "launchable": self.launchable,
             "supported_modes": self.supported_modes,
             "tags": self.tags,
         }
@@ -176,6 +185,33 @@ def test_recipes_validate_dataset_command_outputs_validation_payload(monkeypatch
     assert result.exit_code == 0
     assert '"valid": false' in result.output.lower()
     assert "dataset must include labels" in result.output
+
+
+def test_recipes_validate_dataset_command_fails_cleanly_for_non_launchable_stub(
+    monkeypatch, tmp_path
+):
+    from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+    from tldw_Server_API.app.core.Evaluations.recipe_runs_service import RecipeRunsService
+
+    service = RecipeRunsService(db=EvaluationsDatabase(str(tmp_path / "eval.db")))
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced._get_recipe_runs_service",
+        lambda user_id=None, db_path=None: service,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "recipes",
+            "validate-dataset",
+            "rag_retrieval_tuning",
+            "--dataset-json",
+            '[{"input":"bad"}]',
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "not launchable" in result.output
 
 
 def test_recipes_run_command_enqueues_pending_run(monkeypatch):
