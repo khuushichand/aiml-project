@@ -8,12 +8,25 @@ from tldw_Server_API.app.api.v1.schemas.synthetic_eval_schemas import (
     SyntheticEvalReviewState,
 )
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.Evaluations.synthetic_eval_generation import (
+    SyntheticEvalCorpusScope,
+    SyntheticEvalStructuredTuple,
+)
 from tldw_Server_API.app.core.Evaluations.synthetic_eval_repository import SyntheticEvalRepository
+from tldw_Server_API.app.core.Evaluations.synthetic_eval_service import (
+    SyntheticEvalGenerationService,
+)
 
 
 def _repository(tmp_path) -> SyntheticEvalRepository:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     return SyntheticEvalRepository(db)
+
+
+def _service(tmp_path) -> SyntheticEvalGenerationService:
+    db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
+    repository = SyntheticEvalRepository(db)
+    return SyntheticEvalGenerationService(repository=repository)
 
 
 def test_evaluations_sqlite_connections_enable_foreign_keys(tmp_path) -> None:
@@ -176,3 +189,159 @@ def test_repository_preserves_real_edited_provenance_after_edit_and_approve(tmp_
     assert row is not None  # nosec B101
     assert row["provenance"] == "real_edited"  # nosec B101
     assert row["review_state"] == "approved"  # nosec B101
+
+
+def test_generation_prefers_real_examples_before_seed_and_synthetic_fill(tmp_path) -> None:
+    service = _service(tmp_path)
+    generation_calls: list[dict[str, object]] = []
+
+    def _fake_generate_structured_tuples(*, coverage_gaps, corpus_scope, corpus_examples, seed_examples, target_count):
+        generation_calls.append(
+            {
+                "coverage_gaps": coverage_gaps,
+                "corpus_scope": corpus_scope,
+                "corpus_examples": corpus_examples,
+                "seed_examples": seed_examples,
+                "target_count": target_count,
+            }
+        )
+        return [
+            SyntheticEvalStructuredTuple(
+                source_kind="media_db",
+                query_intent="lookup",
+                difficulty="straightforward",
+                query="What does the policy say?",
+                failure_mode="missing_relevant_span",
+                target_payload={"relevant_media_ids": [1]},
+                provenance_hint="synthetic_from_corpus",
+            )
+        ]
+
+    result = service.generate_draft_batch(
+        recipe_kind="rag_retrieval_tuning",
+        corpus_scope=SyntheticEvalCorpusScope(sources=("media_db", "notes")),
+        real_examples=[
+            {
+                "sample_id": "real-1",
+                "source_kind": "media_db",
+                "query_intent": "lookup",
+                "difficulty": "straightforward",
+                "sample_payload": {"query": "Existing real query"},
+                "provenance": SyntheticEvalProvenance.REAL.value,
+            }
+        ],
+        seed_examples=[
+            {
+                "sample_id": "seed-1",
+                "source_kind": "notes",
+                "query_intent": "comparison",
+                "difficulty": "distractor-heavy",
+                "sample_payload": {"query": "Seeded query"},
+            }
+        ],
+        target_sample_count=3,
+        tuple_generator=_fake_generate_structured_tuples,
+    )
+
+    assert generation_calls  # nosec B101
+    assert result.source_breakdown["real"] == 1  # nosec B101
+    assert result.source_breakdown["seed_examples"] == 1  # nosec B101
+    assert result.source_breakdown["synthetic_from_corpus"] == 1  # nosec B101
+    assert [sample["provenance"] for sample in result.samples] == [  # nosec B101
+        "real",
+        "synthetic_from_seed_examples",
+        "synthetic_from_corpus",
+    ]
+
+
+def test_generation_treats_seed_examples_as_seed_provenance_by_default(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    result = service.generate_draft_batch(
+        recipe_kind="rag_retrieval_tuning",
+        corpus_scope=SyntheticEvalCorpusScope(sources=("media_db", "notes")),
+        real_examples=[
+            {
+                "sample_id": "real-2",
+                "source_kind": "media_db",
+                "query_intent": "lookup",
+                "difficulty": "straightforward",
+                "sample_payload": {"query": "Existing real query"},
+                "provenance": SyntheticEvalProvenance.REAL.value,
+            }
+        ],
+        seed_examples=[
+            {
+                "sample_id": "seed-2",
+                "source_kind": "notes",
+                "query_intent": "comparison",
+                "difficulty": "distractor-heavy",
+                "sample_payload": {"query": "Implicit seed query"},
+            }
+        ],
+        target_sample_count=2,
+        tuple_generator=lambda **kwargs: [],
+    )
+
+    assert result.source_breakdown["real"] == 1  # nosec B101
+    assert result.source_breakdown["seed_examples"] == 1  # nosec B101
+    assert [sample["provenance"] for sample in result.samples] == [  # nosec B101
+        "real",
+        "synthetic_from_seed_examples",
+    ]
+
+
+def test_generation_is_stratified_across_media_notes_intent_and_difficulty(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    result = service.generate_draft_batch(
+        recipe_kind="rag_answer_quality",
+        corpus_scope=SyntheticEvalCorpusScope(sources=("media_db", "notes")),
+        real_examples=[
+            {
+                "sample_id": "real-media-1",
+                "source_kind": "media_db",
+                "query_intent": "lookup",
+                "difficulty": "straightforward",
+                "sample_payload": {"query": "Media lookup"},
+                "provenance": SyntheticEvalProvenance.REAL.value,
+            },
+            {
+                "sample_id": "real-notes-1",
+                "source_kind": "notes",
+                "query_intent": "synthesis",
+                "difficulty": "multi-source",
+                "sample_payload": {"query": "Notes synthesis"},
+                "provenance": SyntheticEvalProvenance.REAL.value,
+            },
+        ],
+        seed_examples=[],
+        target_sample_count=4,
+        tuple_generator=lambda **kwargs: [
+            SyntheticEvalStructuredTuple(
+                source_kind="media_db",
+                query_intent="comparison",
+                difficulty="distractor-heavy",
+                query="What conflicts with the source?",
+                failure_mode="confused_sources",
+                target_payload={"expected_behavior": "hedge"},
+                provenance_hint="synthetic_from_corpus",
+            ),
+            SyntheticEvalStructuredTuple(
+                source_kind="notes",
+                query_intent="ambiguous / underspecified",
+                difficulty="abstention-worthy",
+                query="Is this answerable from the notes alone?",
+                failure_mode="requires_abstention",
+                target_payload={"expected_behavior": "abstain"},
+                provenance_hint="synthetic_from_corpus",
+            ),
+        ],
+    )
+
+    assert "media_db" in result.coverage["sources"]  # nosec B101
+    assert "notes" in result.coverage["sources"]  # nosec B101
+    assert {"lookup", "synthesis", "comparison"} <= set(result.coverage["query_intents"])  # nosec B101
+    assert {"straightforward", "multi-source", "distractor-heavy", "abstention-worthy"} <= set(result.coverage["difficulties"])  # nosec B101
+    assert result.source_breakdown["real"] == 2  # nosec B101
+    assert result.source_breakdown["synthetic_from_corpus"] == 2  # nosec B101
