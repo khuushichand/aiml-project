@@ -20,6 +20,7 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type EvaluationsTab =
+  | "recipes"
   | "evaluations"
   | "runs"
   | "datasets"
@@ -200,7 +201,7 @@ const initialDataState: DataState = {
 }
 
 const initialUIState: UIState = {
-  activeTab: "evaluations",
+  activeTab: "recipes",
   createEvalOpen: false,
   createDatasetOpen: false,
   isPolling: false

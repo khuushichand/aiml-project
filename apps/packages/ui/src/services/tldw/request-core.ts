@@ -400,7 +400,7 @@ export const tldwRequest = async (
             ok: false,
             status: 401,
             error:
-              "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings -> tldw server before continuing."
+              "tldw server API key is still set to a placeholder value. Replace it with your real API key in Settings -> tldw server before continuing."
           }
         }
         h["X-API-KEY"] = key

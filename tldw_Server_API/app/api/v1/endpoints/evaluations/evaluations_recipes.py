@@ -14,6 +14,7 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
     verify_api_key,
 )
 from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
+    RecipeLaunchReadiness,
     RecipeManifest,
     RecipeRunRecord,
 )
@@ -22,6 +23,9 @@ from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
     enqueue_recipe_run,
     mark_recipe_run_enqueue_failure,
+)
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+    recipe_run_jobs_worker_enabled,
 )
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeDefinitionNotFoundError,
@@ -72,6 +76,42 @@ async def get_recipe_manifest(
         return service.get_manifest(recipe_id)
     except RecipeDefinitionNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
+
+
+@recipes_router.get(
+    "/recipes/{recipe_id}/launch-readiness",
+    response_model=RecipeLaunchReadiness,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
+async def get_recipe_launch_readiness(
+    recipe_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
+    del user_ctx
+    service = _service_for_user(current_user)
+    try:
+        service.get_manifest(recipe_id)
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
+
+    worker_enabled = recipe_run_jobs_worker_enabled()
+    message = None
+    if not worker_enabled:
+        message = (
+            "New recipe runs are unavailable because the recipe worker is not running on this server."
+        )
+
+    return RecipeLaunchReadiness(
+        recipe_id=recipe_id,
+        ready=worker_enabled,
+        can_enqueue_runs=worker_enabled,
+        can_reuse_completed_runs=True,
+        runtime_checks={
+            "recipe_run_worker_enabled": worker_enabled,
+        },
+        message=message,
+    )
 
 
 @recipes_router.post(

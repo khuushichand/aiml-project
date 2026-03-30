@@ -25,6 +25,11 @@ export class EvaluationsPage extends BasePage {
   }
 
   /** Evaluations tab trigger */
+  get recipesTab(): Locator {
+    return this.page.getByTestId("evaluations-tab-recipes")
+  }
+
+  /** Evaluations tab trigger */
   get evaluationsTab(): Locator {
     return this.page.getByTestId("evaluations-tab-evaluations")
   }
@@ -49,19 +54,30 @@ export class EvaluationsPage extends BasePage {
     return this.page.getByTestId("evaluations-tab-history")
   }
 
-  /** "Create evaluation" or "New evaluation" button */
-  get createEvaluationButton(): Locator {
-    return this.page.getByTestId("evaluations-create-button")
+  get recipeUseButtons(): Locator {
+    return this.page.getByRole("button", { name: /^Use / })
   }
 
-  /** Create/edit evaluation modal */
-  get createEvaluationModal(): Locator {
-    return this.page.getByRole("dialog", { name: /new evaluation|edit evaluation/i })
+  get validateDatasetButton(): Locator {
+    return this.page.getByRole("button", { name: "Validate dataset" })
   }
 
-  /** "Run" button (triggers an evaluation run) */
-  get runButton(): Locator {
-    return this.page.getByRole("button", { name: /run/i }).first()
+  get runRecipeButton(): Locator {
+    return this.page.getByRole("button", { name: /Run recipe|Try matching run/ })
+  }
+
+  get recipeValidationAlert(): Locator {
+    return this.page.getByText(/Dataset format is valid\.|Dataset format needs attention\./)
+  }
+
+  get recipeWorkerUnavailableAlert(): Locator {
+    return this.page.getByText(
+      "Recipe runs are unavailable because the recipe worker is not running on this server. Enable the evaluations recipe worker and try again."
+    )
+  }
+
+  get currentRunCard(): Locator {
+    return this.page.getByText("Current run")
   }
 
   /* ------------------------------------------------------------------ */
@@ -75,11 +91,21 @@ export class EvaluationsPage extends BasePage {
 
   async assertPageReady(): Promise<void> {
     await expect(this.pageTitle).toBeVisible({ timeout: 20_000 })
-    await expect(this.evaluationsTab).toBeVisible({ timeout: 10_000 })
+    await expect(this.recipesTab).toBeVisible({ timeout: 10_000 })
   }
 
   async getInteractiveElements(): Promise<InteractiveElement[]> {
     return [
+      {
+        name: "Recipes tab",
+        locator: this.recipesTab,
+        expectation: {
+          type: "state_change",
+          stateCheck: async () => {
+            return this.page.url()
+          },
+        },
+      },
       {
         name: "Evaluations tab",
         locator: this.evaluationsTab,
@@ -112,42 +138,17 @@ export class EvaluationsPage extends BasePage {
    * Expects the caller to set up an API call expectation beforehand.
    */
   async runEvaluation(): Promise<void> {
-    // Ensure we are on the evaluations tab
-    const evalTabLabel = this.evaluationsTab
-    const evalTab = this.tabTrigger(evalTabLabel)
-    if (await evalTabLabel.isVisible()) {
-      await evalTab.click()
-      await expect(evalTab).toHaveAttribute("aria-selected", "true", { timeout: 5_000 })
-    }
-
-    // Click "Create" or "New" to open the wizard/form if the run button isn't visible yet
-    const runVisible = await this.runButton.isVisible().catch(() => false)
-    if (!runVisible) {
-      const createVisible = await this.createEvaluationButton.isVisible().catch(() => false)
-      if (createVisible) {
-        await this.createEvaluationButton.click()
-        await expect(this.runButton.or(this.page.getByRole("dialog"))).toBeVisible({ timeout: 5_000 })
-      }
-    }
-
-    // Click the run button if it becomes visible
-    const runBtn = this.runButton
-    if (await runBtn.isVisible().catch(() => false)) {
-      await runBtn.click()
-    }
-  }
-
-  async openCreateEvaluation(): Promise<void> {
-    await expect(this.createEvaluationButton).toBeVisible({ timeout: 10_000 })
-    await this.createEvaluationButton.click()
-    await expect(this.createEvaluationModal).toBeVisible({ timeout: 10_000 })
+    await this.ensureRecipesTabSelected()
+    await expect(this.runRecipeButton).toBeVisible({ timeout: 10_000 })
+    await this.runRecipeButton.click()
   }
 
   /**
    * Switch to a specific tab by clicking its trigger.
    */
-  async switchTab(tab: "evaluations" | "runs" | "datasets" | "webhooks" | "history"): Promise<void> {
+  async switchTab(tab: "recipes" | "evaluations" | "runs" | "datasets" | "webhooks" | "history"): Promise<void> {
     const tabLocators: Record<string, Locator> = {
+      recipes: this.recipesTab,
       evaluations: this.evaluationsTab,
       runs: this.runsTab,
       datasets: this.datasetsTab,
@@ -159,5 +160,39 @@ export class EvaluationsPage extends BasePage {
     await expect(tabLabel).toBeVisible({ timeout: 10_000 })
     await tabTrigger.click()
     await expect(tabTrigger).toHaveAttribute("aria-selected", "true", { timeout: 5_000 })
+  }
+
+  async ensureRecipesTabSelected(): Promise<void> {
+    const recipesTab = this.tabTrigger(this.recipesTab)
+    await expect(this.recipesTab).toBeVisible({ timeout: 10_000 })
+    if ((await recipesTab.getAttribute("aria-selected")) !== "true") {
+      await recipesTab.click()
+    }
+    await expect(recipesTab).toHaveAttribute("aria-selected", "true", {
+      timeout: 5_000,
+    })
+  }
+
+  async assertRecipeCatalogVisible(): Promise<void> {
+    await this.ensureRecipesTabSelected()
+    await expect(this.recipeUseButtons.first()).toBeVisible({ timeout: 10_000 })
+    await expect(this.validateDatasetButton).toBeVisible({ timeout: 10_000 })
+    await expect(this.runRecipeButton).toBeVisible({ timeout: 10_000 })
+  }
+
+  async validateCurrentRecipe(): Promise<void> {
+    await this.ensureRecipesTabSelected()
+    await expect(this.validateDatasetButton).toBeVisible({ timeout: 10_000 })
+    await this.validateDatasetButton.click()
+    await expect(this.recipeValidationAlert).toBeVisible({ timeout: 10_000 })
+  }
+
+  async assertRecipeRunOutcome(): Promise<void> {
+    await expect(
+      this.currentRunCard.or(this.recipeWorkerUnavailableAlert).first()
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      this.page.getByText("recipe_run_enqueue_failed")
+    ).toHaveCount(0)
   }
 }

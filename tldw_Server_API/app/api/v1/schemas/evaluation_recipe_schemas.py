@@ -60,6 +60,19 @@ class RecipeManifest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class RecipeLaunchReadiness(BaseModel):
+    """User-facing launch readiness for a recipe."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipe_id: str
+    ready: bool
+    can_enqueue_runs: bool
+    can_reuse_completed_runs: bool = True
+    runtime_checks: dict[str, bool] = Field(default_factory=dict)
+    message: str | None = None
+
+
 class RecipeRunRecord(BaseModel):
     """Persistent recipe run record."""
 

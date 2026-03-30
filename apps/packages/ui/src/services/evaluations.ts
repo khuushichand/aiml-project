@@ -122,28 +122,108 @@ export type CreateRunPayload = {
 
 export type EvaluationHistoryFilters = {
   user_id?: string
-  type?: string
+  evaluation_type?: string
   start_date?: string
   end_date?: string
+  limit?: number
+  offset?: number
 }
 
 export type EvaluationHistoryItem = {
   id: string
+  name?: string
   user_id?: string
+  created_by?: string
   type?: string
+  eval_type?: string
+  evaluation_type?: string
   created_at?: string
   eval_id?: string
+  evaluation_id?: string
   run_id?: string
   detail?: Record<string, any>
+  metadata?: Record<string, any>
 }
 
 export type EvaluationWebhook = {
-  id: string
+  id?: string
+  webhook_id?: string | number
   url: string
   events: string[]
   created_at?: string
   secret?: string
+  status?: string
   is_active?: boolean
+  failure_count?: number
+}
+
+export type RecipeManifest = {
+  recipe_id: string
+  recipe_version: string
+  name: string
+  description: string
+  supported_modes: Array<"labeled" | "unlabeled">
+  tags: string[]
+}
+
+export type RecipeLaunchReadiness = {
+  recipe_id: string
+  ready: boolean
+  can_enqueue_runs: boolean
+  can_reuse_completed_runs: boolean
+  runtime_checks: Record<string, boolean>
+  message?: string | null
+}
+
+export type RecipeDatasetValidation = {
+  valid: boolean
+  errors: string[]
+  dataset_mode?: "labeled" | "unlabeled" | "mixed" | null
+  sample_count?: number
+  review_sample?: Record<string, any>
+  dataset_snapshot_ref?: string | null
+  dataset_content_hash?: string | null
+  [key: string]: any
+}
+
+export type RecipeConfidenceSummary = {
+  kind?: "aggregate" | "bootstrap" | "judge" | "heuristic"
+  confidence: number
+  sample_count: number
+  spread?: number | null
+  margin?: number | null
+  judge_agreement?: number | null
+  notes?: string | null
+}
+
+export type RecipeRecommendationSlot = {
+  candidate_run_id?: string | null
+  reason_code?: string | null
+  explanation?: string | null
+  confidence?: number | null
+  metadata?: Record<string, any>
+}
+
+export type RecipeRunRecord = {
+  run_id: string
+  recipe_id: string
+  recipe_version: string
+  status: string
+  review_state?: string
+  dataset_snapshot_ref?: string | null
+  dataset_content_hash?: string | null
+  confidence_summary?: RecipeConfidenceSummary | null
+  recommendation_slots?: Record<string, RecipeRecommendationSlot>
+  child_run_ids?: string[]
+  created_at: string
+  updated_at?: string | null
+  metadata?: Record<string, any>
+}
+
+export type RecipeRunReport = {
+  run: RecipeRunRecord
+  confidence_summary?: RecipeConfidenceSummary | null
+  recommendation_slots: Record<string, RecipeRecommendationSlot>
 }
 
 export type BenchmarkInfo = {
@@ -224,31 +304,6 @@ export async function listRuns(evalId: string, params?: { limit?: number }) {
   })
 }
 
-export async function listRunsGlobal(params?: {
-  limit?: number
-  eval_id?: string
-  status?: string
-}) {
-  const query = new URLSearchParams()
-  if (params?.limit != null) query.set("limit", String(params.limit))
-  if (params?.eval_id) query.set("eval_id", params.eval_id)
-  if (params?.status) query.set("status", params.status)
-  const path =
-    "/api/v1/evaluations/runs" +
-    (query.toString() ? `?${query.toString()}` : "")
-
-  return await apiSend<{
-    object?: "list"
-    data: EvaluationRunSummary[]
-    has_more?: boolean
-    first_id?: string | null
-    last_id?: string | null
-  }>({
-    path: path as any,
-    method: "GET"
-  })
-}
-
 export async function cancelRun(runId: string) {
   return await apiSend({
     path: `/api/v1/evaluations/runs/${encodeURIComponent(runId)}/cancel` as any,
@@ -283,11 +338,9 @@ export async function listDatasets(params?: {
 
 export async function getDataset(
   datasetId: string,
-  params?: { limit?: number; offset?: number; include_samples?: boolean }
+  params?: { include_samples?: boolean }
 ) {
   const search = new URLSearchParams()
-  if (params?.limit != null) search.set("limit", String(params.limit))
-  if (params?.offset != null) search.set("offset", String(params.offset))
   if (params?.include_samples) search.set("include_samples", "true")
   const path =
     `/api/v1/evaluations/datasets/${encodeURIComponent(datasetId)}` +
@@ -368,6 +421,71 @@ export async function listBenchmarks() {
   })
 }
 
+export async function listRecipeManifests() {
+  return await apiSend<RecipeManifest[]>({
+    path: "/api/v1/evaluations/recipes" as any,
+    method: "GET"
+  })
+}
+
+export async function getRecipeManifest(recipeId: string) {
+  return await apiSend<RecipeManifest>({
+    path: `/api/v1/evaluations/recipes/${encodeURIComponent(recipeId)}` as any,
+    method: "GET"
+  })
+}
+
+export async function getRecipeLaunchReadiness(recipeId: string) {
+  return await apiSend<RecipeLaunchReadiness>({
+    path: `/api/v1/evaluations/recipes/${encodeURIComponent(recipeId)}/launch-readiness` as any,
+    method: "GET"
+  })
+}
+
+export async function validateRecipeDataset(
+  recipeId: string,
+  payload: {
+    dataset_id?: string
+    dataset?: DatasetSample[]
+  }
+) {
+  return await apiSend<RecipeDatasetValidation>({
+    path: `/api/v1/evaluations/recipes/${encodeURIComponent(recipeId)}/validate-dataset` as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export async function createRecipeRun(
+  recipeId: string,
+  payload: {
+    dataset_id?: string
+    dataset?: DatasetSample[]
+    run_config: Record<string, any>
+    force_rerun?: boolean
+  }
+) {
+  return await apiSend<RecipeRunRecord>({
+    path: `/api/v1/evaluations/recipes/${encodeURIComponent(recipeId)}/runs` as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export async function getRecipeRun(runId: string) {
+  return await apiSend<RecipeRunRecord>({
+    path: `/api/v1/evaluations/recipe-runs/${encodeURIComponent(runId)}` as any,
+    method: "GET"
+  })
+}
+
+export async function getRecipeRunReport(runId: string) {
+  return await apiSend<RecipeRunReport>({
+    path: `/api/v1/evaluations/recipe-runs/${encodeURIComponent(runId)}/report` as any,
+    method: "GET"
+  })
+}
+
 export async function runBenchmark(
   benchmarkName: string,
   payload: Record<string, any>
@@ -400,7 +518,11 @@ export async function getRun(runId: string) {
 }
 
 export async function getHistory(filters?: EvaluationHistoryFilters) {
-  return await apiSend<{ data?: EvaluationHistoryItem[] }>({
+  return await apiSend<{
+    total_count: number
+    items: EvaluationHistoryItem[]
+    aggregations?: Record<string, any>
+  }>({
     path: "/api/v1/evaluations/history" as any,
     method: "POST",
     body: filters || {}
@@ -419,17 +541,16 @@ export async function registerWebhook(payload: {
 }
 
 export async function listWebhooks() {
-  return await apiSend<{ data?: EvaluationWebhook[] }>({
+  return await apiSend<EvaluationWebhook[]>({
     path: "/api/v1/evaluations/webhooks" as any,
     method: "GET"
   })
 }
 
-export async function deleteWebhook(webhookId: string) {
+export async function deleteWebhook(url: string) {
+  const query = new URLSearchParams({ url })
   return await apiSend<void>({
-    path: `/api/v1/evaluations/webhooks/${encodeURIComponent(
-      webhookId
-    )}` as any,
+    path: `/api/v1/evaluations/webhooks?${query.toString()}` as any,
     method: "DELETE"
   })
 }

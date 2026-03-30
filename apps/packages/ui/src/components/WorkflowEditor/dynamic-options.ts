@@ -9,7 +9,7 @@ import { fetchFolders } from "@/services/folder-api"
 import {
   listDatasets,
   listEvaluations,
-  listRunsGlobal
+  listRuns
 } from "@/services/evaluations"
 
 type Option = { value: string; label: string }
@@ -430,8 +430,11 @@ const loadOptions = async (key: OptionSourceKey): Promise<Option[]> => {
         const evalId = key.startsWith("evaluationRuns:")
           ? key.slice("evaluationRuns:".length)
           : ""
-        const res = await listRunsGlobal({ limit: 100, eval_id: evalId || undefined })
-        if (res.ok && res.data) {
+        if (!evalId) {
+          options = []
+        } else {
+          const res = await listRuns(evalId, { limit: 100 })
+          if (res.ok && res.data) {
           const items = Array.isArray(res.data)
             ? res.data
             : Array.isArray(res.data.data)
@@ -443,6 +446,7 @@ const loadOptions = async (key: OptionSourceKey): Promise<Option[]> => {
               label: String(item?.id ?? "")
             }))
           )
+        }
         }
       } else if (key.startsWith("ttsVoices:")) {
         const provider = key.slice("ttsVoices:".length)
@@ -544,6 +548,16 @@ export const useWorkflowDynamicOptions = (params: {
   config?: Record<string, unknown>
 }): DynamicOptionsState => {
   const { fields, stepType, config } = params
+  const sourceSignature = useMemo(() => {
+    const evaluationId = resolveEvaluationIdFromConfig(config)
+    const provider = resolveProviderFromConfig(config)
+    return JSON.stringify({
+      fieldKeys: fields.map((field) => field.key),
+      stepType: stepType || "",
+      evaluationId,
+      provider
+    })
+  }, [fields, stepType, config])
   const resolvedSources = useMemo(() => {
     const fieldToSource = new Map<string, OptionSourceKey>()
     const sources = new Set<OptionSourceKey>()
@@ -557,7 +571,7 @@ export const useWorkflowDynamicOptions = (params: {
       fieldToSource,
       sources: Array.from(sources)
     }
-  }, [fields, stepType, config])
+  }, [sourceSignature, fields, stepType])
 
   const [optionsBySource, setOptionsBySource] = useState<
     Record<string, Option[]>
@@ -569,26 +583,29 @@ export const useWorkflowDynamicOptions = (params: {
   useEffect(() => {
     let isActive = true
     const load = async () => {
-      for (const source of resolvedSources.sources) {
-        if (optionsBySource[source]) continue
-        if (loadingBySource[source]) continue
-        setLoadingBySource((prev) => ({ ...prev, [source]: true }))
-        try {
-          const options = await loadOptions(source)
+      await Promise.all(
+        resolvedSources.sources.map(async (source) => {
           if (!isActive) return
-          setOptionsBySource((prev) => ({ ...prev, [source]: options }))
-        } finally {
-          if (isActive) {
-            setLoadingBySource((prev) => ({ ...prev, [source]: false }))
+          setLoadingBySource((prev) =>
+            prev[source] ? prev : { ...prev, [source]: true }
+          )
+          try {
+            const options = await loadOptions(source)
+            if (!isActive) return
+            setOptionsBySource((prev) => ({ ...prev, [source]: options }))
+          } finally {
+            if (isActive) {
+              setLoadingBySource((prev) => ({ ...prev, [source]: false }))
+            }
           }
-        }
-      }
+        })
+      )
     }
-    load()
+    void load()
     return () => {
       isActive = false
     }
-  }, [resolvedSources.sources, optionsBySource, loadingBySource])
+  }, [resolvedSources.sources])
 
   const optionsByKey = useMemo(() => {
     const output: Record<string, Option[]> = {}

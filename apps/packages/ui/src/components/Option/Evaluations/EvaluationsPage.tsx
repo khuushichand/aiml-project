@@ -9,7 +9,7 @@ import React, { useEffect } from "react"
 import { Alert, Tabs } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
-import { BarChart3, Database, History, Play, Webhook } from "lucide-react"
+import { BarChart3, Database, FlaskConical, History, Play, Webhook } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { PageShell } from "@/components/Common/PageShell"
@@ -18,6 +18,7 @@ import { useEvaluationsStore, type EvaluationsTab as EvaluationsTabType } from "
 import { DatasetsTab } from "./tabs/DatasetsTab"
 import { EvaluationsTab } from "./tabs/EvaluationsTab"
 import { HistoryTab } from "./tabs/HistoryTab"
+import { RecipesTab } from "./tabs/RecipesTab"
 import { RunsTab } from "./tabs/RunsTab"
 import { WebhooksTab } from "./tabs/WebhooksTab"
 
@@ -41,7 +42,7 @@ export const EvaluationsPage: React.FC = () => {
 
     if (
       tabFromQuery &&
-      ["evaluations", "runs", "datasets", "webhooks", "history"].includes(
+      ["recipes", "evaluations", "runs", "datasets", "webhooks", "history"].includes(
         tabFromQuery
       )
     ) {
@@ -88,6 +89,19 @@ export const EvaluationsPage: React.FC = () => {
   }
 
   const tabItems: TabsProps["items"] = [
+    {
+      key: "recipes",
+      label: (
+        <span
+          className="flex items-center gap-2"
+          data-testid="evaluations-tab-recipes"
+        >
+          <FlaskConical className="h-4 w-4" />
+          {t("evaluations:tabRecipes", "Recipes")}
+        </span>
+      ),
+      children: <RecipesTab />
+    },
     {
       key: "evaluations",
       label: (

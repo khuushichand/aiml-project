@@ -45,7 +45,8 @@ export const DatasetsTab: React.FC = () => {
     datasetSamples,
     datasetSamplesPage,
     datasetSamplesPageSize,
-    datasetSamplesTotal
+    datasetSamplesTotal,
+    setDatasetSamplesPage
   } = useEvaluationsStore((s) => ({
     createDatasetOpen: s.createDatasetOpen,
     openCreateDataset: s.openCreateDataset,
@@ -54,7 +55,8 @@ export const DatasetsTab: React.FC = () => {
     datasetSamples: s.datasetSamples,
     datasetSamplesPage: s.datasetSamplesPage,
     datasetSamplesPageSize: s.datasetSamplesPageSize,
-    datasetSamplesTotal: s.datasetSamplesTotal
+    datasetSamplesTotal: s.datasetSamplesTotal,
+    setDatasetSamplesPage: s.setDatasetSamplesPage
   }))
 
   // Queries & mutations
@@ -68,6 +70,10 @@ export const DatasetsTab: React.FC = () => {
   const datasets: DatasetResponse[] = datasetListResp?.data?.data || []
   const samplesJsonValue = Form.useWatch("samplesJson", form) || ""
   const metadataJsonValue = Form.useWatch("metadataJson", form) || ""
+  const pagedSamples = React.useMemo(() => {
+    const start = (datasetSamplesPage - 1) * datasetSamplesPageSize
+    return datasetSamples.slice(start, start + datasetSamplesPageSize)
+  }, [datasetSamples, datasetSamplesPage, datasetSamplesPageSize])
 
   const handleSubmitCreate = async () => {
     try {
@@ -179,7 +185,7 @@ export const DatasetsTab: React.FC = () => {
                 key={ds.id}
                 size="small"
                 className="hover:border-primary/70"
-                bodyStyle={{ padding: "8px 12px" }}
+                styles={{ body: { padding: "8px 12px" } }}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col">
@@ -204,7 +210,7 @@ export const DatasetsTab: React.FC = () => {
                       size="small"
                       loading={loadDatasetMutation.isPending}
                       onClick={() =>
-                        loadDatasetMutation.mutate({ datasetId: ds.id, page: 1 })
+                        loadDatasetMutation.mutate({ datasetId: ds.id })
                       }
                     >
                       {t("common:view", { defaultValue: "View" })}
@@ -392,7 +398,7 @@ export const DatasetsTab: React.FC = () => {
                   defaultValue: "Samples preview"
                 })}
               </Text>
-              {datasetSamples.length === 0 ? (
+              {pagedSamples.length === 0 ? (
                 <Empty
                   description={t("evaluations:noSamplesPreview", {
                     defaultValue: "No samples to preview"
@@ -400,9 +406,9 @@ export const DatasetsTab: React.FC = () => {
                 />
               ) : (
                 <div className="space-y-2">
-                  {datasetSamples.map((sample, idx) => (
+                  {pagedSamples.map((sample, idx) => (
                     <pre
-                      key={idx}
+                      key={`${datasetSamplesPage}-${idx}`}
                       className="max-h-32 overflow-auto rounded bg-surface2 p-2 text-[11px] text-text"
                     >
                       {JSON.stringify(sample, null, 2)}
@@ -419,12 +425,7 @@ export const DatasetsTab: React.FC = () => {
                   pageSize={datasetSamplesPageSize}
                   total={datasetSamplesTotal}
                   size="small"
-                  onChange={(page) =>
-                    loadDatasetMutation.mutate({
-                      datasetId: viewingDataset.id,
-                      page
-                    })
-                  }
+                  onChange={(page) => setDatasetSamplesPage(page)}
                 />
               )}
           </div>

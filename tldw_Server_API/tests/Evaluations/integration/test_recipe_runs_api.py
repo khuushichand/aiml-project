@@ -164,6 +164,50 @@ async def test_recipe_manifest_endpoints(async_api_client, auth_headers) -> None
 
 
 @pytest.mark.asyncio
+async def test_recipe_launch_readiness_endpoint_reports_worker_disabled_by_default(
+    async_api_client,
+    auth_headers,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED", raising=False)
+    monkeypatch.delenv("EVALS_RECIPE_RUN_JOBS_WORKER_ENABLED", raising=False)
+
+    response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/summarization_quality/launch-readiness",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recipe_id"] == "summarization_quality"
+    assert body["ready"] is False
+    assert body["can_enqueue_runs"] is False
+    assert body["can_reuse_completed_runs"] is True
+    assert body["runtime_checks"]["recipe_run_worker_enabled"] is False
+    assert "recipe worker is not running" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_launch_readiness_endpoint_reports_worker_enabled(
+    async_api_client,
+    auth_headers,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED", "true")
+
+    response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/summarization_quality/launch-readiness",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready"] is True
+    assert body["can_enqueue_runs"] is True
+    assert body["runtime_checks"]["recipe_run_worker_enabled"] is True
+
+
+@pytest.mark.asyncio
 async def test_recipe_validate_dataset_endpoint_returns_errors(async_api_client, auth_headers) -> None:
     response = await async_api_client.post(
         "/api/v1/evaluations/recipes/summarization_quality/validate-dataset",
