@@ -169,13 +169,20 @@ The recipe should not require users to understand ranking metrics up front. The 
 The recipe should support two corpus source modes:
 
 1. `Ingested corpus` as the primary path
-   - selected by media ids
-   - or selected by saved collection id
+   - selected by explicit source-qualified ids
+   - V1 should support `media_db` and `notes`
 
 2. `Dataset snapshot` as a secondary path
    - uploaded or referenced snapshot containing the benchmark payload
 
 The report should always persist the effective corpus scope so a run remains reproducible even if the live collection changes later.
+
+For V1, the corpus scope should live at the run level, not the per-sample level. The primary run-level corpus selector should conceptually support:
+
+- `sources`: limited to `media_db` and `notes` in V1
+- `media_ids`: optional explicit media selection
+- `note_ids`: optional explicit note selection
+- optional retrieval filters where already supported by the RAG request surface
 
 For ingested-corpus runs, persisting scope alone is not sufficient. The recipe should also persist:
 
@@ -184,6 +191,8 @@ For ingested-corpus runs, persisting scope alone is not sufficient. The recipe s
 - the effective media id set used at execution time
 
 Recipe runs must not rely on a mutable live collection definition as the sole source of truth for later report interpretation or rerun reuse.
+
+“Saved collections” should not be part of V1 unless there is a real server-backed corpus abstraction that can represent both media and notes. The current repo uses “collection” for multiple unrelated concepts, so the safe first version is explicit run-level source selection across `media_db` and `notes`.
 
 ### Supervision Modes
 
@@ -197,6 +206,7 @@ The recipe should support:
 Users provide queries plus one or both of:
 
 - `relevant_media_ids`
+- `relevant_note_ids`
 - `relevant_chunk_ids`
 
 This is the preferred mode when users already know what the retriever should find.
@@ -217,6 +227,12 @@ The weak-supervision flow should follow these rules:
 - reserve a human review sample in every run
 - explicitly lower confidence when labels are synthetic or judge-derived
 
+The recipe should also define a concrete source precedence for weak-supervision inputs:
+
+1. user-supplied queries
+2. existing product queries or traces, if the product exposes them safely for this workflow
+3. synthetic query generation to fill the remaining coverage gaps
+
 ### Dataset Contract
 
 The recipe should use the existing recipe framework pattern of a common envelope plus task-specific payload.
@@ -225,25 +241,21 @@ Each retrieval sample should conceptually include:
 
 - `sample_id`
 - `query`
-- `corpus_scope`
 - `targets`
 - `metadata`
-
-`corpus_scope` should support:
-
-- `media_ids`
-- `collection_id`
-- optional retrieval filters where supported
 
 `targets` should support:
 
 - `relevant_media_ids`
+- `relevant_note_ids`
 - `relevant_chunk_ids` only when chunk ids are stable for the candidate set being compared
-- canonical passage/span targets for chunking-sensitive comparisons, such as `media_id + character/token offsets`
+- canonical passage/span targets for chunking-sensitive comparisons, such as `source + record_id + character/token offsets`
+- optional graded relevance values for media-, note-, and chunk-level targets
 
-This allows four valid dataset shapes:
+This allows several valid dataset shapes:
 
 - media-level only
+- note-level only
 - chunk-level only
 - both
 - weak-supervision with missing targets initially
@@ -253,6 +265,14 @@ Chunk-level labels need an additional rule:
 - if the candidate sweep changes chunking, overlap, or chunk boundary logic, chunk-level gold labels must not depend on ephemeral chunk ids alone
 - chunk-level evaluation in those runs should use canonical passage/span targets that can be remapped into each candidate’s chunk space
 - if canonical span targets are unavailable, chunk-level evaluation must be disabled for chunking-changing comparisons or constrained to a fixed indexing baseline
+
+V1 should support both binary and graded relevance, but it must define the semantics up front:
+
+- media-, note-, and chunk-level targets may carry either binary relevance or graded relevance on a shared bounded scale
+- the implementation plan should pick one bounded graded scale for V1 and document it explicitly
+- if both binary and graded labels are allowed in the same schema, normalization rules must be explicit before scoring
+- chunk-level relevance does not automatically imply media- or note-level relevance unless that rule is stated in the dataset contract
+- report aggregation must define how multiple relevant chunks for one media or note item roll up into media-/note-level scores
 
 ### Candidate Model
 
@@ -293,6 +313,18 @@ The implementation should define:
 - when a new temporary index must be built
 - how temporary indexes are cleaned up or expired
 - how index build failures surface without corrupting other candidates
+
+The supported V1 candidate surface should be explicitly whitelisted rather than inferred from the full RAG API. The first implementation should choose a small supported subset such as:
+
+- one chunking preset axis
+- `top_k`
+- `hybrid_alpha`
+- `enable_reranking`
+- a restricted `reranking_strategy` subset
+- `rerank_top_k`
+- a narrow set of already-supported filters
+
+Other RAG controls should remain out of scope until the recipe proves out.
 
 ### Candidate Creation
 
