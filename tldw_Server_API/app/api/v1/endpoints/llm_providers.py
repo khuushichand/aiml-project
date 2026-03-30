@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
     get_provider_extra_body_compat,
 )
 from tldw_Server_API.app.core.LLM_Calls.llamacpp_request_extensions import resolve_llamacpp_runtime_caps
+from tldw_Server_API.app.core.LLM_Calls.routing.metadata import merge_routing_metadata
 from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
     resolve_tokenizer_metadata,
     strict_token_counting_enabled as _strict_token_counting_enabled_shared,
@@ -845,7 +846,6 @@ MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
     },
 }
 
-
 def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
     """Return a conservative default metadata object for unknown models."""
     return {
@@ -873,6 +873,12 @@ def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
             "thinking": False,
         },
         "modalities": {"input": ["text"], "output": ["text"]},
+        "tool_support": False,
+        "vision_support": False,
+        "json_mode_support": False,
+        "reasoning_support": False,
+        "quality_rank": None,
+        "latency_rank": None,
         "notes": None,
     }
 
@@ -884,12 +890,11 @@ def get_model_metadata(provider: str, model: str) -> dict[str, Any]:
     md = MODEL_METADATA.get(provider, {}).get(model)
     base = _default_model_metadata(provider, model)
     if md is None:
-        # Still include name field in final payload
-        return base
+        return merge_routing_metadata(base, provider=provider, model=model)
     # Merge on top of defaults to ensure stable schema
     merged = {**base, **{k: v for k, v in md.items() if k != "name"}}
     merged["name"] = model
-    return merged
+    return merge_routing_metadata(merged, provider=provider, model=model)
 
 @router.get("/llm/health", summary="LLM inference health", response_model=dict[str, Any])
 async def llm_health():
@@ -1164,11 +1169,17 @@ def _resolve_model_tokenizer_support(
     model_name: str,
     config_parser: Any,
 ) -> dict[str, Any]:
+    strict_mode_effective = _strict_token_counting_enabled_shared(default=False)
+    if _truthy(os.getenv("TEST_MODE")) and _truthy(os.getenv("E2E_INPROCESS")):
+        return _skipped_model_tokenizer_support(
+            "Tokenizer probe skipped in in-process test mode to avoid heavyweight runtime imports",
+            strict_mode_effective=strict_mode_effective,
+        )
     try:
         return resolve_tokenizer_metadata(
             provider_name,
             model_name,
-            strict_mode_effective=_strict_token_counting_enabled_shared(default=False),
+            strict_mode_effective=strict_mode_effective,
             config_parser=config_parser,
             runtime_probe_exact=True,
             runtime_probe_timeout_seconds=2.0,
@@ -1182,7 +1193,7 @@ def _resolve_model_tokenizer_support(
             "source": None,
             "detokenize": False,
             "count_accuracy": "unavailable",
-            "strict_mode_effective": _strict_token_counting_enabled_shared(default=False),
+            "strict_mode_effective": strict_mode_effective,
         }
 
 

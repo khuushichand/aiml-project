@@ -1,15 +1,16 @@
-const extractText = (value: unknown): string => {
+const extractText = (value: unknown, depth: number = 0): string => {
+  if (depth > 8) return ""
   if (typeof value === "string") return value
   if (Array.isArray(value)) {
-    return value.map(extractText).filter(Boolean).join("")
+    return value.map((v) => extractText(v, depth + 1)).filter(Boolean).join("")
   }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>
-    const text = extractText(record.text)
+    const text = extractText(record.text, depth + 1)
     if (text) return text
-    const content = extractText(record.content)
+    const content = extractText(record.content, depth + 1)
     if (content) return content
-    const parts = extractText(record.parts)
+    const parts = extractText(record.parts, depth + 1)
     if (parts) return parts
   }
   return ""

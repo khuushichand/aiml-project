@@ -146,8 +146,8 @@ vi.mock("@/components/Common/Playground/Message", () => ({
   )
 }))
 
-const getCardElements = (modelKey: "model-a" | "model-b") => {
-  const identity = screen.getByTestId(
+const getCardElements = async (modelKey: "model-a" | "model-b") => {
+  const identity = await screen.findByTestId(
     `compare-model-identity-cluster-1-${modelKey}`
   )
   const card = identity.closest('[role="article"]') as HTMLElement | null
@@ -169,7 +169,7 @@ describe("PlaygroundChat per-model mini composer routing", () => {
 
     render(<PlaygroundChat />)
 
-    const { input, send } = getCardElements("model-a")
+    const { input, send } = await getCardElements("model-a")
 
     await user.type(input, "follow-up for model a")
     await user.click(send)
@@ -188,8 +188,8 @@ describe("PlaygroundChat per-model mini composer routing", () => {
 
     render(<PlaygroundChat />)
 
-    const modelA = getCardElements("model-a")
-    const modelB = getCardElements("model-b")
+    const modelA = await getCardElements("model-a")
+    const modelB = await getCardElements("model-b")
 
     await user.type(modelA.input, "alpha")
     await user.type(modelB.input, "beta")

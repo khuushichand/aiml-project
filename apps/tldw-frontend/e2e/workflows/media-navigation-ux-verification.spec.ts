@@ -118,16 +118,20 @@ const waitForSignificantScroll = async (
   threshold = 80,
   timeoutMs = 5000
 ): Promise<number> => {
-  const startedAt = Date.now()
   let maxDelta = 0
 
-  while (Date.now() - startedAt < timeoutMs) {
-    await page.waitForTimeout(160)
-    const current = await getScrollSnapshot(page)
-    const delta = computeScrollDelta(before, current)
-    if (delta > maxDelta) maxDelta = delta
-    if (maxDelta >= threshold) return maxDelta
-  }
+  await expect
+    .poll(
+      async () => {
+        const current = await getScrollSnapshot(page)
+        const delta = computeScrollDelta(before, current)
+        if (delta > maxDelta) maxDelta = delta
+        return maxDelta
+      },
+      { timeout: timeoutMs }
+    )
+    .toBeGreaterThanOrEqual(threshold)
+    .catch(() => {})
 
   return maxDelta
 }
@@ -206,11 +210,10 @@ const findVisibleSearchButton = async (page: Page): Promise<Locator | null> => {
   return null
 }
 
-const tryFindMatchingMediaRow = async (
+const findMatchingMediaRowIndex = async (
   page: Page,
-  needles: string[],
-  attempts = 8
-): Promise<Locator | null> => {
+  needles: string[]
+): Promise<number> => {
   const normalizedNeedles = needles
     .map((needle) => normalizeWhitespace(needle).toLowerCase())
     .filter((needle) => needle.length > 0)
@@ -218,21 +221,18 @@ const tryFindMatchingMediaRow = async (
   const templatedRows = page.locator("[aria-label^='Select {{type}}: {{title}}']")
   const fallbackRows = page.locator("div[role='button'][aria-selected]")
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const rows = (await templatedRows.count()) > 0 ? templatedRows : fallbackRows
-    const rowCount = await rows.count()
-    for (let idx = 0; idx < Math.min(rowCount, 80); idx += 1) {
-      const row = rows.nth(idx)
-      const text = normalizeWhitespace((await row.textContent()) || "")
-      const normalizedText = text.toLowerCase()
-      if (normalizedNeedles.some((needle) => normalizedText.includes(needle))) {
-        return row
-      }
+  const rows = (await templatedRows.count()) > 0 ? templatedRows : fallbackRows
+  const rowCount = await rows.count()
+  for (let idx = 0; idx < Math.min(rowCount, 80); idx += 1) {
+    const row = rows.nth(idx)
+    const text = normalizeWhitespace((await row.textContent()) || "")
+    const normalizedText = text.toLowerCase()
+    if (normalizedNeedles.some((needle) => normalizedText.includes(needle))) {
+      return idx
     }
-    await page.waitForTimeout(450)
   }
 
-  return null
+  return -1
 }
 
 const selectMediaResult = async (
@@ -256,16 +256,30 @@ const selectMediaResult = async (
   let matchingRow: Locator | null = null
   for (const query of queryVariants) {
     await searchInput.fill("")
-    await page.waitForTimeout(180)
     await searchInput.fill(query)
     if (searchButton) {
       await searchButton.click({ force: true }).catch(() => {})
     }
     await searchInput.press("Enter").catch(() => {})
-    await page.waitForTimeout(250)
+    const templatedRows = page.locator("[aria-label^='Select {{type}}: {{title}}']")
+    const fallbackRows = page.locator("div[role='button'][aria-selected]")
+    let matchingIndex = -1
+    await expect
+      .poll(
+        async () => {
+          matchingIndex = await findMatchingMediaRowIndex(page, rowNeedles)
+          return matchingIndex
+        },
+        { timeout: 4_000 }
+      )
+      .toBeGreaterThanOrEqual(0)
+      .catch(() => {})
 
-    matchingRow = await tryFindMatchingMediaRow(page, rowNeedles)
-    if (matchingRow) break
+    if (matchingIndex >= 0) {
+      const rows = (await templatedRows.count()) > 0 ? templatedRows : fallbackRows
+      matchingRow = rows.nth(matchingIndex)
+      break
+    }
   }
 
   if (!matchingRow) {

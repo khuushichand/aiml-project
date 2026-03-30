@@ -110,4 +110,16 @@ describe("WorkflowEditor responsive layout", () => {
       })
     ).toBeInTheDocument()
   })
+
+  it("renders the selected non-default sidebar panel through its lazy boundary", async () => {
+    useWorkflowEditorStore.setState({
+      sidebarPanel: "config"
+    })
+
+    render(<WorkflowEditor />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Open workflow panels" }))
+    expect(await screen.findByTestId("panel-config")).toBeInTheDocument()
+    expect(screen.queryByTestId("panel-execution")).not.toBeInTheDocument()
+  })
 })

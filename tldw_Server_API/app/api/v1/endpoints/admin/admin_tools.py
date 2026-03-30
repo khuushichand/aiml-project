@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
@@ -227,3 +228,81 @@ async def delete_tool_catalog_entry(
             exc,
         )
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry") from exc
+
+
+class ModuleToolUsage(BaseModel):
+    calls: int = 0
+    avg_latency_ms: float = 0
+
+
+class MCPToolUsageResponse(BaseModel):
+    period_seconds: int
+    modules: dict[str, ModuleToolUsage] = Field(default_factory=dict)
+    tools: dict[str, ModuleToolUsage] = Field(default_factory=dict)
+
+
+@router.get("/mcp/tool-usage", response_model=MCPToolUsageResponse)
+async def get_mcp_tool_usage(
+    period_seconds: int = Query(3600, ge=60, le=86400),
+) -> MCPToolUsageResponse:
+    """Aggregate MCP tool invocation counts per module from internal metrics."""
+    try:
+        from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import (
+            get_metrics_collector,
+        )
+
+        collector = get_metrics_collector()
+        raw = collector.get_internal_metrics(period_seconds=period_seconds)
+
+        module_usage: dict[str, ModuleToolUsage] = {}
+        tool_usage: dict[str, ModuleToolUsage] = {}
+        module_latency_totals: dict[str, float] = {}
+        tool_latency_totals: dict[str, float] = {}
+
+        def _accumulate(
+            target: dict[str, ModuleToolUsage],
+            latency_totals: dict[str, float],
+            key: str,
+            *,
+            count: int,
+            avg_seconds: float,
+        ) -> None:
+            bucket = target.setdefault(key, ModuleToolUsage())
+            bucket.calls += count
+            if count > 0:
+                latency_totals[key] = latency_totals.get(key, 0.0) + (avg_seconds * 1000 * count)
+
+        for key, data in raw.items():
+            if not key.startswith("module_") or "_tools_call" not in key:
+                continue
+            groups = data.get("labels", [])
+            for group in groups:
+                labels = dict(group.get("labels", []))
+                module = labels.get("module", "unknown")
+                tool = labels.get("tool") or labels.get("tool_name")
+                count = group.get("count", 0)
+                avg = group.get("avg", 0)
+                if not isinstance(module, str) or not module:
+                    module = "unknown"
+                _accumulate(module_usage, module_latency_totals, module, count=count, avg_seconds=avg)
+                if isinstance(tool, str) and tool:
+                    tool_key = f"{module}.{tool}"
+                    _accumulate(tool_usage, tool_latency_totals, tool_key, count=count, avg_seconds=avg)
+
+        for name, total_latency_ms in module_latency_totals.items():
+            calls = module_usage[name].calls
+            if calls > 0:
+                module_usage[name].avg_latency_ms = round(total_latency_ms / calls, 1)
+        for name, total_latency_ms in tool_latency_totals.items():
+            calls = tool_usage[name].calls
+            if calls > 0:
+                tool_usage[name].avg_latency_ms = round(total_latency_ms / calls, 1)
+
+        return MCPToolUsageResponse(
+            period_seconds=period_seconds,
+            modules=module_usage,
+            tools=tool_usage,
+        )
+    except ImportError as exc:
+        logger.warning("MCP metrics module unavailable: {}", exc)
+        return MCPToolUsageResponse(period_seconds=period_seconds, modules={}, tools={})

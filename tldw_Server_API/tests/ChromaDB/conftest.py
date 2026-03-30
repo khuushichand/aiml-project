@@ -36,7 +36,7 @@ except KeyError:
     sys.modules['tldw_Server_API.app.core.Embeddings.Embeddings_Create'] = _mod
 
 # Import the MediaDatabase class for proper database creation
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 # Import the modules we're testing
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager

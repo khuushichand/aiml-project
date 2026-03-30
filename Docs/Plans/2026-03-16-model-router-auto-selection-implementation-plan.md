@@ -268,11 +268,10 @@ git commit -m "feat: add llm-backed model routing service"
 ### Task 5: Add Router Accounting And Telemetry
 
 **Files:**
-- Create: `tldw_Server_API/app/core/LLM_Calls/routing/telemetry.py`
+- Create: `tldw_Server_API/app/core/LLM_Calls/routing/accounting.py`
 - Modify: `tldw_Server_API/app/api/v1/endpoints/chat.py`
-- Modify: `tldw_Server_API/app/core/Usage/usage_tracker.py`
 - Test: `tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py`
-- Test: `tldw_Server_API/tests/Chat/unit/test_model_router_usage_logging.py`
+- Test: `tldw_Server_API/tests/Chat/unit/test_model_router_accounting.py`
 
 **Step 1: Write the failing tests**
 
@@ -290,7 +289,7 @@ def test_chat_endpoint_includes_no_routing_debug_without_opt_in():
 
 **Step 2: Run tests to verify they fail**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Chat/unit/test_model_router_usage_logging.py tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Chat/unit/test_model_router_accounting.py tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py -v`
 Expected: FAIL because router usage logging and endpoint routing are not wired.
 
 **Step 3: Write the minimal implementation**
@@ -306,13 +305,13 @@ Re-use the existing `llm_usage_log` path instead of creating a new telemetry sto
 
 **Step 4: Run tests to verify they pass**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Chat/unit/test_model_router_usage_logging.py tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Chat/unit/test_model_router_accounting.py tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/LLM_Calls/routing/telemetry.py tldw_Server_API/app/api/v1/endpoints/chat.py tldw_Server_API/app/core/Usage/usage_tracker.py tldw_Server_API/tests/Chat/unit/test_model_router_usage_logging.py tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py
+git add tldw_Server_API/app/core/LLM_Calls/routing/accounting.py tldw_Server_API/app/api/v1/endpoints/chat.py tldw_Server_API/tests/Chat/unit/test_model_router_accounting.py tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py
 git commit -m "feat: log model router usage separately"
 ```
 
@@ -375,10 +374,9 @@ git commit -m "feat: route auto model selections in chat completions"
 - Modify: `apps/packages/ui/src/utils/resolve-api-provider.ts`
 - Modify: `apps/packages/ui/src/services/tldw/TldwChat.ts`
 - Modify: `apps/packages/ui/src/models/ChatTldw.ts`
-- Modify: `apps/packages/ui/src/hooks/useMessage.tsx`
 - Test: `apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts`
 - Test: `apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts`
-- Test: `apps/packages/ui/src/hooks/__tests__/useMessage.auto-routing.test.tsx`
+- Test: `apps/packages/ui/src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx`
 
 **Step 1: Write the failing tests**
 
@@ -396,14 +394,14 @@ it("does not force a concrete provider inference for auto selections", async () 
 ```
 
 ```ts
-it("submits auto through the shared message hook without inline validation failure", async () => {
-  // render/use hook, set selectedModel=auto, submit, expect no "no model" error
+it("keeps selectedModel synced without clearing auto selections", async () => {
+  // render/use hook, set selectedModel=auto, and verify sync logic preserves it
 })
 ```
 
 **Step 2: Run tests to verify they fail**
 
-Run: `bunx vitest run apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts apps/packages/ui/src/hooks/__tests__/useMessage.auto-routing.test.tsx`
+Run: `bunx vitest run apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts apps/packages/ui/src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx`
 Expected: FAIL because `auto` is currently treated like a non-catalog model or missing selection.
 
 **Step 3: Write the minimal implementation**
@@ -419,13 +417,13 @@ Keep concrete model behavior unchanged.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `bunx vitest run apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts apps/packages/ui/src/hooks/__tests__/useMessage.auto-routing.test.tsx`
+Run: `bunx vitest run apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts apps/packages/ui/src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add apps/packages/ui/src/components/Option/Models/index.tsx apps/packages/ui/src/utils/chat-model-availability.ts apps/packages/ui/src/utils/resolve-api-provider.ts apps/packages/ui/src/services/tldw/TldwChat.ts apps/packages/ui/src/models/ChatTldw.ts apps/packages/ui/src/hooks/useMessage.tsx apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts apps/packages/ui/src/hooks/__tests__/useMessage.auto-routing.test.tsx
+git add apps/packages/ui/src/components/Option/Models/index.tsx apps/packages/ui/src/utils/chat-model-availability.ts apps/packages/ui/src/utils/resolve-api-provider.ts apps/packages/ui/src/services/tldw/TldwChat.ts apps/packages/ui/src/models/ChatTldw.ts apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts apps/packages/ui/src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx
 git commit -m "feat: support auto model sentinel in shared ui"
 ```
 
@@ -433,10 +431,11 @@ git commit -m "feat: support auto model sentinel in shared ui"
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py`
+- Modify: `tldw_Server_API/app/api/v1/schemas/chat_session_schemas.py`
 - Modify: `apps/packages/ui/src/components/Option/WritingPlayground/index.tsx`
-- Modify: `apps/packages/ui/src/services/tldw/TldwApiClient.ts`
-- Test: `tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_chat_auto_routing.py`
-- Test: `tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_stream_and_persist.py`
+- Modify: `apps/packages/ui/src/utils/resolve-api-provider.ts`
+- Test: `tldw_Server_API/tests/Character_Chat_NEW/unit/test_chat_completion_precheck.py`
+- Test: `tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_auto_routing.py`
 - Test: `apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx`
 
 **Step 1: Write the failing tests**
@@ -448,7 +447,7 @@ def test_character_chat_routes_auto_before_shared_resolution():
 ```
 
 ```ts
-it("writing playground keeps auto selection and submits routing overrides", async () => {
+it("writing playground keeps auto selection and submits model='auto'", async () => {
   render(<WritingPlayground />)
   // select auto, trigger generation, assert request body includes model=auto
 })
@@ -456,7 +455,7 @@ it("writing playground keeps auto selection and submits routing overrides", asyn
 
 **Step 2: Run tests to verify they fail**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_chat_auto_routing.py tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_stream_and_persist.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Character_Chat_NEW/unit/test_chat_completion_precheck.py tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_auto_routing.py -v`
 Expected: FAIL because character chat has no auto-routing interception.
 
 Run: `bunx vitest run apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx`
@@ -467,14 +466,16 @@ Expected: FAIL because writing playground does not preserve `auto` end-to-end.
 Add:
 
 - early `auto` routing interception in `character_chat_sessions.py`
+- `routing` override support in `CharacterChatCompletionV2Request`
 - canonical routing pass-through for character chat execution
-- writing playground request-builder support for `model="auto"` and nested `routing`
+- writing playground generation support for `model="auto"`
+- writing playground token-inspection guard so tokenizer-dependent tools still require a concrete model
 
 Do not implement RAG/media integration in this task.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_chat_auto_routing.py tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_stream_and_persist.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Character_Chat_NEW/unit/test_chat_completion_precheck.py tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_auto_routing.py -v`
 Expected: PASS
 
 Run: `bunx vitest run apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx`
@@ -483,8 +484,8 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py apps/packages/ui/src/components/Option/WritingPlayground/index.tsx apps/packages/ui/src/services/tldw/TldwApiClient.ts tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_chat_auto_routing.py tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_stream_and_persist.py apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx
-git commit -m "feat: extend auto model routing to character and writing flows"
+git add tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py tldw_Server_API/app/api/v1/schemas/chat_session_schemas.py tldw_Server_API/tests/Character_Chat_NEW/unit/test_chat_completion_precheck.py tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_auto_routing.py apps/packages/ui/src/components/Option/WritingPlayground/index.tsx apps/packages/ui/src/utils/resolve-api-provider.ts apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx
+git commit -m "feat: route auto model selections in character chat and writing"
 ```
 
 ### Task 9: Verification, Security Check, And Final Docs Pass
@@ -505,9 +506,11 @@ source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/Chat/unit/test_model_router_sticky.py \
   tldw_Server_API/tests/Chat/unit/test_model_router_llm_strategy.py \
   tldw_Server_API/tests/Chat/unit/test_model_router_service.py \
-  tldw_Server_API/tests/Chat/unit/test_model_router_usage_logging.py \
+  tldw_Server_API/tests/Chat/unit/test_model_router_accounting.py \
   tldw_Server_API/tests/Chat/integration/test_chat_endpoint_auto_routing.py \
-  tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_chat_auto_routing.py -v
+  tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_auto_routing.py \
+  tldw_Server_API/tests/Character_Chat_NEW/unit/test_chat_completion_precheck.py \
+  tldw_Server_API/tests/AuthNZ_Unit/test_llm_provider_overrides.py -v
 ```
 
 Expected: PASS
@@ -521,7 +524,7 @@ bunx vitest run \
   apps/packages/ui/src/services/__tests__/tldw-api-client.chat-mutations.test.ts \
   apps/packages/ui/src/utils/__tests__/chat-model-availability.test.ts \
   apps/packages/ui/src/utils/__tests__/resolve-api-provider.test.ts \
-  apps/packages/ui/src/hooks/__tests__/useMessage.auto-routing.test.tsx \
+  apps/packages/ui/src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx \
   apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx
 ```
 
@@ -537,11 +540,10 @@ source .venv/bin/activate && python -m bandit -r \
   tldw_Server_API/app/api/v1/endpoints/chat.py \
   tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py \
   tldw_Server_API/app/core/Chat/chat_service.py \
-  tldw_Server_API/app/core/Usage/usage_tracker.py \
   -f json -o /tmp/bandit_model_router_auto.json
 ```
 
-Expected: no new findings in changed code
+Expected: no new findings in changed code; existing low-severity findings may remain in unchanged sections of `character_chat_sessions.py`
 
 **Step 4: Update docs if verification exposed drift**
 

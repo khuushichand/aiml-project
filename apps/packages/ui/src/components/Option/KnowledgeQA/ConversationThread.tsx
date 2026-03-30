@@ -31,6 +31,12 @@ type ThreadOption = {
   label: string
 }
 
+function truncatePreview(value: string, maxLength = 220): string {
+  const normalized = value.trim()
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, maxLength).trimEnd()}...`
+}
+
 function extractInlineCitationIndices(content: string | null | undefined): number[] {
   if (typeof content !== "string" || content.length === 0) return []
   const matches = content.match(/\[(\d+)\]/g) || []
@@ -177,7 +183,8 @@ export function ConversationThread({ className }: ConversationThreadProps) {
   const [rightThreadId, setRightThreadId] = useState<string | null>(null)
   const [leftTurnId, setLeftTurnId] = useState<string | null>(null)
   const [rightTurnId, setRightTurnId] = useState<string | null>(null)
-  const [loadingThreadId, setLoadingThreadId] = useState<string | null>(null)
+  const [loadingThreadIds, setLoadingThreadIds] = useState<string[]>([])
+  const [failedThreadIds, setFailedThreadIds] = useState<string[]>([])
   const [branchingTurnId, setBranchingTurnId] = useState<string | null>(null)
   const [loadedTurnsByThread, setLoadedTurnsByThread] = useState<
     Record<string, ConversationTurn[]>
@@ -265,7 +272,14 @@ export function ConversationThread({ className }: ConversationThreadProps) {
       if (currentThreadId && threadId === currentThreadId) return
       if (loadedTurnsByThread[threadId]) return
 
-      setLoadingThreadId(threadId)
+      setLoadingThreadIds((previous) =>
+        previous.includes(threadId) ? previous : [...previous, threadId]
+      )
+      setFailedThreadIds((previous) =>
+        previous.includes(threadId)
+          ? previous.filter((candidate) => candidate !== threadId)
+          : previous
+      )
       try {
         const response = await tldwClient.fetchWithAuth(
           `/api/v1/chat/conversations/${threadId}/messages-with-context?include_rag_context=true`
@@ -280,14 +294,18 @@ export function ConversationThread({ className }: ConversationThreadProps) {
           ...previous,
           [threadId]: turns,
         }))
+        setFailedThreadIds((previous) =>
+          previous.filter((candidate) => candidate !== threadId)
+        )
       } catch (error) {
         console.error("Failed to load comparison thread:", error)
-        setLoadedTurnsByThread((previous) => ({
-          ...previous,
-          [threadId]: [],
-        }))
+        setFailedThreadIds((previous) =>
+          previous.includes(threadId) ? previous : [...previous, threadId]
+        )
       } finally {
-        setLoadingThreadId((previous) => (previous === threadId ? null : previous))
+        setLoadingThreadIds((previous) =>
+          previous.filter((candidate) => candidate !== threadId)
+        )
       }
     },
     [currentThreadId, loadedTurnsByThread]
@@ -388,6 +406,12 @@ export function ConversationThread({ className }: ConversationThreadProps) {
         })
       : null
   const comparisonReady = comparisonDraft ? isComparisonReady(comparisonDraft) : false
+  const isSelectedComparisonThreadLoading =
+    (leftThreadId ? loadingThreadIds.includes(leftThreadId) : false) ||
+    (rightThreadId ? loadingThreadIds.includes(rightThreadId) : false)
+  const hasSelectedComparisonThreadFailure =
+    (leftThreadId ? failedThreadIds.includes(leftThreadId) : false) ||
+    (rightThreadId ? failedThreadIds.includes(rightThreadId) : false)
 
   const handleReuseQuestion = (question: string) => {
     setQuery(question)
@@ -400,6 +424,9 @@ export function ConversationThread({ className }: ConversationThreadProps) {
 
   const handleStartBranch = useCallback(
     async (messageId: string) => {
+      if (branchingTurnId !== null) {
+        return
+      }
       setBranchingTurnId(messageId)
       try {
         await branchFromTurn(messageId)
@@ -407,7 +434,7 @@ export function ConversationThread({ className }: ConversationThreadProps) {
         setBranchingTurnId(null)
       }
     },
-    [branchFromTurn]
+    [branchFromTurn, branchingTurnId]
   )
 
   const handleCompareWithPrevious = useCallback(() => {
@@ -423,10 +450,27 @@ export function ConversationThread({ className }: ConversationThreadProps) {
     setIsComparisonOpen(true)
   }, [currentThreadId, historicalTurns, latestTurn])
 
+  const handleCompareTurnToCurrent = useCallback(
+    (turnId: string) => {
+      if (!currentThreadId) return
+      if (!latestTurn) return
+
+      setLeftThreadId(currentThreadId)
+      setRightThreadId(currentThreadId)
+      setLeftTurnId(turnId)
+      setRightTurnId(latestTurn.id)
+      setIsComparisonOpen(true)
+    },
+    [currentThreadId, latestTurn]
+  )
+
   const hasComparisonWorkspace = threadOptions.length > 0
   const canCompareWithPrevious =
     Boolean(currentThreadId) && Boolean(latestTurn) && historicalTurns.length > 0
-  if (!hasComparisonWorkspace && historicalTurns.length === 0) {
+  const hasAdvancedComparisonWorkspace =
+    hasComparisonWorkspace && (threadOptions.length > 1 || historicalTurns.length > 1)
+  const showComparisonWorkspace = hasAdvancedComparisonWorkspace || isComparisonOpen
+  if (historicalTurns.length === 0) {
     return null
   }
 
@@ -462,6 +506,13 @@ export function ConversationThread({ className }: ConversationThreadProps) {
               </div>
 
               <p className="mt-2 text-sm font-medium">{turn.question}</p>
+              {turn.answer ? (
+                <p className="mt-2 text-sm whitespace-pre-wrap leading-relaxed text-text-muted">
+                  {truncatePreview(turn.answer, 220)}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm text-text-muted">No answer recorded.</p>
+              )}
 
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
@@ -475,52 +526,63 @@ export function ConversationThread({ className }: ConversationThreadProps) {
                   <button
                     type="button"
                     onClick={() => void handleStartBranch(turn.id)}
-                    disabled={branchingTurnId === turn.id}
+                    disabled={branchingTurnId !== null}
                     className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <GitBranch className="w-3 h-3" />
-                    {branchingTurnId === turn.id ? "Creating branch..." : "Start Branch"}
+                    {branchingTurnId === turn.id ? "Creating branch..." : "Ask a different follow-up"}
+                  </button>
+                ) : null}
+                {canCompareWithPrevious && turnIndex === historicalTurns.length - 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => handleCompareTurnToCurrent(turn.id)}
+                    className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                  >
+                    Compare to current answer
                   </button>
                 ) : null}
               </div>
 
-              <details className="mt-2 group">
-                <summary className="cursor-pointer text-xs text-primary hover:text-primaryStrong transition-colors">
-                  {turn.answer ? "Show answer" : "No answer recorded"}
-                </summary>
-                {turn.answer ? (
+              {turn.answer && turn.answer.length > 220 ? (
+                <details className="mt-2 group">
+                  <summary className="cursor-pointer text-xs text-primary hover:text-primaryStrong transition-colors">
+                    Show full answer
+                  </summary>
                   <p className="mt-2 text-sm whitespace-pre-wrap leading-relaxed">
                     {turn.answer}
                   </p>
-                ) : null}
-              </details>
+                </details>
+              ) : null}
             </article>
           ))}
         </div>
       ) : null}
 
-      {hasComparisonWorkspace && (
+      {showComparisonWorkspace && (
         <div className="border-t border-border px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">Comparison workspace</h3>
-            <div className="flex flex-wrap items-center gap-2">
-              {canCompareWithPrevious ? (
+            <h3 className="text-sm font-semibold">Compare answers</h3>
+            {hasAdvancedComparisonWorkspace ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {canCompareWithPrevious ? (
+                  <button
+                    type="button"
+                    onClick={handleCompareWithPrevious}
+                    className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                  >
+                    Compare to current answer
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={handleCompareWithPrevious}
-                  className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                  onClick={() => setIsComparisonOpen((previous) => !previous)}
+                  className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
                 >
-                  Compare with previous
+                  {isComparisonOpen ? "Hide comparison" : "Compare turns"}
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => setIsComparisonOpen((previous) => !previous)}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
-              >
-                {isComparisonOpen ? "Hide comparison" : "Compare turns"}
-              </button>
-            </div>
+              </div>
+            ) : null}
           </div>
 
           {isComparisonOpen && (
@@ -605,9 +667,13 @@ export function ConversationThread({ className }: ConversationThreadProps) {
                 </div>
               </div>
 
-              {loadingThreadId &&
-              (loadingThreadId === leftThreadId || loadingThreadId === rightThreadId) ? (
+              {isSelectedComparisonThreadLoading ? (
                 <p className="text-xs text-text-muted">Loading comparison thread...</p>
+              ) : null}
+              {!isSelectedComparisonThreadLoading && hasSelectedComparisonThreadFailure ? (
+                <p className="text-xs text-warning">
+                  Unable to load one of the selected comparison threads. Choose it again to retry.
+                </p>
               ) : null}
 
               {comparisonReady ? (

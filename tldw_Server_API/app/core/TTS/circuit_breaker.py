@@ -172,63 +172,84 @@ class CircuitBreaker:
 
     # -- call ---------------------------------------------------------------
 
+    def _build_open_error(self) -> TTSCircuitOpenError:
+        backoff_delay = self._stats.get_backoff_delay(
+            self.backoff_base_delay,
+            self.backoff_max_delay,
+        )
+        return TTSCircuitOpenError(
+            f"Circuit breaker for {self.provider_name} is open. "
+            f"Failed {self._stats.consecutive_failures} times. "
+            f"Retry after {backoff_delay:.1f}s.",
+            provider=self.provider_name,
+            details={
+                "consecutive_failures": self._stats.consecutive_failures,
+                "backoff_delay": backoff_delay,
+                "failure_rate": self._stats.failure_rate,
+                "error_categories": self._error_categories.copy(),
+            },
+        )
+
+    async def _record_tts_success(self) -> None:
+        async with self._lock:
+            self._stats.record_success()
+            current_change = self._cb.last_state_change_time
+            if (
+                self._cb.state == _UnifiedState.CLOSED
+                and current_change != self._last_seen_state_change
+            ):
+                self._last_seen_state_change = current_change
+                self._state_changed_at = time.time()
+                logger.info(
+                    f"Circuit breaker for {self.provider_name} closed after "
+                    f"{self._stats.consecutive_successes} successful calls"
+                )
+
+    async def _record_tts_failure(self, error: Exception) -> None:
+        async with self._lock:
+            self._stats.record_failure()
+            error_category = categorize_error(error)
+            self._error_categories[error_category] = (
+                self._error_categories.get(error_category, 0) + 1
+            )
+            current_change = self._cb.last_state_change_time
+            if (
+                self._cb.state == _UnifiedState.OPEN
+                and current_change != self._last_seen_state_change
+            ):
+                self._last_seen_state_change = current_change
+                self._state_changed_at = time.time()
+                logger.warning(
+                    f"Circuit breaker for {self.provider_name} opened after "
+                    f"{self._stats.consecutive_failures} failures. "
+                    f"Error categories: {self._error_categories}"
+                )
+
+    async def guard(self) -> None:
+        if self._cb.can_attempt():
+            return
+        raise self._build_open_error()
+
+    async def record_manual_success(self) -> None:
+        self._cb.record_success()
+        await self._record_tts_success()
+
+    async def record_manual_failure(self, error: Exception) -> None:
+        self._cb.record_failure(error)
+        await self._record_tts_failure(error)
+
     async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreakerOpenError as _CBOpen,
         )
         try:
             result = await self._cb.call_async(func, *args, **kwargs)
-            # Record TTS-specific stats (unified breaker already recorded success)
-            async with self._lock:
-                self._stats.record_success()
-                current_change = self._cb.last_state_change_time
-                if (
-                    self._cb.state == _UnifiedState.CLOSED
-                    and current_change != self._last_seen_state_change
-                ):
-                    self._last_seen_state_change = current_change
-                    self._state_changed_at = time.time()
-                    logger.info(
-                        f"Circuit breaker for {self.provider_name} closed after "
-                        f"{self._stats.consecutive_successes} successful calls"
-                    )
+            await self._record_tts_success()
             return result
         except _CBOpen as exc:
-            backoff_delay = self._stats.get_backoff_delay(
-                self.backoff_base_delay, self.backoff_max_delay,
-            )
-            raise TTSCircuitOpenError(
-                f"Circuit breaker for {self.provider_name} is open. "
-                f"Failed {self._stats.consecutive_failures} times. "
-                f"Retry after {backoff_delay:.1f}s.",
-                provider=self.provider_name,
-                details={
-                    "consecutive_failures": self._stats.consecutive_failures,
-                    "backoff_delay": backoff_delay,
-                    "failure_rate": self._stats.failure_rate,
-                    "error_categories": self._error_categories.copy(),
-                },
-            ) from exc
+            raise self._build_open_error() from exc
         except Exception as e:
-            # Record TTS-specific stats (unified breaker already recorded failure)
-            async with self._lock:
-                self._stats.record_failure()
-                error_category = categorize_error(e)
-                self._error_categories[error_category] = (
-                    self._error_categories.get(error_category, 0) + 1
-                )
-                current_change = self._cb.last_state_change_time
-                if (
-                    self._cb.state == _UnifiedState.OPEN
-                    and current_change != self._last_seen_state_change
-                ):
-                    self._last_seen_state_change = current_change
-                    self._state_changed_at = time.time()
-                    logger.warning(
-                        f"Circuit breaker for {self.provider_name} opened after "
-                        f"{self._stats.consecutive_failures} failures. "
-                        f"Error categories: {self._error_categories}"
-                    )
+            await self._record_tts_failure(e)
             raise
 
     # -- status / reset -----------------------------------------------------

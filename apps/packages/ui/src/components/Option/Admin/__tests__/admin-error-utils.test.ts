@@ -15,6 +15,12 @@ describe("admin error utilities", () => {
     expect(deriveAdminGuardFromError(new Error("Request failed: 404"))).toBe(
       "notFound"
     )
+    expect(
+      deriveAdminGuardFromError({
+        status: 404,
+        message: "Not Found (GET /api/v1/admin/billing/overview)"
+      })
+    ).toBe("notFound")
     expect(deriveAdminGuardFromError(new Error("network down"))).toBe(null)
   })
 
@@ -38,4 +44,3 @@ describe("admin error utilities", () => {
     )
   })
 })
-

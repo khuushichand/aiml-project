@@ -12,6 +12,18 @@ type DashboardHeaderProps = {
   uptimeWindowDays?: number;
   loading: boolean;
   onRefresh: () => Promise<void> | void;
+  autoRefreshEnabled?: boolean;
+  onToggleAutoRefresh?: () => void;
+  lastRefreshedAt?: Date | null;
+};
+
+const formatRelativeTime = (date: Date): string => {
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
 };
 
 const formatUptimeValue = (value: number | null) => {
@@ -43,6 +55,9 @@ export const DashboardHeader = ({
   uptimeWindowDays = 30,
   loading,
   onRefresh,
+  autoRefreshEnabled,
+  onToggleAutoRefresh,
+  lastRefreshedAt,
 }: DashboardHeaderProps) => (
   <div className="mb-8 flex items-center justify-between">
     <div>
@@ -76,6 +91,21 @@ export const DashboardHeader = ({
         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         Refresh
       </Button>
+      {onToggleAutoRefresh && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {lastRefreshedAt && (
+            <span>Updated {formatRelativeTime(lastRefreshedAt)}</span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleAutoRefresh}
+            className="text-xs h-7 px-2"
+          >
+            Auto: {autoRefreshEnabled ? 'ON' : 'OFF'}
+          </Button>
+        </div>
+      )}
     </div>
   </div>
 );

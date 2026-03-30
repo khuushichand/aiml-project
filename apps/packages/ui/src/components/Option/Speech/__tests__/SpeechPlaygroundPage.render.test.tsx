@@ -8,6 +8,22 @@ type QueryOptions = {
   queryKey?: readonly unknown[]
 }
 
+const updateStoredValue = (
+  storageValues: Map<string, unknown>,
+  key: string,
+  defaultValue: unknown,
+  nextValue: unknown
+) => {
+  const currentValue = storageValues.has(key)
+    ? storageValues.get(key)
+    : defaultValue
+  const resolvedValue =
+    typeof nextValue === "function"
+      ? (nextValue as (current: unknown) => unknown)(currentValue)
+      : nextValue
+  storageValues.set(key, resolvedValue)
+}
+
 const { invalidateQueriesMock, transcribeAudioMock, getTranscriptionModelsMock } =
   vi.hoisted(() => ({
     invalidateQueriesMock: vi.fn(),
@@ -17,23 +33,11 @@ const { invalidateQueriesMock, transcribeAudioMock, getTranscriptionModelsMock }
     })),
   }))
 
-const { speechModeState, setSpeechModeMock, speechHistoryState, setSpeechHistoryMock } = vi.hoisted(() => ({
-  speechModeState: {
-    value: "roundtrip" as "roundtrip" | "speak" | "listen",
-  },
+const { storageValues, setSpeechModeMock, setSpeechHistoryMock } = vi.hoisted(() => ({
+  storageValues: new Map<string, unknown>(),
   setSpeechModeMock: vi.fn(),
-  speechHistoryState: {
-    value: [] as Array<{
-      id: string
-      type: "stt" | "tts"
-      createdAt: string
-      text: string
-      favorite?: boolean
-    }>,
-  },
   setSpeechHistoryMock: vi.fn(),
 }))
-
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, fallback?: string) => fallback || _key,
@@ -43,12 +47,31 @@ vi.mock("react-i18next", () => ({
 vi.mock("@plasmohq/storage/hook", () => ({
   useStorage: (key: string, defaultValue: unknown) => {
     if (key === "speechPlaygroundMode") {
-      return [speechModeState.value ?? defaultValue, setSpeechModeMock, { isLoading: false }] as const
+      return [
+        storageValues.has(key) ? storageValues.get(key) : defaultValue,
+        (nextValue: unknown) => {
+          setSpeechModeMock(nextValue)
+          updateStoredValue(storageValues, key, defaultValue, nextValue)
+        },
+        { isLoading: false }
+      ] as const
     }
     if (key === "speechPlaygroundHistory") {
-      return [speechHistoryState.value ?? defaultValue, setSpeechHistoryMock, { isLoading: false }] as const
+      return [
+        storageValues.has(key) ? storageValues.get(key) : defaultValue,
+        (nextValue: unknown) => {
+          setSpeechHistoryMock(nextValue)
+          updateStoredValue(storageValues, key, defaultValue, nextValue)
+        },
+        { isLoading: false }
+      ] as const
     }
-    return [defaultValue, vi.fn(), { isLoading: false }] as const
+    return [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      (nextValue: unknown) =>
+        updateStoredValue(storageValues, key, defaultValue, nextValue),
+      { isLoading: false }
+    ] as const
   },
 }))
 
@@ -60,7 +83,7 @@ vi.mock("@tanstack/react-query", () => ({
     if (options?.queryKey?.[0] === "fetchTTSSettings") {
       return {
         data: {
-          ttsProvider: "browser",
+          ttsProvider: "",
           ttsEnabled: true,
           tldwTtsSpeed: 1,
           tldwTtsStreaming: false,
@@ -99,7 +122,9 @@ vi.mock("@/components/Common/CharacterProgressBar", () => ({
 }))
 
 vi.mock("@/components/Option/Speech/TtsProviderStrip", () => ({
-  TtsProviderStrip: () => <div data-testid="tts-provider-strip" />,
+  TtsProviderStrip: (props: { provider: string }) => (
+    <div data-testid="tts-provider-strip" data-provider={props.provider} />
+  ),
 }))
 
 vi.mock("@/components/Option/Speech/TtsStickyActionBar", () => ({
@@ -216,9 +241,9 @@ vi.mock("@/services/tts-providers", () => ({
 }))
 
 vi.mock("@/services/tts", () => ({
-  getTTSProvider: vi.fn(async () => "browser"),
+  getTTSProvider: vi.fn(async () => "tldw"),
   getTTSSettings: vi.fn(async () => ({
-    ttsProvider: "browser",
+    ttsProvider: "",
     ttsEnabled: true,
     responseSplitting: "punctuation",
     tldwTtsSpeed: 1,
@@ -230,6 +255,9 @@ vi.mock("@/services/tts", () => ({
   setTldwTTSResponseFormat: vi.fn(),
   setTldwTTSStreamingEnabled: vi.fn(),
   setResponseSplitting: vi.fn(),
+  DEFAULT_TTS_PROVIDER: "tldw",
+  DEFAULT_TLDW_TTS_MODEL: "KittenML/kitten-tts-nano-0.8",
+  DEFAULT_TLDW_TTS_VOICE: "Bella",
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -287,8 +315,9 @@ describe("SpeechPlaygroundPage", () => {
     invalidateQueriesMock.mockReset()
     transcribeAudioMock.mockReset()
     getTranscriptionModelsMock.mockClear()
-    speechModeState.value = "roundtrip"
-    speechHistoryState.value = []
+    storageValues.clear()
+    storageValues.set("speechPlaygroundMode", "roundtrip")
+    storageValues.set("speechPlaygroundHistory", [])
     setSpeechModeMock.mockReset()
     setSpeechHistoryMock.mockReset()
   })
@@ -299,8 +328,17 @@ describe("SpeechPlaygroundPage", () => {
     expect(screen.getByTestId("speech-page-shell")).toBeInTheDocument()
   })
 
+  it("passes the resolved provider to the tldw strip when the stored provider is empty", (): void => {
+    render(<SpeechPlaygroundPage />)
+
+    expect(screen.getByTestId("tts-provider-strip")).toHaveAttribute(
+      "data-provider",
+      "tldw"
+    )
+  })
+
   it("hides the mode switcher and STT region when locked to listen mode", (): void => {
-    speechModeState.value = "speak"
+    storageValues.set("speechPlaygroundMode", "speak")
 
     render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
 
@@ -323,7 +361,7 @@ describe("SpeechPlaygroundPage", () => {
   })
 
   it("does not overwrite stored mode when locked mode is provided", (): void => {
-    speechModeState.value = "speak"
+    storageValues.set("speechPlaygroundMode", "speak")
 
     render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
 
@@ -331,7 +369,7 @@ describe("SpeechPlaygroundPage", () => {
   })
 
   it("filters stored history down to TTS entries when locked to listen mode", (): void => {
-    speechHistoryState.value = [
+    storageValues.set("speechPlaygroundHistory", [
       {
         id: "stt-1",
         type: "stt",
@@ -344,7 +382,7 @@ describe("SpeechPlaygroundPage", () => {
         createdAt: "2026-03-11T00:01:00.000Z",
         text: "Synthesized narration",
       },
-    ]
+    ])
 
     render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
 
@@ -359,5 +397,13 @@ describe("SpeechPlaygroundPage", () => {
     expect(screen.getByText("Mode")).toBeInTheDocument()
     expect(screen.getByTestId("speech-history-type-filter")).toBeInTheDocument()
     expect(getTranscriptionModelsMock).toHaveBeenCalled()
+  })
+
+  it("shows the shared audio source picker in the speech playground", (): void => {
+    render(<SpeechPlaygroundPage />)
+
+    expect(
+      screen.getByLabelText("Speech playground input source")
+    ).toBeInTheDocument()
   })
 })

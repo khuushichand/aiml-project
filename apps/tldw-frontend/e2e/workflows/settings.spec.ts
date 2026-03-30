@@ -101,8 +101,7 @@ test.describe("Settings Workflow", () => {
       await settingsPage.gotoSection("tldw")
       await settingsPage.waitForReady()
 
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await expect(serverInput).toBeVisible()
+      await expect(settingsPage.serverUrlInput).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -115,8 +114,7 @@ test.describe("Settings Workflow", () => {
       await settingsPage.gotoSection("tldw")
       await settingsPage.waitForReady()
 
-      const apiKeyInput = authedPage.getByLabel(/api key/i)
-      await expect(apiKeyInput).toBeVisible()
+      await expect(settingsPage.apiKeyInput).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -130,11 +128,8 @@ test.describe("Settings Workflow", () => {
       await settingsPage.waitForReady()
 
       // Fill in server config
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await serverInput.fill(TEST_CONFIG.serverUrl)
-
-      const apiKeyInput = authedPage.getByLabel(/api key/i)
-      await apiKeyInput.fill(TEST_CONFIG.apiKey)
+      await settingsPage.serverUrlInput.fill(TEST_CONFIG.serverUrl)
+      await settingsPage.apiKeyInput.fill(TEST_CONFIG.apiKey)
 
       // Save
       await settingsPage.save()
@@ -158,11 +153,8 @@ test.describe("Settings Workflow", () => {
       await settingsPage.waitForReady()
 
       // Fill in valid config
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await serverInput.fill(TEST_CONFIG.serverUrl)
-
-      const apiKeyInput = authedPage.getByLabel(/api key/i)
-      await apiKeyInput.fill(TEST_CONFIG.apiKey)
+      await settingsPage.serverUrlInput.fill(TEST_CONFIG.serverUrl)
+      await settingsPage.apiKeyInput.fill(TEST_CONFIG.apiKey)
 
       // Test connection
       const _connected = await settingsPage.testConnection()
@@ -173,7 +165,7 @@ test.describe("Settings Workflow", () => {
   })
 
   test.describe("Settings Persistence", () => {
-    test("should persist settings after page refresh", async ({
+    test("should restore the authoritative web host after page refresh", async ({
       authedPage,
       diagnostics
     }) => {
@@ -183,8 +175,7 @@ test.describe("Settings Workflow", () => {
 
       // Set custom server URL
       const customUrl = "http://custom-server:9000"
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await serverInput.fill(customUrl)
+      await settingsPage.serverUrlInput.fill(customUrl)
 
       await settingsPage.save()
 
@@ -192,9 +183,11 @@ test.describe("Settings Workflow", () => {
       await authedPage.reload()
       await settingsPage.waitForReady()
 
-      // Verify settings persisted
+      // In web mode the bootstrap mirrors the authoritative frontend host back
+      // into stored config after refresh, even if the user typed a temporary
+      // custom URL into the settings form beforehand.
       const config = await settingsPage.getServerConfig()
-      expect(config.serverUrl).toContain("custom-server")
+      expect(config.serverUrl).toBe(TEST_CONFIG.serverUrl.replace(/\/$/, ""))
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -220,9 +213,10 @@ test.describe("Settings Workflow", () => {
       await settingsPage.gotoSection("tldw")
       await settingsPage.waitForReady()
 
-      // Verify loaded
+      // The web bootstrap keeps an explicit stored API key, but mirrors the
+      // web server host back to the current frontend environment by default.
       const config = await settingsPage.getServerConfig()
-      expect(config.serverUrl).toBe("http://saved-server:8080")
+      expect(config.serverUrl).toBe(TEST_CONFIG.serverUrl.replace(/\/$/, ""))
       expect(config.apiKey).toBe("saved-api-key")
 
       await assertNoCriticalErrors(diagnostics)
@@ -239,17 +233,14 @@ test.describe("Settings Workflow", () => {
       await settingsPage.waitForReady()
 
       // Clear server URL
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await serverInput.clear()
+      await settingsPage.serverUrlInput.clear()
 
       // Try to save
-      const saveBtn = authedPage.getByRole("button", { name: /save/i })
-      await saveBtn.click()
+      await settingsPage.saveButton.click()
 
-      // Check for validation errors
-      await authedPage.waitForTimeout(500)
-      const _hasErrors = await settingsPage.hasValidationErrors()
-      // Validation behavior depends on implementation
+      await expect
+        .poll(() => settingsPage.hasValidationErrors(), { timeout: 5_000 })
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -263,14 +254,14 @@ test.describe("Settings Workflow", () => {
       await settingsPage.waitForReady()
 
       // Enter invalid URL
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await serverInput.fill("not-a-valid-url")
+      await settingsPage.serverUrlInput.fill("not-a-valid-url")
 
       // Try to save
-      const saveBtn = authedPage.getByRole("button", { name: /save/i })
-      await saveBtn.click()
+      await settingsPage.saveButton.click()
 
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(() => settingsPage.hasValidationErrors(), { timeout: 5_000 })
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -284,16 +275,13 @@ test.describe("Settings Workflow", () => {
       await settingsPage.waitForReady()
 
       // Create validation error
-      const serverInput = authedPage.getByLabel(/server url/i)
-      await serverInput.clear()
+      await settingsPage.serverUrlInput.clear()
 
-      const saveBtn = authedPage.getByRole("button", { name: /save/i })
-      await saveBtn.click()
+      await settingsPage.saveButton.click()
 
-      await authedPage.waitForTimeout(500)
-
-      const _errors = await settingsPage.getValidationErrors()
-      // Errors may or may not appear based on validation rules
+      await expect
+        .poll(async () => (await settingsPage.getValidationErrors()).length, { timeout: 5_000 })
+        .toBeGreaterThan(0)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -389,15 +377,54 @@ test.describe("Settings Workflow", () => {
       diagnostics
     }) => {
       const settingsPage = new SettingsPage(authedPage)
+      await settingsPage.gotoSection("chat")
+      await settingsPage.waitForReady()
 
-      try {
-        await settingsPage.configureChatSettings({
-          temperature: 0.7,
-          systemPrompt: "You are a helpful assistant."
-        })
-      } catch {
-        // Chat settings configuration may not be available
-      }
+      const namespaceInput = authedPage.getByLabel(/quick chat project docs namespace/i)
+      await expect(namespaceInput).toBeVisible({ timeout: 10_000 })
+
+      const originalValue = await namespaceInput.inputValue()
+      const updatedValue =
+        originalValue === "project_docs_e2e" ? "project_docs_alt_e2e" : "project_docs_e2e"
+      await namespaceInput.fill(updatedValue)
+      await expect
+        .poll(
+          () =>
+            authedPage.evaluate(() => {
+              const raw = localStorage.getItem("quickChatDocsIndexNamespace")
+              if (raw == null) return null
+              try {
+                return JSON.parse(raw)
+              } catch {
+                return raw
+              }
+            }),
+          { timeout: 5_000 }
+        )
+        .toBe(updatedValue)
+
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      await settingsPage.waitForReady()
+      await expect(authedPage.getByLabel(/quick chat project docs namespace/i)).toHaveValue(
+        updatedValue
+      )
+
+      await authedPage.getByLabel(/quick chat project docs namespace/i).fill(originalValue)
+      await expect
+        .poll(
+          () =>
+            authedPage.evaluate(() => {
+              const raw = localStorage.getItem("quickChatDocsIndexNamespace")
+              if (raw == null) return null
+              try {
+                return JSON.parse(raw)
+              } catch {
+                return raw
+              }
+            }),
+          { timeout: 5_000 }
+        )
+        .toBe(originalValue)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -521,11 +548,13 @@ test.describe("Settings Workflow", () => {
       authedPage,
       diagnostics
     }) => {
-      const settingsPage = new SettingsPage(authedPage)
-      await settingsPage.gotoSection("health")
-      await settingsPage.waitForReady()
+      await authedPage.goto("/settings/health", { waitUntil: "domcontentloaded" })
+      await waitForConnection(authedPage)
 
       await expect(authedPage).toHaveURL(/\/settings\/health/)
+      await expect(
+        authedPage.getByRole("heading", { name: /health status/i }).first()
+      ).toBeVisible({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -556,7 +585,7 @@ test.describe("Settings Workflow", () => {
         "[data-testid='version'], .version-info, .about-version"
       )
 
-      await authedPage.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {})
+      await expect(authedPage.getByRole("main")).toBeVisible({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })

@@ -2,6 +2,7 @@ export type FlashcardsStudyIntent = {
   quizId?: number
   attemptId?: number
   deckId?: number
+  forceShowWorkspaceItems?: boolean
 }
 
 export type QuizAssessmentIntent = {
@@ -14,6 +15,7 @@ export type QuizAssessmentIntent = {
   assignmentDueAt?: string
   assignmentNote?: string
   assignedByRole?: string
+  forceShowWorkspaceItems?: boolean
 }
 
 const extractSearchFromHash = (hash: string): string => {
@@ -53,6 +55,12 @@ const parseIsoDateString = (value: string | null): string | undefined => {
   return parsed.toISOString()
 }
 
+const parseBooleanFlag = (value: string | null): boolean => {
+  if (value == null) return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"
+}
+
 const parseFlashcardsStudyIntentFromParams = (
   params: URLSearchParams
 ): FlashcardsStudyIntent | null => {
@@ -60,13 +68,15 @@ const parseFlashcardsStudyIntentFromParams = (
     params.get("study_source") === "quiz" ||
     params.has("quiz_id") ||
     params.has("attempt_id") ||
-    params.has("deck_id")
+    params.has("deck_id") ||
+    params.has("include_workspace_items")
   if (!hasSignal) return null
 
   const intent: FlashcardsStudyIntent = {
     quizId: parsePositiveInt(params.get("quiz_id")),
     attemptId: parsePositiveInt(params.get("attempt_id")),
-    deckId: parsePositiveInt(params.get("deck_id"))
+    deckId: parsePositiveInt(params.get("deck_id")),
+    forceShowWorkspaceItems: parseBooleanFlag(params.get("include_workspace_items"))
   }
 
   if (!intent.quizId && !intent.attemptId && !intent.deckId) {
@@ -88,7 +98,8 @@ const parseQuizAssessmentIntentFromParams = (
     params.has("assignment_mode") ||
     params.has("assignment_due_at") ||
     params.has("assignment_note") ||
-    params.has("assigned_by_role")
+    params.has("assigned_by_role") ||
+    params.has("include_workspace_items")
   if (!hasSignal) return null
 
   const intent: QuizAssessmentIntent = {
@@ -100,7 +111,8 @@ const parseQuizAssessmentIntentFromParams = (
     assignmentMode: parseSharedAssignmentMode(params.get("assignment_mode")),
     assignmentDueAt: parseIsoDateString(params.get("assignment_due_at")),
     assignmentNote: parseNonEmptyString(params.get("assignment_note")),
-    assignedByRole: parseNonEmptyString(params.get("assigned_by_role"))
+    assignedByRole: parseNonEmptyString(params.get("assigned_by_role")),
+    forceShowWorkspaceItems: parseBooleanFlag(params.get("include_workspace_items"))
   }
 
   if (
@@ -166,6 +178,9 @@ export const buildFlashcardsStudyRouteFromQuiz = (
   if (intent.deckId && intent.deckId > 0) {
     params.set("deck_id", String(intent.deckId))
   }
+  if (intent.forceShowWorkspaceItems || intent.deckId) {
+    params.set("include_workspace_items", "1")
+  }
 
   return `/flashcards?${params.toString()}`
 }
@@ -194,6 +209,9 @@ export const buildQuizAssessmentRouteFromFlashcards = (
   }
   if (intent.sourceAttemptId && intent.sourceAttemptId > 0) {
     params.set("source_attempt_id", String(intent.sourceAttemptId))
+  }
+  if (intent.forceShowWorkspaceItems) {
+    params.set("include_workspace_items", "1")
   }
   const deckName = parseNonEmptyString(intent.deckName ?? null)
   if (deckName) {

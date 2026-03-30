@@ -47,16 +47,14 @@ from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
     generate_embeddings_for_media,
 )
 from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-from tldw_Server_API.app.core.Chunking import Chunker
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-    mark_media_as_processed,
-)
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
 )
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_by_id
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
@@ -139,6 +137,26 @@ def _root_job_uuid(payload: dict[str, Any]) -> str | None:
     return str(root)
 
 
+def _normalize_chunk_type(value: Any) -> str | None:
+    """Normalize a chunk-type candidate while surfacing non-fatal normalization failures."""
+
+    try:
+        return Chunker.normalize_chunk_type(value)
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to normalize chunk type candidate {!r}: {}", value, exc)
+        return None
+
+
+def _resolve_chunk_type(*candidates: Any) -> str:
+    """Return the first normalized chunk type from the candidate list, else fall back to ``text``."""
+
+    for candidate in candidates:
+        normalized = _normalize_chunk_type(candidate)
+        if normalized:
+            return normalized
+    return "text"
+
+
 def _update_root_job(
     root_uuid: str | None,
     *,
@@ -166,15 +184,20 @@ def _update_root_job(
 
 def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
     db_path = get_user_media_db_path(user_id)
-    db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
-    try:
-        media_item = db.get_media_by_id(media_id)
+    with managed_media_database(
+        client_id="embeddings_jobs_worker",
+        db_path=db_path,
+        initialize=False,
+    ) as db:
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise EmbeddingsJobError(f"Media item {media_id} not found", retryable=False)
 
         try:
             if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
-                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
+                from tldw_Server_API.app.core.DB_Management.media_db.api import (
+                    get_document_version,
+                )
 
                 latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
                 if latest and latest.get("content"):
@@ -190,53 +213,6 @@ def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
             "media_item": media_item,
             "content": media_item,
         }
-    finally:
-        with contextlib.suppress(Exception):
-            db.close_connection()
-
-
-def _should_track_media_state(job_type: str | None, payload: dict[str, Any]) -> bool:
-    if job_type != _CONTENT_JOB_TYPE:
-        return True
-    return not (payload.get("collection_name") or payload.get("document_id"))
-
-
-def _mark_media_embeddings_complete(*, user_id: str, media_id: int) -> None:
-    db = None
-    try:
-        db_path = get_user_media_db_path(user_id)
-        db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
-        mark_media_as_processed(db_instance=db, media_id=media_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Failed to mark media {} embeddings complete for user {}: {}",
-            media_id,
-            user_id,
-            exc,
-        )
-    finally:
-        if db is not None:
-            with contextlib.suppress(Exception):
-                db.close_connection()
-
-
-def _mark_media_embeddings_error(*, user_id: str, media_id: int, error_message: str) -> None:
-    db = None
-    try:
-        db_path = get_user_media_db_path(user_id)
-        db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
-        db.mark_embeddings_error(media_id, error_message)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Failed to mark media {} embeddings error for user {}: {}",
-            media_id,
-            user_id,
-            exc,
-        )
-    finally:
-        if db is not None:
-            with contextlib.suppress(Exception):
-                db.close_connection()
 
 
 def _update_root_progress(
@@ -699,19 +675,18 @@ async def _handle_storage_job(
             raise EmbeddingsJobError("Chunk payload missing text for storage stage", retryable=False)
         chunk_texts.append(text)
         chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
-        raw_chunk_type = (
-            chunk.get("chunk_type")
-            or chunk_metadata.get("chunk_type")
-            or chunk_metadata.get("paragraph_kind")
-            or chunk_metadata.get("type")
-            or chunk_metadata.get("kind")
-        )
         metadata = {
             "media_id": str(media_id),
             "chunk_index": chunk.get("index", idx),
             "chunk_start": chunk.get("start"),
             "chunk_end": chunk.get("end"),
-            "chunk_type": _normalize_chunk_type(raw_chunk_type) or "text",
+            "chunk_type": _resolve_chunk_type(
+                chunk.get("chunk_type"),
+                chunk_metadata.get("chunk_type"),
+                chunk_metadata.get("paragraph_kind"),
+                chunk_metadata.get("type"),
+                chunk_metadata.get("kind"),
+            ),
             "title": media_content["media_item"].get("title", ""),
             "author": media_content["media_item"].get("author", ""),
             "embedding_model": embedding_model,

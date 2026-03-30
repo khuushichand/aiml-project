@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 import type { ReactNode } from 'react';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DebugPage from './page';
+import { api } from '@/lib/api-client';
 
 const permissionGuardMock = vi.hoisted(() => vi.fn(({ children }: { children: ReactNode }) => <>{children}</>));
 const isSingleUserModeMock = vi.hoisted(() => vi.fn(() => false));
@@ -19,6 +21,8 @@ vi.mock('@/lib/api-client', () => ({
   api: {
     debugResolveApiKey: vi.fn(),
     debugGetBudgetSummary: vi.fn(),
+    getUser: vi.fn(),
+    debugResolvePermissions: vi.fn(),
   },
 }));
 
@@ -58,5 +62,20 @@ describe('DebugPage', () => {
       }),
       undefined
     );
+  });
+
+  it('rejects non-numeric user IDs before lookup or permission resolution', async () => {
+    const user = userEvent.setup();
+    render(<DebugPage />);
+
+    const [lookupInput, resolveInput] = screen.getAllByLabelText('User ID');
+
+    await user.type(lookupInput, '12abc{enter}');
+
+    await user.type(resolveInput, '42xyz{enter}');
+
+    expect(screen.getAllByText('Enter a valid positive user ID')).toHaveLength(2);
+    expect(api.getUser).not.toHaveBeenCalled();
+    expect(api.debugResolvePermissions).not.toHaveBeenCalled();
   });
 });

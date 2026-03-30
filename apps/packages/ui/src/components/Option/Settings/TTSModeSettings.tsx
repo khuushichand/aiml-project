@@ -1,6 +1,7 @@
 import { SaveButton } from "@/components/Common/SaveButton"
 import { getModels, getVoices } from "@/services/elevenlabs"
 import {
+  DEFAULT_TLDW_TTS_MODEL,
   getTTSSettings,
   setTTSSettings,
   SUPPORTED_TLDW_TTS_FORMATS
@@ -737,7 +738,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 />
               ) : (
                 <Input
-                  placeholder="kokoro"
+                  placeholder={DEFAULT_TLDW_TTS_MODEL}
                   className=" mt-4 sm:mt-0 !w-[300px] sm:w-[200px]"
                   {...form.getInputProps("tldwTtsModel")}
                 />

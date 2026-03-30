@@ -3,6 +3,7 @@
 # Legacy placeholder service kept for non-production scaffolding only.
 # Production deployments should use dedicated media/document ingestion paths.
 
+import json
 import os
 import tempfile
 import time
@@ -16,8 +17,9 @@ from pypandoc import convert_file
 
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
@@ -41,9 +43,116 @@ _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS = (
 def _ensure_placeholder_enabled():
     ensure_placeholder_service_enabled("Document")
 
+
 def _file_security_strict() -> bool:
     import os as _os
     return is_truthy(_os.getenv("FILE_SECURITY_STRICT", "true"))
+
+
+def build_plaintext_chunks(
+    text: str,
+    method: Optional[str] = None,
+    max_size: int = 500,
+    overlap: int = 50,
+    language: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Chunk plaintext into compact metadata records for DB persistence."""
+    method = method or "sentences"
+    ck = Chunker()
+    flat = ck.chunk_text_hierarchical_flat(
+        text,
+        method=method,
+        max_size=max_size,
+        overlap=overlap,
+        language=language or "en",
+    )
+    kind_map = {
+        "paragraph": "text",
+        "list_unordered": "list",
+        "list_ordered": "list",
+        "code_fence": "code",
+        "table_md": "table",
+        "header_line": "heading",
+        "header_atx": "heading",
+    }
+    chunks_out: list[dict[str, Any]] = []
+    for item in flat:
+        md = item.get("metadata", {}) or {}
+        start = md.get("start_offset")
+        end = md.get("end_offset")
+        p_kind = md.get("paragraph_kind")
+        ctype = kind_map.get(str(p_kind or "").lower(), "text")
+        meta_small = {}
+        if md.get("ancestry_titles"):
+            meta_small["ancestry_titles"] = md.get("ancestry_titles")
+        if md.get("section_path"):
+            meta_small["section_path"] = md.get("section_path")
+        chunks_out.append(
+            {
+                "text": item.get("text", ""),
+                "start_char": start,
+                "end_char": end,
+                "chunk_type": ctype,
+                "metadata": meta_small,
+            }
+        )
+    return chunks_out
+
+
+def _store_document_in_db(
+    *,
+    document_url: str,
+    title: str,
+    text_content: str,
+    summary_text: str,
+    custom_keywords: list[str],
+    custom_prompt_input: Optional[str],
+    chunk_method: Optional[str],
+    max_chunk_size: int,
+    chunk_overlap: int,
+    chunk_language: Optional[str],
+    overwrite_existing: bool,
+) -> int:
+    """Persist document content through the repository-backed media DB API."""
+    effective_user_id = 1
+    db_path = get_user_media_db_path(effective_user_id)
+    with managed_media_database(
+        client_id="document_processing_service",
+        db_path=db_path,
+        initialize=False,
+    ) as db:
+        safe_metadata = json.dumps(
+            {
+                "title": title,
+                "source": "document",
+                "url": document_url,
+            },
+            ensure_ascii=False,
+        )
+        chunks = build_plaintext_chunks(
+            text_content,
+            method=chunk_method or "sentences",
+            max_size=max_chunk_size,
+            overlap=chunk_overlap,
+            language=chunk_language or "en",
+        )
+        db_id, _, _ = get_media_repository(db).add_media_with_keywords(
+            url=document_url,
+            title=title,
+            media_type="document",
+            content=text_content,
+            keywords=custom_keywords,
+            prompt=custom_prompt_input,
+            analysis_content=summary_text,
+            safe_metadata=safe_metadata,
+            transcription_model="document-import",
+            author=None,
+            ingestion_date=None,
+            overwrite=overwrite_existing,
+            chunks=chunks,
+        )
+        return db_id
+
 
 async def process_documents(
     doc_urls: Optional[list[str]],
@@ -273,53 +382,6 @@ async def process_documents(
         else:
             return "[Unsupported file extension or not recognized]"
 
-    def build_plaintext_chunks(text: str, method: Optional[str] = None, max_size: int = 500, overlap: int = 50,
-                               language: Optional[str] = None) -> list[dict[str, Any]]:
-        """Chunk plaintext and return items ready for UnvectorizedMediaChunks persistence.
-
-        Uses hierarchical flat chunking to obtain offsets and paragraph kind, then maps
-        to a normalized `chunk_type` for FTS-level retrieval.
-        """
-        method = method or "sentences"
-        ck = Chunker()
-        flat = ck.chunk_text_hierarchical_flat(
-            text,
-            method=method,
-            max_size=max_size,
-            overlap=overlap,
-            language=language or "en",
-        )
-        kind_map = {
-            "paragraph": "text",
-            "list_unordered": "list",
-            "list_ordered": "list",
-            "code_fence": "code",
-            "table_md": "table",
-            "header_line": "heading",
-            "header_atx": "heading",
-        }
-        chunks_out: list[dict[str, Any]] = []
-        for item in flat:
-            md = item.get("metadata", {}) or {}
-            start = md.get("start_offset")
-            end = md.get("end_offset")
-            p_kind = md.get("paragraph_kind")
-            ctype = kind_map.get(str(p_kind or "").lower(), "text")
-            meta_small = {}
-            # Keep compact ancestry for UI/context, avoid large payloads
-            if md.get("ancestry_titles"):
-                meta_small["ancestry_titles"] = md.get("ancestry_titles")
-            if md.get("section_path"):
-                meta_small["section_path"] = md.get("section_path")
-            chunks_out.append({
-                "text": item.get("text", ""),
-                "start_char": start,
-                "end_char": end,
-                "chunk_type": ctype,
-                "metadata": meta_small,
-            })
-        return chunks_out
-
     # Helper for chunking + summarization
     def summarize_text_if_needed(full_text: str) -> str:
         """
@@ -389,51 +451,19 @@ async def process_documents(
 
                 # (Optionally) Store in DB
                 if store_in_db:
-                    # Get database instance
-                    effective_user_id = 1  # Default for document processing
-                    db_path = get_user_media_db_path(effective_user_id)
-                    db = create_media_database(
-                        client_id="document_processing_service",
-                        db_path=db_path,
+                    item_result["db_id"] = _store_document_in_db(
+                        document_url=url,
+                        title=custom_title or os.path.basename(local_path),
+                        text_content=text_content,
+                        summary_text=summary_text,
+                        custom_keywords=custom_keywords,
+                        custom_prompt_input=custom_prompt_input,
+                        chunk_method=chunk_method,
+                        max_chunk_size=max_chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        chunk_language=chunk_language,
+                        overwrite_existing=overwrite_existing,
                     )
-                    try:
-                        # Fix the function call to match the actual signature
-                        # Build safe metadata
-                        import json as _json
-                        _safe_meta = {
-                            "title": custom_title or os.path.basename(local_path),
-                            "source": "document",
-                            "url": url,
-                        }
-                        _safe_json = _json.dumps({k: v for k, v in _safe_meta.items() if v is not None}, ensure_ascii=False)
-
-                        # Build plaintext chunks for FTS-first retrieval
-                        _chunks = build_plaintext_chunks(
-                            text_content,
-                            method=chunk_method or "sentences",
-                            max_size=max_chunk_size,
-                            overlap=chunk_overlap,
-                            language=chunk_language or "en",
-                        )
-
-                        db_id, _, _ = db.add_media_with_keywords(
-                            url=url,
-                            title=custom_title or os.path.basename(local_path),
-                            media_type="document",
-                            content=text_content,
-                            keywords=custom_keywords,
-                            prompt=custom_prompt_input,
-                            analysis_content=summary_text,  # Store summary as analysis
-                            safe_metadata=_safe_json,
-                            transcription_model="document-import",
-                            author=None,
-                            ingestion_date=None,
-                            overwrite=overwrite_existing,
-                            chunks=_chunks
-                        )
-                        item_result["db_id"] = db_id
-                    finally:
-                        db.close_connection()
 
                 processed_count += 1
                 item_result["success"] = True
@@ -469,50 +499,19 @@ async def process_documents(
                 item_result["summary"] = summary_text
 
                 if store_in_db:
-                    # Get database instance
-                    effective_user_id = 1  # Default for document processing
-                    db_path = get_user_media_db_path(effective_user_id)
-                    db = create_media_database(
-                        client_id="document_processing_service",
-                        db_path=db_path,
+                    item_result["db_id"] = _store_document_in_db(
+                        document_url=file_path,
+                        title=custom_title or os.path.basename(file_path),
+                        text_content=text_content,
+                        summary_text=summary_text,
+                        custom_keywords=custom_keywords,
+                        custom_prompt_input=custom_prompt_input,
+                        chunk_method=chunk_method,
+                        max_chunk_size=max_chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        chunk_language=chunk_language,
+                        overwrite_existing=overwrite_existing,
                     )
-                    try:
-                        # Fix the function call to match the actual signature
-                        # Build safe metadata
-                        import json as _json
-                        _safe_meta = {
-                            "title": custom_title or os.path.basename(file_path),
-                            "source": "document",
-                            "url": file_path,
-                        }
-                        _safe_json = _json.dumps({k: v for k, v in _safe_meta.items() if v is not None}, ensure_ascii=False)
-
-                        _chunks = build_plaintext_chunks(
-                            text_content,
-                            method=chunk_method or "sentences",
-                            max_size=max_chunk_size,
-                            overlap=chunk_overlap,
-                            language=chunk_language or "en",
-                        )
-
-                        db_id, _, _ = db.add_media_with_keywords(
-                            url=file_path,
-                            title=custom_title or os.path.basename(file_path),
-                            media_type="document",
-                            content=text_content,
-                            keywords=custom_keywords,
-                            prompt=custom_prompt_input,
-                            analysis_content=summary_text,  # Store summary as analysis
-                            safe_metadata=_safe_json,
-                            transcription_model="document-import",
-                            author=None,
-                            ingestion_date=None,
-                            overwrite=overwrite_existing,
-                            chunks=_chunks
-                        )
-                        item_result["db_id"] = db_id
-                    finally:
-                        db.close_connection()
 
                 processed_count += 1
                 item_result["success"] = True

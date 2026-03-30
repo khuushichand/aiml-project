@@ -23,8 +23,8 @@ modules:
     circuit_breaker_max_timeout: 180
     # Module-specific settings
     settings:
-      # Per-user example path
-      db_path: Databases/user_databases/1/Media_DB_v2.db
+      # Per-user example path; replace <content-db>.db with your configured content DB filename
+      db_path: Databases/user_databases/1/<content-db>.db
       cache_ttl: 300
 ```
 

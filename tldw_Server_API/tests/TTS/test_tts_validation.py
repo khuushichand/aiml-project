@@ -235,6 +235,11 @@ class TestProviderLimits:
         assert "ko" in supertonic2_limits["languages"]
         assert "wav" in supertonic2_limits["valid_formats"]
 
+        kitten_limits = ProviderLimits.get_limits("kitten_tts")
+        assert kitten_limits["max_text_length"] == 5000
+        assert "pcm" in kitten_limits["valid_formats"]
+        assert kitten_limits["max_speed"] == 4.0
+
     def test_provider_specific_validation(self):
         """Test that provider limits are enforced"""
         # OpenAI text limit
@@ -312,6 +317,18 @@ class TestValidateTTSRequest:
         with pytest.raises(TTSValidationError) as exc_info:
             validate_tts_request(request_bad_speed, provider="supertonic2")
         assert "speed" in str(exc_info.value).lower()
+
+    def test_validate_kitten_tts_limits(self):
+        """KittenTTS should accept PCM output and the wider local speed range."""
+        request = TTSRequest(
+            text="Test",
+            voice="Bella",
+            format=AudioFormat.PCM,
+            language="en",
+            speed=4.0,
+        )
+
+        validate_tts_request(request, provider="kitten_tts")
 
     def test_validate_with_voice_reference(self):
         """Test validation with voice reference"""

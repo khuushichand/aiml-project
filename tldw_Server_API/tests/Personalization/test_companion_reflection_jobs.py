@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Iterator
@@ -11,6 +9,9 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Personalization.companion_user_ids import (
+    resolve_companion_storage_user_id,
+)
 from tldw_Server_API.app.core.Personalization.companion_reflection_jobs import (
     COMPANION_REBUILD_JOB_TYPE,
     handle_companion_reflection_job,
@@ -41,11 +42,7 @@ def companion_reflection_env(monkeypatch, tmp_path) -> Iterator[Path]:
 
 
 def _legacy_storage_user_id(user_id: str) -> str:
-    try:
-        return str(int(user_id))
-    except (TypeError, ValueError):
-        digest = hashlib.sha1(str(user_id).encode("utf-8"), usedforsecurity=False).digest()
-        return str(int.from_bytes(digest[:4], byteorder="big", signed=False))
+    return resolve_companion_storage_user_id(user_id)
 
 
 def _seed_companion_context(user_id: str) -> tuple[PersonalizationDB, CollectionsDatabase]:

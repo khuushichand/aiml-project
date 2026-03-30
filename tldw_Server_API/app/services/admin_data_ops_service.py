@@ -177,6 +177,12 @@ def _resolve_dataset_db_path(dataset: str, user_id: int | None) -> tuple[str, in
             fs_path = parsed.path or url
             if fs_path.startswith("//"):
                 fs_path = fs_path[1:]
+            if fs_path in {":memory:", "/:memory:"}:
+                return ":memory:", None
+            if fs_path.startswith("/./"):
+                fs_path = fs_path[1:]
+            if fs_path.startswith("./"):
+                fs_path = get_project_relative_path(fs_path[2:])
             fs_path = fs_path or url
             return fs_path, None
         return url, None
@@ -378,8 +384,14 @@ def _retention_preview_secret() -> bytes:
     if not secret_seed:
         raise RuntimeError("preview_signature_secret_unavailable")
     pepper = getattr(settings, "API_KEY_PEPPER", None) or ""
-    material = f"{secret_seed}|{pepper}|retention-preview|{_RETENTION_PREVIEW_SCHEMA_VERSION}"
-    return hashlib.sha256(material.encode("utf-8")).digest()
+    salt = f"{pepper}|retention-preview|{_RETENTION_PREVIEW_SCHEMA_VERSION}".encode("utf-8")
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        str(secret_seed).encode("utf-8"),
+        salt,
+        200_000,
+        dklen=32,
+    )
 
 
 def build_retention_preview_signature(

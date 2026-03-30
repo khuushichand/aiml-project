@@ -59,7 +59,9 @@ export const McpHubPage = () => {
       </Typography.Title>
       <Tabs
         activeKey={activeTab}
-        onChange={setActiveTab}
+        onChange={(activeKey) =>
+          setActiveTab(activeKey as McpHubGovernanceAuditTabKey)
+        }
         items={[
           {
             key: "profiles",

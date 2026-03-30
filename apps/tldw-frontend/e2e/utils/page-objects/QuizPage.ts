@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class QuizPage extends BasePage {
   constructor(page: Page) {
@@ -17,8 +17,13 @@ export class QuizPage extends BasePage {
     await waitForConnection(this.page)
   }
 
+  async gotoPath(path: string): Promise<void> {
+    await this.page.goto(path, { waitUntil: "domcontentloaded" })
+    await waitForConnection(this.page)
+  }
+
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the quiz playground (online), beta badge, demo preview, or connection banner
     const betaBadge = this.page.locator('[data-testid="quiz-beta-badge"]')
     const demoPreview = this.page.locator('[data-testid="quiz-demo-preview"]')
@@ -132,6 +137,26 @@ export class QuizPage extends BasePage {
   /** Reset current tab button */
   get resetCurrentTabButton(): Locator {
     return this.page.locator('[data-testid="quiz-reset-current-tab"]')
+  }
+
+  get manageShowWorkspaceQuizzesToggle(): Locator {
+    return this.page.locator('[data-testid="quiz-manage-show-workspace-quizzes"]')
+  }
+
+  get manageWorkspaceFilter(): Locator {
+    return this.page.locator('[data-testid="quiz-manage-workspace-filter"]')
+  }
+
+  getTakeQuizCard(quizId: number): Locator {
+    return this.page.locator(`[data-testid="take-quiz-card-${quizId}"]`)
+  }
+
+  getManageQuizStartButton(quizId: number): Locator {
+    return this.page.locator(`[data-testid="quiz-start-${quizId}"]`)
+  }
+
+  getManageQuizEditButton(quizId: number): Locator {
+    return this.page.locator(`[data-testid="quiz-edit-${quizId}"]`)
   }
 
   // -- Helpers ---------------------------------------------------------------

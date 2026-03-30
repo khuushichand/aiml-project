@@ -64,7 +64,6 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.Chunking import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
 from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
 
@@ -127,7 +126,7 @@ async def process_text_for_chunking_json(
     *,
     http_request: Request,
     current_user: User = Depends(get_request_user),
-    media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
+    media_db: Optional[Any] = Depends(try_get_media_db_for_user),
 ):
     """
     Accepts text content and chunking options in a JSON body.

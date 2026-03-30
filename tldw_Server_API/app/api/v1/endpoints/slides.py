@@ -9,6 +9,8 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -50,21 +52,24 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     SlidesHealthResponse,
     SlidesTemplateListResponse,
     SlidesTemplateResponse,
+    VisualStyleCreateRequest,
+    VisualStyleListResponse,
+    VisualStylePatchRequest,
+    VisualStyleResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELETE, MEDIA_READ, MEDIA_UPDATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-    get_document_version,
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    MediaDbSession,
     get_latest_transcription,
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
-from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
+from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase, VisualStyleRow
 from tldw_Server_API.app.core.Slides.slides_assets import resolve_slide_asset
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
@@ -93,6 +98,14 @@ from tldw_Server_API.app.core.Slides.slides_templates import (
     SlidesTemplateNotFoundError,
     get_slide_template,
     list_slide_templates,
+)
+from tldw_Server_API.app.core.Slides.visual_styles import (
+    get_builtin_visual_style,
+    list_builtin_visual_styles,
+)
+from tldw_Server_API.app.core.Slides.visual_style_resolver import (
+    ResolvedBuiltinVisualStyle,
+    resolve_builtin_visual_style,
 )
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -154,6 +167,18 @@ _SLIDES_NONCRITICAL_EXCEPTIONS = (
 
 _PRESENTATION_STUDIO_TRANSITIONS = {"fade", "cut", "wipe", "zoom"}
 _PRESENTATION_STUDIO_TIMING_MODES = {"auto", "manual"}
+
+
+@dataclass(frozen=True)
+class PresentationVisualStyleApplication:
+    """Resolved visual-style application data for presentation writes."""
+
+    style_id: str
+    scope: str
+    name: str
+    version: int | None
+    snapshot: dict[str, Any]
+    appearance_defaults: dict[str, Any]
 
 
 def _parse_etag(raw: str | None) -> int:
@@ -349,6 +374,18 @@ def _validate_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None
     return settings
 
 
+def _validate_custom_css(
+    custom_css: Any,
+    *,
+    detail: str = "invalid_custom_css",
+) -> str | None:
+    if custom_css is None:
+        return None
+    if not isinstance(custom_css, str):
+        raise HTTPException(status_code=422, detail=detail)
+    return custom_css
+
+
 def _serialize_settings(settings: dict[str, Any] | None) -> str | None:
     if settings is None:
         return None
@@ -383,6 +420,26 @@ def _deserialize_studio_data(value: str | None) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _serialize_visual_style_snapshot(snapshot: dict[str, Any] | None) -> str | None:
+    """Serialize a validated visual-style snapshot for presentation persistence."""
+    if snapshot is None:
+        return None
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=422, detail="invalid_visual_style_snapshot")
+    return json.dumps(snapshot, ensure_ascii=True)
+
+
+def _deserialize_visual_style_snapshot(value: str | None) -> dict[str, Any] | None:
+    """Deserialize a persisted visual-style snapshot into a dictionary payload."""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_visual_style_snapshot_json") from exc
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _deserialize_source_ref(value: str | None) -> Any | None:
     if value is None:
         return None
@@ -401,6 +458,8 @@ def _serialize_source_ref(value: Any | None) -> str | None:
 
 
 def _field_was_set(model: Any, field_name: str) -> bool:
+    """Return whether a Pydantic model received an explicit value for a field."""
+
     fields_set = getattr(model, "model_fields_set", None)
     if isinstance(fields_set, set):
         return field_name in fields_set
@@ -408,6 +467,8 @@ def _field_was_set(model: Any, field_name: str) -> bool:
 
 
 def _resolve_template(template_id: str | None) -> SlidesTemplate | None:
+    """Resolve a template id into a template object or raise the appropriate API error."""
+
     if not template_id:
         return None
     try:
@@ -418,15 +479,88 @@ def _resolve_template(template_id: str | None) -> SlidesTemplate | None:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _compact_visual_style_appearance_defaults(appearance_defaults: dict[str, Any]) -> dict[str, Any]:
+    """Return a compact, response-safe copy of visual-style appearance defaults."""
+
+    compact = deepcopy(appearance_defaults)
+    if isinstance(compact, dict):
+        compact.pop("custom_css", None)
+    return compact
+
+
+def _visual_style_application_from_builtin(
+    resolved: ResolvedBuiltinVisualStyle,
+) -> PresentationVisualStyleApplication:
+    """Convert a resolved builtin style into the presentation write-model shape."""
+
+    appearance_defaults = _validate_visual_style_appearance_defaults(resolved.appearance)
+    return PresentationVisualStyleApplication(
+        style_id=resolved.definition.style_id,
+        scope="builtin",
+        name=resolved.definition.name,
+        version=resolved.definition.version,
+        snapshot=deepcopy(resolved.snapshot),
+        appearance_defaults=appearance_defaults,
+    )
+
+
+def _visual_style_application_from_row(row: VisualStyleRow) -> PresentationVisualStyleApplication:
+    """Convert a stored user visual-style row into the presentation write-model shape."""
+
+    payload = _deserialize_visual_style_payload(row.style_payload)
+    appearance_defaults_raw = payload.get("appearance_defaults") if isinstance(payload.get("appearance_defaults"), dict) else {}
+    appearance_defaults = _validate_visual_style_appearance_defaults(appearance_defaults_raw)
+    generation_rules = payload.get("generation_rules") if isinstance(payload.get("generation_rules"), dict) else {}
+    fallback_policy = payload.get("fallback_policy") if isinstance(payload.get("fallback_policy"), dict) else {}
+    artifact_preferences_raw = payload.get("artifact_preferences")
+    artifact_preferences = artifact_preferences_raw if isinstance(artifact_preferences_raw, list) else []
+    version = payload.get("version")
+    response = VisualStyleResponse(
+        id=row.id,
+        name=row.name,
+        scope=row.scope,
+        description=payload.get("description") if isinstance(payload.get("description"), str) else None,
+        version=version if isinstance(version, int) else None,
+        generation_rules=generation_rules,
+        artifact_preferences=[str(item) for item in artifact_preferences],
+        appearance_defaults=appearance_defaults,
+        fallback_policy=fallback_policy,
+        created_at=_normalize_dt(row.created_at),
+        updated_at=_normalize_dt(row.updated_at),
+    )
+    return PresentationVisualStyleApplication(
+        style_id=response.id,
+        scope=response.scope,
+        name=response.name,
+        version=response.version,
+        snapshot=_visual_style_snapshot_from_response(response),
+        appearance_defaults=response.appearance_defaults,
+    )
+
+
 def _apply_template_defaults(
     *,
     request: Any,
     template: SlidesTemplate | None,
+    visual_style_application: PresentationVisualStyleApplication | None = None,
 ) -> tuple[str, str | None, dict[str, Any] | None, str | None]:
-    theme = request.theme if _field_was_set(request, "theme") else None
-    marp_theme = request.marp_theme if _field_was_set(request, "marp_theme") else None
-    settings = request.settings if _field_was_set(request, "settings") else None
-    custom_css = request.custom_css if _field_was_set(request, "custom_css") else None
+    """Merge request values with visual-style and template defaults."""
+
+    appearance_defaults = (
+        visual_style_application.appearance_defaults if visual_style_application is not None else {}
+    )
+    theme = appearance_defaults.get("theme")
+    marp_theme = appearance_defaults.get("marp_theme")
+    settings = appearance_defaults.get("settings")
+    custom_css = appearance_defaults.get("custom_css")
+    if _field_was_set(request, "theme"):
+        theme = request.theme
+    if _field_was_set(request, "marp_theme"):
+        marp_theme = request.marp_theme
+    if _field_was_set(request, "settings"):
+        settings = request.settings
+    if _field_was_set(request, "custom_css"):
+        custom_css = _validate_custom_css(request.custom_css)
 
     if template:
         if theme is None:
@@ -436,7 +570,7 @@ def _apply_template_defaults(
         if settings is None:
             settings = template.settings
         if custom_css is None:
-            custom_css = template.custom_css
+            custom_css = _validate_custom_css(template.custom_css)
 
     if theme is None:
         theme = "black"
@@ -460,6 +594,173 @@ def _template_to_response(template: SlidesTemplate) -> SlidesTemplateResponse:
         default_slides=slides,
         custom_css=template.custom_css,
     )
+
+
+def _deserialize_visual_style_payload(value: str) -> dict[str, Any]:
+    """Deserialize a stored visual-style payload and assert its top-level shape."""
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="visual_style_payload_invalid") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="visual_style_payload_invalid")
+    return payload
+
+
+def _validate_visual_style_appearance_defaults(appearance_defaults: dict[str, Any]) -> dict[str, Any]:
+    """Validate the appearance defaults section for a visual-style payload."""
+    if not isinstance(appearance_defaults, dict):
+        raise HTTPException(status_code=422, detail="invalid_visual_style_appearance_defaults")
+    validated = dict(appearance_defaults)
+    if "theme" in validated:
+        if validated.get("theme") is not None:
+            _validate_theme(validated.get("theme"))
+    if "marp_theme" in validated:
+        validated["marp_theme"] = _validate_marp_theme(validated.get("marp_theme"))
+    if "settings" in validated:
+        validated["settings"] = _validate_settings(validated.get("settings"))
+    if "custom_css" in validated:
+        validated["custom_css"] = _validate_custom_css(
+            validated.get("custom_css"),
+            detail="invalid_visual_style_custom_css",
+        )
+    return validated
+
+
+def _serialize_visual_style_payload(
+    *,
+    description: str | None,
+    generation_rules: dict[str, Any],
+    artifact_preferences: list[str],
+    appearance_defaults: dict[str, Any],
+    fallback_policy: dict[str, Any],
+) -> str:
+    """Serialize a validated visual-style payload for database storage."""
+    payload = {
+        "description": description,
+        "generation_rules": generation_rules,
+        "artifact_preferences": artifact_preferences,
+        "appearance_defaults": _validate_visual_style_appearance_defaults(appearance_defaults),
+        "fallback_policy": fallback_policy,
+    }
+    return json.dumps(payload, ensure_ascii=True)
+
+
+def _visual_style_response_from_builtin(
+    resolved: ResolvedBuiltinVisualStyle,
+) -> VisualStyleResponse:
+    """Convert a resolved builtin style into the public API response shape."""
+
+    return VisualStyleResponse(
+        id=resolved.definition.style_id,
+        name=resolved.definition.name,
+        scope="builtin",
+        category=resolved.definition.category,
+        guide_number=resolved.definition.guide_number,
+        tags=list(resolved.definition.tags),
+        best_for=list(resolved.definition.best_for),
+        description=resolved.definition.description,
+        version=resolved.definition.version,
+        generation_rules=deepcopy(resolved.definition.generation_rules),
+        artifact_preferences=list(resolved.definition.artifact_preferences),
+        appearance_defaults=_compact_visual_style_appearance_defaults(resolved.appearance),
+        fallback_policy=deepcopy(resolved.definition.fallback_policy),
+        created_at=None,
+        updated_at=None,
+    )
+
+
+def _visual_style_response_from_row(row: VisualStyleRow) -> VisualStyleResponse:
+    """Convert a stored visual-style row into the public API response shape."""
+    payload = _deserialize_visual_style_payload(row.style_payload)
+    generation_rules = payload.get("generation_rules") if isinstance(payload.get("generation_rules"), dict) else {}
+    appearance_defaults = payload.get("appearance_defaults") if isinstance(payload.get("appearance_defaults"), dict) else {}
+    fallback_policy = payload.get("fallback_policy") if isinstance(payload.get("fallback_policy"), dict) else {}
+    artifact_preferences_raw = payload.get("artifact_preferences")
+    artifact_preferences = artifact_preferences_raw if isinstance(artifact_preferences_raw, list) else []
+    version = payload.get("version")
+    return VisualStyleResponse(
+        id=row.id,
+        name=row.name,
+        scope=row.scope,
+        description=payload.get("description") if isinstance(payload.get("description"), str) else None,
+        version=version if isinstance(version, int) else None,
+        generation_rules=generation_rules,
+        artifact_preferences=[str(item) for item in artifact_preferences],
+        appearance_defaults=appearance_defaults,
+        fallback_policy=fallback_policy,
+        created_at=_normalize_dt(row.created_at),
+        updated_at=_normalize_dt(row.updated_at),
+    )
+
+
+def _resolve_visual_style_response(style_id: str, db: SlidesDatabase) -> VisualStyleResponse:
+    """Resolve either a builtin or stored style into the public API response shape."""
+
+    resolved_builtin = resolve_builtin_visual_style(style_id, include_custom_css=False)
+    if resolved_builtin is not None:
+        return _visual_style_response_from_builtin(resolved_builtin)
+    try:
+        row = db.get_visual_style_by_id(style_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    return _visual_style_response_from_row(row)
+
+
+def _visual_style_snapshot_from_response(
+    style: VisualStyleResponse,
+    *,
+    compact_resolution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = {
+        "id": style.id,
+        "scope": style.scope,
+        "name": style.name,
+        "version": style.version,
+        "description": style.description,
+        "generation_rules": deepcopy(style.generation_rules),
+        "artifact_preferences": list(style.artifact_preferences),
+        "appearance_defaults": deepcopy(style.appearance_defaults),
+        "fallback_policy": deepcopy(style.fallback_policy),
+    }
+    if compact_resolution is not None:
+        snapshot["resolution"] = deepcopy(compact_resolution)
+    return snapshot
+
+
+def _resolve_presentation_visual_style_application(
+    *,
+    visual_style_id: str | None,
+    visual_style_scope: str | None,
+    db: SlidesDatabase,
+) -> PresentationVisualStyleApplication | None:
+    """Resolve a presentation-level visual-style selection into an application payload."""
+
+    if visual_style_id is None and visual_style_scope is None:
+        return None
+    if visual_style_id is None:
+        raise HTTPException(status_code=422, detail="visual_style_id_required")
+    if visual_style_scope is None:
+        raise HTTPException(status_code=422, detail="visual_style_scope_required")
+
+    resolved_id = visual_style_id.strip()
+    if not resolved_id:
+        raise HTTPException(status_code=422, detail="visual_style_id_required")
+
+    resolved_scope = visual_style_scope.strip().lower()
+    if resolved_scope == "builtin":
+        resolved_builtin = resolve_builtin_visual_style(resolved_id)
+        if resolved_builtin is None:
+            raise HTTPException(status_code=404, detail="visual_style_not_found")
+        return _visual_style_application_from_builtin(resolved_builtin)
+    if resolved_scope == "user":
+        try:
+            row = db.get_visual_style_by_id(resolved_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+        return _visual_style_application_from_row(row)
+    else:
+        raise HTTPException(status_code=422, detail="invalid_visual_style_scope")
 
 
 def _normalize_template_slides(slides_payload: list[Any]) -> list[Slide]:
@@ -494,6 +795,9 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
     studio_data = payload.get("studio_data")
     if isinstance(studio_data, str):
         studio_data = _deserialize_studio_data(studio_data)
+    visual_style_snapshot = payload.get("visual_style_snapshot")
+    if isinstance(visual_style_snapshot, str):
+        visual_style_snapshot = _deserialize_visual_style_snapshot(visual_style_snapshot)
     source_ref = payload.get("source_ref")
     if isinstance(source_ref, str):
         source_ref = _deserialize_source_ref(source_ref)
@@ -516,6 +820,11 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
         theme=payload.get("theme") or "black",
         marp_theme=payload.get("marp_theme"),
         template_id=payload.get("template_id"),
+        visual_style_id=payload.get("visual_style_id"),
+        visual_style_scope=payload.get("visual_style_scope"),
+        visual_style_name=payload.get("visual_style_name"),
+        visual_style_version=payload.get("visual_style_version"),
+        visual_style_snapshot=visual_style_snapshot if isinstance(visual_style_snapshot, dict) or visual_style_snapshot is None else None,
         settings=settings if isinstance(settings, dict) or settings is None else None,
         studio_data=studio_data if isinstance(studio_data, dict) or studio_data is None else None,
         slides=slides,
@@ -561,6 +870,11 @@ def _build_presentation_response(row) -> PresentationResponse:
         theme=row.theme,
         marp_theme=getattr(row, "marp_theme", None),
         template_id=getattr(row, "template_id", None),
+        visual_style_id=getattr(row, "visual_style_id", None),
+        visual_style_scope=getattr(row, "visual_style_scope", None),
+        visual_style_name=getattr(row, "visual_style_name", None),
+        visual_style_version=getattr(row, "visual_style_version", None),
+        visual_style_snapshot=_deserialize_visual_style_snapshot(getattr(row, "visual_style_snapshot", None)),
         settings=_deserialize_settings(row.settings),
         studio_data=_deserialize_studio_data(getattr(row, "studio_data", None)),
         slides=slides,
@@ -697,8 +1011,18 @@ def _generate_presentation(
     source_ref: Any | None,
     source_query: str | None,
 ) -> PresentationResponse:
+    visual_style_application = _resolve_presentation_visual_style_application(
+        visual_style_id=getattr(request, "visual_style_id", None),
+        visual_style_scope=getattr(request, "visual_style_scope", None),
+        db=db,
+    )
+    visual_style_snapshot_dict = visual_style_application.snapshot if visual_style_application else None
     template = _resolve_template(getattr(request, "template_id", None))
-    theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
+    theme, marp_theme, settings, custom_css = _apply_template_defaults(
+        request=request,
+        template=template,
+        visual_style_application=visual_style_application,
+    )
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(marp_theme)
     settings = _validate_settings(settings)
@@ -736,6 +1060,7 @@ def _generate_presentation(
             enable_chunking=request.enable_chunking,
             chunk_size_tokens=request.chunk_size_tokens,
             summary_tokens=request.summary_tokens,
+            visual_style_snapshot=visual_style_snapshot_dict,
         )
     except SlidesSourceTooLargeError as exc:
         _record_generation_error("input_too_large")
@@ -772,6 +1097,11 @@ def _generate_presentation(
         theme=theme,
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
+        visual_style_id=visual_style_application.style_id if visual_style_application else None,
+        visual_style_scope=visual_style_application.scope if visual_style_application else None,
+        visual_style_name=visual_style_application.name if visual_style_application else None,
+        visual_style_version=visual_style_application.version if visual_style_application else None,
+        visual_style_snapshot=_serialize_visual_style_snapshot(visual_style_snapshot_dict),
         settings=_serialize_settings(settings),
         studio_data=None,
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
@@ -810,8 +1140,18 @@ async def create_presentation(
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="title_required")
+    visual_style_application = _resolve_presentation_visual_style_application(
+        visual_style_id=request.visual_style_id,
+        visual_style_scope=request.visual_style_scope,
+        db=db,
+    )
+    visual_style_snapshot_dict = visual_style_application.snapshot if visual_style_application else None
     template = _resolve_template(request.template_id)
-    theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
+    theme, marp_theme, settings, custom_css = _apply_template_defaults(
+        request=request,
+        template=template,
+        visual_style_application=visual_style_application,
+    )
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(marp_theme)
     settings = _validate_settings(settings)
@@ -827,6 +1167,11 @@ async def create_presentation(
         theme=theme,
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
+        visual_style_id=visual_style_application.style_id if visual_style_application else None,
+        visual_style_scope=visual_style_application.scope if visual_style_application else None,
+        visual_style_name=visual_style_application.name if visual_style_application else None,
+        visual_style_version=visual_style_application.version if visual_style_application else None,
+        visual_style_snapshot=_serialize_visual_style_snapshot(visual_style_snapshot_dict),
         settings=_serialize_settings(settings),
         studio_data=_serialize_studio_data(request.studio_data),
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
@@ -930,8 +1275,18 @@ async def update_presentation(
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="title_required")
+    visual_style_application = _resolve_presentation_visual_style_application(
+        visual_style_id=request.visual_style_id,
+        visual_style_scope=request.visual_style_scope,
+        db=db,
+    )
+    visual_style_snapshot_dict = visual_style_application.snapshot if visual_style_application else None
     template = _resolve_template(request.template_id)
-    theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
+    theme, marp_theme, settings, custom_css = _apply_template_defaults(
+        request=request,
+        template=template,
+        visual_style_application=visual_style_application,
+    )
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(marp_theme)
     settings = _validate_settings(settings)
@@ -949,6 +1304,11 @@ async def update_presentation(
                 "theme": theme,
                 "marp_theme": marp_theme,
                 "template_id": template.template_id if template else None,
+                "visual_style_id": visual_style_application.style_id if visual_style_application else None,
+                "visual_style_scope": visual_style_application.scope if visual_style_application else None,
+                "visual_style_name": visual_style_application.name if visual_style_application else None,
+                "visual_style_version": visual_style_application.version if visual_style_application else None,
+                "visual_style_snapshot": _serialize_visual_style_snapshot(visual_style_snapshot_dict),
                 "settings": _serialize_settings(settings),
                 "studio_data": _serialize_studio_data(request.studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
@@ -983,6 +1343,11 @@ async def patch_presentation(
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
     update_fields: dict[str, Any] = {}
+    builtin_appearance_defaults: dict[str, Any] | None = None
+    theme_was_set = _field_was_set(request, "theme")
+    marp_theme_was_set = _field_was_set(request, "marp_theme")
+    settings_was_set = _field_was_set(request, "settings")
+    custom_css_was_set = _field_was_set(request, "custom_css")
     if request.title is not None:
         title = request.title.strip()
         if not title:
@@ -990,15 +1355,56 @@ async def patch_presentation(
         update_fields["title"] = title
     if request.description is not None:
         update_fields["description"] = request.description
+    if theme_was_set and request.theme is None:
+        raise HTTPException(status_code=422, detail="invalid_theme")
     if request.theme is not None:
         _validate_theme(request.theme)
         update_fields["theme"] = request.theme
-    if request.marp_theme is not None:
+    if marp_theme_was_set:
         update_fields["marp_theme"] = _validate_marp_theme(request.marp_theme)
     if _field_was_set(request, "template_id"):
         template = _resolve_template(request.template_id)
         update_fields["template_id"] = template.template_id if template else None
-    if request.settings is not None:
+    if _field_was_set(request, "visual_style_id") or _field_was_set(request, "visual_style_scope"):
+        if request.visual_style_id is None and request.visual_style_scope is None:
+            update_fields["visual_style_id"] = None
+            update_fields["visual_style_scope"] = None
+            update_fields["visual_style_name"] = None
+            update_fields["visual_style_version"] = None
+            update_fields["visual_style_snapshot"] = None
+        else:
+            visual_style_application = _resolve_presentation_visual_style_application(
+                visual_style_id=request.visual_style_id,
+                visual_style_scope=request.visual_style_scope,
+                db=db,
+            )
+            if visual_style_application is None:
+                update_fields["visual_style_id"] = None
+                update_fields["visual_style_scope"] = None
+                update_fields["visual_style_name"] = None
+                update_fields["visual_style_version"] = None
+                update_fields["visual_style_snapshot"] = None
+            else:
+                update_fields["visual_style_id"] = visual_style_application.style_id
+                update_fields["visual_style_scope"] = visual_style_application.scope
+                update_fields["visual_style_name"] = visual_style_application.name
+                update_fields["visual_style_version"] = visual_style_application.version
+                update_fields["visual_style_snapshot"] = _serialize_visual_style_snapshot(
+                    visual_style_application.snapshot
+                )
+                if visual_style_application.scope == "builtin":
+                    # Built-in presets provide deck-wide appearance defaults unless the caller
+                    # overrides a specific field in this patch request.
+                    builtin_appearance_defaults = visual_style_application.appearance_defaults
+                    if not theme_was_set and "theme" not in update_fields:
+                        update_fields["theme"] = builtin_appearance_defaults.get("theme") or "black"
+                    if not marp_theme_was_set and "marp_theme" not in update_fields:
+                        update_fields["marp_theme"] = builtin_appearance_defaults.get("marp_theme")
+                    if not settings_was_set and "settings" not in update_fields:
+                        update_fields["settings"] = _serialize_settings(builtin_appearance_defaults.get("settings"))
+                    if not custom_css_was_set and "custom_css" not in update_fields:
+                        update_fields["custom_css"] = builtin_appearance_defaults.get("custom_css")
+    if settings_was_set:
         settings = _validate_settings(request.settings)
         update_fields["settings"] = _serialize_settings(settings)
     if _field_was_set(request, "studio_data"):
@@ -1007,8 +1413,8 @@ async def patch_presentation(
         slides = _normalize_slides([_slide_from_obj(s) for s in request.slides])
         update_fields["slides"] = json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides])
         update_fields["slides_text"] = _flatten_slides_text(slides)
-    if request.custom_css is not None:
-        update_fields["custom_css"] = request.custom_css
+    if custom_css_was_set:
+        update_fields["custom_css"] = _validate_custom_css(request.custom_css)
     if not update_fields:
         raise HTTPException(status_code=400, detail="no_fields_to_update")
     try:
@@ -1165,6 +1571,190 @@ async def get_template(template_id: str) -> SlidesTemplateResponse:
 
 
 @router.get(
+    "/styles",
+    response_model=VisualStyleListResponse,
+    summary="List visual styles",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.styles.list"))],
+)
+async def list_visual_styles(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleListResponse:
+    builtin_presets = list_builtin_visual_styles()
+    builtin_total = len(builtin_presets)
+    builtin_slice = builtin_presets[offset : offset + limit]
+    remaining = limit - len(builtin_slice)
+    user_offset = max(offset - builtin_total, 0)
+    user_rows: list[VisualStyleRow] = []
+    if remaining > 0:
+        user_rows, _ = db.list_visual_styles(limit=remaining, offset=user_offset)
+    total_count = builtin_total + db.count_visual_styles()
+    styles = [
+        *(
+            _visual_style_response_from_builtin(resolved)
+            for resolved in (
+                resolve_builtin_visual_style(style.style_id, include_custom_css=False)
+                for style in builtin_slice
+            )
+            if resolved is not None
+        ),
+        *(_visual_style_response_from_row(row) for row in user_rows),
+    ]
+    return VisualStyleListResponse(styles=styles, total_count=total_count, limit=limit, offset=offset)
+
+
+@router.get(
+    "/styles/{style_id}",
+    response_model=VisualStyleResponse,
+    summary="Get visual style",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.styles.get"))],
+)
+async def get_visual_style(
+    style_id: str,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleResponse:
+    return _resolve_visual_style_response(style_id, db)
+
+
+@router.post(
+    "/styles",
+    response_model=VisualStyleResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create visual style",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.styles.create"))],
+)
+async def create_visual_style(
+    request: VisualStyleCreateRequest,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleResponse:
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="visual_style_name_required")
+    row = db.create_visual_style(
+        name=name,
+        scope="user",
+        style_payload=_serialize_visual_style_payload(
+            description=request.description,
+            generation_rules=request.generation_rules,
+            artifact_preferences=request.artifact_preferences,
+            appearance_defaults=request.appearance_defaults,
+            fallback_policy=request.fallback_policy,
+        ),
+    )
+    return _visual_style_response_from_row(row)
+
+
+@router.patch(
+    "/styles/{style_id}",
+    response_model=VisualStyleResponse,
+    summary="Patch visual style",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE)), Depends(rbac_rate_limit("slides.styles.update"))],
+)
+async def patch_visual_style(
+    style_id: str,
+    request: VisualStylePatchRequest,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleResponse:
+    if get_builtin_visual_style(style_id) is not None:
+        raise HTTPException(status_code=403, detail="builtin_visual_style_read_only")
+    try:
+        existing = db.get_visual_style_by_id(style_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    payload = _deserialize_visual_style_payload(existing.style_payload)
+    merged_description = (
+        request.description if _field_was_set(request, "description") else payload.get("description")
+    )
+    merged_generation_rules = (
+        request.generation_rules
+        if _field_was_set(request, "generation_rules")
+        else payload.get("generation_rules") or {}
+    )
+    if merged_generation_rules is None:
+        merged_generation_rules = {}
+    merged_artifact_preferences = (
+        request.artifact_preferences
+        if _field_was_set(request, "artifact_preferences")
+        else payload.get("artifact_preferences") or []
+    )
+    if merged_artifact_preferences is None:
+        merged_artifact_preferences = []
+    merged_appearance_defaults = (
+        request.appearance_defaults
+        if _field_was_set(request, "appearance_defaults")
+        else payload.get("appearance_defaults") or {}
+    )
+    if merged_appearance_defaults is None:
+        merged_appearance_defaults = {}
+    merged_fallback_policy = (
+        request.fallback_policy
+        if _field_was_set(request, "fallback_policy")
+        else payload.get("fallback_policy") or {}
+    )
+    if merged_fallback_policy is None:
+        merged_fallback_policy = {}
+    name = (
+        request.name.strip() if _field_was_set(request, "name") and isinstance(request.name, str) else existing.name
+    )
+    if not name:
+        raise HTTPException(status_code=422, detail="visual_style_name_required")
+    if not any(
+        _field_was_set(request, field_name)
+        for field_name in {
+            "name",
+            "description",
+            "generation_rules",
+            "artifact_preferences",
+            "appearance_defaults",
+            "fallback_policy",
+        }
+    ):
+        raise HTTPException(status_code=400, detail="no_fields_to_update")
+    try:
+        row = db.update_visual_style(
+            style_id=style_id,
+            name=name,
+            style_payload=_serialize_visual_style_payload(
+                description=merged_description if isinstance(merged_description, str) or merged_description is None else None,
+                generation_rules=merged_generation_rules if isinstance(merged_generation_rules, dict) else {},
+                artifact_preferences=[str(item) for item in merged_artifact_preferences]
+                if isinstance(merged_artifact_preferences, list)
+                else [],
+                appearance_defaults=merged_appearance_defaults if isinstance(merged_appearance_defaults, dict) else {},
+                fallback_policy=merged_fallback_policy if isinstance(merged_fallback_policy, dict) else {},
+            ),
+            expected_updated_at=existing.updated_at,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="visual_style_version_conflict") from None
+    return _visual_style_response_from_row(row)
+
+
+@router.delete(
+    "/styles/{style_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete visual style",
+    dependencies=[Depends(require_permissions(MEDIA_DELETE)), Depends(rbac_rate_limit("slides.styles.delete"))],
+)
+async def delete_visual_style(
+    style_id: str,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> Response:
+    if get_builtin_visual_style(style_id) is not None:
+        raise HTTPException(status_code=403, detail="builtin_visual_style_read_only")
+    try:
+        deleted = db.delete_visual_style(style_id)
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="visual_style_in_use") from None
+    if not deleted:
+        raise HTTPException(status_code=404, detail="visual_style_not_found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
     "/presentations/{presentation_id}/versions",
     response_model=PresentationVersionListResponse,
     summary="List presentation versions",
@@ -1256,6 +1846,11 @@ async def restore_presentation_version(
                 "theme": theme,
                 "marp_theme": marp_theme,
                 "template_id": restored.template_id,
+                "visual_style_id": restored.visual_style_id,
+                "visual_style_scope": restored.visual_style_scope,
+                "visual_style_name": restored.visual_style_name,
+                "visual_style_version": restored.visual_style_version,
+                "visual_style_snapshot": _serialize_visual_style_snapshot(restored.visual_style_snapshot),
                 "settings": _serialize_settings(settings),
                 "studio_data": _serialize_studio_data(studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
@@ -1489,7 +2084,7 @@ async def generate_from_media(
     request: GenerateFromMediaRequest,
     response: Response,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: MediaDbSession = Depends(get_media_db_for_user),
 ) -> PresentationResponse:
     try:
         media_id = int(request.media_id)
@@ -1633,6 +2228,9 @@ async def export_presentation(
     slides = [_slide_from_obj(item) for item in slides_raw]
     slides = _normalize_slides(slides)
     settings = _deserialize_settings(row.settings)
+    visual_style_snapshot = _deserialize_visual_style_snapshot(
+        getattr(row, "visual_style_snapshot", None)
+    )
     try:
         user_id = int(db.client_id)
     except (TypeError, ValueError) as exc:
@@ -1705,6 +2303,7 @@ async def export_presentation(
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                visual_style_snapshot=visual_style_snapshot,
                 pdf_options=pdf_options,
                 asset_resolver=_asset_resolver,
             )
@@ -1735,6 +2334,7 @@ async def export_presentation(
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                visual_style_snapshot=visual_style_snapshot,
                 asset_resolver=_asset_resolver,
             )
         except SlidesAssetsMissingError as exc:

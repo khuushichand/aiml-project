@@ -91,6 +91,7 @@ from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
     negotiate_structured_response_mode,
     parse_and_validate_structured_output,
 )
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.testing import (
@@ -315,8 +316,9 @@ async def _resolve_assistant_context_for_chat(
 ) -> tuple[dict[str, Any] | None, int | None, dict[str, Any] | None, dict[str, Any]]:
     """Resolve character or persona context for ordinary chat."""
     existing_conversation: dict[str, Any] | None = None
-    if conversation_id:
-        existing_conversation = await loop.run_in_executor(None, chat_db.get_conversation_by_id, conversation_id)
+    get_conversation_by_id = getattr(chat_db, "get_conversation_by_id", None)
+    if conversation_id and callable(get_conversation_by_id):
+        existing_conversation = await loop.run_in_executor(None, get_conversation_by_id, conversation_id)
 
     assistant_context = _normalize_conversation_assistant_context(existing_conversation)
     assistant_kind = assistant_context.get("assistant_kind")
@@ -1074,6 +1076,7 @@ def resolve_provider_and_model(
     request_data: Any,
     metrics_default_provider: str,
     normalize_default_provider: str,
+    routing_decision: RoutingDecision | None = None,
 ) -> tuple[str, str, str, str, dict[str, Any]]:
     """Resolve provider/model for metrics and execution and record the decision path.
 
@@ -1092,6 +1095,40 @@ def resolve_provider_and_model(
     raw_model = getattr(request_data, "model", None)
     raw_api_provider = getattr(request_data, "api_provider", None)
     provider_explicit = bool(str(raw_api_provider or "").strip())
+
+    if routing_decision is not None and routing_decision.canonical:
+        request_data.api_provider = routing_decision.provider
+        request_data.model = routing_decision.model
+
+        debug_info: dict[str, Any] = {
+            "raw": {
+                "api_provider": raw_api_provider,
+                "model": raw_model,
+                "provider_explicit": provider_explicit,
+            },
+            "routing": {
+                "canonical": True,
+                "decision_source": routing_decision.decision_source,
+                "provider": routing_decision.provider,
+                "model": routing_decision.model,
+            },
+            "metrics": {
+                "default_provider": metrics_default_provider,
+                "provider": routing_decision.provider,
+                "model": routing_decision.model,
+            },
+            "selected": {
+                "provider": routing_decision.provider,
+                "model": routing_decision.model,
+            },
+        }
+        return (
+            routing_decision.provider,
+            routing_decision.model,
+            routing_decision.provider,
+            routing_decision.model,
+            debug_info,
+        )
 
     # Step 1: derive metrics-facing provider/model without mutating the request
     metrics_provider, metrics_model = parse_provider_model_for_metrics(
@@ -1525,6 +1562,7 @@ def build_call_params_from_request(
             "save_to_db",
             "history_message_limit",
             "history_message_order",
+            "research_context",
             "slash_command_injection_mode",
             "persona_exemplar_budget_tokens",
             "persona_exemplar_strategy",
@@ -1589,6 +1627,97 @@ def build_call_params_from_request(
     if "system_message" not in cleaned_args and final_system_message is not None:
         cleaned_args["system_message"] = final_system_message
     return cleaned_args
+
+
+def _format_research_context_block(research_context: Any) -> str | None:
+    """Convert bounded deep research context into a model-side system block."""
+    if research_context is None:
+        return None
+
+    if hasattr(research_context, "model_dump"):
+        context_data = research_context.model_dump(exclude_none=True)
+    elif isinstance(research_context, dict):
+        context_data = {k: v for k, v in research_context.items() if v is not None}
+    else:
+        return None
+
+    run_id = str(context_data.get("run_id") or "").strip()
+    query = str(context_data.get("query") or "").strip()
+    question = str(context_data.get("question") or "").strip()
+    research_url = str(context_data.get("research_url") or "").strip()
+    if not run_id and not query and not question:
+        return None
+
+    lines = ["Deep Research Context", f"Run ID: {run_id}" if run_id else None, f"Query: {query}" if query else None]
+    if question:
+        lines.append(f"Question: {question}")
+
+    outline = context_data.get("outline")
+    if isinstance(outline, list) and outline:
+        lines.append("Outline:")
+        for section in outline:
+            if hasattr(section, "model_dump"):
+                section = section.model_dump(exclude_none=True)
+            if isinstance(section, dict):
+                title = str(section.get("title") or "").strip()
+                if title:
+                    lines.append(f"- {title}")
+
+    key_claims = context_data.get("key_claims")
+    if isinstance(key_claims, list) and key_claims:
+        lines.append("Key Claims:")
+        for claim in key_claims:
+            if hasattr(claim, "model_dump"):
+                claim = claim.model_dump(exclude_none=True)
+            if isinstance(claim, dict):
+                claim_text = str(claim.get("text") or "").strip()
+                if claim_text:
+                    lines.append(f"- {claim_text}")
+
+    unresolved = context_data.get("unresolved_questions")
+    if isinstance(unresolved, list) and unresolved:
+        lines.append("Unresolved Questions:")
+        for item in unresolved:
+            text = str(item or "").strip()
+            if text:
+                lines.append(f"- {text}")
+
+    verification_summary = context_data.get("verification_summary")
+    if hasattr(verification_summary, "model_dump"):
+        verification_summary = verification_summary.model_dump(exclude_none=True)
+    if isinstance(verification_summary, dict) and verification_summary:
+        unsupported_count = verification_summary.get("unsupported_claim_count")
+        if unsupported_count is not None:
+            lines.append(f"Unsupported Claims: {unsupported_count}")
+
+    source_trust_summary = context_data.get("source_trust_summary")
+    if hasattr(source_trust_summary, "model_dump"):
+        source_trust_summary = source_trust_summary.model_dump(exclude_none=True)
+    if isinstance(source_trust_summary, dict) and source_trust_summary:
+        high_trust_count = source_trust_summary.get("high_trust_count")
+        if high_trust_count is not None:
+            lines.append(f"High-Trust Sources: {high_trust_count}")
+
+    if research_url:
+        lines.append(f"Research URL: {research_url}")
+
+    return "\n".join(line for line in lines if line)
+
+
+def inject_research_context_into_prompt(
+    *,
+    final_system_message: str | None,
+    templated_llm_payload: list[dict[str, Any]],
+    research_context: Any,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Attach bounded research context to the model-facing system prompt only."""
+    block = _format_research_context_block(research_context)
+    if not block:
+        return final_system_message, list(templated_llm_payload)
+
+    if final_system_message and final_system_message.strip():
+        return f"{final_system_message.rstrip()}\n\n{block}", list(templated_llm_payload)
+    return block, list(templated_llm_payload)
 
 
 def estimate_tokens_from_json(request_json: str) -> int:

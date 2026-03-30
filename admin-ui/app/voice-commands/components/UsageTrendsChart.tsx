@@ -43,7 +43,7 @@ export function UsageTrendsChart({ data, isLoading }: UsageTrendsChartProps) {
             {isLoading ? 'Loading usage data...' : 'No usage data available yet'}
           </div>
         ) : (
-          <div className="h-64">
+          <div className="h-64" role="img" aria-label={`Voice command usage trends chart showing ${chartData.length} data points for commands, users, and success rate`}>
             <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
               <AreaChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />

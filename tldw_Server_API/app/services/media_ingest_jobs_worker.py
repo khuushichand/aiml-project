@@ -15,9 +15,9 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
 from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -291,6 +291,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
                 db_path=str(db_path),
                 client_id=str(client_id),
                 temp_dir=temp_dir,
+                user_id=int(user_id) if user_id.isdigit() else None,
                 cancel_check=cancel_check,
             )
         else:

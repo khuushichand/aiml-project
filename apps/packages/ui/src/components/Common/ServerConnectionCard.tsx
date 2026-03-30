@@ -14,6 +14,10 @@ import { ConnectionPhase } from "@/types/connection"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { focusComposer } from "@/hooks/useComposerFocus"
 import { getReturnTo, clearReturnTo } from "@/utils/return-to"
+import {
+  requestQuickIngestIntro,
+  requestQuickIngestOpen,
+} from "@/utils/quick-ingest-open"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { useNavigate } from "react-router-dom"
 import { ServerOverviewHint } from "@/components/Common/ServerOverviewHint"
@@ -521,7 +525,7 @@ export const ServerConnectionCard: React.FC<Props> = ({
   }
 
   const handleOpenQuickIngestIntro = () => {
-    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest-intro"))
+    requestQuickIngestIntro()
   }
 
   const handleOpenQuickIngest = async () => {
@@ -530,7 +534,7 @@ export const ServerConnectionCard: React.FC<Props> = ({
     } catch {
       // ignore check failures; we will gate on current connection state
     }
-    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+    requestQuickIngestOpen()
   }
 
   const handleReturn = () => {

@@ -931,52 +931,60 @@ export const PolicyAssignmentsTab = ({
       <Card title="Current Effective Preview">
         {effectivePolicy ? (
           <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-            <Space wrap>
-              {effectivePolicy.capabilities.map((capability) => (
-                <Tag key={capability}>{capability}</Tag>
-              ))}
-              {effectivePolicy.allowed_tools.map((tool) => (
-                <Tag key={tool} color="green">
-                  {tool}
-                </Tag>
-              ))}
-              {effectivePolicy.denied_tools.map((tool) => (
-                <Tag key={tool} color="red">
-                  {tool}
-                </Tag>
-              ))}
-              {effectivePolicy.approval_mode ? (
-                <Tag color="gold">{effectivePolicy.approval_mode}</Tag>
-              ) : null}
-              {getPathScopeLabel(effectivePolicy.policy_document?.path_scope_mode) ? (
-                <Tag color="cyan">{getPathScopeLabel(effectivePolicy.policy_document?.path_scope_mode)}</Tag>
-              ) : null}
-              {effectivePolicy.policy_document?.path_scope_enforcement ? (
-                <Tag color="orange">Path approval fallback</Tag>
-              ) : null}
-              {getPathAllowlistSummary(effectivePolicy.policy_document?.path_allowlist_prefixes) ? (
-                <Tag color="blue">
-                  {`paths ${getPathAllowlistSummary(effectivePolicy.policy_document?.path_allowlist_prefixes)}`}
-                </Tag>
-              ) : null}
-              {effectivePolicy.selected_assignment_workspace_ids?.length ? (
-                <Tag color="purple">
-                  {`workspaces ${effectivePolicy.selected_assignment_workspace_ids.join(", ")}`}
-                </Tag>
-              ) : null}
-              {effectivePolicy.selected_workspace_set_object_name ? (
-                <Tag color="geekblue">
-                  {`workspace set ${effectivePolicy.selected_workspace_set_object_name}`}
-                </Tag>
-              ) : null}
-              {effectivePolicy.selected_workspace_trust_source ? (
-                <Tag color={effectivePolicy.selected_workspace_trust_source === "shared_registry" ? "magenta" : "purple"}>
-                  {effectivePolicy.selected_workspace_trust_source === "shared_registry"
-                    ? "shared registry"
-                    : "user-local"}
-                </Tag>
-              ) : null}
-            </Space>
+            {(() => {
+              const effectivePolicyDocument =
+                (effectivePolicy.policy_document as McpHubPermissionPolicyDocument | null | undefined) ??
+                {}
+
+              return (
+                <Space wrap>
+                  {effectivePolicy.capabilities.map((capability) => (
+                    <Tag key={capability}>{capability}</Tag>
+                  ))}
+                  {effectivePolicy.allowed_tools.map((tool) => (
+                    <Tag key={tool} color="green">
+                      {tool}
+                    </Tag>
+                  ))}
+                  {effectivePolicy.denied_tools.map((tool) => (
+                    <Tag key={tool} color="red">
+                      {tool}
+                    </Tag>
+                  ))}
+                  {effectivePolicy.approval_mode ? (
+                    <Tag color="gold">{effectivePolicy.approval_mode}</Tag>
+                  ) : null}
+                  {getPathScopeLabel(effectivePolicyDocument.path_scope_mode) ? (
+                    <Tag color="cyan">{getPathScopeLabel(effectivePolicyDocument.path_scope_mode)}</Tag>
+                  ) : null}
+                  {effectivePolicyDocument.path_scope_enforcement ? (
+                    <Tag color="orange">Path approval fallback</Tag>
+                  ) : null}
+                  {getPathAllowlistSummary(effectivePolicyDocument.path_allowlist_prefixes) ? (
+                    <Tag color="blue">
+                      {`paths ${getPathAllowlistSummary(effectivePolicyDocument.path_allowlist_prefixes)}`}
+                    </Tag>
+                  ) : null}
+                  {effectivePolicy.selected_assignment_workspace_ids?.length ? (
+                    <Tag color="purple">
+                      {`workspaces ${effectivePolicy.selected_assignment_workspace_ids.join(", ")}`}
+                    </Tag>
+                  ) : null}
+                  {effectivePolicy.selected_workspace_set_object_name ? (
+                    <Tag color="geekblue">
+                      {`workspace set ${effectivePolicy.selected_workspace_set_object_name}`}
+                    </Tag>
+                  ) : null}
+                  {effectivePolicy.selected_workspace_trust_source ? (
+                    <Tag color={effectivePolicy.selected_workspace_trust_source === "shared_registry" ? "magenta" : "purple"}>
+                      {effectivePolicy.selected_workspace_trust_source === "shared_registry"
+                        ? "shared registry"
+                        : "user-local"}
+                    </Tag>
+                  ) : null}
+                </Space>
+              )
+            })()}
             {effectivePolicy.provenance.length > 0 ? (
               <Space orientation="vertical" size={4} style={{ width: "100%" }}>
                 <Typography.Text strong>Why This Applies</Typography.Text>

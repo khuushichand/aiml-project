@@ -956,6 +956,9 @@ async function* bgStreamDirect<
     throw e
   } finally {
     if (idleTimer) clearTimeout(idleTimer)
+    try {
+      reader.cancel()
+    } catch {}
     if (abortSignal) {
       try {
         abortSignal.removeEventListener("abort", onAbort)

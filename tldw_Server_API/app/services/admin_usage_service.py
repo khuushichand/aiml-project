@@ -1012,3 +1012,88 @@ async def export_llm_usage_csv(
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export llm usage CSV: {exc}")
         raise HTTPException(status_code=500, detail="Failed to export CSV") from exc
+
+
+async def get_cost_attribution(
+    *,
+    principal: AuthPrincipal,
+    db,
+    group_by: str = "user",
+    range_days: int = 7,
+) -> dict:
+    """Aggregate LLM cost by user or org over the given time range."""
+    try:
+        if group_by not in {"user", "org"}:
+            raise HTTPException(status_code=422, detail="group_by must be 'user' or 'org'")
+
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+        if org_ids is not None and len(org_ids) == 0:
+            return {"group_by": group_by, "range_days": range_days, "items": []}
+
+        is_pg = _is_postgres_connection(db)
+        group_field = "user_id" if group_by == "user" else "org_id"
+
+        if is_pg:
+            pg_org_filter = ""
+            pg_params: list[Any] = [int(range_days)]
+            if org_ids is not None:
+                pg_org_filter = " AND org_id = ANY($2)"
+                pg_params.append(org_ids)
+            pg_query = f"""
+                SELECT
+                    {group_field} as entity_id,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                FROM llm_usage_v2
+                WHERE created_at >= CURRENT_TIMESTAMP - ($1 * INTERVAL '1 day')
+                {pg_org_filter}
+                GROUP BY {group_field}
+                ORDER BY total_tokens DESC
+                LIMIT 50
+                """  # nosec B608
+            rows = await db.fetch(pg_query, *pg_params)
+        else:
+            sqlite_org_filter = ""
+            sqlite_params: list[Any] = [f"-{int(range_days)} days"]
+            if org_ids is not None:
+                placeholders = ",".join("?" for _ in org_ids)
+                sqlite_org_filter = f" AND org_id IN ({placeholders})"
+                sqlite_params.extend(org_ids)
+            sqlite_query = f"""
+                SELECT
+                    {group_field} as entity_id,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                FROM llm_usage_v2
+                WHERE datetime(created_at) >= datetime('now', ?)
+                {sqlite_org_filter}
+                GROUP BY {group_field}
+                ORDER BY total_tokens DESC
+                LIMIT 50
+                """  # nosec B608
+            cursor = await db.execute(sqlite_query, tuple(sqlite_params))
+            rows = await cursor.fetchall()
+
+        items = []
+        for row in rows:
+            r = dict(row) if hasattr(row, 'keys') else {
+                "entity_id": row[0], "request_count": row[1],
+                "total_tokens": row[2], "prompt_tokens": row[3], "completion_tokens": row[4],
+            }
+            # Estimated cost at blended $3/M tokens
+            tokens = int(r.get("total_tokens") or 0)
+            r["estimated_cost_usd"] = round(tokens * 0.000003, 4)
+            items.append(r)
+
+        return {
+            "group_by": group_by,
+            "range_days": range_days,
+            "items": items,
+        }
+    except Exception as exc:
+        logger.exception("Failed to get cost attribution")
+        raise HTTPException(status_code=503, detail="Cost attribution is currently unavailable") from exc

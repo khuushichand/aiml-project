@@ -5,6 +5,7 @@ import {
   getCriticalIssues,
   classifySmokeIssues
 } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 import type { DiagnosticsData } from "./smoke.setup"
 import type { Page } from "@playwright/test"
 
@@ -63,7 +64,7 @@ const gotoCriticalRoute = async (
         )
       }
       clearDiagnostics(diagnostics)
-      await page.waitForTimeout(NAVIGATION_RETRY_WAIT_MS)
+      await new Promise((resolve) => setTimeout(resolve, NAVIGATION_RETRY_WAIT_MS))
     }
   }
 
@@ -78,6 +79,7 @@ type CriticalRoute = {
   path: string
   name: string
   expectedPath?: string
+  allowRedirectPanel?: boolean
   loadTimeoutMs?: number
 }
 
@@ -90,7 +92,12 @@ const CRITICAL_ROUTES: CriticalRoute[] = [
   { path: "/flashcards", name: "Flashcards" },
   { path: "/admin/llamacpp", name: "LlamaCpp Admin" },
   { path: "/content-review", name: "Content Review" },
-  { path: "/claims-review", name: "Claims Review", expectedPath: "/content-review" },
+  {
+    path: "/claims-review",
+    name: "Claims Review",
+    expectedPath: "/content-review",
+    allowRedirectPanel: true
+  },
   { path: "/workspace-playground", name: "Workspace Playground" },
   { path: "/stt", name: "STT" },
   { path: "/speech", name: "Speech" }
@@ -126,12 +133,40 @@ test.describe("Stage 5 release gate", () => {
       expect(status, `Route returned non-success status for ${route.path}`).toBeLessThan(400)
 
       const expectedPath = route.expectedPath || route.path
-      await page.waitForURL((url) => url.pathname === expectedPath, {
-        timeout: routeLoadTimeout
-      })
-      await page
-        .waitForLoadState("networkidle", { timeout: routeLoadTimeout })
-        .catch(() => {})
+      let resolvedViaRedirectPanel = false
+      if (route.allowRedirectPanel) {
+        await page.waitForFunction(
+          ({ targetPath, allowRedirectPanel }) => {
+            return (
+              window.location.pathname === targetPath ||
+              (allowRedirectPanel &&
+                Boolean(document.querySelector('[data-testid="route-redirect-panel"]')))
+            )
+          },
+          {
+            targetPath: expectedPath,
+            allowRedirectPanel: route.allowRedirectPanel
+          },
+          {
+            timeout: routeLoadTimeout
+          }
+        )
+        const redirectPanel = page.getByTestId("route-redirect-panel")
+        resolvedViaRedirectPanel =
+          route.allowRedirectPanel &&
+          (await redirectPanel.isVisible().catch(() => false))
+      } else {
+        await page.waitForURL((url) => url.pathname === expectedPath, {
+          timeout: routeLoadTimeout
+        })
+      }
+      await waitForAppShell(page, routeLoadTimeout)
+
+      if (!resolvedViaRedirectPanel) {
+        await page.waitForURL((url) => url.pathname === expectedPath, {
+          timeout: routeLoadTimeout
+        })
+      }
 
       const issues = getCriticalIssues(diagnostics)
       const classified = classifySmokeIssues(route.path, issues)

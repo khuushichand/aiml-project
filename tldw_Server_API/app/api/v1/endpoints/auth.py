@@ -18,6 +18,7 @@ from typing import Any, Optional
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from loguru import logger
 from pydantic import BaseModel, EmailStr, Field
@@ -35,6 +36,12 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_rate_limiter_dep,
     get_registration_service_dep,
     get_session_manager_dep,
+)
+from tldw_Server_API.app.api.v1.API_Deps.federation_deps import (
+    get_federation_provisioning_service_dep,
+    get_identity_provider_repo_dep,
+    get_oidc_federation_service_dep,
+    require_enterprise_federation,
 )
 from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 
@@ -58,10 +65,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
-from tldw_Server_API.app.core.AuthNZ.database import (
-    get_db_pool,
-    is_postgres_backend,
-)
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     DuplicateOrganizationError,
@@ -83,6 +87,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.repos.identity_provider_repo import IdentityProviderRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_profile, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
@@ -104,6 +109,10 @@ from tldw_Server_API.app.services.auth_service import (
     update_user_password_hash,
 )
 from tldw_Server_API.app.services.registration_service import RegistrationService
+from tldw_Server_API.app.core.AuthNZ.federation.claim_mapping import preview_claim_mapping
+from tldw_Server_API.app.core.AuthNZ.federation.oidc_service import OIDCFederationService
+from tldw_Server_API.app.core.AuthNZ.federation.provisioning_service import FederationProvisioningService
+from tldw_Server_API.app.core.AuthNZ.federation.state_repo import FederationStateRepo
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _env_flag_enabled,
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
@@ -172,6 +181,39 @@ def _legacy_user_me_enabled() -> bool:
 
 def _legacy_warning_payload(successor: str) -> dict[str, str]:
     return {"warning": "deprecated_endpoint", "successor": successor}
+
+
+def _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode():
+    from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+    return admin_mod._ensure_sqlite_authnz_ready_if_test_mode
+
+
+def _get_federation_state_repo(session_manager: SessionManager) -> FederationStateRepo:
+    return FederationStateRepo(session_manager=session_manager)
+
+
+async def _resolve_federation_provider(
+    *,
+    repo: IdentityProviderRepo,
+    provider_slug: str,
+    org_id: int | None = None,
+) -> dict[str, Any] | None:
+    normalized_slug = str(provider_slug or "").strip()
+    if org_id is not None:
+        provider = await repo.get_provider_by_slug(
+            slug=normalized_slug,
+            owner_scope_type="org",
+            owner_scope_id=int(org_id),
+        )
+        if provider:
+            return provider
+    return await repo.get_provider_by_slug(
+        slug=normalized_slug,
+        owner_scope_type="global",
+        owner_scope_id=None,
+    )
+
 
 def _get_email_service():
     """Resolve the email service lazily to honor monkeypatched modules in tests."""
@@ -242,6 +284,312 @@ def _get_mfa_login_ttl_seconds() -> int:
 
 def _normalize_magic_email(email: str) -> str:
     return str(email or "").strip().lower()
+
+
+async def _safe_audit_log_login_event(
+    *,
+    user_id: int,
+    username: str,
+    ip: str,
+    user_agent: str,
+    success: bool,
+) -> None:
+    try:
+        svc = await get_or_create_audit_service_for_user_id(user_id)
+        await svc.log_login(
+            user_id=user_id,
+            username=username,
+            ip_address=ip,
+            user_agent=user_agent,
+            success=success,
+        )
+        flush_on_login = _env_flag_enabled("AUDIT_FLUSH_ON_LOGIN")
+        test_mode = _is_test_mode()
+        if flush_on_login or test_mode:
+            await svc.flush()
+    except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "Federated login audit failed for user_id={}: {}",
+            user_id,
+            exc,
+            exc_info=True,
+        )
+
+
+async def _issue_multi_user_tokens(
+    *,
+    request: Request,
+    db: Any,
+    user: dict[str, Any],
+    jwt_service: JWTService,
+    session_manager: SessionManager,
+    settings: Settings,
+) -> TokenResponse:
+    user_id = int(user["id"])
+    username = str(user.get("username") or "")
+    client_ip = _auth_request_client_ip(request)
+    user_agent = request.headers.get("User-Agent", "Unknown")
+
+    temp_access = f"temp_access_{secrets.token_urlsafe(16)}"
+    temp_refresh = f"temp_refresh_{secrets.token_urlsafe(16)}"
+    temp_session_info = await session_manager.create_session(
+        user_id=user_id,
+        access_token=temp_access,
+        refresh_token=temp_refresh,
+        ip_address=client_ip,
+        user_agent=user_agent,
+    )
+    session_id = int(temp_session_info["session_id"])
+
+    if settings.AUTH_MODE == "multi_user":
+        await _ensure_user_org_membership(user_id, user.get("username"))
+
+    scope_claims = await _build_scope_claims(user_id)
+    add_claims = dict(scope_claims)
+    add_claims["session_id"] = session_id
+    access_token = jwt_service.create_access_token(
+        user_id=user_id,
+        username=username,
+        role=str(user.get("role") or settings.DEFAULT_USER_ROLE),
+        additional_claims=add_claims,
+    )
+    refresh_token = jwt_service.create_refresh_token(
+        user_id=user_id,
+        username=username,
+        additional_claims=add_claims,
+    )
+    await session_manager.update_session_tokens(
+        session_id=session_id,
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
+    await update_user_last_login(db, user_id, datetime.utcnow())
+    await _safe_audit_log_login_event(
+        user_id=user_id,
+        username=username,
+        ip=client_ip,
+        user_agent=user_agent,
+        success=True,
+    )
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+@router.get(
+    "/federation/{provider_slug}/login",
+    dependencies=[Depends(check_auth_rate_limit)],
+)
+async def federation_login(
+    provider_slug: str,
+    request: Request,
+    org_id: int | None = Query(None, ge=1),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+) -> RedirectResponse:
+    await _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode()()
+    require_enterprise_federation()
+    client_ip = _auth_request_client_ip(request)
+    allowed, retry_after = await _reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.federation.login",
+        entity=f"ip:{client_ip}",
+        tags={
+            "auth_endpoint": "federation_login",
+            "provider_slug": str(provider_slug or ""),
+        },
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many federation login attempts. Please try again later.",
+            headers={"Retry-After": str(int(retry_after or 1))},
+        )
+
+    repo = await get_identity_provider_repo_dep()
+    provider = await _resolve_federation_provider(
+        repo=repo,
+        provider_slug=provider_slug,
+        org_id=org_id,
+    )
+    if not provider or not bool(provider.get("enabled")):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Identity provider not found",
+        )
+
+    redirect_uri = str(request.url_for("federation_callback", provider_slug=provider_slug))
+    oidc_service = get_oidc_federation_service_dep()
+    try:
+        auth_request = await oidc_service.build_authorization_request(
+            provider=provider,
+            redirect_uri=redirect_uri,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    state_repo = _get_federation_state_repo(session_manager)
+    await state_repo.create_state(
+        state=auth_request["state"],
+        payload={
+            "provider_id": int(provider["id"]),
+            "provider_slug": str(provider["slug"]),
+            "owner_scope_type": str(provider.get("owner_scope_type") or "global"),
+            "owner_scope_id": provider.get("owner_scope_id"),
+            "redirect_uri": redirect_uri,
+            "nonce": auth_request["nonce"],
+            "code_verifier": auth_request["code_verifier"],
+            "expires_at": auth_request["expires_at"].isoformat(),
+        },
+        ttl_seconds=int(auth_request["ttl_seconds"]),
+    )
+    return RedirectResponse(url=str(auth_request["auth_url"]), status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+@router.get(
+    "/federation/{provider_slug}/callback",
+    name="federation_callback",
+    response_model=TokenResponse,
+    dependencies=[Depends(check_auth_rate_limit)],
+)
+async def federation_callback(
+    provider_slug: str,
+    code: str,
+    state: str,
+    request: Request,
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    settings: Settings = Depends(get_settings),
+    provisioning_service: FederationProvisioningService = Depends(get_federation_provisioning_service_dep),
+) -> TokenResponse:
+    await _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode()()
+    require_enterprise_federation()
+
+    code_value = str(code or "").strip()
+    state_value = str(state or "").strip()
+    if not code_value or not state_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing OIDC callback parameters",
+        )
+    client_ip = _auth_request_client_ip(request)
+    allowed, retry_after = await _reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.federation.callback",
+        entity=f"ip:{client_ip}",
+        tags={
+            "auth_endpoint": "federation_callback",
+            "provider_slug": str(provider_slug or ""),
+        },
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many federation callback attempts. Please try again later.",
+            headers={"Retry-After": str(int(retry_after or 1))},
+        )
+
+    state_repo = _get_federation_state_repo(session_manager)
+    state_record = await state_repo.consume_state(state=state_value)
+    if not state_record:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or expired OIDC state",
+        )
+
+    repo = await get_identity_provider_repo_dep()
+    provider_id = int(state_record.get("provider_id") or 0)
+    provider = await repo.get_provider(provider_id) if provider_id > 0 else None
+    if not provider or not bool(provider.get("enabled")):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Identity provider not found",
+        )
+    if str(provider.get("slug") or "").strip() != str(provider_slug or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="OIDC state provider mismatch",
+        )
+
+    redirect_uri = str(state_record.get("redirect_uri") or "").strip()
+    code_verifier = str(state_record.get("code_verifier") or "").strip()
+    if not redirect_uri or not code_verifier:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OIDC state is incomplete",
+        )
+
+    oidc_service = get_oidc_federation_service_dep()
+    try:
+        claims = await oidc_service.exchange_authorization_code(
+            provider=provider,
+            code=code_value,
+            redirect_uri=redirect_uri,
+            code_verifier=code_verifier,
+            nonce=(str(state_record.get("nonce")).strip() if state_record.get("nonce") else None),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    mapped_claims = preview_claim_mapping(provider.get("claim_mapping"), claims)
+    subject = str(mapped_claims.get("subject") or "").strip()
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OIDC claims did not resolve a subject",
+        )
+
+    db_pool = provisioning_service.db_pool
+    user = await provisioning_service.resolve_user_for_login(
+        provider=provider,
+        mapped_claims=mapped_claims,
+    )
+    if not user:
+        policy = provider.get("provisioning_policy") or {}
+        if not bool(policy.get("jit_create")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Federated account is not linked to a local user",
+            )
+        user = await _provision_federated_user(
+            mapped_claims=mapped_claims,
+            registration_service=RegistrationService(db_pool=db_pool),
+            default_role=settings.DEFAULT_USER_ROLE,
+        )
+    if not bool(user.get("is_active", True)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive. Please contact support.",
+        )
+
+    await provisioning_service.upsert_identity_link(
+        provider=provider,
+        user_id=int(user["id"]),
+        mapped_claims=mapped_claims,
+        raw_claims=claims,
+    )
+    await provisioning_service.apply_mapped_grants(
+        provider=provider,
+        user_id=int(user["id"]),
+        mapped_claims=mapped_claims,
+    )
+    db_pool = await get_db_pool()
+    async with db_pool.transaction() as db:
+        return await _issue_multi_user_tokens(
+            request=request,
+            db=db,
+            user=user,
+            jwt_service=jwt_service,
+            session_manager=session_manager,
+            settings=settings,
+        )
 
 
 def _current_user_value(user: Any, key: str, default: Any = None) -> Any:
@@ -412,6 +760,21 @@ def _derive_username_from_email(email: str) -> str:
     return local[:32]
 
 
+def _derive_username_from_claims(mapped_claims: dict[str, Any]) -> str:
+    username_hint = str(mapped_claims.get("username") or "").strip().lower()
+    if username_hint:
+        username_hint = re.sub(r"[^a-z0-9_-]+", "-", username_hint).strip("-")
+        if len(username_hint) >= 3:
+            return username_hint[:32]
+    return _derive_username_from_email(str(mapped_claims.get("email") or "user"))
+
+
+def _username_with_suffix(base: str, suffix: str) -> str:
+    if len(base) + len(suffix) <= 32:
+        return f"{base}{suffix}"
+    return f"{base[: 32 - len(suffix)]}{suffix}"
+
+
 def _generate_magic_password(length: int = 16) -> str:
     # Ensure a mix of upper, lower, digit, and special characters.
     specials = "!@#$%^&*"
@@ -426,6 +789,68 @@ def _generate_magic_password(length: int = 16) -> str:
     base.extend(secrets.choice(choices) for _ in range(remaining))
     secrets.SystemRandom().shuffle(base)
     return "".join(base)
+
+
+async def _provision_federated_user(
+    *,
+    mapped_claims: dict[str, Any],
+    registration_service: RegistrationService,
+    default_role: str,
+) -> dict[str, Any]:
+    email = str(mapped_claims.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OIDC claims did not resolve an email for JIT provisioning",
+        )
+
+    password = _generate_magic_password()
+    username_base = _derive_username_from_claims(mapped_claims)
+    user_info: Optional[dict[str, Any]] = None
+
+    for attempt in range(5):
+        suffix = f"-{secrets.token_hex(2)}"
+        username = username_base if attempt == 0 else _username_with_suffix(username_base, suffix)
+        try:
+            user_info = await registration_service.register_user(
+                username=username,
+                email=email,
+                password=password,
+                role_override=default_role,
+                is_verified_override=True,
+                system_provisioning=True,
+            )
+            break
+        except DuplicateUserError as exc:
+            if getattr(exc, "field", None) == "username":
+                continue
+            if getattr(exc, "field", None) == "email":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Federated email already belongs to a local user",
+                ) from exc
+            raise
+        except RegistrationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not provision a unique username for the federated user",
+        )
+
+    return {
+        "id": int(user_info["user_id"]),
+        "username": str(user_info["username"]),
+        "email": str(user_info["email"]),
+        "role": str(user_info["role"]),
+        "is_active": bool(user_info.get("is_active", True)),
+        "is_verified": bool(user_info.get("is_verified", False)),
+    }
+
 
 async def _ensure_user_org_membership(user_id: int, username: Optional[str] = None) -> None:
     """Ensure a user has at least one org membership; create a personal org if not."""
@@ -2323,6 +2748,79 @@ async def request_magic_link(
 
 
 @router.post(
+    "/admin/reauth/request",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_auth_rate_limit)],
+)
+async def request_admin_reauth(
+    request: Request,
+    current_user: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+) -> MessageResponse:
+    """Email a purpose-scoped admin reauthentication link to the acting admin."""
+    settings = get_settings()
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Admin reauthentication is only available in multi-user mode",
+        )
+    if not _current_user_has_admin_claims(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin reauthentication is only available to administrators",
+        )
+
+    user_id = _current_user_id(current_user)
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+    email = _normalize_magic_email(_current_user_value(current_user, "email", ""))
+    username = _current_user_username(current_user)
+    if not email:
+        actor = await fetch_active_user_by_id(db, int(user_id))
+        if actor:
+            email = _normalize_magic_email(actor.get("email") or "")
+            username = str(actor.get("username") or username)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authenticated admin account is missing an email address",
+        )
+
+    expires_in_minutes = max(1, min(int(settings.MAGIC_LINK_EXPIRE_MINUTES), 10))
+
+    try:
+        token = jwt_service.create_admin_reauth_token(
+            email=email,
+            user_id=int(user_id),
+            expires_in_minutes=expires_in_minutes,
+        )
+
+        email_service = _get_email_service()
+        await email_service.send_admin_reauth_email(
+            to_email=email,
+            reauth_token=token,
+            expires_in_minutes=expires_in_minutes,
+            username=username,
+        )
+    except HTTPException:
+        raise
+    except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error("Failed to send admin reauthentication email: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send admin reauthentication email",
+        ) from exc
+
+    return MessageResponse(message="Admin reauthentication link sent")
+
+
+@router.post(
     "/magic-link/verify",
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
@@ -2361,6 +2859,12 @@ async def verify_magic_link(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid magic link token",
         ) from exc
+
+    if str(payload.get("purpose") or "").strip().lower() == "admin_reauth":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Admin reauthentication tokens cannot be used for sign-in",
+        )
 
     email = _normalize_magic_email(payload.get("email") or "")
     user_id: Optional[int] = None

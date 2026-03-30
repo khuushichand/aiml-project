@@ -11,6 +11,10 @@ import { BasePage, type InteractiveElement } from "./BasePage"
 import { waitForConnection } from "../helpers"
 
 export class EvaluationsPage extends BasePage {
+  private tabTrigger(tabLabel: Locator): Locator {
+    return tabLabel.locator("xpath=ancestor-or-self::*[@role='tab'][1]").first()
+  }
+
   /* ------------------------------------------------------------------ */
   /* Locators                                                            */
   /* ------------------------------------------------------------------ */
@@ -47,7 +51,12 @@ export class EvaluationsPage extends BasePage {
 
   /** "Create evaluation" or "New evaluation" button */
   get createEvaluationButton(): Locator {
-    return this.page.getByRole("button", { name: /create|new/i }).first()
+    return this.page.getByTestId("evaluations-create-button")
+  }
+
+  /** Create/edit evaluation modal */
+  get createEvaluationModal(): Locator {
+    return this.page.getByRole("dialog", { name: /new evaluation|edit evaluation/i })
   }
 
   /** "Run" button (triggers an evaluation run) */
@@ -104,10 +113,11 @@ export class EvaluationsPage extends BasePage {
    */
   async runEvaluation(): Promise<void> {
     // Ensure we are on the evaluations tab
-    const evalTab = this.evaluationsTab
-    if (await evalTab.isVisible()) {
+    const evalTabLabel = this.evaluationsTab
+    const evalTab = this.tabTrigger(evalTabLabel)
+    if (await evalTabLabel.isVisible()) {
       await evalTab.click()
-      await this.page.waitForTimeout(500)
+      await expect(evalTab).toHaveAttribute("aria-selected", "true", { timeout: 5_000 })
     }
 
     // Click "Create" or "New" to open the wizard/form if the run button isn't visible yet
@@ -116,7 +126,7 @@ export class EvaluationsPage extends BasePage {
       const createVisible = await this.createEvaluationButton.isVisible().catch(() => false)
       if (createVisible) {
         await this.createEvaluationButton.click()
-        await this.page.waitForTimeout(500)
+        await expect(this.runButton.or(this.page.getByRole("dialog"))).toBeVisible({ timeout: 5_000 })
       }
     }
 
@@ -125,6 +135,12 @@ export class EvaluationsPage extends BasePage {
     if (await runBtn.isVisible().catch(() => false)) {
       await runBtn.click()
     }
+  }
+
+  async openCreateEvaluation(): Promise<void> {
+    await expect(this.createEvaluationButton).toBeVisible({ timeout: 10_000 })
+    await this.createEvaluationButton.click()
+    await expect(this.createEvaluationModal).toBeVisible({ timeout: 10_000 })
   }
 
   /**
@@ -138,9 +154,10 @@ export class EvaluationsPage extends BasePage {
       webhooks: this.webhooksTab,
       history: this.historyTab,
     }
-    const locator = tabLocators[tab]
-    await expect(locator).toBeVisible({ timeout: 10_000 })
-    await locator.click()
-    await this.page.waitForTimeout(500)
+    const tabLabel = tabLocators[tab]
+    const tabTrigger = this.tabTrigger(tabLabel)
+    await expect(tabLabel).toBeVisible({ timeout: 10_000 })
+    await tabTrigger.click()
+    await expect(tabTrigger).toHaveAttribute("aria-selected", "true", { timeout: 5_000 })
   }
 }

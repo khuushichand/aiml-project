@@ -1,0 +1,237 @@
+import React from "react"
+import { render, screen, waitFor } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { AgentRegistryPage } from "../index"
+
+const storageMocks = vi.hoisted(() => ({
+  useStorage: vi.fn()
+}))
+
+const configMocks = vi.hoisted(() => ({
+  getConfig: vi.fn()
+}))
+
+const acpMocks = vi.hoisted(() => ({
+  constructedConfigs: [] as Array<{
+    serverUrl: string
+    getAuthHeaders: () => Promise<Record<string, string>>
+    getAuthParams: () => Promise<{ token?: string; api_key?: string }>
+  }>,
+  getAvailableAgents: vi.fn()
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (_key: string, fallback?: string) => fallback ?? _key
+  })
+}))
+
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: (...args: unknown[]) => storageMocks.useStorage(...args)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getConfig: (...args: unknown[]) => configMocks.getConfig(...args)
+  }
+}))
+
+vi.mock("@/services/acp/client", () => ({
+  ACPRestClient: class {
+    private config: {
+      serverUrl: string
+      getAuthHeaders: () => Promise<Record<string, string>>
+      getAuthParams: () => Promise<{ token?: string; api_key?: string }>
+    }
+
+    constructor(config: {
+      serverUrl: string
+      getAuthHeaders: () => Promise<Record<string, string>>
+      getAuthParams: () => Promise<{ token?: string; api_key?: string }>
+    }) {
+      this.config = config
+      acpMocks.constructedConfigs.push(config)
+    }
+
+    async getAvailableAgents() {
+      return acpMocks.getAvailableAgents(this.config)
+    }
+  }
+}))
+
+vi.mock("antd", () => ({
+  Alert: ({
+    message,
+    description
+  }: {
+    message?: React.ReactNode
+    description?: React.ReactNode
+  }) => (
+    <div>
+      <div>{message}</div>
+      {description ? <div>{description}</div> : null}
+    </div>
+  ),
+  Badge: ({ count }: { count?: React.ReactNode }) => <span>{count}</span>,
+  Button: ({
+    children,
+    onClick
+  }: {
+    children?: React.ReactNode
+    onClick?: () => void
+  }) => (
+    <button type="button" onClick={onClick}>
+      {children}
+    </button>
+  ),
+  Card: ({
+    title,
+    extra,
+    children
+  }: {
+    title?: React.ReactNode
+    extra?: React.ReactNode
+    children?: React.ReactNode
+  }) => (
+    <section>
+      {title}
+      {extra}
+      {children}
+    </section>
+  ),
+  Empty: ({ description }: { description?: React.ReactNode }) => (
+    <div>{description}</div>
+  ),
+  Spin: () => <div>Loading...</div>,
+  Tag: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+  Tooltip: ({ children }: { children?: React.ReactNode }) => <>{children}</>
+}))
+
+describe("AgentRegistryPage connection config", () => {
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    acpMocks.constructedConfigs.length = 0
+
+    storageMocks.useStorage.mockImplementation((key: string, fallback: string) => {
+      if (key === "serverUrl") return ["http://localhost:8000", vi.fn()]
+      if (key === "authMode") return ["single-user", vi.fn()]
+      if (key === "apiKey") return ["", vi.fn()]
+      if (key === "accessToken") return ["", vi.fn()]
+      return [fallback, vi.fn()]
+    })
+
+    configMocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "real-key",
+      accessToken: ""
+    })
+
+    acpMocks.getAvailableAgents.mockResolvedValue({
+      agents: [
+        {
+          type: "planner",
+          name: "Planner Agent",
+          description: "Plans work",
+          is_configured: true
+        }
+      ]
+    })
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          runner: "ok",
+          agent: "ok",
+          api_keys: "ok"
+        })
+      }))
+    )
+  })
+
+  afterEach(() => {
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+  })
+
+  it("uses the canonical tldw config for ACP requests instead of stale legacy storage keys", async () => {
+    render(<AgentRegistryPage />)
+
+    expect(await screen.findByText("Planner Agent")).toBeInTheDocument()
+
+    await waitFor(async () => {
+      expect(acpMocks.constructedConfigs[0]?.serverUrl).toBe("http://127.0.0.1:8000")
+      expect(global.fetch).toHaveBeenCalledWith(
+        "http://127.0.0.1:8000/api/v1/acp/health",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "X-API-KEY": "real-key"
+          })
+        })
+      )
+      const authHeaders = await acpMocks.constructedConfigs[0]?.getAuthHeaders()
+      expect(authHeaders).toEqual(
+        expect.objectContaining({
+          "X-API-KEY": "real-key"
+        })
+      )
+    })
+  })
+
+  it("uses the shared quickstart health path instead of concatenating the backend serverUrl", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    render(<AgentRegistryPage />)
+
+    expect(await screen.findByText("Planner Agent")).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/v1/acp/health",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "X-API-KEY": "real-key"
+          })
+        })
+      )
+    })
+  })
+
+  it("normalizes structured ACP health payloads without trying to render raw objects", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          runner: {
+            status: "ok",
+            path: "/opt/homebrew/bin/go",
+            source: "PATH"
+          },
+          agents: [
+            {
+              agent_type: "planner",
+              status: "available",
+              api_key_set: true
+            }
+          ],
+          overall: "ok",
+          message: null
+        })
+      }))
+    )
+
+    render(<AgentRegistryPage />)
+
+    expect(await screen.findByText(/Runner source PATH path \/opt\/homebrew\/bin\/go/i)).toBeInTheDocument()
+    expect(screen.getByText(/1\/1 agents available/i)).toBeInTheDocument()
+  })
+})

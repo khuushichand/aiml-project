@@ -15,6 +15,7 @@ This module includes adapters for content operations:
 - slides_generate: Generate presentation slides
 - report_generate: Generate reports
 - newsletter_generate: Generate newsletters
+- notes_studio_generate: Generate structured notes studio payloads
 - diagram_generate: Generate diagrams
 - audio_briefing_compose: Compose multi-voice audio briefing scripts
 """
@@ -32,6 +33,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content.generation import (
     run_glossary_extract_adapter,
     run_mindmap_generate_adapter,
     run_newsletter_generate_adapter,
+    run_notes_studio_generate_adapter,
     run_outline_generate_adapter,
     run_quiz_generate_adapter,
     run_report_generate_adapter,
@@ -64,5 +66,6 @@ __all__ = [
     "run_slides_generate_adapter",
     "run_report_generate_adapter",
     "run_newsletter_generate_adapter",
+    "run_notes_studio_generate_adapter",
     "run_diagram_generate_adapter",
 ]

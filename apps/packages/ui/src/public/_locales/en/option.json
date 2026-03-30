@@ -1220,6 +1220,96 @@
   "notesSearch_tagsHelp": {
     "message": "Keywords help you find this note using the keyword filter on the left."
   },
+  "notesSearch_notesStudioAction": {
+    "message": "Notes Studio"
+  },
+  "notesSearch_notesStudioTemplateLabel": {
+    "message": "Choose notebook template"
+  },
+  "notesSearch_notesStudioHandwritingLabel": {
+    "message": "Handwriting treatment"
+  },
+  "notesSearch_notesStudioExcerptLabel": {
+    "message": "Selected excerpt"
+  },
+  "notesSearch_notesStudioCreateAction": {
+    "message": "Create Notes Studio note"
+  },
+  "notesSearch_notesStudioSelectionRequired": {
+    "message": "Select Markdown text before opening Notes Studio."
+  },
+  "notesSearch_notesStudioSaveFirstWarning": {
+    "message": "Save this note before opening Notes Studio."
+  },
+  "notesSearch_notesStudioMarkdownOnlyNotice": {
+    "message": "Notes Studio works from Markdown selections only."
+  },
+  "notesSearch_notesStudioSwitchToMarkdown": {
+    "message": "Switch to Markdown"
+  },
+  "notesSearch_notesStudioTemplateLined": {
+    "message": "Lined"
+  },
+  "notesSearch_notesStudioTemplateGrid": {
+    "message": "Grid"
+  },
+  "notesSearch_notesStudioTemplateCornell": {
+    "message": "Cornell"
+  },
+  "notesSearch_notesStudioHandwritingAccented": {
+    "message": "Accented"
+  },
+  "notesSearch_notesStudioHandwritingOff": {
+    "message": "Off"
+  },
+  "notesSearch_notesStudioCreateError": {
+    "message": "Failed to create Notes Studio note."
+  },
+  "notesSearch_notesStudioLoadError": {
+    "message": "Failed to load Notes Studio state."
+  },
+  "notesSearch_notesStudioStaleWarning": {
+    "message": "This Studio view is stale because the markdown companion changed."
+  },
+  "notesSearch_notesStudioRegenerateAction": {
+    "message": "Regenerate Studio view from current Markdown"
+  },
+  "notesSearch_notesStudioContinuePlainAction": {
+    "message": "Continue editing plain note"
+  },
+  "notesSearch_notesStudioPaperSizeLabel": {
+    "message": "Paper size"
+  },
+  "notesSearch_notesStudioDiagramHeading": {
+    "message": "Diagram"
+  },
+  "notesSearch_notesStudioRegenerateError": {
+    "message": "Failed to regenerate Notes Studio view."
+  },
+  "notesSearch_notesStudioUntitledPrintNote": {
+    "message": "Untitled note"
+  },
+  "notesSearch_notesStudioPrintTitleSuffix": {
+    "message": "Notes Studio Print"
+  },
+  "notesSearch_notesStudioExportedLabel": {
+    "message": "Exported"
+  },
+  "notesSearch_notesStudioTemplateMetaLabel": {
+    "message": "Template"
+  },
+  "notesSearch_notesStudioPaperMetaLabel": {
+    "message": "Paper"
+  },
+  "notesSearch_notesPrintUnavailable": {
+    "message": "Print is not available in this environment"
+  },
+  "notesSearch_notesPrintPopupError": {
+    "message": "Unable to open print view. Please allow pop-ups and try again."
+  },
+  "notesSearch_notesPrintOpened": {
+    "message": "Opened print view. Use Save as PDF in your browser to export PDF."
+  },
   "tts_playground": {
     "message": "TTS Playground"
   },
@@ -2791,6 +2881,15 @@
   },
   "header_modeWatchlists": {
     "message": "Watchlists"
+  },
+  "header_integrations": {
+    "message": "Integrations"
+  },
+  "header_scheduledTasks": {
+    "message": "Scheduled Tasks"
+  },
+  "header_adminIntegrations": {
+    "message": "Workspace Integrations"
   },
   "header_modeKanban": {
     "message": "Kanban Playground"

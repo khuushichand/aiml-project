@@ -467,7 +467,7 @@ async def reset_singletons(request):
     """Auto-reset all singletons before and after each test for clean state."""
     # No session-wide default DB. Tests must use isolated DB fixtures or mocks.
     # Reset before test
-    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.services.registration_service import reset_registration_service
@@ -628,7 +628,7 @@ async def real_audit_service(tmp_path):
 
 
 @pytest_asyncio.fixture
-async def isolated_test_environment(monkeypatch):
+async def isolated_test_environment(monkeypatch, tmp_path):
     """Create isolated DB and app instance for each test - TRUE ONE DB PER TEST."""
     import uuid as uuid_lib
 
@@ -1147,7 +1147,7 @@ async def isolated_test_environment(monkeypatch):
                 price_usd_yearly DOUBLE PRECISION DEFAULT 0,
                 limits_json JSONB NOT NULL,
                 is_active BOOLEAN DEFAULT TRUE,
-                is_public BOOLEAN DEFAULT TRUE,
+                is_public BOOLEAN DEFAULT FALSE,
                 sort_order INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1165,7 +1165,7 @@ async def isolated_test_environment(monkeypatch):
             {
                 "name": "free",
                 "display_name": "Free",
-                "description": "Get started with basic features",
+                "description": "Internal/default plan (not publicly listed)",
                 "price_usd_monthly": 0,
                 "price_usd_yearly": 0,
                 "sort_order": 0,
@@ -1182,50 +1182,6 @@ async def isolated_test_environment(monkeypatch):
                     "team_members": 1,
                     "rate_limit_rpm": 10,
                     "features": ["basic_search", "fts5_search", "basic_chat"],
-                },
-            },
-            {
-                "name": "pro",
-                "display_name": "Pro",
-                "description": "For power users and small teams",
-                "price_usd_monthly": 29,
-                "price_usd_yearly": 290,
-                "sort_order": 1,
-                "limits": {
-                    "storage_mb": 10240,
-                    "api_calls_day": 5000,
-                    "api_calls_month": 150000,
-                    "llm_tokens_day": 500000,
-                    "llm_tokens_month": 15000000,
-                    "llm_cost_month_usd": 50,
-                    "transcription_minutes_month": 300,
-                    "rag_queries_day": 500,
-                    "concurrent_jobs": 5,
-                    "team_members": 5,
-                    "rate_limit_rpm": 120,
-                    "features": ["*", "rag_advanced", "vector_search", "priority_support"],
-                },
-            },
-            {
-                "name": "enterprise",
-                "display_name": "Enterprise",
-                "description": "For organizations with advanced needs",
-                "price_usd_monthly": 199,
-                "price_usd_yearly": 1990,
-                "sort_order": 2,
-                "limits": {
-                    "storage_mb": 102400,
-                    "api_calls_day": 50000,
-                    "api_calls_month": 1500000,
-                    "llm_tokens_day": 5000000,
-                    "llm_tokens_month": 150000000,
-                    "llm_cost_month_usd": 500,
-                    "transcription_minutes_month": 3000,
-                    "rag_queries_day": 5000,
-                    "concurrent_jobs": 20,
-                    "team_members": -1,
-                    "rate_limit_rpm": 600,
-                    "features": ["*", "sso", "audit_logs", "dedicated_support", "custom_models"],
                 },
             },
         ]
@@ -1349,13 +1305,14 @@ async def isolated_test_environment(monkeypatch):
     monkeypatch.setenv("ENABLE_REGISTRATION", "true")
     monkeypatch.setenv("REQUIRE_REGISTRATION_CODE", "false")
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str((tmp_path / "user_databases").resolve()))
     # Defer heavy startup (embeddings, TTS, request queue, etc.) to prevent local hangs
     monkeypatch.setenv("DEFER_HEAVY_STARTUP", "true")
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "1")
 
     # 5. Reset ALL singletons to force fresh initialization with new DB
-    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
@@ -1365,6 +1322,10 @@ async def isolated_test_environment(monkeypatch):
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
     from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
     from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
+    from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+        ensure_billing_tables_pg,
+        ensure_identity_federation_tables_pg,
+    )
 
     await reset_db_pool()
     await reset_session_manager()
@@ -1376,6 +1337,16 @@ async def isolated_test_environment(monkeypatch):
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_users_db()
+
+    # Run the same Postgres compatibility DDL used by production bootstrap,
+    # then tear the pool back down so the TestClient creates a fresh pool on
+    # its own event loop.
+    try:
+        bootstrap_pool = await get_db_pool()
+        await ensure_billing_tables_pg(bootstrap_pool)
+        await ensure_identity_federation_tables_pg(bootstrap_pool)
+    finally:
+        await reset_db_pool()
 
     # 5.1 Skip forcing a DatabasePool into the app to avoid cross-event-loop issues.
     #     Let the FastAPI app create its own pool within its own loop when handling requests.

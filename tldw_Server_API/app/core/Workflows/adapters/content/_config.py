@@ -238,3 +238,22 @@ class DiagramGenerateConfig(BaseAdapterConfig):
     style: str | None = Field(None, description="Diagram style theme")
     provider: str | None = Field(None, description="LLM provider")
     model: str | None = Field(None, description="Model for generation")
+
+
+class NotesStudioGenerateConfig(BaseAdapterConfig):
+    """Config for deterministic or structured Notes Studio generation."""
+
+    excerpt_text: str = Field(..., description="Source excerpt used for study-note generation")
+    source_note_id: str | None = Field(None, description="Original source note identifier")
+    source_title: str | None = Field(None, description="Original source note title")
+    derived_title: str | None = Field(None, description="Deterministic derived note title")
+    template_type: Literal["lined", "grid", "cornell"] = Field(
+        "lined",
+        description="Notebook template hint for the generated payload",
+    )
+    handwriting_mode: Literal["off", "accented"] = Field(
+        "accented",
+        description="Handwriting accent mode for downstream rendering",
+    )
+    provider: str | None = Field(None, description="Optional LLM provider for structured generation")
+    model: str | None = Field(None, description="Optional LLM model for structured generation")

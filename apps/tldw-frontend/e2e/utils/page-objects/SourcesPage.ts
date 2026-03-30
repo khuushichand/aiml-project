@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class SourcesPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class SourcesPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for heading, offline state, unsupported state, or empty state
     const heading = this.page.getByText("Sources")
     const offline = this.page.getByText("Server is offline. Connect to manage ingestion sources.")

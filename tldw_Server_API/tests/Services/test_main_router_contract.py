@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import builtins
-import importlib
-import sys
 
 import pytest
 from fastapi import APIRouter, FastAPI
+
+from tldw_Server_API.tests.helpers.app_main_state import (
+    clear_app_main,
+    import_app_main,
+    restore_app_main,
+    snapshot_app_main,
+)
 
 
 @pytest.mark.unit
@@ -72,7 +77,8 @@ def test_minimal_app_import_survives_setup_router_import_error(monkeypatch: pyte
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
     original_import = builtins.__import__
-    existing_main = sys.modules.pop("tldw_Server_API.app.main", None)
+    existing_main = snapshot_app_main()
+    clear_app_main()
 
     def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "tldw_Server_API.app.api.v1.endpoints.setup":
@@ -82,10 +88,8 @@ def test_minimal_app_import_survives_setup_router_import_error(monkeypatch: pyte
     monkeypatch.setattr(builtins, "__import__", _guarded_import)
 
     try:
-        imported_main = importlib.import_module("tldw_Server_API.app.main")
+        imported_main = import_app_main()
         assert imported_main.app is not None
         assert any(route.path == "/health" for route in imported_main.app.routes)
     finally:
-        sys.modules.pop("tldw_Server_API.app.main", None)
-        if existing_main is not None:
-            sys.modules["tldw_Server_API.app.main"] = existing_main
+        restore_app_main(existing_main)

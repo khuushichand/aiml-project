@@ -1,20 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react"
-import { Modal, Button, Switch, Select, Radio, Collapse } from "antd"
-import type { RadioChangeEvent } from "antd"
+import { Modal, Button } from "antd"
 import { useTranslation } from "react-i18next"
-import {
-  ArrowLeft,
-  ArrowRight,
-  ChevronDown,
-  Minimize2,
-  XCircle,
-  Info,
-} from "lucide-react"
+import { XCircle } from "lucide-react"
 import { browser } from "wxt/browser"
-import { IngestWizardProvider, useIngestWizard } from "./QuickIngest/IngestWizardContext"
+import {
+  IngestWizardProvider,
+  useIngestWizard,
+  type IngestWizardState,
+} from "./QuickIngest/IngestWizardContext"
 import { IngestWizardStepper } from "./QuickIngest/IngestWizardStepper"
 import { AddContentStep } from "./QuickIngest/AddContentStep"
-import { PresetSelector } from "./QuickIngest/PresetSelector"
+import { WizardConfigureStep } from "./QuickIngest/WizardConfigureStep"
 import { ReviewStep } from "./QuickIngest/ReviewStep"
 import { ProcessingStep } from "./QuickIngest/ProcessingStep"
 import { WizardResultsStep } from "./QuickIngest/WizardResultsStep"
@@ -24,11 +20,19 @@ import {
   startQuickIngestSession,
   submitQuickIngestBatch,
 } from "@/services/tldw/quick-ingest-batch"
+import { reattachQuickIngestSession } from "@/services/tldw/quick-ingest-session-reattach"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import {
+  type PersistedWizardQueueItem,
+  type QuickIngestSessionLifecycle,
+  type QuickIngestSessionRecord,
+  useQuickIngestSessionStore,
+} from "@/store/quick-ingest-session"
 import type {
   DetectedMediaType,
   ItemProgress,
   ItemProgressStatus,
+  PersistedQuickIngestTracking,
   TypeDefaults,
   WizardQueueItem,
   WizardResultItem,
@@ -43,260 +47,6 @@ type QuickIngestWizardModalProps = {
   onClose: () => void
   /** When true, automatically skip to processing on mount (compat with old modal). */
   autoProcessQueued?: boolean
-}
-
-// ---------------------------------------------------------------------------
-// Configure Step (Step 2) - inline
-// ---------------------------------------------------------------------------
-
-const ConfigureStep: React.FC = () => {
-  const { t } = useTranslation(["option"])
-  const { state, setPreset, setCustomOptions, goNext, goBack } = useIngestWizard()
-  const { queueItems, selectedPreset, presetConfig } = state
-
-  const qi = useCallback(
-    (key: string, defaultValue: string, options?: Record<string, unknown>) =>
-      options
-        ? t(`quickIngest.${key}`, { defaultValue, ...options })
-        : t(`quickIngest.${key}`, defaultValue),
-    [t],
-  )
-
-  // Detect which content types are present in the queue
-  const detectedTypes = useMemo(() => {
-    const types = new Set<DetectedMediaType>()
-    for (const item of queueItems) {
-      types.add(item.detectedType)
-    }
-    return types
-  }, [queueItems])
-
-  const hasAudio = detectedTypes.has("audio")
-  const hasVideo = detectedTypes.has("video")
-  const hasDocument =
-    detectedTypes.has("document") ||
-    detectedTypes.has("pdf") ||
-    detectedTypes.has("ebook") ||
-    detectedTypes.has("image")
-
-  // Handlers for type-specific options
-  const handleLanguageChange = useCallback(
-    (value: string) => {
-      setCustomOptions({
-        typeDefaults: {
-          ...presetConfig.typeDefaults,
-          audio: { ...presetConfig.typeDefaults.audio, language: value },
-        },
-      })
-    },
-    [presetConfig.typeDefaults, setCustomOptions],
-  )
-
-  const handleDiarizeToggle = useCallback(
-    (checked: boolean) => {
-      setCustomOptions({
-        typeDefaults: {
-          ...presetConfig.typeDefaults,
-          audio: { ...presetConfig.typeDefaults.audio, diarize: checked },
-        },
-      })
-    },
-    [presetConfig.typeDefaults, setCustomOptions],
-  )
-
-  const handleOcrToggle = useCallback(
-    (checked: boolean) => {
-      setCustomOptions({
-        typeDefaults: {
-          ...presetConfig.typeDefaults,
-          document: { ...presetConfig.typeDefaults.document, ocr: checked },
-        },
-      })
-    },
-    [presetConfig.typeDefaults, setCustomOptions],
-  )
-
-  const handleCaptionsToggle = useCallback(
-    (checked: boolean) => {
-      setCustomOptions({
-        typeDefaults: {
-          ...presetConfig.typeDefaults,
-          video: { ...presetConfig.typeDefaults.video, captions: checked },
-        },
-      })
-    },
-    [presetConfig.typeDefaults, setCustomOptions],
-  )
-
-  const handleStorageChange = useCallback(
-    (e: RadioChangeEvent) => {
-      setCustomOptions({ storeRemote: e.target.value })
-    },
-    [setCustomOptions],
-  )
-
-  return (
-    <div className="py-3 space-y-5">
-      {/* Preset cards */}
-      <PresetSelector
-        qi={qi}
-        value={selectedPreset}
-        onChange={setPreset}
-        queueItems={queueItems}
-      />
-
-      {/* Type-specific options */}
-      {(hasAudio || hasVideo || hasDocument) && (
-        <div className="space-y-3">
-          <h4 className="text-sm font-medium text-text">
-            {qi("wizard.configure.typeOptions", "Content-specific options")}
-          </h4>
-
-          {/* Audio options */}
-          {hasAudio && (
-            <div className="flex items-center gap-4 rounded-md border border-border px-3 py-2">
-              <span className="text-sm text-text min-w-[80px]">
-                {qi("wizard.configure.audio", "Audio")}
-              </span>
-              <div className="flex items-center gap-3 flex-1">
-                <label className="flex items-center gap-1.5 text-xs text-text-muted">
-                  {qi("wizard.configure.language", "Language")}
-                  <Select
-                    size="small"
-                    value={presetConfig.typeDefaults.audio?.language ?? "auto"}
-                    onChange={handleLanguageChange}
-                    className="w-28"
-                    options={[
-                      { value: "auto", label: "Auto-detect" },
-                      { value: "en", label: "English" },
-                      { value: "es", label: "Spanish" },
-                      { value: "fr", label: "French" },
-                      { value: "de", label: "German" },
-                      { value: "ja", label: "Japanese" },
-                      { value: "zh", label: "Chinese" },
-                      { value: "ko", label: "Korean" },
-                      { value: "pt", label: "Portuguese" },
-                      { value: "ru", label: "Russian" },
-                    ]}
-                  />
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-text-muted">
-                  {qi("wizard.configure.diarization", "Diarization")}
-                  <Switch
-                    size="small"
-                    checked={presetConfig.typeDefaults.audio?.diarize ?? false}
-                    onChange={handleDiarizeToggle}
-                  />
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* Document options */}
-          {hasDocument && (
-            <div className="flex items-center gap-4 rounded-md border border-border px-3 py-2">
-              <span className="text-sm text-text min-w-[80px]">
-                {qi("wizard.configure.documents", "Documents")}
-              </span>
-              <div className="flex items-center gap-3 flex-1">
-                <label className="flex items-center gap-1.5 text-xs text-text-muted">
-                  {qi("wizard.configure.ocr", "OCR")}
-                  <Switch
-                    size="small"
-                    checked={presetConfig.typeDefaults.document?.ocr ?? false}
-                    onChange={handleOcrToggle}
-                  />
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* Video options */}
-          {hasVideo && (
-            <div className="flex items-center gap-4 rounded-md border border-border px-3 py-2">
-              <span className="text-sm text-text min-w-[80px]">
-                {qi("wizard.configure.video", "Video")}
-              </span>
-              <div className="flex items-center gap-3 flex-1">
-                <label className="flex items-center gap-1.5 text-xs text-text-muted">
-                  {qi("wizard.configure.captions", "Captions")}
-                  <Switch
-                    size="small"
-                    checked={presetConfig.typeDefaults.video?.captions ?? false}
-                    onChange={handleCaptionsToggle}
-                  />
-                </label>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Storage option */}
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-text">
-          {qi("wizard.configure.storage", "Storage")}
-        </h4>
-        <Radio.Group
-          value={presetConfig.storeRemote}
-          onChange={handleStorageChange}
-          className="flex gap-4"
-        >
-          <Radio value={true}>
-            <span className="text-sm">{qi("wizard.configure.server", "Server")}</span>
-          </Radio>
-          <Radio value={false}>
-            <span className="text-sm">{qi("wizard.configure.local", "Local only")}</span>
-          </Radio>
-        </Radio.Group>
-      </div>
-
-      {/* Advanced options placeholder */}
-      <Collapse
-        ghost
-        expandIcon={({ isActive }) => (
-          <ChevronDown
-            className={`h-4 w-4 text-text-muted transition-transform ${
-              isActive ? "rotate-180" : ""
-            }`}
-          />
-        )}
-        items={[
-          {
-            key: "advanced",
-            label: (
-              <span className="text-xs text-text-muted">
-                {qi("wizard.configure.advanced", "Advanced options")}
-              </span>
-            ),
-            children: (
-              <div className="flex items-center gap-2 rounded-md bg-surface2 px-3 py-3 text-xs text-text-muted">
-                <Info className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                <span>
-                  {qi(
-                    "wizard.configure.advancedPlaceholder",
-                    "Advanced options are available in the full ingest modal.",
-                  )}
-                </span>
-              </div>
-            ),
-          },
-        ]}
-      />
-
-      {/* Navigation buttons */}
-      <div className="flex items-center justify-between pt-2">
-        <Button onClick={goBack}>
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          {qi("wizard.back", "Back")}
-        </Button>
-        <Button type="primary" onClick={goNext}>
-          {qi("wizard.next", "Next")}
-          <ArrowRight className="ml-1 h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  )
 }
 
 type QuickIngestEntryType = "auto" | "html" | "pdf" | "document" | "audio" | "video"
@@ -350,6 +100,8 @@ const RESULT_SUCCESS_STATUS_TOKENS = [
 ]
 
 const RESULT_CANCELLED_STATUS_TOKENS = ["cancelled", "canceled"]
+const FILE_REATTACH_WARNING = "Reattach this file after refresh to process it."
+const PERSISTED_REATTACH_POLL_INTERVAL_MS = 1_500
 
 const mapDetectedTypeToEntryType = (
   detectedType: DetectedMediaType
@@ -480,6 +232,410 @@ const buildFailureResults = (
     error: message,
   }))
 
+const buildQueueFileKey = (item: WizardQueueItem): string | undefined => {
+  if (item.fileStub?.key) return item.fileStub.key
+  if (!item.file) return undefined
+  const lastModified = Number.isFinite(item.file.lastModified) ? item.file.lastModified : 0
+  return `${item.file.name}::${item.file.size}::${lastModified}`
+}
+
+const buildPersistedQueueItems = (
+  items: WizardQueueItem[]
+): PersistedWizardQueueItem[] =>
+  items.map((item) => ({
+    id: item.id,
+    kind: item.kind || (item.url ? "url" : "file"),
+    fileName: item.fileName || item.file?.name,
+    name: item.fileName || item.file?.name,
+    key: buildQueueFileKey(item),
+    size: item.file ? item.file.size : item.fileSize,
+    type: item.file?.type || item.mimeType,
+    lastModified:
+      item.file?.lastModified ?? item.fileStub?.lastModified ?? undefined,
+    url: item.url,
+    detectedType: item.detectedType,
+    icon: item.icon,
+    fileSize: item.file?.size ?? item.fileSize,
+    mimeType: item.file?.type || item.mimeType,
+    validation: item.validation,
+    fileStub:
+      item.file || item.fileStub
+        ? {
+            key: buildQueueFileKey(item),
+            instanceId: item.fileStub?.instanceId,
+            lastModified:
+              item.file?.lastModified ?? item.fileStub?.lastModified ?? undefined,
+          }
+        : undefined,
+  }))
+
+const normalizeTrackedItemIds = (
+  tracking?: Pick<PersistedQuickIngestTracking, "submittedItemIds" | "itemIds">
+): string[] =>
+  Array.from(
+    new Set(
+      [
+        ...(Array.isArray(tracking?.submittedItemIds)
+          ? tracking.submittedItemIds
+          : []),
+        ...(Array.isArray(tracking?.itemIds) ? tracking.itemIds : []),
+      ]
+        .map((itemId) => String(itemId || "").trim())
+        .filter(Boolean)
+    )
+  )
+
+const normalizeTrackedJobIds = (
+  tracking?: Pick<PersistedQuickIngestTracking, "jobIds">
+): number[] =>
+  Array.from(
+    new Set(
+      (Array.isArray(tracking?.jobIds) ? tracking.jobIds : [])
+        .map((jobId) => Number(jobId))
+        .filter((jobId) => Number.isFinite(jobId) && jobId > 0)
+        .map((jobId) => Math.trunc(jobId))
+    )
+  )
+
+const resolveTrackedQueueItems = (
+  items: WizardQueueItem[],
+  tracking?: PersistedQuickIngestTracking
+): WizardQueueItem[] => {
+  const trackedItemIds = normalizeTrackedItemIds(tracking)
+  if (trackedItemIds.length === 0) {
+    const trackedJobIds = normalizeTrackedJobIds(tracking)
+    if (trackedJobIds.length > 0) {
+      return items.slice(0, trackedJobIds.length)
+    }
+    return items
+  }
+  const itemsById = new Map(items.map((item) => [item.id, item] as const))
+  const trackedItems = trackedItemIds
+    .map((itemId) => itemsById.get(itemId))
+    .filter((item): item is WizardQueueItem => Boolean(item))
+  return trackedItems.length > 0 ? trackedItems : items
+}
+
+const resolveQueueItemForReattachedJob = (
+  items: WizardQueueItem[],
+  tracking: PersistedQuickIngestTracking | undefined,
+  sourceItemId: string | undefined,
+  jobId: number,
+  index: number
+): WizardQueueItem | undefined => {
+  const mappedItemId = String(sourceItemId || "").trim() || tracking?.jobIdToItemId?.[String(jobId)]
+  if (mappedItemId) {
+    return items.find((item) => item.id === mappedItemId)
+  }
+  return resolveTrackedQueueItems(items, tracking)[index]
+}
+
+const resolveTrackingBatchIds = (
+  tracking?: PersistedQuickIngestTracking
+): string[] =>
+  Array.from(
+    new Set(
+      [tracking?.batchId, ...(tracking?.batchIds || [])]
+        .map((batchId) => String(batchId || "").trim())
+        .filter(Boolean)
+    )
+  )
+
+const hydrateQueueItems = (
+  queueItems: QuickIngestSessionRecord["queueItems"]
+): WizardQueueItem[] =>
+  queueItems.map((item) => {
+    const isFileItem = item.kind === "file" || (!item.url && Boolean(item.fileName || item.name))
+    if (!isFileItem) {
+      return {
+        id: item.id,
+        kind: "url",
+        url: item.url,
+        detectedType: item.detectedType,
+        icon: item.icon,
+        fileSize: item.fileSize,
+        mimeType: item.mimeType,
+        validation: item.validation,
+      }
+    }
+
+    const warnings = Array.from(
+      new Set([...(item.validation.warnings ?? []), FILE_REATTACH_WARNING])
+    )
+
+    return {
+      id: item.id,
+      kind: "file",
+      fileName: item.fileName || item.name,
+      detectedType: item.detectedType,
+      icon: item.icon,
+      fileSize: item.fileSize,
+      mimeType: item.mimeType || item.type,
+      validation: {
+        ...item.validation,
+        valid: false,
+        warnings,
+      },
+      fileStub: item.fileStub || {
+        key: item.key,
+        lastModified: item.lastModified,
+      },
+    }
+  })
+
+const deriveLifecycleFromWizardState = (
+  state: IngestWizardState,
+  existingLifecycle?: QuickIngestSessionLifecycle
+): QuickIngestSessionLifecycle => {
+  if (state.currentStep < 4 && state.processingState.status === "idle") {
+    return "draft"
+  }
+
+  if (state.processingState.status === "running") {
+    return "processing"
+  }
+
+  if (state.processingState.status === "cancelled") {
+    return "cancelled"
+  }
+
+  if (state.processingState.status === "error") {
+    if (existingLifecycle === "interrupted") {
+      return "interrupted"
+    }
+    return "partial_failure"
+  }
+
+  if (state.processingState.status === "complete" || state.currentStep === 5) {
+    const hasFailures = state.results.some(
+      (item) => item.status === "error" || item.outcome === "failed"
+    )
+    const allCancelled =
+      state.results.length > 0 &&
+      state.results.every((item) => item.outcome === "cancelled")
+    if (allCancelled) return "cancelled"
+    return hasFailures ? "partial_failure" : "completed"
+  }
+
+  return existingLifecycle || "draft"
+}
+
+const buildResultSummaryFromState = (
+  state: IngestWizardState,
+  lifecycle: QuickIngestSessionLifecycle,
+  existingSession: QuickIngestSessionRecord
+): QuickIngestSessionRecord["resultSummary"] => {
+  const successes = state.results.filter((item) => item.status === "ok")
+  const failures = state.results.filter(
+    (item) => item.status === "error" && item.outcome !== "cancelled"
+  )
+  const cancelled = state.results.filter((item) => item.outcome === "cancelled")
+  const firstSuccess = successes[0]
+
+  return {
+    ...existingSession.resultSummary,
+    status:
+      lifecycle === "completed"
+        ? "success"
+        : lifecycle === "cancelled"
+          ? "cancelled"
+          : lifecycle === "partial_failure" || lifecycle === "interrupted"
+            ? "error"
+            : existingSession.resultSummary.status,
+    attemptedAt:
+      existingSession.resultSummary.attemptedAt ??
+      existingSession.createdAt ??
+      Date.now(),
+    completedAt:
+      lifecycle === "completed" ||
+      lifecycle === "partial_failure" ||
+      lifecycle === "cancelled" ||
+      lifecycle === "interrupted"
+        ? Date.now()
+        : existingSession.resultSummary.completedAt,
+    totalCount: state.results.length || state.queueItems.length,
+    successCount: successes.length,
+    failedCount: failures.length,
+    cancelledCount: cancelled.length,
+    firstMediaId:
+      firstSuccess?.mediaId === null || typeof firstSuccess?.mediaId === "undefined"
+        ? existingSession.resultSummary.firstMediaId
+        : String(firstSuccess.mediaId),
+    primarySourceLabel:
+      firstSuccess?.title ||
+      firstSuccess?.fileName ||
+      firstSuccess?.url ||
+      existingSession.resultSummary.primarySourceLabel,
+    errorMessage:
+      failures[0]?.error ||
+      cancelled[0]?.error ||
+      existingSession.errorMessage ||
+      null,
+  }
+}
+
+const buildInitialWizardState = (
+  session: QuickIngestSessionRecord
+): IngestWizardState => ({
+  currentStep: session.currentStep,
+  highestStep: Math.max(session.currentStep, 1) as IngestWizardState["highestStep"],
+  queueItems: hydrateQueueItems(session.queueItems),
+  selectedPreset: session.selectedPreset,
+  customBasePreset: session.customBasePreset,
+  presetConfig: session.presetConfig,
+  customOptions: session.customOptions,
+  processingState: session.processingState,
+  results: session.results,
+  isMinimized:
+    session.visibility === "hidden" && session.lifecycle === "processing",
+})
+
+const buildSessionPatchFromWizardState = (
+  state: IngestWizardState,
+  session: QuickIngestSessionRecord
+): Partial<QuickIngestSessionRecord> => {
+  const lifecycle = deriveLifecycleFromWizardState(state, session.lifecycle)
+  const queueItems = buildPersistedQueueItems(state.queueItems)
+  return {
+    currentStep: state.currentStep,
+    queueItems,
+    selectedPreset: state.selectedPreset,
+    customBasePreset: state.customBasePreset,
+    presetConfig: state.presetConfig,
+    customOptions: state.customOptions,
+    processingState: state.processingState,
+    results: state.results,
+    badge: {
+      queueCount:
+        lifecycle === "draft"
+          ? queueItems.filter((item) => item.validation.valid).length
+          : 0,
+      hasRecentFailure:
+        lifecycle === "partial_failure" || lifecycle === "interrupted",
+    },
+    lifecycle,
+    completedAt:
+      lifecycle === "completed" ||
+      lifecycle === "partial_failure" ||
+      lifecycle === "cancelled" ||
+      lifecycle === "interrupted"
+        ? Date.now()
+        : null,
+    errorMessage:
+      lifecycle === "partial_failure" || lifecycle === "interrupted"
+        ? state.results.find((item) => item.status === "error")?.error ||
+          session.errorMessage ||
+          null
+        : lifecycle === "cancelled"
+          ? state.results.find((item) => item.outcome === "cancelled")?.error || null
+          : null,
+    resultSummary: buildResultSummaryFromState(state, lifecycle, session),
+  }
+}
+
+const mapReattachedJobStatusToProgress = (status: string): ItemProgressStatus => {
+  switch (status) {
+    case "pending":
+    case "queued":
+      return "queued"
+    case "uploading":
+      return "uploading"
+    case "running":
+    case "processing":
+      return "processing"
+    case "analyzing":
+      return "analyzing"
+    case "storing":
+      return "storing"
+    case "completed":
+      return "complete"
+    case "cancelled":
+      return "cancelled"
+    default:
+      return "failed"
+  }
+}
+
+const buildResultsFromReattachedJobs = (
+  items: WizardQueueItem[],
+  jobs: Array<{
+    jobId: number
+    status: string
+    result?: any
+    error?: string
+    sourceItemId?: string
+  }>,
+  tracking?: PersistedQuickIngestTracking
+): WizardResultItem[] =>
+  jobs.map((job, index) => {
+    const item = resolveQueueItemForReattachedJob(
+      items,
+      tracking,
+      job.sourceItemId,
+      job.jobId,
+      index
+    )
+    const jobStatus = String(job.status || "").trim().toLowerCase()
+    const resultStatus = jobStatus === "completed" ? "ok" : "error"
+    return {
+      id: item?.id || `reattached-${job.jobId}`,
+      status: resultStatus,
+      outcome:
+        resultStatus === "ok"
+          ? "processed"
+          : jobStatus === "cancelled"
+            ? "cancelled"
+            : "failed",
+      url: item?.url,
+      fileName: item?.fileName,
+      type: mapDetectedTypeToEntryType(item?.detectedType || "unknown"),
+      error:
+        resultStatus === "ok"
+          ? undefined
+          : job.error || `Quick ingest ${jobStatus || "failed"}.`,
+      mediaId: job.result?.media_id ?? job.result?.mediaId ?? null,
+      title: job.result?.title ?? null,
+      data: job.result,
+    }
+  })
+
+const buildProgressFromReattachedJobs = (
+  items: WizardQueueItem[],
+  jobs: Array<{ jobId: number; status: string; error?: string; sourceItemId?: string }>,
+  tracking?: PersistedQuickIngestTracking
+): ItemProgress[] =>
+  jobs.map((job, index) => {
+    const item = resolveQueueItemForReattachedJob(
+      items,
+      tracking,
+      job.sourceItemId,
+      job.jobId,
+      index
+    )
+    const status = mapReattachedJobStatusToProgress(job.status)
+    const progressPercent =
+      status === "complete" || status === "failed" || status === "cancelled"
+        ? 100
+        : status === "queued"
+          ? 0
+          : 50
+    return {
+      id: item?.id || `reattached-${job.jobId}`,
+      status,
+      progressPercent,
+      currentStage:
+        status === "failed"
+          ? job.error || "Failed"
+          : status === "complete"
+            ? "Complete"
+            : status === "cancelled"
+              ? "Cancelled"
+              : String(job.status || "Processing"),
+      estimatedRemaining: 0,
+      error: status === "failed" ? job.error : undefined,
+    }
+  })
+
 const buildQuickIngestPayload = async (
   items: WizardQueueItem[],
   options: QuickIngestRequestPayload["common"] & {
@@ -531,18 +687,29 @@ const buildQuickIngestPayload = async (
 // ---------------------------------------------------------------------------
 
 type WizardModalContentProps = {
+  open: boolean
   onClose: () => void
   autoProcessQueued?: boolean
+  session: QuickIngestSessionRecord
+  markProcessingTracking: (tracking: PersistedQuickIngestTracking) => void
+  markInterrupted: (reason?: string) => void
+  shouldAttemptPersistedReattach: boolean
 }
 
 const WizardModalContent: React.FC<WizardModalContentProps> = ({
+  open,
   onClose,
   autoProcessQueued = false,
+  session,
+  markProcessingTracking,
+  markInterrupted,
+  shouldAttemptPersistedReattach,
 }) => {
   const { t } = useTranslation(["option"])
   const {
     state,
     minimize,
+    restore,
     cancelProcessing,
     skipToProcessing,
     updateItemProgress,
@@ -556,14 +723,49 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
   const hasStartedRunRef = useRef(false)
   const runStartedAtRef = useRef<number | null>(null)
   const cancelledSessionIdsRef = useRef<Set<string>>(new Set())
+  const shouldAttemptPersistedReattachRef = useRef(shouldAttemptPersistedReattach)
   const validQueueItems = useMemo(
     () => queueItems.filter((item) => item.validation.valid),
     [queueItems]
   )
+  const trackedQueueItems = useMemo(
+    () => resolveTrackedQueueItems(queueItems, session.tracking),
+    [queueItems, session.tracking]
+  )
+  const initialTrackedQueueItemsRef = useRef(trackedQueueItems)
+  const initialCurrentStepRef = useRef(currentStep)
+  const initialElapsedRef = useRef(state.processingState.elapsed)
+  const persistedTrackingRef = useRef(session.tracking)
+  const persistedReattachTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     resultsRef.current = results
   }, [results])
+
+  useEffect(() => {
+    initialTrackedQueueItemsRef.current = trackedQueueItems
+  }, [trackedQueueItems])
+
+  useEffect(() => {
+    persistedTrackingRef.current = session.tracking
+    const sessionId = String(session.tracking?.sessionId || "").trim()
+    if (sessionId) {
+      activeSessionIdRef.current = sessionId
+    }
+    const startedAt = session.tracking?.startedAt
+    if (
+      typeof startedAt === "number" &&
+      Number.isFinite(startedAt) &&
+      !runStartedAtRef.current
+    ) {
+      runStartedAtRef.current = startedAt
+    }
+  }, [session.tracking])
+
+  useEffect(() => {
+    if (!open || !state.isMinimized) return
+    restore()
+  }, [open, restore, state.isMinimized])
 
   // Auto-process on mount if autoProcessQueued is set and there are queued items
   const autoProcessedRef = useRef(false)
@@ -599,6 +801,103 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     const timer = window.setInterval(syncElapsed, 1000)
     return () => window.clearInterval(timer)
   }, [processingState.status, syncElapsed])
+
+  useEffect(() => {
+    const persistedTracking = persistedTrackingRef.current
+    const reattachQueueItems = initialTrackedQueueItemsRef.current
+    if (!shouldAttemptPersistedReattachRef.current || !persistedTracking) return
+    shouldAttemptPersistedReattachRef.current = false
+
+    const startedAt = persistedTracking.startedAt
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      runStartedAtRef.current = startedAt
+    }
+    const sessionId = String(persistedTracking.sessionId || "").trim()
+    if (sessionId) {
+      activeSessionIdRef.current = sessionId
+    }
+
+    let cancelled = false
+    const pollPersistedTracking = async () => {
+      const snapshot = await reattachQuickIngestSession(persistedTracking)
+      if (cancelled) return
+
+      const perItemProgress = buildProgressFromReattachedJobs(
+        reattachQueueItems,
+        snapshot.jobs,
+        persistedTracking
+      )
+      const elapsed =
+        typeof startedAt === "number" && Number.isFinite(startedAt)
+          ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+          : initialElapsedRef.current
+
+      if (snapshot.lifecycle === "processing") {
+        updateProcessingState({
+          status: "running",
+          perItemProgress,
+          elapsed,
+          estimatedRemaining: 0,
+        })
+        persistedReattachTimerRef.current = window.setTimeout(() => {
+          void pollPersistedTracking()
+        }, PERSISTED_REATTACH_POLL_INTERVAL_MS)
+        return
+      }
+
+      const reattachedResults =
+        snapshot.jobs.length > 0
+          ? buildResultsFromReattachedJobs(
+              reattachQueueItems,
+              snapshot.jobs,
+              persistedTracking
+            )
+          : buildFailureResults(
+              reattachQueueItems,
+              snapshot.errorMessage || "Quick ingest could not reconnect to live job status.",
+              "failed"
+            )
+
+      resultsRef.current = reattachedResults
+      setResults(reattachedResults)
+      updateProcessingState({
+        status:
+          snapshot.lifecycle === "completed"
+            ? "complete"
+            : snapshot.lifecycle === "cancelled"
+              ? "cancelled"
+              : "error",
+        perItemProgress,
+        elapsed,
+        estimatedRemaining: 0,
+      })
+      hasStartedRunRef.current = false
+      activeSessionIdRef.current = null
+      if (snapshot.lifecycle === "interrupted") {
+        markInterrupted(
+          snapshot.errorMessage || "Quick ingest could not reconnect to live job status."
+        )
+      }
+      if (initialCurrentStepRef.current < 5) {
+        goNext()
+      }
+    }
+
+    void pollPersistedTracking()
+
+    return () => {
+      cancelled = true
+      if (persistedReattachTimerRef.current != null) {
+        window.clearTimeout(persistedReattachTimerRef.current)
+        persistedReattachTimerRef.current = null
+      }
+    }
+  }, [
+    goNext,
+    markInterrupted,
+    setResults,
+    updateProcessingState,
+  ])
 
   const applyResults = useCallback(
     (incoming: WizardResultItem[]) => {
@@ -638,10 +937,24 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
 
   const finalizeFailure = useCallback(
     (message: string, outcome: "failed" | "cancelled") => {
-      const fallbackResults = buildFailureResults(validQueueItems, message, outcome)
+      const fallbackItems =
+        trackedQueueItems.length > 0 ? trackedQueueItems : validQueueItems
+      const existingResultIds = new Set(
+        resultsRef.current
+          .map((result) => String(result.id || "").trim())
+          .filter(Boolean)
+      )
+      const unresolvedFallbackItems = fallbackItems.filter(
+        (item) => !existingResultIds.has(item.id)
+      )
+      const fallbackResults = buildFailureResults(
+        unresolvedFallbackItems,
+        message,
+        outcome
+      )
       finalizeRun(outcome === "cancelled" ? "cancelled" : "error", fallbackResults)
     },
-    [finalizeRun, validQueueItems]
+    [finalizeRun, trackedQueueItems, validQueueItems]
   )
 
   const markRunActive = useCallback(() => {
@@ -766,6 +1079,11 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       const sessionId = String(startAck.sessionId).trim()
       activeSessionIdRef.current = sessionId
       cancelledSessionIdsRef.current.delete(sessionId)
+      markProcessingTracking({
+        mode: sessionId.startsWith("qi-direct-") ? "webui-direct" : "extension-runtime",
+        sessionId,
+        startedAt: runStartedAtRef.current || Date.now(),
+      })
 
       if (!sessionId.startsWith("qi-direct-")) {
         return
@@ -774,6 +1092,14 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       const response = await submitQuickIngestBatch({
         ...requestPayload,
         __quickIngestSessionId: sessionId,
+        onTrackingMetadata: (tracking) => {
+          markProcessingTracking({
+            ...tracking,
+            sessionId,
+            mode: "webui-direct",
+            startedAt: tracking.startedAt || runStartedAtRef.current || Date.now(),
+          })
+        },
       })
 
       if (
@@ -817,21 +1143,34 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     presetConfig.reviewBeforeStorage,
     presetConfig.storeRemote,
     presetConfig.typeDefaults,
+    markProcessingTracking,
     validQueueItems,
   ])
 
   useEffect(() => {
     if (currentStep !== 4 || processingState.status !== "running") return
+    if (session.lifecycle === "processing" && session.tracking) {
+      const canReattachDirectJobs =
+        session.tracking.mode === "webui-direct" &&
+        Boolean(session.tracking.jobIds?.length)
+      if (session.tracking.mode !== "webui-direct" || canReattachDirectJobs) {
+        return
+      }
+    }
     void startRun()
-  }, [currentStep, processingState.status, startRun])
+  }, [currentStep, processingState.status, session.lifecycle, session.tracking, startRun])
 
   useEffect(() => {
     if (processingState.status !== "cancelled") return
-    const sessionId = String(activeSessionIdRef.current || "").trim()
+    const persistedTracking = persistedTrackingRef.current
+    const sessionId = String(
+      activeSessionIdRef.current || persistedTracking?.sessionId || ""
+    ).trim()
     if (!sessionId || cancelledSessionIdsRef.current.has(sessionId)) return
     cancelledSessionIdsRef.current.add(sessionId)
     void cancelQuickIngestSession({
       sessionId,
+      batchIds: resolveTrackingBatchIds(persistedTracking),
       reason: "user_cancelled",
     }).catch(() => {
       // best effort cancellation
@@ -903,7 +1242,11 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       case 1:
         return <AddContentStep onQuickProcess={handleQuickProcess} />
       case 2:
-        return <ConfigureStep />
+        return (
+          <WizardConfigureStep
+            isStepVisible={open && !state.isMinimized && currentStep === 2}
+          />
+        )
       case 3:
         return <ReviewStep />
       case 4:
@@ -913,20 +1256,23 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       default:
         return null
     }
-  }, [currentStep, handleQuickProcess, onClose])
+  }, [currentStep, handleQuickProcess, onClose, open, state.isMinimized])
 
   return (
     <>
       <Modal
-        open={!state.isMinimized}
+        open={open && !state.isMinimized}
         onCancel={handleCloseAttempt}
         title={modalTitle}
         footer={null}
         width={800}
-        destroyOnHidden
         className="quick-ingest-modal quick-ingest-wizard-modal"
         styles={{
-          body: { padding: "0 16px 16px" },
+          body: {
+            padding: "0 16px 16px",
+            maxHeight: "calc(100vh - 180px)",
+            overflowY: "auto",
+          },
         }}
       >
         {/* Stepper navigation */}
@@ -951,11 +1297,66 @@ export const QuickIngestWizardModal: React.FC<QuickIngestWizardModalProps> = ({
   onClose,
   autoProcessQueued = false,
 }) => {
-  if (!open) return null
+  const {
+    session,
+    upsertSession,
+    markProcessingTracking,
+    markInterrupted,
+    createDraftSession,
+  } =
+    useQuickIngestSessionStore((store) => ({
+      session: store.session,
+      upsertSession: store.upsertSession,
+      markProcessingTracking: store.markProcessingTracking,
+      markInterrupted: store.markInterrupted,
+      createDraftSession: store.createDraftSession,
+    }))
+
+  const initialState = useMemo(
+    () => (session ? buildInitialWizardState(session) : undefined),
+    [session]
+  )
+  const sessionRef = useRef(session)
+
+  useEffect(() => {
+    sessionRef.current = session
+  }, [session])
+
+  useEffect(() => {
+    if (!open || session) return
+    createDraftSession()
+  }, [createDraftSession, open, session])
+
+  const persistWizardState = useCallback(
+    (state: IngestWizardState) => {
+      const currentSession = sessionRef.current
+      if (!currentSession) return
+      upsertSession(buildSessionPatchFromWizardState(state, currentSession))
+    },
+    [upsertSession]
+  )
+
+  if (!session || !initialState) return null
 
   return (
-    <IngestWizardProvider>
-      <WizardModalContent onClose={onClose} autoProcessQueued={autoProcessQueued} />
+    <IngestWizardProvider
+      key={session.id}
+      initialState={initialState}
+      onStateChange={persistWizardState}
+    >
+      <WizardModalContent
+        open={open}
+        onClose={onClose}
+        autoProcessQueued={autoProcessQueued}
+        session={session}
+        markProcessingTracking={markProcessingTracking}
+        markInterrupted={markInterrupted}
+        shouldAttemptPersistedReattach={
+          session.lifecycle === "processing" &&
+          session.tracking?.mode === "webui-direct" &&
+          Boolean(session.tracking?.jobIds?.length)
+        }
+      />
     </IngestWizardProvider>
   )
 }

@@ -77,6 +77,20 @@ describe("SearchBar behavior", () => {
     )
   })
 
+  it("keeps the compact width cap by default", () => {
+    render(<SearchBar autoFocus={false} />)
+
+    expect(screen.getByRole("textbox", { name: "Search your knowledge base" }).closest("form"))
+      .toHaveClass("max-w-3xl")
+  })
+
+  it("removes the compact width cap when wide mode is enabled", () => {
+    render(<SearchBar autoFocus={false} widthMode="wide" />)
+
+    expect(screen.getByRole("textbox", { name: "Search your knowledge base" }).closest("form"))
+      .not.toHaveClass("max-w-3xl")
+  })
+
   it("uses explicit searching label and loading indicator", () => {
     state.query = "active query"
     state.isSearching = true
@@ -178,6 +192,62 @@ describe("SearchBar behavior", () => {
     expect(state.setQuery).toHaveBeenCalledWith("")
   })
 
+  it("runs clear-full shortcut when the knowledge search input itself has focus", () => {
+    state.query = "existing query"
+    state.results = [{ id: "r1" }]
+
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+    input.focus()
+    fireEvent.keyDown(input, { key: "k", metaKey: true })
+
+    expect(state.clearResults).toHaveBeenCalledTimes(1)
+    expect(state.setQuery).toHaveBeenCalledWith("")
+  })
+
+  it("does not clear the active session when Cmd/Ctrl+K originates from another editable control", () => {
+    state.query = "existing query"
+    state.results = [{ id: "r1" }]
+
+    render(
+      <>
+        <input aria-label="History filter" />
+        <SearchBar autoFocus={false} />
+      </>
+    )
+
+    const secondaryInput = screen.getByRole("textbox", { name: "History filter" })
+    secondaryInput.focus()
+    fireEvent.keyDown(secondaryInput, { key: "k", metaKey: true })
+
+    expect(state.clearResults).not.toHaveBeenCalled()
+    expect(state.setQuery).not.toHaveBeenCalledWith("")
+  })
+
+  it("does not clear the active session when Cmd/Ctrl+K originates from another interactive control", () => {
+    state.query = "existing query"
+    state.results = [{ id: "r1" }]
+
+    render(
+      <>
+        <button type="button" aria-label="Export answer">
+          Export
+        </button>
+        <SearchBar autoFocus={false} />
+      </>
+    )
+
+    const exportButton = screen.getByRole("button", { name: "Export answer" })
+    exportButton.focus()
+    fireEvent.keyDown(exportButton, { key: "k", metaKey: true })
+
+    expect(state.clearResults).not.toHaveBeenCalled()
+    expect(state.setQuery).not.toHaveBeenCalledWith("")
+  })
+
   it("shows stop action during search and triggers cancellation", () => {
     state.query = "active query"
     state.isSearching = true
@@ -244,5 +314,38 @@ describe("SearchBar behavior", () => {
       type: "suggestion_accept",
       source: "history",
     })
+  })
+
+  it("clamps the active suggestion index when the suggestion list shrinks", () => {
+    state.query = "co"
+    state.searchHistory = [
+      { query: "Compare findings across Q1 and Q2 reports" },
+      { query: "Compare confidence intervals across studies" },
+    ]
+
+    const { rerender } = render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+
+    fireEvent.focus(input)
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+
+    state.query = "q1"
+    rerender(<SearchBar autoFocus={false} />)
+
+    const remainingSuggestion = screen.getByRole("option", {
+      name: /Compare findings across Q1 and Q2 reports/i,
+    })
+    expect(remainingSuggestion).toHaveAttribute("aria-selected", "true")
+
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(state.setQuery).toHaveBeenCalledWith(
+      "Compare findings across Q1 and Q2 reports"
+    )
+    expect(state.search).not.toHaveBeenCalled()
   })
 })

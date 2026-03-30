@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sys
+import threading
+import types
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock
 import uuid
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_repository import (
+    MediaRepository,
+)
 
 
 def _insert_claim_record(db: MediaDatabase) -> None:
@@ -223,6 +229,200 @@ def test_delete_fts_keyword_postgres_nulls_vector() -> None:
     sql, params = db._execute_with_connection.call_args.args[1:]
     assert sql.strip().startswith("UPDATE keywords SET keyword_fts_tsv = NULL")
     assert params == (7,)
+
+
+def test_runtime_fts_ops_update_fts_media_sqlite_preserves_synonym_expansion_and_fallback(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import fts_ops
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        def execute(self, sql: str, params: tuple[object, ...]):
+            self.calls.append((sql, params))
+            return None
+
+    class _Db:
+        backend_type = BackendType.SQLITE
+
+    module_name = "tldw_Server_API.app.core.RAG.rag_service.synonyms_registry"
+    synonym_module = types.ModuleType(module_name)
+
+    def fake_get_corpus_synonyms(_corpus):
+        return {"title": ["alias-one"], "body": ["alias-two"]}
+
+    synonym_module.get_corpus_synonyms = fake_get_corpus_synonyms  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module_name, synonym_module)
+    monkeypatch.setenv("DEFAULT_FTS_CORPUS", "test-corpus")
+    monkeypatch.setenv("FTS_SYNONYM_EXPANSION_LIMIT", "1")
+
+    conn = _Conn()
+    fts_ops._update_fts_media(_Db(), conn, 9, "Title", "Body")
+
+    assert len(conn.calls) == 1
+    sql, params = conn.calls[0]
+    assert sql.startswith("INSERT OR REPLACE INTO media_fts")
+    assert params[0:2] == (9, "Title")
+    assert params[2] in {"Body alias-one", "Body alias-two"}
+
+    def raising_get_corpus_synonyms(_corpus):
+        raise RuntimeError("boom")
+
+    synonym_module.get_corpus_synonyms = raising_get_corpus_synonyms  # type: ignore[attr-defined]
+    conn_fallback = _Conn()
+    fts_ops._update_fts_media(_Db(), conn_fallback, 10, "Title", "Body")
+
+    assert conn_fallback.calls[0][1] == (10, "Title", "Body")
+
+
+def test_runtime_fts_ops_sync_refresh_noops_when_update_payload_has_no_relevant_fields() -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import fts_ops
+
+    class _Db:
+        def __init__(self) -> None:
+            self.deleted_media: list[int] = []
+            self.updated_media: list[tuple[int, str, object]] = []
+            self.deleted_keywords: list[int] = []
+            self.updated_keywords: list[tuple[int, str]] = []
+
+        def _fetchone_with_connection(self, _conn, query: str, _params=None):
+            if "FROM Media" in query:
+                return {"id": 7, "title": "Title", "content": "Body", "deleted": 0}
+            if "FROM Keywords" in query:
+                return {"id": 5, "keyword": "science", "deleted": 0}
+            raise AssertionError(f"unexpected query: {query}")
+
+        def _delete_fts_media(self, _conn, media_id: int) -> None:
+            self.deleted_media.append(media_id)
+
+        def _update_fts_media(self, _conn, media_id: int, title: str, content: object) -> None:
+            self.updated_media.append((media_id, title, content))
+
+        def _delete_fts_keyword(self, _conn, keyword_id: int) -> None:
+            self.deleted_keywords.append(keyword_id)
+
+        def _update_fts_keyword(self, _conn, keyword_id: int, keyword: str) -> None:
+            self.updated_keywords.append((keyword_id, keyword))
+
+    db = _Db()
+    conn = object()
+
+    fts_ops.sync_refresh_fts_for_entity(
+        db,
+        conn,
+        entity="Media",
+        entity_uuid="media-uuid",
+        operation="update",
+        payload={"author": "ignored"},
+    )
+    fts_ops.sync_refresh_fts_for_entity(
+        db,
+        conn,
+        entity="Keywords",
+        entity_uuid="kw-uuid",
+        operation="update",
+        payload={"confidence": 0.9},
+    )
+
+    assert db.deleted_media == []
+    assert db.updated_media == []
+    assert db.deleted_keywords == []
+    assert db.updated_keywords == []
+
+
+def test_media_repository_uses_execution_helper_for_postgres_chunk_persistence(monkeypatch) -> None:
+    import tldw_Server_API.app.core.config as config_module
+
+    monkeypatch.setattr(config_module, "rag_enable_structure_index", lambda: False, raising=False)
+
+    executed: List[Tuple[str, Any]] = []
+
+    class _Cursor:
+        def __init__(
+            self,
+            *,
+            fetchone_result: Dict[str, Any] | None = None,
+            rowcount: int = 1,
+            lastrowid: int | None = None,
+        ) -> None:
+            self._fetchone_result = fetchone_result
+            self.rowcount = rowcount
+            self.lastrowid = lastrowid
+
+        def fetchone(self):
+            return self._fetchone_result
+
+    class _Conn:
+        pass
+
+    conn = _Conn()
+
+    class _FakeDb:
+        backend_type = BackendType.POSTGRESQL
+        client_id = "pg-media-repo"
+        backend = object()
+        _media_insert_lock = threading.Lock()
+
+        def __init__(self) -> None:
+            self._uuid_counter = 0
+
+        def _get_current_utc_timestamp_str(self) -> str:
+            return "2026-03-15T23:40:00.000Z"
+
+        def transaction(self):
+            @contextmanager
+            def _ctx():
+                yield conn
+
+            return _ctx()
+
+        def _execute_with_connection(self, conn_arg: Any, query: str, params: Any = None):
+            assert conn_arg is conn
+            executed.append((query, params))
+            if "INSERT INTO Media (" in query:
+                return _Cursor(fetchone_result={"id": 41})
+            return _Cursor()
+
+        def _fetchone_with_connection(self, conn_arg: Any, query: str, params: Any = None):
+            assert conn_arg is conn
+            return None
+
+        def _generate_uuid(self) -> str:
+            self._uuid_counter += 1
+            return f"uuid-{self._uuid_counter}"
+
+        def _resolve_scope_ids(self) -> tuple[None, None]:
+            return None, None
+
+        def _log_sync_event(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def _update_fts_media(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def update_keywords_for_media(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def create_document_version(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    repo = MediaRepository(session=_FakeDb())
+
+    media_id, media_uuid, message = repo.add_media_with_keywords(
+        title="Chunked PG doc",
+        content="chunk source",
+        media_type="text",
+        keywords=[],
+        overwrite=True,
+        chunks=[{"text": "chunk one", "chunk_type": "text"}],
+    )
+
+    assert media_id == 41
+    assert media_uuid == "uuid-1"
+    assert message == "Media 'Chunked PG doc' added."
+    assert any("INSERT INTO UnvectorizedMediaChunks" in sql for sql, _ in executed)
 
 
 def test_backup_database_postgres_returns_false(tmp_path: Path) -> None:

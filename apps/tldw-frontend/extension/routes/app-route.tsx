@@ -20,8 +20,6 @@ import {
   type PlatformTarget
 } from "@/config/platform"
 import {
-  optionRoutes,
-  sidepanelRoutes,
   type RouteDefinition,
   type RouteKind
 } from "@/routes/route-registry"
@@ -84,11 +82,11 @@ const RouteNotFoundState = ({
           </Link>
           {kind === "options" && (
             <Link
-              to="/knowledge"
+              to="/research"
               className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
-              data-testid="not-found-open-knowledge"
+              data-testid="not-found-open-research"
             >
-              Open Knowledge
+              Open Research
             </Link>
           )}
           {kind === "options" && (
@@ -276,7 +274,13 @@ class SidepanelErrorBoundary extends React.Component<
   }
 }
 
-export const RouteShell = ({ kind }: { kind: RouteKind }) => {
+export const ExtensionRouteShell = ({
+  kind,
+  routes
+}: {
+  kind: RouteKind
+  routes: RouteDefinition[]
+}) => {
   const { mode } = useTheme()
   const navigate = useNavigate()
   const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
@@ -328,7 +332,6 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
     })
   }, [location.pathname, setChatSidebarCollapsed])
   const { label, description } = ROUTE_FALLBACKS[kind]
-  const routes = kind === "options" ? optionRoutes : sidepanelRoutes
   const visibleRoutes = getRoutesForTarget(routes, platformConfig.target)
   const attemptedRoute = `${location.pathname}${location.search}${location.hash}` || "/"
   const handleOptionsReset = () => {

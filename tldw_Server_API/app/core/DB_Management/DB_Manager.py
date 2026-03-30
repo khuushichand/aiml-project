@@ -5,10 +5,9 @@
 #
 # Imports
 import configparser
-import contextlib
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from loguru import logger
 
@@ -34,69 +33,68 @@ from tldw_Server_API.app.core.DB_Management.ChatWorkflows_DB import ChatWorkflow
 # insert_prompt_to_db as sqlite_insert_prompt_to_db,
 #delete_prompt as sqlite_delete_prompt
 #)
-from tldw_Server_API.app.core.DB_Management.content_backend import (
-    ContentDatabaseSettings,
-    get_content_backend,
-    load_content_db_settings,
-)
+from tldw_Server_API.app.core.DB_Management.content_backend import ContentDatabaseSettings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import defaults as media_db_runtime_defaults
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.defaults import (
+    build_media_runtime_config,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    create_media_database as runtime_create_media_database,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    check_media_exists as sqlite_check_media_exists,
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    validate_postgres_content_backend as runtime_validate_postgres_content_backend,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    create_automated_backup as sqlite_create_automated_backup,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    empty_trash as sqlite_empty_trash,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    fetch_keywords_for_media as sqlite_fetch_keywords_for_media,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_all_content_from_database as sqlite_get_all_content_from_database,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_document_version as sqlite_get_document_version,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_full_media_details as sqlite_get_full_media_details,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_full_media_details_rich as sqlite_get_full_media_details_rich,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription as sqlite_get_latest_transcription,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_media_prompts as sqlite_get_media_prompts,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_media_transcripts as sqlite_get_media_transcripts,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_specific_prompt as sqlite_get_specific_prompt,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_specific_transcript as sqlite_get_specific_transcript,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_unprocessed_media as sqlite_get_unprocessed_media,
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version as sqlite_get_document_version,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     ingest_article_to_db_new as sqlite_ingest_article_to_db,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    check_media_exists as sqlite_check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    get_unprocessed_media as sqlite_get_unprocessed_media,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
     mark_media_as_processed as sqlite_mark_media_as_processed,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+    fetch_keywords_for_media as sqlite_fetch_keywords_for_media,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+    get_all_content_from_database as sqlite_get_all_content_from_database,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+    check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+    empty_trash as sqlite_empty_trash,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_backup import (
+    create_automated_backup as sqlite_create_automated_backup,
 )
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
@@ -108,20 +106,17 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 ############################################################################################################
 #
 # Database Config loading (standardized on load_comprehensive_config)
-single_user_config = load_comprehensive_config()
-
-content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
-
-# Resolve shared backend instance for content databases (Media/ChaCha).
-# Keep backend initialization lazy to avoid heavy import-time side effects.
-_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = None
-_POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
-
-# Default Media DB is per-user. For single-user mode, resolve the fixed user's path.
-single_user_db_path: str = (
-    content_db_settings.sqlite_path
-    or str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-)
+single_user_config: configparser.ConfigParser
+content_db_settings: ContentDatabaseSettings
+_CONTENT_DB_BACKEND: Optional[DatabaseBackend]
+_POSTGRES_CONTENT_MODE: bool
+single_user_db_path: str
+single_user_backup_path: str
+single_user_backup_dir: Union[str, bytes]
+single_user_chacha_path: str
+single_user_workflows_path: str
+single_user_chat_workflows_path: str
+db_type: str
 """Backup directory resolution (standardized)
 
 Precedence:
@@ -130,27 +125,6 @@ Precedence:
 3) default ./tldw_DB_Backups/
 """
 _DEFAULT_BACKUP_DIR = './tldw_DB_Backups/'
-single_user_backup_path: str = content_db_settings.backup_path or _DEFAULT_BACKUP_DIR
-single_user_backup_dir: Union[str, bytes] = (
-    os.environ.get('TLDW_DB_BACKUP_PATH')
-    or single_user_backup_path
-    or _DEFAULT_BACKUP_DIR
-)
-single_user_chacha_path: str = single_user_config.get(
-    'Database',
-    'chacha_path',
-    fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
-)
-single_user_workflows_path: str = single_user_config.get(
-    'Database',
-    'workflows_path',
-    fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id()))
-)
-single_user_chat_workflows_path: str = single_user_config.get(
-    'Database',
-    'chat_workflows_path',
-    fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
-)
 
 DB_MANAGER_RUNTIME_EXCEPTIONS = (
     OSError,
@@ -163,23 +137,85 @@ DB_MANAGER_RUNTIME_EXCEPTIONS = (
 )
 
 
+def _sync_media_runtime_defaults() -> None:
+    """Mirror shared Media DB runtime defaults onto DB_Manager compatibility globals."""
+    global single_user_config, content_db_settings, _CONTENT_DB_BACKEND
+    global _POSTGRES_CONTENT_MODE, single_user_db_path
+
+    single_user_config = media_db_runtime_defaults.single_user_config
+    content_db_settings = media_db_runtime_defaults.content_db_settings
+    _CONTENT_DB_BACKEND = media_db_runtime_defaults.content_db_backend
+    _POSTGRES_CONTENT_MODE = media_db_runtime_defaults.postgres_content_mode
+    single_user_db_path = str(media_db_runtime_defaults.single_user_db_path)
+
+
+def _sync_db_manager_path_defaults(
+    config: Optional[configparser.ConfigParser] = None,
+) -> None:
+    """Refresh DB_Manager-owned path globals from the shared Media DB defaults."""
+    global single_user_backup_path, single_user_backup_dir
+    global single_user_chacha_path, single_user_workflows_path
+    global single_user_chat_workflows_path
+
+    cfg = config or single_user_config
+    single_user_backup_path = content_db_settings.backup_path or _DEFAULT_BACKUP_DIR
+    single_user_backup_dir = (
+        os.environ.get('TLDW_DB_BACKUP_PATH')
+        or single_user_backup_path
+        or _DEFAULT_BACKUP_DIR
+    )
+    single_user_chacha_path = cfg.get(
+        'Database',
+        'chacha_path',
+        fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
+    )
+    single_user_workflows_path = cfg.get(
+        'Database',
+        'workflows_path',
+        fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id())),
+    )
+    single_user_chat_workflows_path = cfg.get(
+        'Database',
+        'chat_workflows_path',
+        fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
+    )
+
+
+def _sync_db_type() -> None:
+    """Refresh the DB_Manager compatibility backend discriminator."""
+    global db_type
+
+    raw_backend = content_db_settings.raw_backend_type
+    if content_db_settings.backend_type == BackendType.POSTGRESQL:
+        db_type = 'postgres'
+    elif content_db_settings.backend_type == BackendType.SQLITE:
+        db_type = 'sqlite'
+    elif raw_backend in {'elasticsearch', 'opensearch'}:
+        db_type = 'elasticsearch'
+        logger.warning(
+            "Elasticsearch content backend is not supported in DB_Manager; operations will raise NotImplementedError"
+        )
+    else:
+        logger.warning(f"Unknown Database.type '{raw_backend}', defaulting to sqlite content backend")
+        db_type = 'sqlite'
+
+
+_sync_media_runtime_defaults()
+_sync_db_manager_path_defaults()
+_sync_db_type()
+
+
 def _ensure_content_backend_loaded() -> Optional[DatabaseBackend]:
     """Lazily resolve the shared content backend when PostgreSQL mode is active."""
-    global _CONTENT_DB_BACKEND
-    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
-        try:
-            _CONTENT_DB_BACKEND = get_content_backend(single_user_config)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Unable to initialize PostgreSQL content backend lazily: {exc}")
-            _CONTENT_DB_BACKEND = None
-    return _CONTENT_DB_BACKEND
+    backend = media_db_runtime_defaults.ensure_content_backend_loaded()
+    _sync_media_runtime_defaults()
+    return backend
 
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
     """Return the shared content DatabaseBackend instance (if configured)."""
-    backend = _ensure_content_backend_loaded()
-    if _POSTGRES_CONTENT_MODE and backend is None:
-        raise RuntimeError("PostgreSQL content backend is required but was not initialized. Check TLDW_CONTENT_DB_BACKEND configuration.")
+    backend = media_db_runtime_defaults.get_content_backend_instance()
+    _sync_media_runtime_defaults()
     return backend
 
 
@@ -205,6 +241,23 @@ def shutdown_content_backend() -> None:
         logger.warning(f"Failed to close content backend pool: {exc}")
 
 
+def _is_media_database_instance(candidate: Any) -> bool:
+    return candidate is not None and callable(getattr(candidate, "execute_query", None)) and (
+        hasattr(candidate, "backend") or hasattr(candidate, "backend_type")
+    )
+
+
+def _unwrap_media_database(candidate: Any) -> Any:
+    if _is_media_database_instance(candidate):
+        return candidate
+
+    wrapped = getattr(candidate, "database", None)
+    if _is_media_database_instance(wrapped):
+        return wrapped
+
+    return candidate
+
+
 def reset_content_backend(
     *,
     config: Optional[configparser.ConfigParser] = None,
@@ -217,88 +270,22 @@ def reset_content_backend(
     - Recomputes module-level settings and paths derived from config.
     - Optionally rebuilds the backend immediately when reload=True.
     """
-    global _CONTENT_DB_BACKEND, _POSTGRES_CONTENT_MODE
-    global content_db_settings
-    global single_user_db_path, single_user_backup_path, single_user_backup_dir
+    global _CONTENT_DB_BACKEND
+    global single_user_backup_path, single_user_backup_dir
     global single_user_chacha_path, single_user_workflows_path
-    global single_user_chat_workflows_path, single_user_config
+    global single_user_chat_workflows_path
 
     cfg = config or single_user_config
-
-    # Invalidate content_backend module cache if present
     try:
-        import tldw_Server_API.app.core.DB_Management.content_backend as cb
-        try:
-            if hasattr(cb, "_cache_lock") and cb._cache_lock:
-                with cb._cache_lock:  # type: ignore[attr-defined]
-                    cb._cached_backend = None  # type: ignore[attr-defined]
-                    cb._cached_backend_signature = None  # type: ignore[attr-defined]
-            else:
-                cb._cached_backend = None  # type: ignore[attr-defined]
-                cb._cached_backend_signature = None  # type: ignore[attr-defined]
-        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
-            logger.debug(f"reset_content_backend: failed to clear backend cache: {e}")
-    except ImportError as e:
-        logger.debug(f"reset_content_backend: unable to import content_backend: {e}")
-
-    # Clear shared instance
-    _CONTENT_DB_BACKEND = None
-
-    # Recompute settings and derived paths from the provided config
-    try:
-        content_db_settings = load_content_db_settings(cfg)
-        _POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
-
-        single_user_db_path = (
-            content_db_settings.sqlite_path
-            or str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+        _CONTENT_DB_BACKEND = media_db_runtime_defaults.reset_media_runtime_defaults(
+            config=cfg,
+            reload=reload,
         )
-        single_user_backup_path = content_db_settings.backup_path or _DEFAULT_BACKUP_DIR
-        single_user_backup_dir = (
-            os.environ.get('TLDW_DB_BACKUP_PATH')
-            or single_user_backup_path
-            or _DEFAULT_BACKUP_DIR
-        )
-        single_user_chacha_path = cfg.get(
-            'Database',
-            'chacha_path',
-            fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
-        )
-        single_user_workflows_path = cfg.get(
-            'Database',
-            'workflows_path',
-            fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id())),
-        )
-        single_user_chat_workflows_path = cfg.get(
-            'Database',
-            'chat_workflows_path',
-            fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
-        )
-        # Recompute db_type to reflect updated settings
-        global db_type
-        raw_backend_local = content_db_settings.raw_backend_type
-        if content_db_settings.backend_type == BackendType.POSTGRESQL:
-            db_type = 'postgres'
-        elif content_db_settings.backend_type == BackendType.SQLITE:
-            db_type = 'sqlite'
-        elif raw_backend_local in {'elasticsearch', 'opensearch'}:
-            db_type = 'elasticsearch'
-            logger.warning(
-                "Elasticsearch content backend is not supported in DB_Manager; operations will raise NotImplementedError"
-            )
-        else:
-            logger.warning(
-                f"Unknown Database.type '{raw_backend_local}', defaulting to sqlite content backend"
-            )
-            db_type = 'sqlite'
+        _sync_media_runtime_defaults()
+        _sync_db_manager_path_defaults(cfg)
+        _sync_db_type()
     except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
         logger.debug(f"reset_content_backend: failed to recompute content settings: {e}")
-
-    if reload:
-        try:
-            _CONTENT_DB_BACKEND = get_content_backend(cfg)
-        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
-            logger.debug(f"reset_content_backend: unable to rebuild content backend: {e}")
     return _CONTENT_DB_BACKEND
 
 
@@ -308,34 +295,14 @@ def create_media_database(
     db_path: Union[str, Path, None] = None,
     backend: Optional[DatabaseBackend] = None,
     config: Optional[configparser.ConfigParser] = None,
-) -> MediaDatabase:
+) -> Any:
     """Factory for MediaDatabase instances using the shared backend wiring."""
-
-    target_path = Path(db_path) if db_path else Path(single_user_db_path)
-    backend_to_use = backend or _ensure_content_backend_loaded()
-    cfg = config or single_user_config
-
-    if _POSTGRES_CONTENT_MODE:
-        if backend_to_use is None or backend_to_use.backend_type != BackendType.POSTGRESQL:
-            raise RuntimeError(
-                "PostgreSQL content backend configured but backend could not be created. "
-                "Ensure psycopg is installed and TLDW_CONTENT_PG_* settings are set."
-            )
-        target_path = Path(db_path) if db_path else Path(single_user_db_path)
-        return MediaDatabase(
-            db_path=str(target_path),
-            client_id=client_id,
-            backend=backend_to_use,
-            config=cfg,
-        )
-
-    # For SQLite/per-user mode, do not pass the shared backend; let the instance
-    # bind to the specific per-user file path to avoid root-level DBs.
-    return MediaDatabase(
-        db_path=str(target_path),
-        client_id=client_id,
-        backend=None,
-        config=cfg,
+    return runtime_create_media_database(
+        client_id,
+        db_path=db_path,
+        backend=backend,
+        config=config,
+        runtime=build_media_runtime_config(),
     )
 
 
@@ -346,85 +313,10 @@ def validate_postgres_content_backend() -> None:
     row-level security policies are missing. Acts as a no-op for SQLite.
     """
 
-    backend: Optional[DatabaseBackend]
-    try:
-        backend = get_content_backend_instance()
-    except RuntimeError:
-        # Propagate configuration errors directly
-        raise
-
-    if backend is None:
-        if _POSTGRES_CONTENT_MODE:
-            raise RuntimeError(
-                "PostgreSQL content backend configured but not initialized. "
-                "Ensure psycopg is installed and TLDW_CONTENT_PG_* (or DATABASE_URL) is set."
-            )
-        return
-
-    if backend.backend_type != BackendType.POSTGRESQL:
-        if _POSTGRES_CONTENT_MODE:
-            raise RuntimeError(
-                "PostgreSQL content backend required but a different backend was provided."
-            )
-        return
-
-    validator = MediaDatabase(
-        db_path=":memory:",
-        client_id="content_backend_validator",
-        backend=backend,
-        config=single_user_config,
+    runtime_validate_postgres_content_backend(
+        get_content_backend_instance=get_content_backend_instance,
+        runtime=build_media_runtime_config(),
     )
-    try:
-        with backend.transaction() as conn:  # type: ignore[arg-type]
-            version_result = backend.execute(
-                "SELECT version FROM schema_version LIMIT 1",
-                connection=conn,
-            )
-            current_version_row = version_result.first if version_result else None
-            if isinstance(current_version_row, dict):
-                current_version_raw = current_version_row.get("version")
-            else:
-                current_version_raw = current_version_row
-            try:
-                current_version = int(current_version_raw or 0)
-            except (TypeError, ValueError):
-                current_version = 0
-
-            expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
-            if current_version != expected_version:
-                raise RuntimeError(
-                    "PostgreSQL content schema is outdated. "
-                    f"Current version={current_version}, expected={expected_version}. "
-                    "Run migrations: python -m tldw_Server_API.app.core.DB_Management.migration_tools "
-                    "or apply the SQL under app/core/DB_Management/migrations/."
-                )
-
-            required_policies = {
-                "media": [
-                    "media_scope_admin",
-                    "media_scope_personal",
-                    "media_scope_org",
-                    "media_scope_team",
-                ],
-                "sync_log": [
-                    "sync_scope_admin",
-                    "sync_scope_personal",
-                    "sync_scope_org",
-                    "sync_scope_team",
-                ],
-            }
-
-            for table, policies in required_policies.items():
-                for policy in policies:
-                    if not validator._postgres_policy_exists(conn, table, policy):
-                        raise RuntimeError(
-                            f"Missing Postgres RLS policy '{policy}' on table '{table}'. "
-                            "Apply policies via pg_rls_policies.ensure_* helpers or run: "
-                            "python -m tldw_Server_API.app.core.DB_Management.migration_tools --apply-rls"
-                        )
-    finally:
-        with contextlib.suppress(DB_MANAGER_RUNTIME_EXCEPTIONS):
-            validator.close_connection()
 
 
 def create_chacha_database(
@@ -560,22 +452,6 @@ def default_db_config():
         'elasticsearch_port': 9200
     }
 
-raw_backend = content_db_settings.raw_backend_type
-# Derive db_type from resolved backend settings with explicit handling for
-# unsupported elasticsearch/opensearch types.
-if content_db_settings.backend_type == BackendType.POSTGRESQL:
-    db_type = 'postgres'
-elif content_db_settings.backend_type == BackendType.SQLITE:
-    db_type = 'sqlite'
-elif raw_backend in {'elasticsearch', 'opensearch'}:
-    db_type = 'elasticsearch'
-    logger.warning(
-        "Elasticsearch content backend is not supported in DB_Manager; operations will raise NotImplementedError"
-    )
-else:
-    logger.warning(f"Unknown Database.type '{raw_backend}', defaulting to sqlite content backend")
-    db_type = 'sqlite'
-
 # Content backends supported by this module. Elasticsearch/opensearch are
 # intentionally not wired here to avoid confusing fallthrough paths.
 SQL_CONTENT_BACKENDS = {'sqlite', 'postgres'}
@@ -594,16 +470,19 @@ def _raise_elasticsearch_not_supported(op: str) -> None:
     raise NotImplementedError(message)
 
 
-def _require_db_instance(args, kwargs, func_name: str) -> MediaDatabase:
-    """Extract MediaDatabase instance from kwargs or first positional arg.
+def _require_db_instance(args, kwargs, func_name: str) -> Any:
+    """Extract a MediaDatabase instance from kwargs or first positional arg.
 
-    Emits a deprecation warning if provided positionally. Returns the instance
-    or raises ValueError if invalid/missing.
+    Accepts either a raw MediaDatabase or a request-scoped wrapper exposing
+    the underlying instance at ``.database``. Emits a deprecation warning if
+    provided positionally. Returns the unwrapped MediaDatabase or raises
+    ValueError if invalid/missing.
     """
+
     provided_positionally = False
     if 'db_instance' in kwargs and kwargs['db_instance'] is not None:
         dbi = kwargs.pop('db_instance')
-    elif args and isinstance(args[0], MediaDatabase):
+    elif args and _is_media_database_instance(_unwrap_media_database(args[0])):
         dbi = args[0]
         provided_positionally = True
     else:
@@ -616,7 +495,8 @@ def _require_db_instance(args, kwargs, func_name: str) -> MediaDatabase:
             func_name,
         )
 
-    if not isinstance(dbi, MediaDatabase):
+    dbi = _unwrap_media_database(dbi)
+    if not _is_media_database_instance(dbi):
         raise ValueError(f"{func_name} requires 'db_instance' (MediaDatabase)")
     return dbi
 #
@@ -624,7 +504,7 @@ def _require_db_instance(args, kwargs, func_name: str) -> MediaDatabase:
 
 def get_all_content_from_database(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        # Media_DB_v2 exposes this as a standalone helper requiring db_instance
+        # The extracted legacy helper still expects an explicit db_instance.
         return sqlite_get_all_content_from_database(*args, **kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_all_content_from_database")
@@ -639,9 +519,19 @@ def check_media_exists(*args, **kwargs):
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
+
+# DEPRECATED MEDIA COMPATIBILITY SURFACE
+# Keep these forwards until all callers have moved to media_db.api.
 def get_full_media_details(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return sqlite_get_full_media_details(*args, **kwargs)
+        db_instance = kwargs.get('db_instance') or (args[0] if args else None)
+        media_id = kwargs.get('media_id') or (args[1] if len(args) > 1 else None)
+        include_content = kwargs.get('include_content', True)
+        return media_db_api.get_full_media_details(
+            db=db_instance,
+            media_id=media_id,
+            include_content=include_content,
+        )
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_full_media_details")
     else:
@@ -655,7 +545,18 @@ def get_full_media_details2(*args, **kwargs):
 
 def get_full_media_details_rich(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return sqlite_get_full_media_details_rich(*args, **kwargs)
+        db_instance = kwargs.get('db_instance') or (args[0] if args else None)
+        media_id = kwargs.get('media_id') or (args[1] if len(args) > 1 else None)
+        include_content = kwargs.get('include_content', True)
+        include_versions = kwargs.get('include_versions', True)
+        include_version_content = kwargs.get('include_version_content', False)
+        return media_db_api.get_full_media_details_rich(
+            db=db_instance,
+            media_id=media_id,
+            include_content=include_content,
+            include_versions=include_versions,
+            include_version_content=include_version_content,
+        )
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_full_media_details_rich")
     else:
@@ -668,7 +569,7 @@ def get_full_media_details_rich2(*args, **kwargs):
 
 def get_paginated_files(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'get_paginated_files')
+        db_instance: Any = _require_db_instance(args, kwargs, 'get_paginated_files')
         page = kwargs.get('page', 1)
         results_per_page = kwargs.get('results_per_page', 50)
         if hasattr(db_instance, "get_paginated_files"):
@@ -683,7 +584,7 @@ def get_paginated_files(*args, **kwargs):
 
 def get_paginated_trash_files(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'get_paginated_trash_files')
+        db_instance: Any = _require_db_instance(args, kwargs, 'get_paginated_trash_files')
         page = kwargs.get('page', 1)
         results_per_page = kwargs.get('results_per_page', 50)
         if hasattr(db_instance, "get_paginated_trash_list"):
@@ -714,8 +615,9 @@ def import_obsidian_note_to_db(*args, **kwargs):
 
 def add_media_with_keywords(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'add_media_with_keywords')
-        return db_instance.add_media_with_keywords(**kwargs)
+        db_instance: Any = _require_db_instance(args, kwargs, 'add_media_with_keywords')
+        media_writer = get_media_repository(db_instance)
+        return media_writer.add_media_with_keywords(**kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("add_media_with_keywords")
     else:
@@ -742,7 +644,7 @@ def ingest_article_to_db(*args, **kwargs):
 
 def add_media_chunk(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'add_media_chunk')
+        db_instance: Any = _require_db_instance(args, kwargs, 'add_media_chunk')
         return db_instance.add_media_chunk(**kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("add_media_chunk")
@@ -751,7 +653,7 @@ def add_media_chunk(*args, **kwargs):
 
 def batch_insert_chunks(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'batch_insert_chunks')
+        db_instance: Any = _require_db_instance(args, kwargs, 'batch_insert_chunks')
         return db_instance.batch_insert_chunks(**kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("batch_insert_chunks")
@@ -760,7 +662,7 @@ def batch_insert_chunks(*args, **kwargs):
 
 def get_unprocessed_media(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'get_unprocessed_media')
+        db_instance: Any = _require_db_instance(args, kwargs, 'get_unprocessed_media')
         return sqlite_get_unprocessed_media(db_instance)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_unprocessed_media")
@@ -770,7 +672,7 @@ def get_unprocessed_media(*args, **kwargs):
 
 def mark_media_as_processed(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'mark_media_as_processed')
+        db_instance: Any = _require_db_instance(args, kwargs, 'mark_media_as_processed')
         media_id = kwargs.pop('media_id', None)
         if media_id is None:
             raise ValueError("mark_media_as_processed requires 'media_id'")
@@ -783,7 +685,7 @@ def mark_media_as_processed(*args, **kwargs):
 
 def update_keywords_for_media(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'update_keywords_for_media')
+        db_instance: Any = _require_db_instance(args, kwargs, 'update_keywords_for_media')
         media_id = kwargs.pop('media_id', None)
         keywords = kwargs.pop('keywords', None)
         if media_id is None or keywords is None:
@@ -797,7 +699,7 @@ def update_keywords_for_media(*args, **kwargs):
 
 def rollback_to_version(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'rollback_to_version')
+        db_instance: Any = _require_db_instance(args, kwargs, 'rollback_to_version')
         media_id = kwargs.pop('media_id', None)
         target_version_number = kwargs.pop('target_version_number', None)
         if media_id is None or target_version_number is None:
@@ -811,7 +713,7 @@ def rollback_to_version(*args, **kwargs):
 
 def delete_document_version(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'delete_document_version')
+        db_instance: Any = _require_db_instance(args, kwargs, 'delete_document_version')
         version_uuid = kwargs.pop('version_uuid', None)
         if version_uuid is None:
             raise ValueError("delete_document_version requires 'version_uuid'")
@@ -919,7 +821,7 @@ def delete_document_version(*args, **kwargs):
 
 def mark_as_trash(*args, **kwargs) -> bool:
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'mark_as_trash')
+        db_instance: Any = _require_db_instance(args, kwargs, 'mark_as_trash')
         return db_instance.mark_as_trash(**kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("mark_as_trash")
@@ -936,8 +838,8 @@ def get_latest_transcription(*args, **kwargs):
 
 def fetch_paginated_data(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'fetch_paginated_data')
-        # Media_DB_v2 does not expose fetch_paginated_data; prefer get_paginated_files
+        db_instance: Any = _require_db_instance(args, kwargs, 'fetch_paginated_data')
+        # The underlying content DB exposes paginated file listing directly.
         page = kwargs.get('page', 1)
         results_per_page = kwargs.get('results_per_page', 50)
         return db_instance.get_paginated_files(page=page, results_per_page=results_per_page)
@@ -963,13 +865,14 @@ def get_specific_transcript(*args, **kwargs) -> dict:
         raise ValueError(f"Unsupported database type: {db_type}")
 
 
-def get_all_document_versions(db_instance: MediaDatabase, media_id: int, **kwargs):
+def get_all_document_versions(db_instance: Any, media_id: int, **kwargs):
     """
     Wrapper to get all document versions for a given media_id from a MediaDatabase instance.
     """
-    # db_type check might be relevant if you support multiple DB backends via DB_Manager
-    # For now, assume db_instance is always a Media_DB_v2.MediaDatabase instance.
-    if isinstance(db_instance, MediaDatabase):
+    # db_type check might be relevant if you support multiple DB backends via DB_Manager.
+    # For now, this wrapper expects a Media DB-like instance.
+    db_instance = _unwrap_media_database(db_instance)
+    if _is_media_database_instance(db_instance):
         # Call the INSTANCE method, passing only the relevant kwargs
         # The instance method itself is get_all_document_versions(self, media_id, include_content=True, include_deleted=False, limit=None, offset=None)
         # So we need to ensure only those valid arguments are passed from kwargs.
@@ -1026,7 +929,7 @@ def get_specific_prompt(*args, **kwargs) -> dict:
 
 def add_keyword(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'add_keyword')
+        db_instance: Any = _require_db_instance(args, kwargs, 'add_keyword')
         keyword = kwargs.get('keyword') or kwargs.get('keyword_text')
         if keyword is None:
             raise ValueError("add_keyword requires 'keyword'")
@@ -1380,12 +1283,13 @@ def fetch_item_details(*args, **kwargs) -> tuple[str, str, str]:
     Returns empty strings when not found or inactive.
     """
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = kwargs.get('db_instance') or (args[0] if args else None)
+        db_instance: Any = kwargs.get('db_instance') or (args[0] if args else None)
         media_id: Optional[int] = kwargs.get('media_id')
-        if not isinstance(db_instance, MediaDatabase) or media_id is None:
+        db_instance = _unwrap_media_database(db_instance)
+        if not _is_media_database_instance(db_instance) or media_id is None:
             raise ValueError("fetch_item_details requires 'db_instance' and 'media_id'")
-        details = sqlite_get_full_media_details_rich(
-            db_instance=db_instance,
+        details = media_db_api.get_full_media_details_rich(
+            db=db_instance,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -1434,8 +1338,9 @@ def create_automated_backup(*args, **kwargs):
 
 def create_document_version(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        db_instance: MediaDatabase = kwargs.pop('db_instance', None) or (args[0] if args else None)
-        if not isinstance(db_instance, MediaDatabase):
+        db_instance: Any = kwargs.pop('db_instance', None) or (args[0] if args else None)
+        db_instance = _unwrap_media_database(db_instance)
+        if not _is_media_database_instance(db_instance):
             raise ValueError("create_document_version requires 'db_instance' (MediaDatabase)")
         return db_instance.create_document_version(**kwargs)
     elif db_type == 'elasticsearch':

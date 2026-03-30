@@ -80,6 +80,10 @@ export const test = base.extend<WorkflowFixtures>({
 
   // Pre-seeded authenticated page
   authedPage: async ({ page }, use, testInfo) => {
+    const appOrigin = new URL(TEST_CONFIG.webUrl).origin
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: appOrigin,
+    })
     await seedAuth(page)
     startApiCapture(page)
     await use(page)

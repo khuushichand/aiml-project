@@ -55,10 +55,9 @@ test.describe('Notes workspace UX', () => {
 
     const textarea = page.getByPlaceholder('Write your note here...')
     await textarea.fill('Unsaved note content')
-    const unsavedTag = page.locator('.ant-tag', { hasText: 'Unsaved' })
-    await expect(unsavedTag).toBeVisible()
+    await expect(page.getByText(/Unsaved changes/i)).toBeVisible()
 
-    const newNoteButton = page.getByTestId('notes-new-button')
+    const newNoteButton = page.getByRole('button', { name: /New note/i })
     await expect(newNoteButton).toBeEnabled()
     await newNoteButton.click()
 

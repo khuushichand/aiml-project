@@ -21,7 +21,7 @@ import {
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { cn } from "@/libs/utils"
-import type { RagSettings } from "@/services/rag/unified-rag"
+import type { RagSettings, RagTextChunkMethod } from "@/services/rag/unified-rag"
 
 // Section configuration
 type SectionConfig = {
@@ -409,6 +409,47 @@ function SettingSelect({
   )
 }
 
+function SettingInput({
+  label,
+  description,
+  value,
+  onChange,
+  type = "text",
+  min,
+  max,
+  step,
+  placeholder,
+}: {
+  label: string
+  description?: string
+  value: string | number
+  onChange: (value: string | number) => void
+  type?: "text" | "number"
+  min?: number
+  max?: number
+  step?: number
+  placeholder?: string
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-sm font-medium">{label}</div>
+      <input
+        type={type}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        placeholder={placeholder}
+        onChange={(e) =>
+          onChange(type === "number" ? Number(e.target.value) : e.target.value)
+        }
+        className="w-full px-3 py-1.5 text-sm rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      />
+      {description && <div className="text-xs text-text-muted">{description}</div>}
+    </div>
+  )
+}
+
 const ARRAY_VALUE_KIND_BY_KEY: Partial<Record<RagKey, "string" | "number">> = {
   include_media_ids: "number",
   include_note_ids: "string",
@@ -701,6 +742,21 @@ function AllOptionsSection({ settings, updateSetting }: SectionSettingsProps) {
 // Section implementations
 function SearchSection({ settings, updateSetting }: SectionSettingsProps) {
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const showTextLateChunking =
+    (settings.search_mode === "fts" || settings.search_mode === "hybrid") &&
+    settings.fts_level === "chunk"
+  const showTextLateChunkingKnobs =
+    showTextLateChunking && settings.enable_text_late_chunking
+  const textLateChunkMethodOptions: { value: RagTextChunkMethod; label: string }[] = [
+    { value: "sentences", label: "Sentences" },
+    { value: "words", label: "Words" },
+    { value: "paragraphs", label: "Paragraphs" },
+    { value: "tokens", label: "Tokens" },
+    { value: "semantic", label: "Semantic" },
+    { value: "propositions", label: "Propositions" },
+    { value: "ebook_chapters", label: "Ebook Chapters" },
+    { value: "json", label: "JSON" },
+  ]
 
   return (
     <div className="space-y-4">
@@ -723,6 +779,59 @@ function SearchSection({ settings, updateSetting }: SectionSettingsProps) {
           { value: "chunk", label: "Chunk-level" },
         ]}
       />
+      {showTextLateChunking && (
+        <SettingToggle
+          label="Text late chunking"
+          description="For this query, bypass stored text chunks and rechunk matched media in memory."
+          checked={settings.enable_text_late_chunking}
+          onChange={(v) => updateSetting("enable_text_late_chunking", v)}
+        />
+      )}
+      {showTextLateChunkingKnobs && (
+        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+          <SettingSelect
+            label="Late Chunk Method"
+            description="Chunk matched media in memory with this method for the current query."
+            value={settings.chunk_method}
+            onChange={(v) => updateSetting("chunk_method", v as typeof settings.chunk_method)}
+            options={textLateChunkMethodOptions}
+          />
+          <SettingInput
+            type="number"
+            label="Late Chunk Size"
+            description="Maximum unit count per transient chunk."
+            value={settings.chunk_size}
+            min={1}
+            step={1}
+            onChange={(v) => updateSetting("chunk_size", Math.max(1, Math.round(Number(v))))}
+          />
+          <SettingInput
+            type="number"
+            label="Late Chunk Overlap"
+            description="Overlap between transient chunks. Must stay below chunk size."
+            value={settings.chunk_overlap}
+            min={0}
+            max={Math.max(0, settings.chunk_size - 1)}
+            step={1}
+            onChange={(v) =>
+              updateSetting(
+                "chunk_overlap",
+                Math.max(
+                  0,
+                  Math.min(Math.round(Number(v)), Math.max(0, settings.chunk_size - 1))
+                )
+              )
+            }
+          />
+          <SettingInput
+            label="Late Chunk Language"
+            description="Optional language override such as en or es."
+            value={settings.chunk_language}
+            placeholder="Auto"
+            onChange={(v) => updateSetting("chunk_language", String(v))}
+          />
+        </div>
+      )}
       <SettingSlider
         label="Hybrid Alpha"
         description="0 = FTS only, 1 = Vector only"

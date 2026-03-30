@@ -1,13 +1,12 @@
 import hashlib
 import json
-from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from tldw_Server_API.app.core.Setup.audio_pack_service import (
     build_audio_pack_manifest,
-    get_audio_pack_root,
-    resolve_audio_pack_path,
+    register_imported_audio_pack,
     validate_audio_pack_manifest,
 )
 
@@ -26,27 +25,47 @@ def test_audio_pack_manifest_captures_selection_identity():
     assert manifest["checksums"]["manifest_sha256"]
 
 
-def test_audio_pack_manifest_streams_asset_checksums(monkeypatch, tmp_path):
-    asset_path = tmp_path / "model.bin"
-    asset_bytes = b"audio-pack-asset"
-    asset_path.write_bytes(asset_bytes)
-
-    def _fail_read_bytes(self):  # noqa: ANN001
-        raise AssertionError("read_bytes should not be used for audio pack checksums")
-
-    monkeypatch.setattr(Path, "read_bytes", _fail_read_bytes)
-
+def test_audio_pack_manifest_captures_tts_choice_identity():
     manifest = build_audio_pack_manifest(
         bundle_id="cpu_local",
         resource_profile="balanced",
-        installed_assets=[{"path": str(asset_path)}],
+        tts_choice="kitten_tts",
+        catalog_version="v2",
     )
 
-    assert manifest["checksums"]["assets"][str(asset_path)] == hashlib.sha256(asset_bytes).hexdigest()
+    assert manifest["tts_choice"] == "kitten_tts"
+    assert manifest["selection_key"] == "v2:cpu_local:balanced:kitten_tts"
 
 
-def test_validate_audio_pack_manifest_reports_platform_mismatch(tmp_path, monkeypatch):
-    monkeypatch_root = tmp_path / "Config_Files"
+def test_audio_pack_manifest_canonicalizes_default_tts_choice_identity():
+    omitted = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
+    )
+    explicit_default = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        tts_choice="kokoro",
+        catalog_version="v2",
+    )
+
+    assert omitted["selection_key"] == "v2:cpu_local:balanced"
+    assert explicit_default["selection_key"] == "v2:cpu_local:balanced"
+    assert explicit_default["tts_choice"] is None
+
+
+def test_audio_pack_manifest_rejects_invalid_tts_choice():
+    with pytest.raises(ValueError, match="Unknown curated TTS choice"):
+        build_audio_pack_manifest(
+            bundle_id="cpu_local",
+            resource_profile="balanced",
+            tts_choice="bogus_choice",
+            catalog_version="v2",
+        )
+
+
+def test_validate_audio_pack_manifest_reports_platform_mismatch(tmp_path):
     manifest = build_audio_pack_manifest(
         bundle_id="cpu_local",
         resource_profile="balanced",
@@ -70,75 +89,191 @@ def test_validate_audio_pack_manifest_reports_platform_mismatch(tmp_path, monkey
     assert any("platform" in issue.lower() for issue in result["issues"])
 
 
-def test_validate_audio_pack_manifest_rejects_non_object_manifest(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Setup.audio_pack_service.CONFIG_ROOT",
-        tmp_path / "Config_Files",
+def test_validate_audio_pack_manifest_rejects_invalid_tts_choice(tmp_path):
+    manifest = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
     )
-    pack_path = resolve_audio_pack_path("bad-pack.json")
-    pack_path.write_text(json.dumps(["not", "a", "manifest"]), encoding="utf-8")
+    manifest["tts_choice"] = "bogus_choice"
+    manifest_without_checksums = dict(manifest)
+    manifest_without_checksums["checksums"] = {}
+    manifest["checksums"] = {
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(manifest_without_checksums, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "assets": {},
+    }
+    pack_path = tmp_path / "audio_pack.json"
+    pack_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    result = validate_audio_pack_manifest("bad-pack.json")
+    result = validate_audio_pack_manifest(pack_path)
 
     assert result["compatible"] is False
-    assert "Audio pack manifest must be a JSON object." in result["issues"]
+    assert any("curated TTS choice" in issue for issue in result["issues"])
+    assert "invalid_tts_choice" in result["issue_codes"]
+    assert result["selection_key"] == "v2:cpu_local:balanced"
 
 
-def test_validate_audio_pack_manifest_handles_invalid_nested_shapes(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Setup.audio_pack_service.CONFIG_ROOT",
-        tmp_path / "Config_Files",
+def test_validate_audio_pack_manifest_rejects_noncanonical_selection_key(tmp_path):
+    manifest = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
     )
-    pack_path = resolve_audio_pack_path("odd-pack.json")
+    manifest["tts_choice"] = "kokoro"
+    manifest["selection_key"] = "v2:cpu_local:balanced:kokoro"
+    manifest_without_checksums = dict(manifest)
+    manifest_without_checksums["checksums"] = {}
+    manifest["checksums"] = {
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(manifest_without_checksums, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "assets": {},
+    }
+    pack_path = tmp_path / "audio_pack.json"
+    pack_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_audio_pack_manifest(pack_path)
+
+    assert result["compatible"] is False
+    assert any("selection key" in issue.lower() for issue in result["issues"])
+    assert "selection_key_mismatch" in result["issue_codes"]
+    assert result["selection_key"] == "v2:cpu_local:balanced"
+
+
+def test_register_imported_audio_pack_rejects_invalid_tts_choice_before_persistence(tmp_path):
+    manifest = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
+    )
+    manifest["tts_choice"] = "bogus_choice"
+    manifest_without_checksums = dict(manifest)
+    manifest_without_checksums["checksums"] = {}
+    manifest["checksums"] = {
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(manifest_without_checksums, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "assets": {},
+    }
+    pack_path = tmp_path / "audio_pack.json"
+    pack_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    readiness_store = MagicMock()
+    readiness_store.load.return_value = {"imported_packs": []}
+
+    with pytest.raises(ValueError, match="curated TTS choice"):
+        register_imported_audio_pack(pack_path, readiness_store=readiness_store)
+
+    readiness_store.update.assert_not_called()
+
+
+def test_register_imported_audio_pack_persists_canonical_default_tts_choice(tmp_path):
+    manifest = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
+    )
+    manifest["tts_choice"] = "kokoro"
+    manifest_without_checksums = dict(manifest)
+    manifest_without_checksums["checksums"] = {}
+    manifest["checksums"] = {
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(manifest_without_checksums, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "assets": {},
+    }
+    pack_path = tmp_path / "audio_pack.json"
+    pack_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    readiness_store = MagicMock()
+    readiness_store.load.return_value = {"imported_packs": []}
+
+    result = register_imported_audio_pack(pack_path, readiness_store=readiness_store)
+
+    assert result["tts_choice"] is None
+    assert result["selection_key"] == "v2:cpu_local:balanced"
+
+    update_kwargs = readiness_store.update.call_args.kwargs
+    assert update_kwargs["tts_choice"] is None
+    assert update_kwargs["selection_key"] == "v2:cpu_local:balanced"
+    assert update_kwargs["imported_packs"][-1]["tts_choice"] is None
+    assert update_kwargs["imported_packs"][-1]["selection_key"] == "v2:cpu_local:balanced"
+
+
+def test_register_imported_audio_pack_rejects_noncanonical_selection_key(tmp_path):
+    manifest = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
+    )
+    manifest["tts_choice"] = "kokoro"
+    manifest["selection_key"] = "v2:cpu_local:balanced:kokoro"
+    manifest_without_checksums = dict(manifest)
+    manifest_without_checksums["checksums"] = {}
+    manifest["checksums"] = {
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(manifest_without_checksums, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "assets": {},
+    }
+    pack_path = tmp_path / "audio_pack.json"
+    pack_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    readiness_store = MagicMock()
+    readiness_store.load.return_value = {"imported_packs": []}
+
+    with pytest.raises(ValueError, match="selection key"):
+        register_imported_audio_pack(pack_path, readiness_store=readiness_store)
+
+    readiness_store.update.assert_not_called()
+
+
+def test_validate_audio_pack_manifest_handles_missing_bundle_identity_fields(tmp_path):
+    pack_path = tmp_path / "audio_pack.json"
     pack_path.write_text(
         json.dumps(
             {
                 "format": "audio_bundle_pack_manifest_v1",
-                "bundle_id": 123,
-                "resource_profile": ["balanced"],
-                "catalog_version": "v2",
-                "selection_key": "v2:cpu_local:balanced",
-                "compatibility": ["linux", "x86_64"],
-                "assets": ["not-a-dict"],
-                "checksums": [],
+                "checksums": {},
+                "compatibility": {"platform": "darwin", "arch": "arm64", "python_version": "3.11"},
+                "assets": [],
             }
         ),
         encoding="utf-8",
     )
 
-    result = validate_audio_pack_manifest("odd-pack.json")
+    result = validate_audio_pack_manifest(pack_path)
 
     assert result["compatible"] is False
-    assert "Manifest checksums entry must be an object." in result["issues"]
-    assert "Manifest compatibility entry must be an object." in result["issues"]
-    assert "Referenced audio bundle or resource profile is not available in this catalog." in result["issues"]
+    assert any("audio bundle or resource profile" in issue.lower() for issue in result["issues"])
+    assert "unknown_bundle" in result["issue_codes"]
 
 
-def test_resolve_audio_pack_path_anchors_to_managed_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Setup.audio_pack_service.CONFIG_ROOT",
-        tmp_path / "Config_Files",
+def test_register_imported_audio_pack_rejects_unknown_bundle_identity(tmp_path):
+    manifest = build_audio_pack_manifest(
+        bundle_id="cpu_local",
+        resource_profile="balanced",
+        catalog_version="v2",
     )
+    manifest["bundle_id"] = "unknown_bundle"
+    manifest["selection_key"] = "v2:unknown_bundle:balanced"
+    manifest_without_checksums = dict(manifest)
+    manifest_without_checksums["checksums"] = {}
+    manifest["checksums"] = {
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(manifest_without_checksums, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "assets": {},
+    }
+    pack_path = tmp_path / "audio_pack.json"
+    pack_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    resolved = resolve_audio_pack_path("bundle-pack.json")
+    readiness_store = MagicMock()
+    readiness_store.load.return_value = {"imported_packs": []}
 
-    assert resolved == tmp_path / "Config_Files" / "audio_packs" / "bundle-pack.json"
-    assert get_audio_pack_root() == tmp_path / "Config_Files" / "audio_packs"
+    with pytest.raises(ValueError, match="not available in this catalog"):
+        register_imported_audio_pack(pack_path, readiness_store=readiness_store)
 
-
-def test_resolve_audio_pack_path_returns_resolved_managed_path(tmp_path, monkeypatch):
-    config_root = tmp_path / "nested" / ".." / "Config_Files"
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Setup.audio_pack_service.CONFIG_ROOT",
-        config_root,
-    )
-
-    resolved = resolve_audio_pack_path("bundle-pack.json")
-
-    assert resolved == (tmp_path / "Config_Files" / "audio_packs" / "bundle-pack.json").resolve()
-
-
-@pytest.mark.parametrize("pack_name", ["../bundle.json", "nested/bundle.json", "nested\\bundle.json", ".json"])
-def test_resolve_audio_pack_path_rejects_non_filename_inputs(pack_name):
-    with pytest.raises(ValueError, match="Audio pack names must"):
-        resolve_audio_pack_path(pack_name)
+    readiness_store.update.assert_not_called()

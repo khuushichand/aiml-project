@@ -39,7 +39,10 @@ describe("TldwApiClient chat mutations", () => {
         ) {
           throw Object.assign(new Error("Version conflict"), { status: 409 })
         }
-        if (request.path === "/api/v1/chats/abc" && request.method === "GET") {
+        if (
+          request.path === "/api/v1/chats/abc?scope_type=global" &&
+          request.method === "GET"
+        ) {
           return {
             id: "abc",
             title: "Latest",
@@ -49,7 +52,8 @@ describe("TldwApiClient chat mutations", () => {
           }
         }
         if (
-          request.path === "/api/v1/chats/abc?expected_version=7" &&
+          request.path ===
+            "/api/v1/chats/abc?scope_type=global&expected_version=7" &&
           request.method === "PUT"
         ) {
           return {
@@ -77,18 +81,73 @@ describe("TldwApiClient chat mutations", () => {
     })
     expect(calls).toEqual([
       expect.objectContaining({
-        path: "/api/v1/chats/abc?expected_version=4",
+        path: "/api/v1/chats/abc?scope_type=global&expected_version=4",
         method: "PUT"
       }),
       expect.objectContaining({
-        path: "/api/v1/chats/abc",
+        path: "/api/v1/chats/abc?scope_type=global",
         method: "GET"
       }),
       expect.objectContaining({
-        path: "/api/v1/chats/abc?expected_version=7",
+        path: "/api/v1/chats/abc?scope_type=global&expected_version=7",
         method: "PUT"
       })
     ])
     expect(result.version).toBe(8)
+  })
+
+  it("forwards nested routing overrides when creating a chat completion", async () => {
+    mocks.bgRequest.mockResolvedValue({ id: "resp-1", object: "chat.completion" })
+
+    const client = new TldwApiClient()
+    await client.createChatCompletion({
+      model: "auto",
+      messages: [{ role: "user", content: "hello" }],
+      routing: { mode: "per_turn", cross_provider: false }
+    })
+
+    const request = mocks.bgRequest.mock.calls.at(-1)?.[0] as {
+      path?: string
+      method?: string
+      body?: {
+        routing?: {
+          mode?: string
+          cross_provider?: boolean
+        }
+      }
+    }
+
+    expect(request.path).toBe("/api/v1/chat/completions")
+    expect(request.method).toBe("POST")
+    expect(request.body?.routing).toEqual({
+      mode: "per_turn",
+      cross_provider: false
+    })
+  })
+
+  it("sanitizes leaky background payload fields when creating a chat completion", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "resp-1",
+      object: "chat.completion",
+      error: "trace=/Users/private/stack.txt",
+      details: "/Users/private/stack.txt",
+      nested: {
+        traceback: "Traceback: /Users/private/stack.txt",
+        items: [{ exception: "boom" }]
+      }
+    })
+
+    const client = new TldwApiClient()
+    const response = await client.createChatCompletion({
+      model: "auto",
+      messages: [{ role: "user", content: "hello" }]
+    })
+
+    const payload = await response.json()
+
+    expect(payload.error).not.toContain("/Users/private")
+    expect(payload.details).toBeUndefined()
+    expect(payload.nested.traceback).toBeUndefined()
+    expect(payload.nested.items[0].exception).toBeUndefined()
   })
 })

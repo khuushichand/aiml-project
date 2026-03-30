@@ -5,7 +5,7 @@ const storageState = vi.hoisted(() => ({
   values: {
     speechToTextLanguage: "en-US",
     ttsProvider: "tldw",
-    tldwTtsVoice: "af_heart",
+    tldwTtsVoice: "Bella",
     openAITTSVoice: "alloy",
     elevenLabsVoiceId: "voice-eleven"
   } as Record<string, unknown>
@@ -56,7 +56,7 @@ describe("useResolvedPersonaVoiceDefaults", () => {
     storageState.values = {
       speechToTextLanguage: "en-US",
       ttsProvider: "tldw",
-      tldwTtsVoice: "af_heart",
+      tldwTtsVoice: "Bella",
       openAITTSVoice: "alloy",
       elevenLabsVoiceId: "voice-eleven"
     }
@@ -99,7 +99,7 @@ describe("useResolvedPersonaVoiceDefaults", () => {
     })
   })
 
-  it("uses browser-backed defaults when persona values are absent", () => {
+  it("uses Kitten-backed defaults when persona values are absent", () => {
     storageState.values.ttsProvider = "elevenlabs"
     voiceChatState.voiceChatTriggerPhrases = ["okay helper", "status check"]
     voiceChatState.voiceChatAutoResume = false
@@ -123,5 +123,16 @@ describe("useResolvedPersonaVoiceDefaults", () => {
       turnStopSecs: 0.2,
       minUtteranceSecs: 0.4
     })
+  })
+
+  it("materializes the canonical fresh-profile Kitten baseline", () => {
+    storageState.values = {
+      speechToTextLanguage: "en-US"
+    }
+
+    const { result } = renderHook(() => useResolvedPersonaVoiceDefaults(null))
+
+    expect(result.current.ttsProvider).toBe("tldw")
+    expect(result.current.ttsVoice).toBe("Bella")
   })
 })

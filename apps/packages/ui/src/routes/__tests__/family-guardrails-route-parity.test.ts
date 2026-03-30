@@ -33,6 +33,21 @@ const extensionRouteRegistryPath = resolve(
 
 const webRouteRegistrySource = readFileSync(webRouteRegistryPath, "utf8")
 const extensionRouteRegistrySource = readFileSync(extensionRouteRegistryPath, "utf8")
+const webRouteModulePath = resolve(
+  workspaceRoot,
+  "apps/packages/ui/src/routes/option-family-guardrails-wizard.tsx"
+)
+const extensionRouteModulePath = resolve(
+  workspaceRoot,
+  "apps/tldw-frontend/extension/routes/option-family-guardrails-wizard.tsx"
+)
+const webRouteModuleSource = readFileSync(webRouteModulePath, "utf8")
+const extensionRouteModuleSource = readFileSync(extensionRouteModulePath, "utf8")
+
+const normalizeSource = (source: string): string =>
+  source
+    .replace(/\r\n/g, "\n")
+    .trim()
 
 describe("family guardrails route parity", () => {
   it("registers the same family wizard settings path in web and extension registries", () => {
@@ -54,5 +69,9 @@ describe("family guardrails route parity", () => {
     expect(extensionRouteRegistrySource).toContain('labelToken: "settings:familyGuardrailsWizardNav"')
     expect(webRouteRegistrySource).toContain("order: 8")
     expect(extensionRouteRegistrySource).toContain("order: 8")
+  })
+
+  it("keeps the dedicated family wizard route modules in sync", () => {
+    expect(normalizeSource(extensionRouteModuleSource)).toBe(normalizeSource(webRouteModuleSource))
   })
 })

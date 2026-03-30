@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  BrainCircuit,
   BookMarked,
   BookOpen,
   BookText,
@@ -17,6 +18,7 @@ import {
   Layers,
   LayoutGrid,
   Library,
+  ListTodo,
   MessageSquare,
   Mic,
   Microscope,
@@ -34,6 +36,7 @@ import {
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 export type HeaderShortcutItem = {
   id: HeaderShortcutId
@@ -52,7 +55,7 @@ export type HeaderShortcutGroup = {
   items: HeaderShortcutItem[]
 }
 
-export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
+const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
   {
     id: "chat-persona",
     titleKey: "option:header.groupChatPersona",
@@ -60,7 +63,7 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
     items: [
       {
         id: "chat",
-        to: "/",
+        to: "/chat",
         icon: MessageSquare,
         labelKey: "option:header.modePlayground",
         labelDefault: "Chat",
@@ -119,6 +122,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelKey: "option:header.modePromptStudio",
         labelDefault: "Prompt Studio",
         shortcutIndex: 3
+      },
+      {
+        id: "deep-research",
+        to: "/research",
+        icon: BrainCircuit,
+        labelKey: "option:header.deepResearch",
+        labelDefault: "Deep Research"
       },
       {
         id: "workspace-playground",
@@ -292,6 +302,20 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "Workflows"
       },
       {
+        id: "integrations",
+        to: "/integrations",
+        icon: Bot,
+        labelKey: "option:header.integrations",
+        labelDefault: "Integrations"
+      },
+      {
+        id: "scheduled-tasks",
+        to: "/scheduled-tasks",
+        icon: ListTodo,
+        labelKey: "option:header.scheduledTasks",
+        labelDefault: "Scheduled Tasks"
+      },
+      {
         id: "acp-playground",
         to: "/acp-playground",
         icon: Bot,
@@ -348,6 +372,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "Server Admin"
       },
       {
+        id: "admin-integrations",
+        to: "/admin/integrations",
+        icon: CombineIcon,
+        labelKey: "option:header.adminIntegrations",
+        labelDefault: "Workspace Integrations"
+      },
+      {
         id: "admin-llamacpp",
         to: "/admin/llamacpp",
         icon: Microscope,
@@ -379,12 +410,55 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
   }
 ]
 
-export const HEADER_SHORTCUT_ITEMS: HeaderShortcutItem[] =
-  HEADER_SHORTCUT_GROUPS.flatMap((group) => group.items)
+const HOSTED_VISIBLE_SHORTCUT_PATHS = new Set([
+  "/chat",
+  "/knowledge",
+  "/media",
+  "/collections"
+])
+
+const getHostedHeaderShortcutGroups = (): HeaderShortcutGroup[] => {
+  const filteredGroups = BASE_HEADER_SHORTCUT_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => HOSTED_VISIBLE_SHORTCUT_PATHS.has(item.to))
+  })).filter((group) => group.items.length > 0)
+
+  filteredGroups.push({
+    id: "account-help",
+    titleKey: "option:header.groupAccountHelp",
+    titleDefault: "Account & Billing",
+    items: [
+      {
+        id: "account",
+        to: "/account",
+        icon: UserCircle2,
+        labelKey: "option:header.account",
+        labelDefault: "Account"
+      },
+      {
+        id: "billing",
+        to: "/billing",
+        icon: ClipboardList,
+        labelKey: "option:header.billing",
+        labelDefault: "Billing"
+      }
+    ]
+  })
+
+  return filteredGroups
+}
+
+export const getHeaderShortcutGroups = (): HeaderShortcutGroup[] =>
+  isHostedTldwDeployment()
+    ? getHostedHeaderShortcutGroups()
+    : BASE_HEADER_SHORTCUT_GROUPS
+
+export const getHeaderShortcutItems = (): HeaderShortcutItem[] =>
+  getHeaderShortcutGroups().flatMap((group) => group.items)
 
 export const normalizeHeaderShortcutSelection = (
   selection: HeaderShortcutId[]
 ): HeaderShortcutItem[] => {
   const selected = new Set(selection)
-  return HEADER_SHORTCUT_ITEMS.filter((item) => selected.has(item.id))
+  return getHeaderShortcutItems().filter((item) => selected.has(item.id))
 }

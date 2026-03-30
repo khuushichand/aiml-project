@@ -1,52 +1,46 @@
 import React from "react"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 
 const mocks = vi.hoisted(() => ({
-  isOnline: true,
-  capabilitiesState: {
-    capabilities: { hasPersonalization: true, hasPersona: true },
-    loading: false
-  } as {
-    capabilities: { hasPersonalization: boolean; hasPersona?: boolean } | null
-    loading: boolean
-  },
-  fetchPersonalizationProfile: vi.fn(async (..._args: unknown[]) => null),
-  updatePersonalizationOptIn: vi.fn(async (..._args: unknown[]) => null),
-  updateCompanionPreferences: vi.fn(async (..._args: unknown[]) => null),
   isCompanionConsentRequiredError: vi.fn((error: { status?: number; message?: string }) => {
     return (
       error?.status === 409 &&
       String(error?.message || "").includes("Enable personalization before using companion.")
     )
   }),
-  fetchCompanionWorkspaceSnapshot: vi.fn(async (..._args: unknown[]) => null),
   recordExplicitCompanionCapture: vi.fn(async (..._args: unknown[]) => null)
-}))
-
-vi.mock("@/hooks/useServerOnline", () => ({
-  useServerOnline: () => mocks.isOnline
-}))
-
-vi.mock("@/hooks/useServerCapabilities", () => ({
-  useServerCapabilities: () => mocks.capabilitiesState
 }))
 
 vi.mock("@/components/Common/RouteErrorBoundary", () => ({
   RouteErrorBoundary: ({ children }: { children: React.ReactNode }) => <>{children}</>
 }))
 
+vi.mock("@/components/Option/CompanionHome", () => ({
+  CompanionHomeShell: ({
+    surface,
+    onPersonalizationEnabled
+  }: {
+    surface: "options" | "sidepanel"
+    onPersonalizationEnabled?: () => void
+  }) => (
+    <div data-testid="companion-home-shell">
+      {surface}
+      <button
+        data-testid="companion-home-personalization-enabled"
+        onClick={() => onPersonalizationEnabled?.()}
+        type="button"
+      >
+        personalization enabled
+      </button>
+    </div>
+  )
+}))
+
 vi.mock("@/services/companion", () => ({
-  fetchPersonalizationProfile: (...args: unknown[]) =>
-    mocks.fetchPersonalizationProfile(...args),
-  updatePersonalizationOptIn: (...args: unknown[]) => mocks.updatePersonalizationOptIn(...args),
-  updateCompanionPreferences: (...args: unknown[]) =>
-    mocks.updateCompanionPreferences(...args),
   isCompanionConsentRequiredError: (error?: unknown) =>
     mocks.isCompanionConsentRequiredError(error as { status?: number; message?: string }),
-  fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
-    mocks.fetchCompanionWorkspaceSnapshot(...args),
   recordExplicitCompanionCapture: (...args: unknown[]) =>
     mocks.recordExplicitCompanionCapture(...args)
 }))
@@ -87,35 +81,6 @@ describe("SidepanelCompanion", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
-    mocks.isOnline = true
-    mocks.capabilitiesState.capabilities = { hasPersonalization: true, hasPersona: true }
-    mocks.capabilitiesState.loading = false
-    mocks.fetchPersonalizationProfile.mockResolvedValue({
-      enabled: true,
-      updated_at: "2026-03-10T08:00:00Z"
-    })
-    mocks.updatePersonalizationOptIn.mockResolvedValue({
-      enabled: true,
-      updated_at: "2026-03-10T15:00:00Z"
-    })
-    mocks.updateCompanionPreferences.mockResolvedValue({
-      enabled: true,
-      proactive_enabled: true,
-      companion_reflections_enabled: true,
-      companion_daily_reflections_enabled: true,
-      companion_weekly_reflections_enabled: true,
-      updated_at: "2026-03-10T15:00:00Z"
-    })
-    mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValue({
-      activity: [],
-      activityTotal: 0,
-      knowledge: [],
-      knowledgeTotal: 0,
-      goals: [],
-      activeGoalCount: 0,
-      reflections: [],
-      reflectionNotifications: []
-    })
     mocks.recordExplicitCompanionCapture.mockResolvedValue({
       id: "activity-1",
       event_type: "extension.selection_saved",
@@ -137,11 +102,12 @@ describe("SidepanelCompanion", () => {
     })
   })
 
-  it("shows unavailable state when personalization capability is missing", () => {
-    mocks.capabilitiesState.capabilities = { hasPersonalization: false, hasPersona: true }
+  it("renders the Companion Home shell in the sidepanel wrapper", async () => {
     renderRoute()
 
-    expect(screen.getByText("Companion unavailable")).toBeInTheDocument()
+    expect(await screen.findByTestId("companion-home-shell")).toBeInTheDocument()
+    expect(screen.getByText("sidepanel")).toBeInTheDocument()
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Companion")
   })
 
   it("records the pending selection capture when the companion route opens", async () => {
@@ -207,59 +173,59 @@ describe("SidepanelCompanion", () => {
     )
   })
 
-  it("offers the companion conversation route and hides option-only navigation links", async () => {
-    renderRoute()
-
-    await screen.findByTestId("companion-page")
-    expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute(
-      "href",
-      "/companion/conversation"
+  it("retries the pending capture after personalization is enabled from companion home", async () => {
+    window.sessionStorage.setItem(
+      "tldw:companion:pendingCapture",
+      JSON.stringify({
+        id: "capture-1",
+        selectionText: "Remember this paragraph.",
+        pageUrl: "https://example.com/article",
+        pageTitle: "Example article",
+        action: "save_selection"
+      })
     )
-    expect(screen.queryByRole("link", { name: "Open collections" })).not.toBeInTheDocument()
-    expect(screen.queryByRole("link", { name: "Open watchlists" })).not.toBeInTheDocument()
-  })
+    mocks.recordExplicitCompanionCapture
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Enable personalization before using companion."), {
+          status: 409
+        })
+      )
+      .mockResolvedValueOnce({
+        id: "activity-1",
+        event_type: "extension.selection_saved",
+        source_type: "browser_selection",
+        source_id: "capture-1",
+        surface: "extension.sidepanel",
+        tags: ["extension", "selection"],
+        provenance: {
+          capture_mode: "explicit",
+          route: "extension.context_menu",
+          action: "save_selection"
+        },
+        metadata: {
+          selection: "Remember this paragraph.",
+          page_url: "https://example.com/article",
+          page_title: "Example article"
+        },
+        created_at: "2026-03-10T12:00:00Z"
+      })
 
-  it("keeps destructive lifecycle controls out of the sidepanel surface", async () => {
     renderRoute()
 
-    await screen.findByTestId("companion-page")
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     expect(
-      screen.queryByRole("button", { name: "Purge knowledge" })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Rebuild knowledge" })
-    ).not.toBeInTheDocument()
-  })
+      await screen.findByText("Enable personalization before saving to companion.")
+    ).toBeInTheDocument()
+    expect(window.sessionStorage.getItem("tldw:companion:pendingCapture")).toContain(
+      "\"capture-1\""
+    )
+    expect(mocks.recordExplicitCompanionCapture).toHaveBeenCalledTimes(1)
 
-  it("does not render standalone follow-up prompts on the default workspace surface", async () => {
-    mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValueOnce({
-      activity: [],
-      activityTotal: 0,
-      knowledge: [],
-      knowledgeTotal: 0,
-      goals: [],
-      activeGoalCount: 0,
-      reflections: [
-        {
-          id: "reflection-1",
-          cadence: "daily",
-          title: "Daily reflection",
-          summary: "You revisited project alpha.",
-          evidence: [{ source_id: "activity-1" }],
-          provenance: { source_event_ids: ["activity-1"] },
-          created_at: "2026-03-10T13:00:00Z"
-        }
-      ],
-      reflectionNotifications: []
+    fireEvent.click(screen.getByTestId("companion-home-personalization-enabled"))
+
+    await waitFor(() => {
+      expect(mocks.recordExplicitCompanionCapture).toHaveBeenCalledTimes(2)
     })
-
-    renderRoute()
-
-    await screen.findByText("You revisited project alpha.")
-    expect(screen.queryByText("Follow-up prompts")).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Next concrete step" })
-    ).not.toBeInTheDocument()
+    expect(await screen.findByText("Saved selection to companion.")).toBeInTheDocument()
+    expect(window.sessionStorage.getItem("tldw:companion:pendingCapture")).toBeNull()
   })
 })

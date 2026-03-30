@@ -11,6 +11,9 @@ outputs:
   tldw_frontend_changed:
     description: Whether the primary web frontend paths changed.
     value: ${{ steps.classify.outputs.tldw_frontend_changed }}
+  family_guardrails_changed:
+    description: Whether family guardrails browser-gate paths changed.
+    value: ${{ steps.classify.outputs.family_guardrails_changed }}
   admin_ui_changed:
     description: Whether admin-ui paths changed.
     value: ${{ steps.classify.outputs.admin_ui_changed }}

@@ -9,6 +9,7 @@ export type TakeTabNavigationSource =
 export type TakeTabNavigationIntent = {
   startQuizId?: number | null
   highlightQuizId?: number | null
+  forceShowWorkspaceItems?: boolean
   sourceTab?: TakeTabNavigationSource | null
   attemptId?: number | null
   assignmentMode?: "shared" | null

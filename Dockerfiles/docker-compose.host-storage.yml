@@ -1,0 +1,83 @@
+# docker-compose.host-storage.yml for tldw_server using repo-visible bind mounts
+#
+# This file is a drop-in alternative to Dockerfiles/docker-compose.yml when you
+# want Docker-managed data to live under ../docker-data instead of named volumes.
+# It intentionally preserves the same service names and mount targets so the
+# runtime behavior stays aligned with the default quickstart.
+# WARNING: Default credentials in this file are for local development only.
+# Override SINGLE_USER_API_KEY, POSTGRES_PASSWORD, and configure Redis
+# authentication (requirepass or ACLs) before using this compose stack anywhere
+# beyond local testing.
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfiles/Dockerfile.prod
+    image: tldw-server:prod
+    container_name: tldw-app
+    ports:
+      - "8000:8000"
+    environment:
+      - AUTH_MODE=${AUTH_MODE:-single_user}
+      - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY:-change-me}
+      - tldw_production=${tldw_production:-false}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./Databases/users.db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - JOBS_DB_URL=${JOBS_DB_URL:-}
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-4}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ../docker-data/app:/app/Databases
+      - ../docker-data/user_data:/app/Databases/user_databases
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/ready', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:18-bookworm
+    container_name: tldw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
+      POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
+      # Local-only fallback; always override this outside disposable development.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-TestPassword123!}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ../docker-data/postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: tldw-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ../docker-data/redis:/data
+
+# Usage:
+#   # Single-user with repo-visible storage:
+#   #   docker compose --env-file tldw_Server_API/Config_Files/.env \
+#   #     -f Dockerfiles/docker-compose.host-storage.yml up -d --build
+#   # Optional WebUI:
+#   #   docker compose --env-file tldw_Server_API/Config_Files/.env \
+#   #     -f Dockerfiles/docker-compose.host-storage.yml \
+#   #     -f Dockerfiles/docker-compose.webui.yml up -d --build

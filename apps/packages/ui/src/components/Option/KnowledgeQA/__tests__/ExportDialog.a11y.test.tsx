@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ExportDialog } from "../ExportDialog"
 
@@ -228,6 +228,72 @@ describe("ExportDialog accessibility", () => {
     }
   })
 
+  it("ignores stale chatbook export completions after the dialog closes", async () => {
+    let resolveExport: ((value: Record<string, unknown>) => void) | null = null
+    exportChatbookMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveExport = resolve
+        })
+    )
+    const onClose = vi.fn()
+    const { rerender } = render(<ExportDialog open onClose={onClose} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Chatbook/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+    rerender(<ExportDialog open={false} onClose={onClose} />)
+
+    resolveExport?.({
+      success: true,
+      job_id: "job-stale",
+      download_url: "/api/v1/chatbooks/download/job-stale",
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(downloadChatbookExportMock).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(0)
+    expect(messageOpenMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+      })
+    )
+  })
+
+  it("ignores stale chatbook export completions after reopening the same thread", async () => {
+    let resolveExport: ((value: Record<string, unknown>) => void) | null = null
+    exportChatbookMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveExport = resolve
+        })
+    )
+    const onClose = vi.fn()
+    const { rerender } = render(<ExportDialog open onClose={onClose} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Chatbook/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+    rerender(<ExportDialog open={false} onClose={onClose} />)
+    rerender(<ExportDialog open onClose={onClose} />)
+
+    resolveExport?.({
+      success: true,
+      job_id: "job-reopened",
+      download_url: "/api/v1/chatbooks/download/job-reopened",
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(downloadChatbookExportMock).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it("uses browser print fallback for PDF exports", async () => {
     vi.useFakeTimers()
     const printSpy = vi.spyOn(window, "print").mockImplementation(() => {})
@@ -242,6 +308,26 @@ describe("ExportDialog accessibility", () => {
 
       vi.advanceTimersByTime(500)
       expect(printSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      printSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it("cancels pending PDF print when the dialog closes before the timeout fires", async () => {
+    vi.useFakeTimers()
+    const printSpy = vi.spyOn(window, "print").mockImplementation(() => {})
+    try {
+      const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+      fireEvent.click(screen.getByRole("button", { name: /PDF/i }))
+      fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+      await Promise.resolve()
+      rerender(<ExportDialog open={false} onClose={vi.fn()} />)
+
+      vi.advanceTimersByTime(500)
+      expect(printSpy).not.toHaveBeenCalled()
     } finally {
       printSpy.mockRestore()
       vi.useRealTimers()
@@ -355,12 +441,144 @@ describe("ExportDialog accessibility", () => {
     )
   })
 
+  it("ignores stale Save to Notes completions after the dialog closes", async () => {
+    let resolveSave: ((value: { id: number }) => void) | null = null
+    createNoteMock.mockImplementation(
+      () =>
+        new Promise<{ id: number }>((resolve) => {
+          resolveSave = resolve
+        })
+    )
+
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Save to Notes" }))
+    expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled()
+
+    rerender(<ExportDialog open={false} onClose={vi.fn()} />)
+
+    resolveSave?.({ id: 42 })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+
+    expect(screen.getByRole("button", { name: "Save to Notes" })).toBeEnabled()
+    expect(messageOpenMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "success",
+        content: "Saved to Notes.",
+      })
+    )
+  })
+
   it("disables share-link action for local-only threads", () => {
     state.currentThreadId = "local-thread-123"
 
     render(<ExportDialog open onClose={vi.fn()} />)
 
     expect(screen.getByRole("button", { name: "Create share link" })).toBeDisabled()
+  })
+
+  it("clears stale share-link state when the active thread changes", async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create share link" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Revoke link" })).toBeEnabled()
+    )
+    expect(screen.getByText(/Active link expires/i)).toBeInTheDocument()
+
+    state.currentThreadId = "thread-2"
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+
+    expect(screen.getByRole("button", { name: "Create share link" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Revoke link" })).toBeDisabled()
+    expect(screen.queryByText(/Active link expires/i)).not.toBeInTheDocument()
+  })
+
+  it("clears export preview state when the active thread changes", async () => {
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+    await waitFor(() => expect(screen.getByText("Preview")).toBeInTheDocument())
+
+    state.currentThreadId = "thread-2"
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+
+    expect(screen.queryByText("Preview")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^Copy$/ })).not.toBeInTheDocument()
+  })
+
+  it("ignores stale share-link completions after the active thread changes", async () => {
+    let resolveShareLink: ((value: Record<string, unknown>) => void) | null = null
+    createShareLinkMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveShareLink = resolve
+        })
+    )
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create share link" }))
+
+    state.currentThreadId = "thread-2"
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+
+    resolveShareLink?.({
+      share_id: "share-1",
+      token: "token-1",
+      share_path: "/knowledge/shared/token-1",
+      created_at: "2026-02-19T10:00:00.000Z",
+      expires_at: "2026-02-20T10:00:00.000Z",
+      permission: "view",
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(writeTextMock).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Create share link" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Revoke link" })).toBeDisabled()
+    expect(screen.queryByText(/Active link expires/i)).not.toBeInTheDocument()
+  })
+
+  it("keeps the revoke handle when clipboard copy fails after share-link creation", async () => {
+    const writeTextMock = vi.fn().mockRejectedValue(new Error("clipboard denied"))
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
+    render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create share link" }))
+
+    await waitFor(() =>
+      expect(messageOpenMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "warning",
+        })
+      )
+    )
+
+    expect(screen.getByText(/Active link expires/i)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Revoke link" })).toBeEnabled()
   })
 
   it("preserves format defaults and preview copy feedback behavior", async () => {
@@ -390,5 +608,102 @@ describe("ExportDialog accessibility", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
     )
+  })
+
+  it("keeps the latest export copy confirmation visible until the latest timeout completes", async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: {
+        writeText: writeTextMock,
+      },
+      configurable: true,
+    })
+
+    try {
+      render(<ExportDialog open onClose={vi.fn()} />)
+
+      fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+      await waitFor(() => expect(screen.getByText("Preview")).toBeInTheDocument())
+      vi.useFakeTimers()
+
+      fireEvent.click(screen.getByRole("button", { name: /^Copy$/ }))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+
+      fireEvent.click(screen.getByRole("button", { name: "Copied" }))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(writeTextMock).toHaveBeenCalledTimes(2)
+
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+      expect(screen.getByRole("button", { name: /^Copy$/ })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("resets transient export state when the dialog is closed and reopened", async () => {
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+    await waitFor(() => expect(screen.getByText("Preview")).toBeInTheDocument())
+
+    rerender(<ExportDialog open={false} onClose={vi.fn()} />)
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+
+    expect(screen.queryByText("Preview")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^Copy$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument()
+  })
+
+  it("does not let a stale preview-copy completion leak into the next export session", async () => {
+    let resolveCopy: (() => void) | null = null
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: {
+        writeText: vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveCopy = resolve
+            })
+        ),
+      },
+      configurable: true,
+    })
+
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+    await waitFor(() => expect(screen.getByText("Preview")).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole("button", { name: /^Copy$/ }))
+    rerender(<ExportDialog open={false} onClose={vi.fn()} />)
+
+    resolveCopy?.()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+    await waitFor(() => expect(screen.getByText("Preview")).toBeInTheDocument())
+
+    expect(screen.getByRole("button", { name: /^Copy$/ })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument()
   })
 })

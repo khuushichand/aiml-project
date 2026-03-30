@@ -6,6 +6,15 @@ import {
   type MonitoringMetricsApiClient,
 } from './use-monitoring-metrics-history';
 
+vi.mock('@/lib/use-url-state', async () => {
+  const React = await import('react');
+
+  return {
+    useUrlState: <T,>(_key: string, options?: { defaultValue?: T }) =>
+      React.useState<T | undefined>(options?.defaultValue),
+  };
+});
+
 type HarnessProps = {
   apiClient: MonitoringMetricsApiClient;
   pollIntervalMs?: number;

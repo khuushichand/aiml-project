@@ -2,6 +2,10 @@
 
 This module provides subscription lifecycle, usage enforcement, and Stripe webhook handling for organization billing.
 
+Related documents:
+- `Docs/User_Guides/Server/Production_Hardening_Checklist.md`
+- `Docs/Published/Deployment/First_Time_Production_Setup.md`
+
 ## Key Environment Variables
 
 - `BILLING_ENABLED`
@@ -53,3 +57,4 @@ Validation behavior:
 
 - Stripe-backed subscription cancel/resume operations fail closed when Stripe cannot be reached or is unavailable, to avoid local/remote state drift.
 - Non-active subscription statuses (for example `past_due` or `canceled`) fall back to free-tier limits during enforcement.
+- Stripe webhook prove-out should target `POST /api/v1/billing/webhooks/stripe` and verify signature validation, idempotency, and subscription state reconciliation before production use.

@@ -86,7 +86,7 @@ export const SidepanelApp: React.FC = () => {
     <AppShell
       router={Router}
       direction={direction}
-      emptyDescription={t("common:noData")}
+      emptyDescription={t("common:noData", { defaultValue: "No data" })}
       suspendWhenHidden={platformConfig.features.suspendSidepanelWhenHidden}
       includeAntdApp={platformConfig.features.includeAntdApp}
       extras={extras}
@@ -120,7 +120,7 @@ export const OptionsApp: React.FC = () => {
     <AppShell
       router={Router}
       direction={direction}
-      emptyDescription={t("common:noData")}
+      emptyDescription={t("common:noData", { defaultValue: "No data" })}
       suspendWhenHidden={platformConfig.features.suspendOptionsWhenHidden}
       includeAntdApp={platformConfig.features.includeAntdApp}
     >

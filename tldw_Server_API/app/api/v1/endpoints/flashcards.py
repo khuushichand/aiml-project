@@ -12,6 +12,7 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
     DeckCreate,
@@ -72,6 +73,7 @@ from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_flashcard_assistant_context,
     generate_study_assistant_reply,
 )
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.image_validation import (
     get_max_flashcard_asset_bytes,
@@ -84,6 +86,13 @@ _FLASHCARDS_INT_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
 )
+
+
+def _ensure_workspace_exists(db: CharactersRAGDB, workspace_id: Optional[str]) -> None:
+    if workspace_id is None:
+        return
+    if db.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
 
 
 def _coerce_scheduler_type(value: Any) -> str:
@@ -185,6 +194,46 @@ def _int_env(name: str, default: int) -> int:
         return max(1, value)
     except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
         return default
+
+
+def _config_default_llm_provider() -> str | None:
+    """Return the configured server default LLM provider when present."""
+    cfg = loaded_config_data
+
+    for section in ("llm_api_settings", "API"):
+        try:
+            section_data = cfg.get(section)
+        except (AttributeError, TypeError, KeyError):
+            section_data = None
+        if not isinstance(section_data, dict):
+            continue
+        default_api = section_data.get("default_api")
+        if isinstance(default_api, str):
+            candidate = default_api.strip()
+            if candidate:
+                return candidate
+    return None
+
+
+def _resolve_flashcard_generation_provider(request_provider: str | None) -> str:
+    """Resolve provider for flashcard generation using the server's default contract."""
+    provider = str(request_provider or "").strip()
+    if provider:
+        return provider.lower()
+
+    cfg_default = _config_default_llm_provider()
+    if cfg_default:
+        return cfg_default.strip().lower()
+
+    env_default = str(os.getenv("DEFAULT_LLM_PROVIDER") or "").strip()
+    if env_default:
+        return env_default.lower()
+
+    if is_test_mode():
+        return "local-llm"
+
+    fallback = str(DEFAULT_LLM_PROVIDER or "openai").strip().lower()
+    return fallback or "openai"
 
 
 def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
@@ -465,11 +514,13 @@ def _get_flashcards_apkg_max_media_bytes() -> int:
 @router.post("/decks", response_model=Deck)
 def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
+        _ensure_workspace_exists(db, payload.workspace_id)
         deck_id = db.add_deck(
             payload.name,
             payload.description,
             payload.scheduler_settings.model_dump() if payload.scheduler_settings else None,
             scheduler_type=payload.scheduler_type,
+            workspace_id=payload.workspace_id,
         )
         # Return the exact deck row by id
         deck = db.get_deck(deck_id)
@@ -480,6 +531,7 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
             "id": deck_id,
             "name": payload.name,
             "description": payload.description,
+            "workspace_id": payload.workspace_id,
             "created_at": None,
             "last_modified": None,
             "deleted": False,
@@ -503,10 +555,22 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
 
 
 @router.get("/decks", response_model=list[Deck])
-def list_decks(db: CharactersRAGDB = Depends(get_chacha_db_for_user), include_deleted: bool = False,
-               limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
+def list_decks(
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    include_deleted: bool = False,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
     try:
-        return db.list_decks(limit=limit, offset=offset, include_deleted=include_deleted)
+        return db.list_decks(
+            limit=limit,
+            offset=offset,
+            include_deleted=include_deleted,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list decks: {e}")
         raise HTTPException(status_code=500, detail="Failed to list decks") from e
@@ -522,13 +586,17 @@ def update_deck(
     expected_version = data.pop("expected_version", None)
     scheduler_settings = data.pop("scheduler_settings", None)
     scheduler_type = data.pop("scheduler_type", None)
+    workspace_id = data.pop("workspace_id", ...)
     try:
+        if workspace_id is not ...:
+            _ensure_workspace_exists(db, workspace_id)
         ok = db.update_deck(
             deck_id,
             name=data.get("name"),
             description=data.get("description"),
             scheduler_settings=scheduler_settings,
             scheduler_type=scheduler_type,
+            workspace_id=workspace_id,
             expected_version=expected_version,
         )
         if not ok:
@@ -823,6 +891,8 @@ def update_flashcards_bulk(
 @router.get("", response_model=FlashcardListResponse)
 def list_flashcards(
     deck_id: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     tag: Optional[str] = None,
     due_status: Optional[str] = Query('all', pattern="^(new|learning|due|all)$"),
     q: Optional[str] = None,
@@ -832,9 +902,27 @@ def list_flashcards(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     try:
-        items = db.list_flashcards(deck_id=deck_id, tag=tag, due_status=due_status or 'all', q=q,
-                                   include_deleted=False, limit=limit, offset=offset, order_by=order_by or 'due_at')
-        total = db.count_flashcards(deck_id=deck_id, tag=tag, due_status=due_status or 'all', q=q, include_deleted=False)
+        items = db.list_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            due_status=due_status or 'all',
+            q=q,
+            include_deleted=False,
+            limit=limit,
+            offset=offset,
+            order_by=order_by or 'due_at',
+        )
+        total = db.count_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            due_status=due_status or 'all',
+            q=q,
+            include_deleted=False,
+        )
         return {"items": items, "count": len(items), "total": int(total)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list flashcards: {e}")
@@ -844,10 +932,16 @@ def list_flashcards(
 @router.get("/analytics/summary", response_model=FlashcardAnalyticsSummaryResponse)
 def get_flashcard_analytics_summary(
     deck_id: Optional[int] = Query(None, ge=1),
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     try:
-        return db.get_flashcard_analytics_summary(deck_id=deck_id)
+        return db.get_flashcard_analytics_summary(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
     except CharactersRAGDBError as e:
         logger.error(f"Failed to get flashcard analytics summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get flashcard analytics summary") from e
@@ -1050,7 +1144,10 @@ def import_flashcards(
         # Build or cache decks by name
         decks_cache: dict[str, int] = {}
         # Preload existing decks once
-        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        existing_decks = {
+            d.get('name'): d.get('id')
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
+        }
         default_deck_name = 'Default'
         # Ensure default deck exists in cache
         if default_deck_name not in existing_decks:
@@ -1249,7 +1346,10 @@ async def import_flashcards_json(
             raise HTTPException(status_code=400, detail="JSON content must be a list of objects or {'items': [...]} ")
 
         # Deck cache
-        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        existing_decks = {
+            d.get('name'): d.get('id')
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
+        }
         decks_cache: dict[str, int] = dict(existing_decks)
         default_deck_name = 'Default'
         if default_deck_name not in decks_cache:
@@ -1415,7 +1515,7 @@ async def import_flashcards_apkg(
 
         existing_decks = {
             d.get("name"): d.get("id")
-            for d in db.list_decks(limit=10000, offset=0, include_deleted=False)
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
         }
         decks_cache: dict[str, int] = dict(existing_decks)
         if "Default" not in decks_cache:
@@ -1503,10 +1603,16 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
 @router.get("/review/next", response_model=FlashcardNextReviewResponse)
 def get_next_review_card(
     deck_id: Optional[int] = Query(None, ge=1),
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     try:
-        card, selection_reason = db.get_next_review_card(deck_id=deck_id)
+        card, selection_reason = db.get_next_review_card(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
         if not card:
             return {"card": None, "selection_reason": "none"}
         deck = db.get_deck(int(card["deck_id"])) if card.get("deck_id") is not None else None
@@ -1613,6 +1719,7 @@ async def respond_flashcard_assistant(
 async def generate_flashcards(payload: FlashcardGenerateRequest):
     """Generate flashcards from free text using the workflows flashcard_generate adapter."""
     try:
+        provider = _resolve_flashcard_generation_provider(payload.provider)
         result = await run_flashcard_generate_adapter(
             {
                 "text": payload.text,
@@ -1620,7 +1727,7 @@ async def generate_flashcards(payload: FlashcardGenerateRequest):
                 "card_type": payload.card_type,
                 "difficulty": payload.difficulty,
                 "focus_topics": payload.focus_topics,
-                "provider": payload.provider,
+                "provider": provider,
                 "model": payload.model,
             },
             {},
@@ -1689,6 +1796,8 @@ async def generate_flashcards(payload: FlashcardGenerateRequest):
 @router.get("/export")
 def export_flashcards(
     deck_id: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     tag: Optional[str] = None,
     q: Optional[str] = None,
     format: Optional[str] = Query("csv", pattern="^(csv|apkg)$"),
@@ -1699,7 +1808,17 @@ def export_flashcards(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     try:
-        items = db.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
+        items = db.list_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            q=q,
+            due_status='all',
+            include_deleted=False,
+            limit=100000,
+            offset=0,
+        )
         if format == 'apkg':
             apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
 
@@ -1726,7 +1845,16 @@ def export_flashcards(
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv
         dlm = delimiter or '\t'
-        data = db.export_flashcards_csv(deck_id=deck_id, tag=tag, q=q, delimiter=dlm, include_header=bool(include_header), extended_header=bool(extended_header))
+        data = db.export_flashcards_csv(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            q=q,
+            delimiter=dlm,
+            include_header=bool(include_header),
+            extended_header=bool(extended_header),
+        )
         media_type = "text/tab-separated-values; charset=utf-8" if dlm == '\t' else "text/csv; charset=utf-8"
         filename = "flashcards.tsv" if dlm == '\t' else "flashcards.csv"
         return StreamingResponse(iter([data]), media_type=media_type,

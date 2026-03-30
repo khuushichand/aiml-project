@@ -2,6 +2,7 @@ import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
+import type { AudioGenerationSettings } from "@/types/workspace"
 import { StudioPane } from "../StudioPane"
 
 const {
@@ -14,12 +15,14 @@ const {
   mockMessageError,
   mockMessageInfo,
   mockGenerateFlashcardsService,
+  mockCreateFlashcardsBulk,
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
   mockDownloadOutput,
   mockCreateChatCompletion,
   mockGetMediaDetails,
+  mockUpsertWorkspace,
   mockGetChatModels,
   messageOptionStoreState,
   chatModelSettingsStoreState,
@@ -36,19 +39,21 @@ const {
   const messageError = vi.fn()
   const messageInfo = vi.fn()
   const generateFlashcardsService = vi.fn()
+  const createFlashcardsBulk = vi.fn()
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
   const downloadOutput = vi.fn()
   const createChatCompletion = vi.fn()
   const getMediaDetails = vi.fn()
+  const upsertWorkspace = vi.fn()
   const getChatModels = vi.fn()
-  const defaultAudioSettings = {
-    provider: "browser" as const,
+  const defaultAudioSettings: AudioGenerationSettings = {
+    provider: "browser",
     model: "kokoro",
     voice: "af_heart",
     speed: 1,
-    format: "mp3" as const
+    format: "mp3"
   }
   const defaultSources = [
     {
@@ -124,12 +129,14 @@ const {
     mockMessageError: messageError,
     mockMessageInfo: messageInfo,
     mockGenerateFlashcardsService: generateFlashcardsService,
+    mockCreateFlashcardsBulk: createFlashcardsBulk,
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
     mockDownloadOutput: downloadOutput,
     mockCreateChatCompletion: createChatCompletion,
     mockGetMediaDetails: getMediaDetails,
+    mockUpsertWorkspace: upsertWorkspace,
     mockGetChatModels: getChatModels,
     messageOptionStoreState: messageOptionState,
     chatModelSettingsStoreState: chatModelSettingsState,
@@ -187,7 +194,10 @@ vi.mock("@/services/flashcards", () => ({
   generateFlashcards: mockGenerateFlashcardsService,
   listDecks: vi.fn().mockResolvedValue([]),
   createDeck: vi.fn().mockResolvedValue({ id: 1, name: "Workspace Flashcards" }),
-  createFlashcard: vi.fn().mockResolvedValue({ uuid: "card-1" })
+  createFlashcard: vi.fn().mockResolvedValue({ uuid: "card-1" }),
+  createFlashcardsBulk: mockCreateFlashcardsBulk.mockResolvedValue({
+    cards: [{ uuid: "card-1" }]
+  })
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -195,8 +205,10 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
+    upsertWorkspace: mockUpsertWorkspace,
     exportPresentation: vi.fn(),
     downloadOutput: mockDownloadOutput
   }
@@ -659,35 +671,169 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockRagSearch).not.toHaveBeenCalled()
   })
 
-  it("falls back to a provider-compatible model when the selected model belongs to another provider", async () => {
-    messageOptionStoreState.selectedModel = "llama-3.1-8b"
-    chatModelSettingsStoreState.apiProvider = "openai"
-    mockGetChatModels.mockResolvedValue([
-      {
-        id: "llama-3.1-8b",
-        name: "Llama 3.1 8B",
-        provider: "ollama"
-      },
-      {
-        id: "gpt-4o-mini",
-        name: "GPT-4o mini",
-        provider: "openai"
+  it("uses selected source content directly for report generation", async () => {
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention by 18 percent after the March 2026 onboarding update."
       }
-    ])
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "## Executive Summary\nProject Falcon improved retention by 18 percent.\n\n## Key Findings\n- March 2026 onboarding update increased retention."
+      )
+    )
 
     renderStudioPane()
 
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+    fireEvent.click(screen.getByRole("button", { name: "Report" }))
 
     await waitFor(() => {
       expect(mockCreateChatCompletion).toHaveBeenCalled()
     })
 
-    const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
-    expect(summaryRequest).toMatchObject({
+    const reportRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(reportRequest).toMatchObject({
       model: "gpt-4o-mini",
-      api_provider: "openai"
+      max_tokens: 450
     })
+    expect(reportRequest.messages?.[0]?.content).toContain(
+      "source-grounded report writer"
+    )
+    expect(reportRequest.messages?.[1]?.content).toContain("Executive Summary")
+    expect(reportRequest.messages?.[1]?.content).toContain("DSPy Prompting Talk")
+    expect(reportRequest.messages?.[1]?.content).toContain("March 2026 onboarding")
+    expect(reportRequest.messages?.[1]?.content).toContain("Keep the full report under 500 words")
+    expect(mockRagSearch).not.toHaveBeenCalled()
+  })
+
+  it("uses selected source content directly for compare sources generation", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "Alpha Findings",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      },
+      {
+        id: "source-2",
+        mediaId: 202,
+        title: "Beta Findings",
+        type: "document",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.getSelectedMediaIds = () => [101, 202]
+    mockGetMediaDetails
+      .mockResolvedValueOnce({
+        source: { title: "Alpha Findings" },
+        content: {
+          text: "Alpha reports retention improved by 18 percent after the Falcon rollout."
+        }
+      })
+      .mockResolvedValueOnce({
+        source: { title: "Beta Findings" },
+        content: {
+          text: "Beta reports retention improved by 12 percent and attributes gains to training."
+        }
+      })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "## Agreements\n- Both sources report retention gains.\n\n## Disagreements\n- Alpha reports 18 percent while Beta reports 12 percent."
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare Sources" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    const compareRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(compareRequest).toMatchObject({
+      model: "gpt-4o-mini"
+    })
+    expect(compareRequest.messages?.[0]?.content).toContain(
+      "source-grounded comparison analyst"
+    )
+    expect(compareRequest.messages?.[1]?.content).toContain("Alpha Findings")
+    expect(compareRequest.messages?.[1]?.content).toContain("Beta Findings")
+    expect(compareRequest.messages?.[1]?.content).toContain("18 percent")
+    expect(compareRequest.messages?.[1]?.content).toContain("12 percent")
+    expect(mockRagSearch).not.toHaveBeenCalled()
+  })
+
+  it("uses selected source content directly for timeline generation", async () => {
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "January 2026 baseline survey completed. February 2026 pilot launched. March 2026 rollout improved retention by 18 percent."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "- January 2026 - Baseline survey completed.\n- February 2026 - Pilot launched.\n- March 2026 - Rollout improved retention by 18 percent."
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Timeline" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    const timelineRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(timelineRequest).toMatchObject({
+      model: "gpt-4o-mini"
+    })
+    expect(timelineRequest.messages?.[0]?.content).toContain(
+      "source-grounded timeline analyst"
+    )
+    expect(timelineRequest.messages?.[1]?.content).toContain("January 2026")
+    expect(timelineRequest.messages?.[1]?.content).toContain("March 2026")
+    expect(mockRagSearch).not.toHaveBeenCalled()
+  })
+
+  it("uses selected source content directly for slides fallback generation", async () => {
+    mockGenerateSlidesFromMedia.mockRejectedValue(new Error("Slides API unavailable"))
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon launched in March 2026 and improved retention by 18 percent."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "# Project Falcon Review\n\n## Slide 1: Overview\n- Project Falcon launched in March 2026.\n\n## Slide 2: Outcomes\n- Retention improved by 18 percent."
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    const slidesRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(slidesRequest).toMatchObject({
+      model: "gpt-4o-mini"
+    })
+    expect(slidesRequest.messages?.[0]?.content).toContain(
+      "source-grounded presentation writer"
+    )
+    expect(slidesRequest.messages?.[1]?.content).toContain("Project Falcon")
+    expect(slidesRequest.messages?.[1]?.content).toContain("March 2026")
+    expect(mockRagSearch).not.toHaveBeenCalled()
   })
 
   it("falls back to the default summary instruction when no custom prompt is set", async () => {
@@ -809,6 +955,101 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     anchorClickSpy.mockRestore()
   })
 
+  it("downloads flashcard artifacts locally instead of calling outputs download", async () => {
+    mockDownloadOutput.mockResolvedValue(new Blob(["server download"]))
+
+    const createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:flashcards")
+    const revokeObjectUrlSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {})
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {})
+
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-flashcards",
+        type: "flashcards",
+        title: "Flashcards",
+        status: "completed",
+        serverId: 7,
+        content: "Front: ATP\nBack: Cellular energy",
+        data: {
+          flashcards: [
+            {
+              front: "ATP",
+              back: "Cellular energy"
+            }
+          ],
+          deckId: 7
+        },
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }))
+
+    await waitFor(() => {
+      expect(createObjectUrlSpy).toHaveBeenCalled()
+    })
+
+    expect(mockDownloadOutput).not.toHaveBeenCalled()
+    expect(anchorClickSpy).toHaveBeenCalled()
+    expect(revokeObjectUrlSpy).toHaveBeenCalled()
+
+    createObjectUrlSpy.mockRestore()
+    revokeObjectUrlSpy.mockRestore()
+    anchorClickSpy.mockRestore()
+  })
+
+  it("completes browser audio overview generation without server TTS", async () => {
+    workspaceStoreState.audioSettings = {
+      ...baseAudioSettings,
+      provider: "browser"
+    }
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention by 18 percent after the March 2026 onboarding update."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Audio script")
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Audio Summary" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Audio script",
+          audioFormat: "browser"
+        })
+      )
+    })
+
+    const audioRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(audioRequest.messages?.[0]?.content).toContain(
+      "source-grounded audio script writer"
+    )
+    expect(audioRequest.messages?.[1]?.content).toContain("DSPy Prompting Talk")
+    expect(audioRequest.messages?.[1]?.content).toContain("March 2026 onboarding")
+    expect(mockRagSearch).not.toHaveBeenCalled()
+    expect(mockSynthesizeSpeech).not.toHaveBeenCalled()
+  })
+
   it("fails non-browser audio overview generation when TTS does not return audio", async () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")
@@ -847,9 +1088,17 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       provider: "tldw",
       model: "kokoro"
     }
-    mockRagSearch.mockResolvedValue({
-      generation: "Sorry, I encountered an error. Please try again."
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention by 18 percent after the March 2026 onboarding update."
+      }
     })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "Sorry, I encountered an error. Please try again."
+      )
+    )
     mockSynthesizeSpeech.mockResolvedValue(new ArrayBuffer(8))
 
     renderStudioPane()
@@ -869,21 +1118,16 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageSuccess).not.toHaveBeenCalled()
   })
 
-  it("passes extended timeout to report generation RAG request", async () => {
+  it("uses direct source-content chat generation for reports instead of RAG", async () => {
     renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Report" }))
 
     await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalled()
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
     })
 
-    expect(mockRagSearch).toHaveBeenLastCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        timeoutMs: 120000
-      })
-    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
   })
 
   it("uses structured flashcard generation instead of the RAG text path", async () => {

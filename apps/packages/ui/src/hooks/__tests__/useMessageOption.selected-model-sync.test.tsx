@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
   storeState,
+  chatBaseState,
+  selectedAssistantState,
+  setSelectedAssistantSpy,
   storageBacking,
   storageSetCalls,
   lastUseChatActionsArgs,
@@ -62,6 +65,12 @@ const {
     setServerChatTitle: vi.fn(),
     serverChatCharacterId: null,
     setServerChatCharacterId: vi.fn(),
+    serverChatAssistantKind: null,
+    setServerChatAssistantKind: vi.fn(),
+    serverChatAssistantId: null,
+    setServerChatAssistantId: vi.fn(),
+    serverChatPersonaMemoryMode: null,
+    setServerChatPersonaMemoryMode: vi.fn(),
     serverChatMetaLoaded: false,
     setServerChatMetaLoaded: vi.fn(),
     serverChatState: null,
@@ -85,8 +94,43 @@ const {
     clearReplyTarget: vi.fn()
   }
 
+  const chatBaseState = {
+    messages: [],
+    setMessages: vi.fn(),
+    history: [],
+    setHistory: vi.fn(),
+    streaming: false,
+    setStreaming: vi.fn(),
+    isFirstMessage: true,
+    setIsFirstMessage: vi.fn(),
+    historyId: null,
+    setHistoryId: vi.fn(),
+    isLoading: false,
+    setIsLoading: vi.fn(),
+    isProcessing: false,
+    setIsProcessing: vi.fn(),
+    chatMode: "normal",
+    setChatMode: vi.fn(),
+    isEmbedding: false,
+    setIsEmbedding: vi.fn(),
+    selectedQuickPrompt: null,
+    setSelectedQuickPrompt: vi.fn(),
+    selectedSystemPrompt: null,
+    setSelectedSystemPrompt: vi.fn(),
+    useOCR: false,
+    setUseOCR: vi.fn()
+  }
+
+  const selectedAssistantState = {
+    current: null as Record<string, unknown> | null
+  }
+  const setSelectedAssistantSpy = vi.fn()
+
   return {
     storeState: state,
+    chatBaseState,
+    selectedAssistantState,
+    setSelectedAssistantSpy,
     storageBacking: new Map<string, any>(),
     storageSetCalls: [] as Array<{ key: string; value: unknown }>,
     lastUseChatActionsArgs: { value: null as Record<string, unknown> | null },
@@ -133,32 +177,7 @@ vi.mock("@/hooks/useAntdNotification", () => ({
 }))
 
 vi.mock("@/hooks/chat/useChatBaseState", () => ({
-  useChatBaseState: () => ({
-    messages: [],
-    setMessages: vi.fn(),
-    history: [],
-    setHistory: vi.fn(),
-    streaming: false,
-    setStreaming: vi.fn(),
-    isFirstMessage: true,
-    setIsFirstMessage: vi.fn(),
-    historyId: null,
-    setHistoryId: vi.fn(),
-    isLoading: false,
-    setIsLoading: vi.fn(),
-    isProcessing: false,
-    setIsProcessing: vi.fn(),
-    chatMode: "normal",
-    setChatMode: vi.fn(),
-    isEmbedding: false,
-    setIsEmbedding: vi.fn(),
-    selectedQuickPrompt: null,
-    setSelectedQuickPrompt: vi.fn(),
-    selectedSystemPrompt: null,
-    setSelectedSystemPrompt: vi.fn(),
-    useOCR: false,
-    setUseOCR: vi.fn()
-  })
+  useChatBaseState: () => chatBaseState
 }))
 
 vi.mock("@/hooks/chat/useSelectServerChat", () => ({
@@ -227,6 +246,10 @@ vi.mock("@/hooks/useSelectedCharacter", () => ({
   useSelectedCharacter: () => [null, vi.fn()]
 }))
 
+vi.mock("@/hooks/useSelectedAssistant", () => ({
+  useSelectedAssistant: () => [selectedAssistantState.current, setSelectedAssistantSpy]
+}))
+
 vi.mock("@/hooks/useSetting", () => ({
   useSetting: () => [25]
 }))
@@ -272,6 +295,19 @@ describe("useMessageOption selected model sync", () => {
     storageSetCalls.length = 0
     lastUseChatActionsArgs.value = null
     storeState.selectedModel = null
+    storeState.serverChatId = null
+    storeState.serverChatAssistantKind = null
+    storeState.serverChatAssistantId = null
+    storeState.serverChatPersonaMemoryMode = null
+    selectedAssistantState.current = null
+    setSelectedAssistantSpy.mockReset()
+    chatBaseState.messages = []
+    chatBaseState.history = []
+    chatBaseState.historyId = null
+    chatBaseState.setMessages.mockReset()
+    chatBaseState.setHistory.mockReset()
+    chatBaseState.setHistoryId.mockReset()
+    storeState.setServerChatId.mockReset()
   })
 
   it("prefers store-selected model over stale storage-selected model", async () => {
@@ -305,5 +341,41 @@ describe("useMessageOption selected model sync", () => {
     await waitFor(() => {
       expect(storeState.selectedModel).toBe("z-ai/glm-4.6")
     })
+  })
+
+  it("does not clear the current server chat when assistant hydration matches the loaded chat identity", () => {
+    storeState.serverChatId = "chat-1"
+    storeState.serverChatAssistantKind = "character"
+    storeState.serverChatAssistantId = "char-1"
+    chatBaseState.messages = [
+      {
+        id: "msg-1",
+        role: "assistant",
+        message: "Hello there",
+        isBot: true,
+        sources: []
+      }
+    ]
+    chatBaseState.history = [
+      {
+        role: "assistant",
+        content: "Hello there"
+      }
+    ]
+    chatBaseState.historyId = "history-1"
+
+    const { rerender } = renderHook(() => useMessageOption())
+
+    selectedAssistantState.current = {
+      id: "char-1",
+      kind: "character",
+      name: "Guide"
+    }
+    rerender()
+
+    expect(storeState.setServerChatId).not.toHaveBeenCalledWith(null)
+    expect(chatBaseState.setMessages).not.toHaveBeenCalledWith([])
+    expect(chatBaseState.setHistory).not.toHaveBeenCalledWith([])
+    expect(chatBaseState.setHistoryId).not.toHaveBeenCalledWith(null)
   })
 })

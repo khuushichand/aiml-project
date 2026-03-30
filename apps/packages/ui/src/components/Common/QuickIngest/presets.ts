@@ -198,6 +198,12 @@ export function configMatchesPreset(
     return false
   }
 
+  const audioLanguage = (config.typeDefaults?.audio?.language || "").trim()
+  const presetAudioLanguage = (preset.typeDefaults?.audio?.language || "").trim()
+  if (audioLanguage !== presetAudioLanguage) {
+    return false
+  }
+
   const documentOcr = config.typeDefaults?.document?.ocr ?? false
   const presetDocumentOcr = preset.typeDefaults?.document?.ocr ?? false
   if (documentOcr !== presetDocumentOcr) {

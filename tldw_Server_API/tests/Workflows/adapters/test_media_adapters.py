@@ -345,6 +345,93 @@ class TestMediaIngestAdapter:
 
         assert result["metadata"][0]["status"] == "local_ok"
 
+    @pytest.mark.asyncio
+    async def test_media_ingest_indexing_uses_media_repository_api(
+        self, test_mode_env, workflow_file_base, sample_text_file, monkeypatch
+    ):
+        """Test workflow indexing persists through the media_db API seam."""
+        import contextlib
+
+        from tldw_Server_API.app.core.Workflows.adapters import run_media_ingest_adapter
+        from tldw_Server_API.app.core.Workflows.adapters.media import ingest as ingest_module
+
+        monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(sample_text_file.parent))
+        events = []
+
+        class _FakeRepo:
+            def add_media_with_keywords(self, **kwargs):
+                events.append(("add_media_with_keywords", kwargs["title"]))
+                self.kwargs = kwargs
+                return 501, "workflow-media", "stored"
+
+        fake_repo = _FakeRepo()
+
+        @contextlib.contextmanager
+        def _fake_managed_media_database(client_id, **kwargs):
+            events.append(("open", client_id, kwargs))
+            yield object()
+
+        monkeypatch.setattr(
+            ingest_module,
+            "managed_media_database",
+            _fake_managed_media_database,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            ingest_module,
+            "get_media_repository",
+            lambda _db: fake_repo,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_single_user_id",
+            staticmethod(lambda: 1),
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_media_db_path",
+            staticmethod(lambda user_id: sample_text_file.parent / f"user-{user_id}.sqlite3"),
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.media_db.api.get_media_repository",
+            lambda db: fake_repo,
+        )
+
+        config = {
+            "sources": [{"uri": f"file://{sample_text_file}", "media_type": "document"}],
+            "extraction": {"extract_text": True},
+            "indexing": {"index_in_rag": True},
+            "metadata": {"title": "Indexed workflow doc", "tags": ["workflow", "index"]},
+        }
+        context = {"user_id": "1"}
+
+        result = await run_media_ingest_adapter(config, context)
+
+        assert result["rag_indexed"] is True
+        assert result["media_ids"] == [501]
+        assert result["metadata"][0]["stored_media_id"] == 501
+        assert result["metadata"][0]["db_message"] == "stored"
+        assert events == [
+            (
+                "open",
+                "workflow_engine",
+                {
+                    "db_path": str(sample_text_file.parent / "user-1.sqlite3"),
+                    "initialize": False,
+                },
+            ),
+            ("add_media_with_keywords", "Indexed workflow doc"),
+        ]
+        assert fake_repo.kwargs == {
+            "url": f"file://{sample_text_file}",
+            "title": "Indexed workflow doc",
+            "media_type": "document",
+            "content": sample_text_file.read_text(encoding="utf-8"),
+            "keywords": ["workflow", "index"],
+            "overwrite": False,
+            "chunk_options": None,
+            "chunks": None,
+        }
+
 
 # =============================================================================
 # Tests for run_process_media_adapter

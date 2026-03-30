@@ -5,7 +5,6 @@ disables CSRF and rate limiter prior to FastAPI app import.
 """
 
 import os
-import importlib
 import pytest
 import asyncio
 from datetime import datetime, timedelta
@@ -18,6 +17,7 @@ from fastapi.testclient import TestClient
 # Import app initially; tests will rebind this reference via the module-level
 # fixture below to ensure a fresh instance when needed.
 from tldw_Server_API.app.main import app
+from tldw_Server_API.tests.helpers.app_main_state import reload_app_main
 
 pytestmark = pytest.mark.integration
 
@@ -63,8 +63,7 @@ def _isolate_app_state_per_test(monkeypatch, request):
     if _should_reload:
         # Reload app.main under the new environment and rebind global `app`
         try:
-            import tldw_Server_API.app.main as _main
-            reloaded = importlib.reload(_main)
+            reloaded = reload_app_main()
             # Rebind the module-level app reference for this test module
             app = reloaded.app
             # Clear any leftover overrides just in case

@@ -107,7 +107,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
 
   const handleResearchClick = useCallback(() => {
     setShowLanding(false)
-    navigate("/knowledge")
+    navigate("/research")
     onClose?.()
   }, [navigate, onClose, setShowLanding])
 
@@ -174,7 +174,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
             title={t("common:landingHub.research.title", "Do Research")}
             description={t(
               "common:landingHub.research.description",
-              "Deep-dive into your sources with RAG-powered chat"
+              "Launch the deep research console for long-form cited runs"
             )}
             onClick={handleResearchClick}
           />

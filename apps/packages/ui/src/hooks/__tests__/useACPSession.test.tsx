@@ -8,8 +8,18 @@ const { useStorageMock } = vi.hoisted(() => ({
   useStorageMock: vi.fn(),
 }))
 
+const { getConfigMock } = vi.hoisted(() => ({
+  getConfigMock: vi.fn(),
+}))
+
 vi.mock("@plasmohq/storage/hook", () => ({
   useStorage: useStorageMock,
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getConfig: getConfigMock,
+  },
 }))
 
 class MockWebSocket {
@@ -56,6 +66,12 @@ describe("useACPSession", () => {
         accessToken: "",
       }
       return [overrides[key] ?? defaultValue, vi.fn(), { isLoading: false }] as const
+    })
+    getConfigMock.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "test-key",
+      accessToken: "",
     })
   })
 

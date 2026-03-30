@@ -49,10 +49,14 @@ vi.mock("../tabs", () => ({
   ManageTab: (props: {
     onNavigateToImport: () => void
     openCreateSignal?: number
+    initialDeckId?: number
+    initialShowWorkspaceDecks?: boolean
   }) => (
     <div data-testid="mock-manage-tab">
       <button onClick={props.onNavigateToImport}>Route Import</button>
       <span data-testid="mock-open-create-signal">{String(props.openCreateSignal ?? 0)}</span>
+      <span data-testid="mock-manage-initial-deck-id">{String(props.initialDeckId ?? "")}</span>
+      <span data-testid="mock-manage-show-workspace">{String(props.initialShowWorkspaceDecks ?? false)}</span>
     </div>
   ),
   ImportExportTab: () => <div data-testid="mock-transfer-tab">Transfer panel</div>,
@@ -134,6 +138,20 @@ describe("FlashcardsManager consistency standards", () => {
     render(<FlashcardsManager />)
 
     expect(screen.getByTestId("mock-transfer-tab")).toBeInTheDocument()
+  })
+
+  it("opens the Manage tab with a preselected workspace deck from direct-link params", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/flashcards?tab=manage&deck_id=9&include_workspace_items=1"
+    )
+
+    render(<FlashcardsManager />)
+
+    expect(screen.getByTestId("mock-manage-tab")).toBeInTheDocument()
+    expect(screen.getByTestId("mock-manage-initial-deck-id")).toHaveTextContent("9")
+    expect(screen.getByTestId("mock-manage-show-workspace")).toHaveTextContent("true")
   })
 
   it("uses Study/Manage/Transfer/Scheduler tab labels", () => {

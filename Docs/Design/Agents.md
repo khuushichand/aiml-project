@@ -3,6 +3,9 @@
 
 ## Skills
 
+
+https://github.com/openai/symphony
+
 https://skills.sh/
 https://skills.sh/remotion-dev/skills/remotion-best-practices
 https://github.com/coreyhaines31/marketingskills
@@ -18,6 +21,41 @@ https://github.com/9cb14c1ec0/vibe-manager
 https://github.com/slopus/happy
 https://github.com/samuelclay/crabigator
 https://github.com/googleworkspace/cli
+
+https://github.com/Nano-Collective/nanocoder
+https://github.com/skorokithakis/stavrobot
+https://theredbeard.io/blog/the-missing-memory-type/
+
+https://www.joegaebel.com/articles/principled-agentic-software-development/
+https://stoneforge.ai/blog/ai-coding-agent-context-window-hill-climbing/
+
+https://github.com/GoogleCloudPlatform/generative-ai/tree/main/gemini/agents/always-on-memory-agent
+https://github.com/ash-ai-org/ash-ai
+https://developers.openai.com/codex/app-server
+https://github.com/antithesishq/bombadil
+	https://kiro.dev/blog/property-based-testing/
+	https://kiro.dev/docs/specs/
+	https://kiro.dev/docs/specs/best-practices/
+	https://arxiv.org/abs/2506.18315
+	https://arxiv.org/abs/2510.09907
+
+https://github.com/SeifBenayed/claude-code-sdk/blob/main/test-loop.js
+	https://github.com/SeifBenayed/claude-code-sdk/blob/main/claude-native.py
+	https://github.com/SeifBenayed/claude-code-sdk/blob/main/claude-native.py
+	https://github.com/SeifBenayed/claude-code-sdk/blob/main/test-mcp.js
+	https://github.com/SeifBenayed/claude-code-sdk/blob/main/test-loop.js
+
+
+https://github.com/understudy-ai/understudy
+	https://github.com/Gen-Verse/OpenClaw-RL
+	https://github.com/XSkill-Agent/XSkill
+	https://github.com/Netflix-Skunkworks/railguard-skill
+
+https://github.com/epiral/agent-clip
+https://www.reddit.com/r/LocalLLaMA/comments/1rso48p/cli_is_all_agents_need_part_2_misconceptions/
+https://github.com/epiral/pinix
+https://justin.poehnelt.com/posts/rewrite-your-cli-for-ai-agents/
+https://github.com/agentic-research/mache
 
 
 https://www.productcurious.com/p/a-pms-guide-to-ai-agent-architecture

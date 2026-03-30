@@ -1,132 +1,178 @@
-import { useStorage } from "@plasmohq/storage/hook"
-import { Collapse, Input, InputNumber, Select, Switch, Button, Tooltip } from "antd"
-import React from "react"
-import { useTranslation } from "react-i18next"
-import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { SUPPORTED_LANGUAGES } from "~/utils/supported-languages"
+import { useStorage } from "@plasmohq/storage/hook";
+import {
+  Collapse,
+  Input,
+  InputNumber,
+  Select,
+  Switch,
+  Button,
+  Tooltip,
+} from "antd";
+import React from "react";
+import { useTranslation } from "react-i18next";
+import type { AudioFeatureGroup } from "@/audio";
+import { AudioSourcePicker } from "@/components/Common/AudioSourcePicker";
+import type { AudioInputDeviceOption } from "@/hooks/useAudioSourceCatalog";
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog";
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences";
+import { tldwClient } from "@/services/tldw/TldwApiClient";
+import { SUPPORTED_LANGUAGES } from "~/utils/supported-languages";
+
+const AudioSourcePreferenceRow = ({
+  featureGroup,
+  label,
+  devices,
+  hideBorder,
+}: {
+  featureGroup: AudioFeatureGroup;
+  label: string;
+  devices: AudioInputDeviceOption[];
+  hideBorder?: boolean;
+}) => {
+  const { preference, setPreference } = useAudioSourcePreferences(featureGroup);
+
+  return (
+    <div className="flex flex-row justify-between items-start gap-4">
+      <span className="text-text">{label}</span>
+      <AudioSourcePicker
+        ariaLabel={`${label} audio input source`}
+        className={hideBorder ? "w-full" : "!min-w-[240px]"}
+        requestedSourceKind={preference.sourceKind}
+        resolvedSourceKind={preference.sourceKind}
+        requestedDeviceId={preference.deviceId}
+        lastKnownLabel={preference.lastKnownLabel}
+        devices={devices}
+        onChange={(nextValue) =>
+          setPreference({
+            featureGroup,
+            sourceKind: nextValue.sourceKind,
+            deviceId: nextValue.deviceId ?? null,
+            lastKnownLabel: nextValue.lastKnownLabel ?? null,
+          })
+        }
+      />
+    </div>
+  );
+};
 
 export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
-  const { t } = useTranslation("settings")
+  const { t } = useTranslation("settings");
   const [speechToTextLanguage, setSpeechToTextLanguage] = useStorage(
     "speechToTextLanguage",
-    "en-US"
-  )
+    "en-US",
+  );
 
   const [autoSubmitVoiceMessage, setAutoSubmitVoiceMessage] = useStorage(
     "autoSubmitVoiceMessage",
-    false
-  )
+    false,
+  );
 
   const [autoStopTimeout, setAutoStopTimeout] = useStorage(
     "autoStopTimeout",
-    2000
-  )
+    2000,
+  );
   const resolvedAutoStopTimeout =
-    typeof autoStopTimeout === "number" ? autoStopTimeout : 2000
+    typeof autoStopTimeout === "number" ? autoStopTimeout : 2000;
 
-  const [sttModel, setSttModel] = useStorage("sttModel", "whisper-1")
+  const [sttModel, setSttModel] = useStorage("sttModel", "whisper-1");
   const [sttUseSegmentation, setSttUseSegmentation] = useStorage(
     "sttUseSegmentation",
-    false
-  )
-  const [
-    sttTimestampGranularities,
-    setSttTimestampGranularities
-  ] = useStorage("sttTimestampGranularities", "segment")
+    false,
+  );
+  const [sttTimestampGranularities, setSttTimestampGranularities] = useStorage(
+    "sttTimestampGranularities",
+    "segment",
+  );
 
-  const [sttPrompt, setSttPrompt] = useStorage("sttPrompt", "")
-  const [sttTask, setSttTask] = useStorage("sttTask", "transcribe")
+  const [sttPrompt, setSttPrompt] = useStorage("sttPrompt", "");
+  const [sttTask, setSttTask] = useStorage("sttTask", "transcribe");
   const [sttResponseFormat, setSttResponseFormat] = useStorage(
     "sttResponseFormat",
-    "json"
-  )
-  const [sttTemperature, setSttTemperature] = useStorage(
-    "sttTemperature",
-    0
-  )
-  const [sttSegK, setSttSegK] = useStorage("sttSegK", 6)
-  const [
-    sttSegMinSegmentSize,
-    setSttSegMinSegmentSize
-  ] = useStorage("sttSegMinSegmentSize", 5)
-  const [
-    sttSegLambdaBalance,
-    setSttSegLambdaBalance
-  ] = useStorage("sttSegLambdaBalance", 0.01)
-  const [
-    sttSegUtteranceExpansionWidth,
-    setSttSegUtteranceExpansionWidth
-  ] = useStorage("sttSegUtteranceExpansionWidth", 2)
-  const [
-    sttSegEmbeddingsProvider,
-    setSttSegEmbeddingsProvider
-  ] = useStorage("sttSegEmbeddingsProvider", "")
+    "json",
+  );
+  const [sttTemperature, setSttTemperature] = useStorage("sttTemperature", 0);
+  const [sttSegK, setSttSegK] = useStorage("sttSegK", 6);
+  const [sttSegMinSegmentSize, setSttSegMinSegmentSize] = useStorage(
+    "sttSegMinSegmentSize",
+    5,
+  );
+  const [sttSegLambdaBalance, setSttSegLambdaBalance] = useStorage(
+    "sttSegLambdaBalance",
+    0.01,
+  );
+  const [sttSegUtteranceExpansionWidth, setSttSegUtteranceExpansionWidth] =
+    useStorage("sttSegUtteranceExpansionWidth", 2);
+  const [sttSegEmbeddingsProvider, setSttSegEmbeddingsProvider] = useStorage(
+    "sttSegEmbeddingsProvider",
+    "",
+  );
   const [sttSegEmbeddingsModel, setSttSegEmbeddingsModel] = useStorage(
     "sttSegEmbeddingsModel",
-    ""
-  )
+    "",
+  );
 
-  const [serverModels, setServerModels] = React.useState<string[]>([])
-  const [serverModelsLoading, setServerModelsLoading] = React.useState(false)
+  const [serverModels, setServerModels] = React.useState<string[]>([]);
+  const [serverModelsLoading, setServerModelsLoading] = React.useState(false);
   const [modelHealth, setModelHealth] = React.useState<
     "idle" | "checking" | "ok" | "error"
-  >("idle")
+  >("idle");
+  const { devices: audioInputDevices } = useAudioSourceCatalog();
 
   React.useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
     const fetchModels = async () => {
-      setServerModelsLoading(true)
+      setServerModelsLoading(true);
       try {
-        const res = await tldwClient.getTranscriptionModels()
+        const res = await tldwClient.getTranscriptionModels();
         const all = Array.isArray(res?.all_models)
           ? (res.all_models as string[])
-          : []
+          : [];
         if (!cancelled && all.length > 0) {
-          const unique = Array.from(new Set(all)).sort()
-          setServerModels(unique)
+          const unique = Array.from(new Set(all)).sort();
+          setServerModels(unique);
         }
       } catch (e) {
         if ((import.meta as any)?.env?.DEV) {
           // eslint-disable-next-line no-console
-          console.warn("Failed to load transcription models from server", e)
+          console.warn("Failed to load transcription models from server", e);
         }
       } finally {
         if (!cancelled) {
-          setServerModelsLoading(false)
+          setServerModelsLoading(false);
         }
       }
-    }
-    fetchModels()
+    };
+    fetchModels();
     return () => {
-      cancelled = true
-    }
-  }, [])
+      cancelled = true;
+    };
+  }, []);
 
   const handleCheckModelHealth = async () => {
-    const model = (sttModel || "").trim()
+    const model = (sttModel || "").trim();
     if (!model) {
-      return
+      return;
     }
-    setModelHealth("checking")
+    setModelHealth("checking");
     try {
-      const res = await tldwClient.getTranscriptionModelHealth(model)
+      const res = await tldwClient.getTranscriptionModelHealth(model);
       const status =
         typeof res === "object" && res && "status" in res
           ? (res as any).status
-          : undefined
+          : undefined;
       if (status && typeof status === "string") {
-        setModelHealth(status.toLowerCase() === "ok" ? "ok" : "error")
+        setModelHealth(status.toLowerCase() === "ok" ? "ok" : "error");
       } else {
-        setModelHealth("ok")
+        setModelHealth("ok");
       }
     } catch (e) {
       if ((import.meta as any)?.env?.DEV) {
         // eslint-disable-next-line no-console
-        console.warn("Transcription model health check failed", e)
+        console.warn("Transcription model health check failed", e);
       }
-      setModelHealth("error")
+      setModelHealth("error");
     }
-  }
+  };
 
   const collapseItems = [
     {
@@ -141,7 +187,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             </span>
             <Select
               placeholder={t(
-                "generalSettings.settings.speechRecognitionLang.placeholder"
+                "generalSettings.settings.speechRecognitionLang.placeholder",
               )}
               allowClear
               showSearch
@@ -152,7 +198,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 option!.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
               }
               onChange={(value) => {
-                setSpeechToTextLanguage(value)
+                setSpeechToTextLanguage(value);
               }}
               className={hideBorder ? "w-full" : "!min-w-[200px]"}
             />
@@ -167,7 +213,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 hideBorder
                   ? "w-full flex flex-col items-end"
                   : "!min-w-[200px] flex flex-col items-end"
-              }>
+              }
+            >
               <Select
                 className="w-full"
                 showSearch
@@ -179,14 +226,14 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                   serverModels.length > 0
                     ? serverModels.map((model) => ({
                         label: model,
-                        value: model
+                        value: model,
                       }))
                     : sttModel
                       ? [
                           {
                             label: sttModel,
-                            value: sttModel
-                          }
+                            value: sttModel,
+                          },
                         ]
                       : []
                 }
@@ -199,7 +246,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                   {t(
                     "generalSettings.stt.model.helpFromServer",
                     "Models provided by your tldw server ({{count}} total).",
-                    { count: serverModels.length }
+                    { count: serverModels.length },
                   )}
                 </span>
               )}
@@ -208,7 +255,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                   !sttModel
                     ? t(
                         "generalSettings.stt.model.healthCheckSelectFirst",
-                        "Select a model first"
+                        "Select a model first",
                       )
                     : ""
                 }
@@ -224,21 +271,21 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                   {modelHealth === "checking"
                     ? t(
                         "generalSettings.stt.model.healthChecking",
-                        "Checking model health…"
+                        "Checking model health…",
                       )
                     : modelHealth === "ok"
                       ? t(
                           "generalSettings.stt.model.healthOk",
-                          "Model appears healthy"
+                          "Model appears healthy",
                         )
                       : modelHealth === "error"
                         ? t(
                             "generalSettings.stt.model.healthError",
-                            "Health check failed"
+                            "Health check failed",
                           )
                         : t(
                             "generalSettings.stt.model.healthCheck",
-                            "Check model health"
+                            "Check model health",
                           )}
                 </Button>
               </Tooltip>
@@ -258,16 +305,16 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                   value: "transcribe",
                   label: t(
                     "generalSettings.stt.task.transcribe",
-                    "Transcribe (same language)"
-                  )
+                    "Transcribe (same language)",
+                  ),
                 },
                 {
                   value: "translate",
                   label: t(
                     "generalSettings.stt.task.translate",
-                    "Translate to English"
-                  )
-                }
+                    "Translate to English",
+                  ),
+                },
               ]}
             />
           </div>
@@ -279,7 +326,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             <Switch
               checked={autoSubmitVoiceMessage}
               onChange={(checked) => {
-                setAutoSubmitVoiceMessage(checked)
+                setAutoSubmitVoiceMessage(checked);
               }}
             />
           </div>
@@ -296,13 +343,58 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
               suffix="ms"
               onChange={(e) => {
                 setAutoStopTimeout(
-                  typeof e === "number" ? e : resolvedAutoStopTimeout
-                )
+                  typeof e === "number" ? e : resolvedAutoStopTimeout,
+                );
               }}
             />
           </div>
         </div>
-      )
+      ),
+    },
+    {
+      key: "sources",
+      label: t(
+        "generalSettings.stt.sourcePreferences.title",
+        "Audio input source preferences",
+      ),
+      className: "!border-0",
+      children: (
+        <div className="space-y-4">
+          <p className="text-xs text-text-subtle">
+            {t(
+              "generalSettings.stt.sourcePreferences.description",
+              "Choose which microphone each speech surface should prefer by default.",
+            )}
+          </p>
+          <AudioSourcePreferenceRow
+            featureGroup="dictation"
+            label={t(
+              "generalSettings.stt.sourcePreferences.dictation",
+              "Dictation",
+            )}
+            devices={audioInputDevices}
+            hideBorder={hideBorder}
+          />
+          <AudioSourcePreferenceRow
+            featureGroup="live_voice"
+            label={t(
+              "generalSettings.stt.sourcePreferences.liveVoice",
+              "Live voice",
+            )}
+            devices={audioInputDevices}
+            hideBorder={hideBorder}
+          />
+          <AudioSourcePreferenceRow
+            featureGroup="speech_playground"
+            label={t(
+              "generalSettings.stt.sourcePreferences.speechPlayground",
+              "Speech Playground",
+            )}
+            devices={audioInputDevices}
+            hideBorder={hideBorder}
+          />
+        </div>
+      ),
     },
     {
       key: "advanced",
@@ -311,7 +403,10 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
       children: (
         <>
           <p className="text-xs text-text-subtle mb-4">
-            {t("generalSettings.stt.advancedSettingsHelp", "These settings are for advanced users. Most users can leave these at their default values.")}
+            {t(
+              "generalSettings.stt.advancedSettingsHelp",
+              "These settings are for advanced users. Most users can leave these at their default values.",
+            )}
           </p>
           <div className="space-y-4">
             <div className="flex flex-row justify-between">
@@ -335,19 +430,25 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 options={[
                   {
                     value: "segment",
-                    label: t("generalSettings.stt.timestampGranularities.segment", "Per segment")
+                    label: t(
+                      "generalSettings.stt.timestampGranularities.segment",
+                      "Per segment",
+                    ),
                   },
                   {
                     value: "word",
-                    label: t("generalSettings.stt.timestampGranularities.word", "Per word")
+                    label: t(
+                      "generalSettings.stt.timestampGranularities.word",
+                      "Per word",
+                    ),
                   },
                   {
                     value: "segment,word",
                     label: t(
                       "generalSettings.stt.timestampGranularities.segmentWord",
-                      "Segment + word"
-                    )
-                  }
+                      "Segment + word",
+                    ),
+                  },
                 ]}
               />
             </div>
@@ -365,31 +466,31 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                     value: "json",
                     label: t(
                       "generalSettings.stt.responseFormat.json",
-                      "JSON (text + segments)"
-                    )
+                      "JSON (text + segments)",
+                    ),
                   },
                   {
                     value: "verbose_json",
                     label: t(
                       "generalSettings.stt.responseFormat.verboseJson",
-                      "Verbose JSON"
-                    )
+                      "Verbose JSON",
+                    ),
                   },
                   {
                     value: "text",
                     label: t(
                       "generalSettings.stt.responseFormat.text",
-                      "Plain text"
-                    )
+                      "Plain text",
+                    ),
                   },
                   {
                     value: "srt",
-                    label: t("generalSettings.stt.responseFormat.srt", "SRT")
+                    label: t("generalSettings.stt.responseFormat.srt", "SRT"),
                   },
                   {
                     value: "vtt",
-                    label: t("generalSettings.stt.responseFormat.vtt", "VTT")
-                  }
+                    label: t("generalSettings.stt.responseFormat.vtt", "VTT"),
+                  },
                 ]}
               />
             </div>
@@ -405,7 +506,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 step={0.1}
                 value={sttTemperature}
                 onChange={(value) => {
-                  setSttTemperature(typeof value === "number" ? value : 0)
+                  setSttTemperature(typeof value === "number" ? value : 0);
                 }}
               />
             </div>
@@ -418,7 +519,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 className={hideBorder ? "w-full" : "!min-w-[200px]"}
                 placeholder={t(
                   "generalSettings.stt.prompt.placeholder",
-                  "Optional text to guide style"
+                  "Optional text to guide style",
                 )}
                 value={sttPrompt}
                 onChange={(e) => setSttPrompt(e.target.value)}
@@ -434,7 +535,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 min={1}
                 value={sttSegK}
                 onChange={(value) => {
-                  setSttSegK(typeof value === "number" ? value : 6)
+                  setSttSegK(typeof value === "number" ? value : 6);
                 }}
               />
             </div>
@@ -449,8 +550,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 value={sttSegMinSegmentSize}
                 onChange={(value) => {
                   setSttSegMinSegmentSize(
-                    typeof value === "number" ? value : 5
-                  )
+                    typeof value === "number" ? value : 5,
+                  );
                 }}
               />
             </div>
@@ -466,8 +567,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 value={sttSegLambdaBalance}
                 onChange={(value) => {
                   setSttSegLambdaBalance(
-                    typeof value === "number" ? value : 0.01
-                  )
+                    typeof value === "number" ? value : 0.01,
+                  );
                 }}
               />
             </div>
@@ -482,8 +583,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 value={sttSegUtteranceExpansionWidth}
                 onChange={(value) => {
                   setSttSegUtteranceExpansionWidth(
-                    typeof value === "number" ? value : 2
-                  )
+                    typeof value === "number" ? value : 2,
+                  );
                 }}
               />
             </div>
@@ -511,9 +612,9 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             </div>
           </div>
         </>
-      )
-    }
-  ]
+      ),
+    },
+  ];
 
   return (
     <div>
@@ -521,16 +622,15 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         <h2
           className={`${
             !hideBorder ? "text-base font-semibold leading-7" : "text-md"
-          } text-text`}>
+          } text-text`}
+        >
           {t("generalSettings.stt.heading")}
         </h2>
-        {!hideBorder && (
-          <div className="border-b border-border mt-3"></div>
-        )}
+        {!hideBorder && <div className="border-b border-border mt-3"></div>}
         <p className="mt-2 text-xs text-text-muted">
           {t(
             "generalSettings.stt.usedByChat",
-            "These Speech-to-Text defaults are used by the chat dictation button in the Playground and Sidebar."
+            "These Speech-to-Text defaults are used by the chat dictation button in the Playground and Sidebar.",
           )}
         </p>
       </div>
@@ -540,5 +640,5 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         items={collapseItems}
       />
     </div>
-  )
-}
+  );
+};

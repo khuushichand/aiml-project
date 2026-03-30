@@ -3,8 +3,10 @@ from typing import AsyncGenerator
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError, MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 from tldw_Server_API.tests.test_utils import create_test_media
 
 
@@ -37,7 +39,7 @@ def _principal_override():
     return _override
 
 
-def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
+def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch, managed_test_media_db):
 
 
     from tldw_Server_API.app.main import app as fastapi_app
@@ -48,19 +50,23 @@ def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_MODE", "1")
 
     db_path = tmp_path / "media.db"
-    seed_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-    media_id = create_test_media(seed_db, title="Test Doc", content="One two three four five.")
-    seed_db.close_connection()
+    with managed_test_media_db(
+        "test_client",
+        db_path=str(db_path),
+        initialize=False,
+    ) as seed_db:
+        media_id = create_test_media(seed_db, title="Test Doc", content="One two three four five.")
 
     async def _override_user() -> User:
         return User(id=1, username="tester", email=None, is_active=True)
 
-    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
-        override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-        try:
+    async def _override_db() -> AsyncGenerator[MediaDbLike, None]:
+        with managed_test_media_db(
+            "test_client",
+            db_path=str(db_path),
+            initialize=False,
+        ) as override_db:
             yield override_db
-        finally:
-            override_db.close_connection()
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
@@ -89,17 +95,20 @@ def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
         fastapi_app.dependency_overrides.pop(get_auth_principal, None)
         fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
 
-    check_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-    row = check_db.execute_query(
-        "SELECT count(*) AS c FROM UnvectorizedMediaChunks WHERE media_id = ?",
-        (media_id,),
-    ).fetchone()
-    check_db.close_connection()
+    with managed_test_media_db(
+        "test_client",
+        db_path=str(db_path),
+        initialize=False,
+    ) as check_db:
+        row = check_db.execute_query(
+            "SELECT count(*) AS c FROM UnvectorizedMediaChunks WHERE media_id = ?",
+            (media_id,),
+        ).fetchone()
     count_val = row["c"] if isinstance(row, dict) else row[0]
     assert count_val >= 1
 
 
-def test_reprocess_missing_media_returns_404(tmp_path):
+def test_reprocess_missing_media_returns_404(tmp_path, managed_test_media_db):
 
 
     from tldw_Server_API.app.main import app as fastapi_app
@@ -108,18 +117,23 @@ def test_reprocess_missing_media_returns_404(tmp_path):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     db_path = tmp_path / "media.db"
-    seed_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-    seed_db.close_connection()
+    with managed_test_media_db(
+        "test_client",
+        db_path=str(db_path),
+        initialize=False,
+    ):
+        pass
 
     async def _override_user() -> User:
         return User(id=1, username="tester", email=None, is_active=True)
 
-    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
-        override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-        try:
+    async def _override_db() -> AsyncGenerator[MediaDbLike, None]:
+        with managed_test_media_db(
+            "test_client",
+            db_path=str(db_path),
+            initialize=False,
+        ) as override_db:
             yield override_db
-        finally:
-            override_db.close_connection()
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()

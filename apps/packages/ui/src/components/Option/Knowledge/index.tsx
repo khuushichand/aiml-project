@@ -10,6 +10,7 @@ import { useDemoMode } from "@/context/demo-mode"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getNoOfRetrievedDocs } from "@/services/app"
+import { requestQuickIngestIntro } from "@/utils/quick-ingest-open"
 import { RagDocsPerReplyHint } from "./RagDocsPerReplyHint"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useKnowledgeStatus } from "@/hooks/useConnectionState"
@@ -232,7 +233,7 @@ export const KnowledgeSettings = () => {
         })}
         onPrimaryAction={() => {
           try {
-            window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest-intro"))
+            requestQuickIngestIntro()
           } catch {
             // ignore dispatch errors
           }

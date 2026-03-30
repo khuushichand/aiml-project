@@ -376,6 +376,31 @@ def test_silero_turn_detector_logs_fail_open(monkeypatch):
     assert any("Silero VAD" in msg and "continuing without auto-commit" in msg for msg in captured_warnings)
 
 
+def test_silero_turn_detector_surfaces_specific_loader_reason(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+
+    monkeypatch.setattr(vlib, "_lazy_import_silero_vad", lambda: (None, None))
+    monkeypatch.setattr(
+        vlib,
+        "get_silero_vad_unavailable_reason",
+        lambda: "missing_dependency: torchaudio",
+        raising=False,
+    )
+
+    detector = unified.SileroTurnDetector(
+        sample_rate=16000,
+        enabled=True,
+        vad_threshold=0.5,
+        min_silence_ms=200,
+        turn_stop_secs=0.1,
+        min_utterance_secs=0.2,
+    )
+
+    assert detector.available is False
+    assert detector.unavailable_reason == "missing_dependency: torchaudio"
+
+
 @pytest.mark.asyncio
 async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
     """

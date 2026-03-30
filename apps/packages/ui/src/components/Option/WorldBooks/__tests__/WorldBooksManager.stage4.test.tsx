@@ -172,6 +172,12 @@ describe("WorldBooksManager stage-4 flows", () => {
     vi.clearAllMocks()
   })
 
+  it("renders the manager action bar without throwing", () => {
+    render(<WorldBooksManager />)
+
+    expect(screen.getByRole("button", { name: "Duplicate world book" })).toBeInTheDocument()
+  })
+
   it("duplicates a world book and clones its entries", async () => {
     const user = userEvent.setup()
     const sourceEntries = [

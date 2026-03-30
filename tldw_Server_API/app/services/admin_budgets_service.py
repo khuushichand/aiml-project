@@ -239,10 +239,15 @@ def _normalize_budget_payload(raw: Any) -> dict[str, Any]:
     budgets: dict[str, Any] = {}
     if isinstance(data.get("budgets"), dict):
         budgets.update(data.get("budgets") or {})
+    provider_budgets = budgets.pop("provider_budgets", None)
     for key in _BUDGET_KEYS:
         if key in data and key not in budgets:
             budgets[key] = data[key]
+    if provider_budgets is None and isinstance(data.get("provider_budgets"), dict):
+        provider_budgets = data.get("provider_budgets")
     payload = {"budgets": budgets} if budgets else {}
+    if isinstance(provider_budgets, dict) and provider_budgets:
+        payload["provider_budgets"] = provider_budgets
     thresholds = _coerce_alert_thresholds(data.get("alert_thresholds"))
     if thresholds is not None:
         payload["alert_thresholds"] = thresholds
@@ -262,6 +267,8 @@ def _flatten_budget_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key in _BUDGET_KEYS:
             if key in payload:
                 flat[key] = payload[key]
+    if isinstance(payload.get("provider_budgets"), dict):
+        flat["provider_budgets"] = payload.get("provider_budgets")
     if "alert_thresholds" in payload:
         flat["alert_thresholds"] = payload.get("alert_thresholds")
     if "enforcement_mode" in payload:
@@ -276,6 +283,8 @@ def _inflate_budget_payload(flat: dict[str, Any]) -> dict[str, Any]:
     for key in _BUDGET_KEYS:
         if key in flat:
             payload[key] = flat[key]
+    if "provider_budgets" in flat:
+        payload["provider_budgets"] = flat.get("provider_budgets")
     if "alert_thresholds" in flat:
         payload["alert_thresholds"] = flat.get("alert_thresholds")
     if "enforcement_mode" in flat:
@@ -463,8 +472,42 @@ def merge_budget_settings(
             else:
                 merged[key] = merged_enforcement
             continue
+        if key == "provider_budgets":
+            merged_providers = _merge_provider_budgets(merged.get(key), value)
+            if merged_providers is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = merged_providers
+            continue
         raise ValueError("invalid_budget_update")
     return merged
+
+
+def _merge_provider_budgets(
+    existing: Any, updates: Any
+) -> dict[str, Any] | None:
+    """Merge per-provider budget thresholds.
+
+    Structure: ``{"openai": {"month_usd": 50}, "anthropic": {"month_usd": 100}}``
+    Setting a provider to ``None`` removes it.
+    """
+    if updates is None:
+        return None
+    existing_payload = existing if isinstance(existing, dict) else {}
+    merged = dict(existing_payload)
+    if not isinstance(updates, dict):
+        return merged or None
+    for provider, settings in updates.items():
+        if settings is None:
+            merged.pop(provider, None)
+        elif isinstance(settings, dict):
+            existing_provider = merged.get(provider)
+            if not isinstance(existing_provider, dict):
+                existing_provider = {}
+            merged[provider] = {**existing_provider, **settings}
+        else:
+            merged[provider] = settings
+    return merged or None
 
 
 def _merge_alert_thresholds(existing: Any, updates: Any) -> dict[str, Any] | None:
@@ -620,6 +663,16 @@ def build_budget_change_log(
                 )
             )
             continue
+        if key == "provider_budgets":
+            changes.extend(
+                _build_generic_map_changes(
+                    "provider_budgets",
+                    existing_budgets.get("provider_budgets"),
+                    merged_budgets.get("provider_budgets"),
+                    budget_updates.get("provider_budgets"),
+                )
+            )
+            continue
     return changes
 
 
@@ -702,6 +755,52 @@ def _build_nested_changes(
     return changes
 
 
+def _build_generic_map_changes(
+    field_name: str,
+    existing_value: Any,
+    merged_value: Any,
+    update_value: Any,
+) -> list[dict[str, Any]]:
+    if update_value is None:
+        if existing_value is None:
+            return []
+        return [
+            {
+                "field_name": f"budgets.{field_name}",
+                "old_value": existing_value,
+                "new_value": None,
+                "data_type": _infer_change_data_type(existing_value),
+            }
+        ]
+
+    if not isinstance(update_value, dict):
+        if existing_value == merged_value:
+            return []
+        changed_value = merged_value if merged_value is not None else existing_value
+        return [
+            {
+                "field_name": f"budgets.{field_name}",
+                "old_value": existing_value,
+                "new_value": merged_value,
+                "data_type": _infer_change_data_type(changed_value),
+            }
+        ]
+
+    existing_payload = existing_value if isinstance(existing_value, dict) else {}
+    merged_payload = merged_value if isinstance(merged_value, dict) else {}
+    changes: list[dict[str, Any]] = []
+    for key, value in update_value.items():
+        changes.extend(
+            _build_generic_map_changes(
+                f"{field_name}.{key}",
+                existing_payload.get(key),
+                merged_payload.get(key),
+                value,
+            )
+        )
+    return changes
+
+
 def _is_db_pool_object(db: Any) -> bool:
     return isinstance(db, DatabasePool)
 
@@ -771,13 +870,6 @@ async def list_org_budgets(
 ) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
     pg = _is_postgres_connection(db)
-    if pg:
-        try:
-            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
-
-            await ensure_billing_tables_pg()
-        except Exception as exc:
-            logger.debug(f"admin budgets: ensure billing tables skipped/failed: {exc}")
     if org_ids is not None and len(org_ids) == 0:
         return [], 0
 
@@ -807,12 +899,8 @@ async def list_org_budgets(
 
     list_budgets_sql_template = (
         "SELECT o.id as org_id, o.name as org_name, o.slug as org_slug, "
-        "os.custom_limits_json, os.updated_at, "
-        "ob.budgets_json, ob.updated_at as budgets_updated_at, "
-        "sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json "
+        "ob.budgets_json, ob.updated_at as budgets_updated_at "
         "FROM organizations o "
-        "LEFT JOIN org_subscriptions os ON os.org_id = o.id "
-        "LEFT JOIN subscription_plans sp ON os.plan_id = sp.id "
         "LEFT JOIN org_budgets ob ON ob.org_id = o.id "
         "{where_clause} "
         "ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
@@ -835,13 +923,6 @@ async def upsert_org_budget(
     clear_budgets: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     pg = _is_postgres_connection(db)
-    if pg:
-        try:
-            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
-
-            await ensure_billing_tables_pg(run_backfill=False)
-        except Exception as exc:
-            logger.debug(f"admin budgets: ensure billing tables skipped/failed: {exc}")
 
     org_row = await _fetchrow(
         db,
@@ -853,98 +934,8 @@ async def upsert_org_budget(
         raise ValueError("org_not_found")
     org_data = dict(org_row) if not isinstance(org_row, dict) else org_row
 
-    sub_row = await _fetchrow(
-        db,
-        """
-        SELECT os.org_id, os.custom_limits_json, os.updated_at,
-               sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json
-        FROM org_subscriptions os
-        JOIN subscription_plans sp ON os.plan_id = sp.id
-        WHERE os.org_id = $1
-        """,
-        [org_id],
-        pg=pg,
-    )
-
-    if not sub_row:
-        plan_row = await _fetchrow(
-            db,
-            "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
-            ["free"],
-            pg=pg,
-        )
-        if not plan_row:
-            default_limits = get_plan_limits("free")
-            if pg:
-                await db.execute(
-                    """
-                    INSERT INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-                    ON CONFLICT (name) DO NOTHING
-                    """,
-                    "free",
-                    "Free",
-                    "Get started with basic features",
-                    0,
-                    0,
-                    json.dumps(default_limits),
-                    0,
-                )
-            else:
-                await db.execute(
-                    """
-                    INSERT OR IGNORE INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        "free",
-                        "Free",
-                        "Get started with basic features",
-                        0,
-                        0,
-                        json.dumps(default_limits),
-                        0,
-                    ),
-                )
-            plan_row = await _fetchrow(
-                db,
-                "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
-                ["free"],
-                pg=pg,
-            )
-        if not plan_row:
-            raise ValueError("plan_not_found")
-        plan_data = dict(plan_row) if not isinstance(plan_row, dict) else plan_row
-        plan_id = int(plan_data.get("id"))
-        await db.execute(
-            """
-            INSERT INTO org_subscriptions (org_id, plan_id, status)
-            VALUES ($1, $2, 'active')
-            ON CONFLICT (org_id) DO NOTHING
-            """,
-            org_id,
-            plan_id,
-        )
-        sub_row = await _fetchrow(
-            db,
-            """
-            SELECT os.org_id, os.custom_limits_json, os.updated_at,
-                   sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json
-            FROM org_subscriptions os
-            JOIN subscription_plans sp ON os.plan_id = sp.id
-            WHERE os.org_id = $1
-            """,
-            [org_id],
-            pg=pg,
-        )
-
-    if not sub_row:
-        raise ValueError("subscription_not_found")
-
-    row_dict = dict(sub_row) if not isinstance(sub_row, dict) else sub_row
-    custom_limits = _parse_json_payload(row_dict.get("custom_limits_json"))
+    custom_limits: dict[str, Any] = {}
+    row_dict: dict[str, Any] = {}
 
     budget_row = await _fetchrow(
         db,

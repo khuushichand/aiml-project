@@ -1,5 +1,6 @@
 import React from "react"
-
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
 import { useMicStream } from "@/hooks/useMicStream"
 import type { ResolvedPersonaVoiceDefaults } from "@/hooks/useResolvedPersonaVoiceDefaults"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
@@ -122,6 +123,13 @@ export const usePersonaLiveVoiceController = ({
   const [listeningRecoveryRestartKey, setListeningRecoveryRestartKey] = React.useState(0)
   const [thinkingRecoveryArmed, setThinkingRecoveryArmed] = React.useState(false)
   const [thinkingRecoveryRestartKey, setThinkingRecoveryRestartKey] = React.useState(0)
+  const { preference: liveVoiceSourcePreference, isLoading: liveVoiceSourceLoading } =
+    useAudioSourcePreferences("live_voice")
+  const {
+    devices: audioInputDevices,
+    isSettled: hasAudioCatalogSettled
+  } = useAudioSourceCatalog()
+  const [pendingStartRequest, setPendingStartRequest] = React.useState(false)
 
   const heardTranscriptRef = React.useRef("")
   const manualModeRequiredRef = React.useRef(false)
@@ -130,7 +138,6 @@ export const usePersonaLiveVoiceController = ({
   const pendingResumeRef = React.useRef(false)
   const awaitingTtsTimeoutRef = React.useRef<number | null>(null)
   const browserUtteranceActiveRef = React.useRef(false)
-  const resumeListeningRef = React.useRef<() => void>(() => {})
   const listeningRecoveryTimeoutRef = React.useRef<number | null>(null)
   const thinkingRecoveryTimeoutRef = React.useRef<number | null>(null)
 
@@ -138,6 +145,36 @@ export const usePersonaLiveVoiceController = ({
     () => normalizeTtsProvider(resolvedDefaults.ttsProvider),
     [resolvedDefaults.ttsProvider]
   )
+  const liveVoiceSourceReady = hasAudioCatalogSettled && !liveVoiceSourceLoading
+  const liveVoiceResolvedSource = React.useMemo(() => {
+    if (!liveVoiceSourceReady) {
+      return liveVoiceSourcePreference
+    }
+
+    if (liveVoiceSourcePreference.sourceKind !== "mic_device") {
+      return liveVoiceSourcePreference
+    }
+
+    const requestedDeviceId = String(liveVoiceSourcePreference.deviceId || "").trim()
+    const deviceStillAvailable = audioInputDevices.some(
+      (device) => device.deviceId === requestedDeviceId
+    )
+
+    if (deviceStillAvailable) {
+      return liveVoiceSourcePreference
+    }
+
+    return {
+      featureGroup: "live_voice" as const,
+      sourceKind: "default_mic" as const,
+      deviceId: null,
+      lastKnownLabel: null
+    }
+  }, [audioInputDevices, liveVoiceSourcePreference, liveVoiceSourceReady])
+  const liveVoiceDeviceId =
+    liveVoiceResolvedSource.sourceKind === "mic_device"
+      ? liveVoiceResolvedSource.deviceId
+      : null
 
   const vadPreset = React.useMemo<PersonaLiveVadPreset>(() => {
     const current = {
@@ -208,6 +245,15 @@ export const usePersonaLiveVoiceController = ({
     setRecoveryMode((current) => (current === "thinking_stuck" ? "none" : current))
   }, [clearThinkingRecoveryTimeout])
 
+  const handleVoiceError = React.useCallback((error: unknown) => {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Live voice capture failed. Check microphone permissions and audio setup."
+    setWarning(message)
+    setState("error")
+  }, [])
+
   const {
     start: audioStart,
     append: audioAppend,
@@ -215,15 +261,6 @@ export const usePersonaLiveVoiceController = ({
     stop: audioStop,
     state: audioState
   } = useStreamingAudioPlayer()
-
-  const finishVoiceTurn = React.useCallback(() => {
-    pendingResumeRef.current = false
-    if (sessionAutoResume && canUseServerStt && connected) {
-      resumeListeningRef.current()
-      return
-    }
-    setState("idle")
-  }, [canUseServerStt, connected, sessionAutoResume])
 
   const stopBrowserSpeech = React.useCallback(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -243,15 +280,6 @@ export const usePersonaLiveVoiceController = ({
     audioStop()
     stopBrowserSpeech()
   }, [audioStop, clearAwaitingTtsTimeout, stopBrowserSpeech])
-
-  const handleVoiceError = React.useCallback((error: unknown) => {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Live voice capture failed. Check microphone permissions and audio setup."
-    setWarning(message)
-    setState("error")
-  }, [])
 
   const sendVoiceCommit = React.useCallback(
     (transcript: string, source = "persona_live_voice_manual") => {
@@ -305,12 +333,74 @@ export const usePersonaLiveVoiceController = ({
     }
   )
 
+  const startMicCapture = React.useCallback(async () => {
+    if (!canUseServerStt) {
+      setWarning("This tldw connection does not expose server speech transcription.")
+      setState("error")
+      return false
+    }
+    if (!connected || !sessionId || !ws || ws.readyState !== WebSocket.OPEN) {
+      setWarning("Connect Persona Garden before starting live voice.")
+      setState("error")
+      return false
+    }
+    if (!liveVoiceSourceReady) {
+      return false
+    }
+
+    clearTransientWarning()
+    setHeardText("")
+    heardTranscriptRef.current = ""
+    setActiveToolStatus("")
+    setRecoveryMode("none")
+    clearThinkingRecovery()
+    setState("listening")
+    try {
+      await startMicStream({ deviceId: liveVoiceDeviceId })
+      return true
+    } catch (error) {
+      handleVoiceError(error)
+      return false
+    }
+  }, [
+    canUseServerStt,
+    clearThinkingRecovery,
+    clearTransientWarning,
+    connected,
+    handleVoiceError,
+    liveVoiceDeviceId,
+    liveVoiceSourceReady,
+    sessionId,
+    startMicStream,
+    ws
+  ])
+
+  const finishVoiceTurn = React.useCallback(() => {
+    if (sessionAutoResume && canUseServerStt && connected) {
+      if (liveVoiceSourceReady) {
+        setPendingStartRequest(false)
+        pendingResumeRef.current = false
+        void startMicCapture()
+        return
+      }
+      pendingResumeRef.current = true
+      setPendingStartRequest(true)
+      setState("idle")
+      return
+    }
+    pendingResumeRef.current = false
+    setPendingStartRequest(false)
+    setState("idle")
+  }, [canUseServerStt, connected, liveVoiceSourceReady, sessionAutoResume, startMicCapture])
+
   const resetTurn = React.useCallback(() => {
     clearListeningRecoveryTimeout()
     clearThinkingRecovery()
     if (micActive) {
       stopMicStream()
     }
+    pendingResumeRef.current = false
+    setPendingStartRequest(false)
     setRecoveryMode("none")
     setHeardText("")
     heardTranscriptRef.current = ""
@@ -345,37 +435,45 @@ export const usePersonaLiveVoiceController = ({
   }, [textOnlyDueToTtsFailure])
 
   React.useEffect(() => {
-    resumeListeningRef.current = () => {
-      if (!sessionAutoResume || !canUseServerStt || !connected || micActive) {
-        setState("idle")
-        return
-      }
-      clearTransientWarning()
-      setHeardText("")
-      heardTranscriptRef.current = ""
-      setActiveToolStatus("")
-      setRecoveryMode("none")
-      clearThinkingRecovery()
-      void startMicStream()
-        .then(() => {
-          setState("listening")
-        })
-        .catch((error) => {
-          handleVoiceError(error)
-        })
+    if (!pendingStartRequest) return
+    if (!liveVoiceSourceReady) return
+    setPendingStartRequest(false)
+    void startMicCapture()
+  }, [liveVoiceSourceReady, pendingStartRequest, startMicCapture])
+
+  React.useEffect(() => {
+    if (!pendingResumeRef.current) return
+    if (audioState.playing) return
+    if (!sessionAutoResume || !canUseServerStt || !connected) {
+      pendingResumeRef.current = false
+      setPendingStartRequest(false)
+      setState("idle")
+      return
     }
+    if (!liveVoiceSourceReady) {
+      setPendingStartRequest(true)
+      return
+    }
+    setPendingStartRequest(false)
+    pendingResumeRef.current = false
+    void startMicCapture()
   }, [
+    audioState.playing,
     canUseServerStt,
-    clearThinkingRecovery,
     connected,
-    clearTransientWarning,
-    handleVoiceError,
-    micActive,
+    liveVoiceSourceReady,
     sessionAutoResume,
-    startMicStream
+    startMicCapture
   ])
 
   const startListening = React.useCallback(async () => {
+    if (state === "speaking") {
+      if (!sessionBargeIn) {
+        setWarning("Barge-in is off for this live session.")
+        return
+      }
+      stopCurrentPlayback()
+    }
     if (!canUseServerStt) {
       setWarning("This tldw connection does not expose server speech transcription.")
       setState("error")
@@ -386,47 +484,52 @@ export const usePersonaLiveVoiceController = ({
       setState("error")
       return
     }
-    if (state === "speaking") {
-      if (!sessionBargeIn) {
-        setWarning("Barge-in is off for this live session.")
-        return
-      }
-      stopCurrentPlayback()
+    if (!liveVoiceSourceReady) {
+      clearTransientWarning()
+      setHeardText("")
+      heardTranscriptRef.current = ""
+      setActiveToolStatus("")
+      setRecoveryMode("none")
+      clearThinkingRecovery()
+      setPendingStartRequest(true)
+      setState("idle")
+      return
     }
-    clearTransientWarning()
-    setHeardText("")
-    heardTranscriptRef.current = ""
-    setActiveToolStatus("")
-    setRecoveryMode("none")
-    clearThinkingRecovery()
-    setState("listening")
-    try {
-      await startMicStream()
-    } catch (error) {
-      handleVoiceError(error)
-    }
+
+    setPendingStartRequest(false)
+    await startMicCapture()
   }, [
     canUseServerStt,
     clearThinkingRecovery,
     clearTransientWarning,
     connected,
-    handleVoiceError,
+    liveVoiceSourceReady,
     sessionBargeIn,
     sessionId,
-    startMicStream,
     state,
+    startMicCapture,
     stopCurrentPlayback,
     ws
   ])
 
   const stopListening = React.useCallback(() => {
-    if (!micActive) return
+    if (!micActive && !pendingStartRequest) return
+    setPendingStartRequest(false)
+    pendingResumeRef.current = false
     clearListeningRecoveryTimeout()
     clearThinkingRecovery()
     setRecoveryMode("none")
-    stopMicStream()
+    if (micActive) {
+      stopMicStream()
+    }
     setState("idle")
-  }, [clearListeningRecoveryTimeout, clearThinkingRecovery, micActive, stopMicStream])
+  }, [
+    clearListeningRecoveryTimeout,
+    clearThinkingRecovery,
+    micActive,
+    pendingStartRequest,
+    stopMicStream
+  ])
 
   const sendCurrentTranscriptNow = React.useCallback(() => {
     if (micActive) {
@@ -436,12 +539,12 @@ export const usePersonaLiveVoiceController = ({
   }, [micActive, sendVoiceCommit, stopMicStream])
 
   const toggleListening = React.useCallback(() => {
-    if (micActive) {
+    if (micActive || pendingStartRequest) {
       stopListening()
       return
     }
     void startListening()
-  }, [micActive, startListening, stopListening])
+  }, [micActive, pendingStartRequest, startListening, stopListening])
 
   const playBrowserSpeech = React.useCallback(
     (text: string) => {
@@ -525,6 +628,7 @@ export const usePersonaLiveVoiceController = ({
     clearThinkingRecoveryTimeout()
     pendingBinaryFinishRef.current = false
     pendingResumeRef.current = false
+    setPendingStartRequest(false)
     stopMicStream()
     stopCurrentPlayback()
   }, [
@@ -563,6 +667,7 @@ export const usePersonaLiveVoiceController = ({
       setState("idle")
       pendingBinaryFinishRef.current = false
       pendingResumeRef.current = false
+      setPendingStartRequest(false)
       clearAwaitingTtsTimeout()
       clearListeningRecoveryTimeout()
       clearThinkingRecoveryTimeout()
@@ -673,17 +778,12 @@ export const usePersonaLiveVoiceController = ({
   ])
 
   React.useEffect(() => {
-    if (!pendingResumeRef.current) return
-    if (audioState.playing) return
-    pendingResumeRef.current = false
-    finishVoiceTurn()
-  }, [audioState.playing, finishVoiceTurn])
-
-  React.useEffect(() => {
     return () => {
       clearAwaitingTtsTimeout()
       clearListeningRecoveryTimeout()
       clearThinkingRecoveryTimeout()
+      setPendingStartRequest(false)
+      pendingResumeRef.current = false
       stopMicStream()
       stopCurrentPlayback()
     }
@@ -910,7 +1010,7 @@ export const usePersonaLiveVoiceController = ({
     manualModeRequired,
     canSendNow: Boolean(String(heardText || heardTranscriptRef.current || "").trim()),
     speechAvailable: canUseServerStt,
-    isListening: micActive,
+    isListening: micActive || pendingStartRequest,
     sessionAutoResume,
     sessionBargeIn,
     autoCommitEnabled,

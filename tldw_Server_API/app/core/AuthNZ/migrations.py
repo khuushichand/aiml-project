@@ -14,6 +14,7 @@ from loguru import logger
 
 #
 # Local imports
+from tldw_Server_API.app.core.AuthNZ.admin_webhook_secrets import encrypt_admin_webhook_secret
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
 from tldw_Server_API.app.core.Infrastructure.distributed_lock import acquire_migration_lock
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -31,6 +32,15 @@ _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
     sqlite3.Error,
     json.JSONDecodeError,
 )
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Return True when the given SQLite table already exists."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 #######################################################################################################################
 #
@@ -2492,167 +2502,9 @@ def rollback_029_drop_org_invite_redemptions_table(conn: sqlite3.Connection) -> 
 
 
 def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
-    """Create subscription_plans table for plan tier definitions."""
-    logger.info("Migration 030: START subscription_plans table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            stripe_product_id TEXT,
-            stripe_price_id TEXT,
-            stripe_price_id_yearly TEXT,
-            price_usd_monthly REAL DEFAULT 0,
-            price_usd_yearly REAL DEFAULT 0,
-            limits_json TEXT NOT NULL,
-            is_active INTEGER DEFAULT 1,
-            is_public INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)")
-
-    # Seed default plans
-    default_plans = [
-        {
-            "name": "free",
-            "display_name": "Free",
-            "description": "Internal/default plan (not publicly listed)",
-            "price_usd_monthly": 0,
-            "price_usd_yearly": 0,
-            "sort_order": 0,
-            "is_public": 0,
-            "limits_json": json.dumps({
-                "storage_mb": 1024,
-                "api_calls_day": 100,
-                "api_calls_month": 3000,
-                "llm_tokens_day": 10000,
-                "llm_tokens_month": 300000,
-                "transcription_minutes_month": 10,
-                "rag_queries_day": 50,
-                "concurrent_jobs": 1,
-                "team_members": 1,
-                "rate_limit_rpm": 10,
-                "features": ["basic_search", "basic_chat"]
-            })
-        },
-        {
-            "name": "starter",
-            "display_name": "Starter",
-            "description": "For individuals getting started",
-            "price_usd_monthly": 10,
-            "price_usd_yearly": 100,
-            "sort_order": 1,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 2048,
-                "api_calls_day": 1000,
-                "api_calls_month": 30000,
-                "llm_tokens_month": 4000000,
-                "llm_tokens_premium_month": 80000,
-                "max_context_tokens": 64000,
-                "byok_enabled": True,
-                "byok_keys_saved": 1,
-                "notebooks": 100,
-                "sources_per_notebook": 50,
-                "ingestion_pages_month": 2000,
-                "ingestion_pages_day": 150,
-                "scheduled_refresh": "manual",
-                "max_upload_mb": 50,
-                "transcription_minutes_month": 120,
-                "tts_minutes_month": 30,
-                "rag_queries_day": 1000,
-                "concurrent_jobs": 2,
-                "team_members": 1,
-                "rate_limit_rpm": 20,
-                "features": ["basic_search", "basic_chat", "byok"]
-            })
-        },
-        {
-            "name": "plus",
-            "display_name": "Plus",
-            "description": "For power users who need more capacity",
-            "price_usd_monthly": 20,
-            "price_usd_yearly": 200,
-            "sort_order": 2,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 10240,
-                "api_calls_day": 5000,
-                "api_calls_month": 150000,
-                "llm_tokens_month": 12000000,
-                "llm_tokens_premium_month": 200000,
-                "max_context_tokens": 128000,
-                "byok_enabled": True,
-                "byok_keys_saved": 3,
-                "notebooks": 300,
-                "sources_per_notebook": 100,
-                "ingestion_pages_month": 10000,
-                "ingestion_pages_day": 750,
-                "scheduled_refresh": "weekly",
-                "max_upload_mb": 200,
-                "transcription_minutes_month": 300,
-                "tts_minutes_month": 90,
-                "rag_queries_day": 5000,
-                "concurrent_jobs": 5,
-                "team_members": 1,
-                "rate_limit_rpm": 60,
-                "features": ["*", "byok", "rag_advanced", "vector_search"]
-            })
-        },
-        {
-            "name": "pro",
-            "display_name": "Pro",
-            "description": "For teams and professional usage",
-            "price_usd_monthly": 30,
-            "price_usd_yearly": 300,
-            "sort_order": 3,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 30720,
-                "api_calls_day": 15000,
-                "api_calls_month": 450000,
-                "llm_tokens_month": 18000000,
-                "llm_tokens_premium_month": 300000,
-                "max_context_tokens": 200000,
-                "byok_enabled": True,
-                "byok_keys_saved": 10,
-                "notebooks": 1000,
-                "sources_per_notebook": 300,
-                "ingestion_pages_month": 30000,
-                "ingestion_pages_day": 2000,
-                "scheduled_refresh": "daily",
-                "max_upload_mb": 500,
-                "transcription_minutes_month": 500,
-                "tts_minutes_month": 150,
-                "rag_queries_day": 15000,
-                "concurrent_jobs": 10,
-                "team_members": 5,
-                "rate_limit_rpm": 120,
-                "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"]
-            })
-        }
-    ]
-
-    for plan in default_plans:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO subscription_plans
-            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (plan["name"], plan["display_name"], plan["description"],
-             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"], plan.get("is_public", 1))
-        )
-
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 030: Created subscription_plans table with default plans")
+    logger.info("Migration 030: Retired public billing plan schema bootstrap")
 
 
 def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None:
@@ -2663,40 +2515,9 @@ def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None
 
 
 def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
-    """Create org_subscriptions table for organization subscription state."""
-    logger.info("Migration 031: START org_subscriptions table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS org_subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL UNIQUE,
-            plan_id INTEGER NOT NULL,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            stripe_subscription_status TEXT,
-            billing_cycle TEXT DEFAULT 'monthly',
-            current_period_start TIMESTAMP,
-            current_period_end TIMESTAMP,
-            status TEXT DEFAULT 'active',
-            trial_start TIMESTAMP,
-            trial_end TIMESTAMP,
-            canceled_at TIMESTAMP,
-            cancel_at_period_end INTEGER DEFAULT 0,
-            custom_limits_json TEXT,
-            metadata TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE RESTRICT
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 031: Created org_subscriptions table")
+    logger.info("Migration 031: Retired public org_subscriptions schema bootstrap")
 
 
 def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
@@ -2707,28 +2528,9 @@ def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
 
 
 def migration_032_create_stripe_webhook_events(conn: sqlite3.Connection) -> None:
-    """Create stripe_webhook_events table for idempotency and audit."""
-    logger.info("Migration 032: START stripe_webhook_events table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stripe_event_id TEXT UNIQUE NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            processed_at TIMESTAMP,
-            error_message TEXT,
-            retry_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 032: Created stripe_webhook_events table")
+    logger.info("Migration 032: Retired public Stripe webhook schema bootstrap")
 
 
 def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> None:
@@ -2739,31 +2541,9 @@ def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> N
 
 
 def migration_033_create_payment_history(conn: sqlite3.Connection) -> None:
-    """Create payment_history table for invoice display."""
-    logger.info("Migration 033: START payment_history table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS payment_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL,
-            stripe_invoice_id TEXT,
-            stripe_payment_intent_id TEXT,
-            amount_cents INTEGER NOT NULL,
-            currency TEXT DEFAULT 'usd',
-            status TEXT NOT NULL,
-            description TEXT,
-            invoice_pdf_url TEXT,
-            receipt_url TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 033: Created payment_history table")
+    logger.info("Migration 033: Retired public payment history schema bootstrap")
 
 
 def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
@@ -2774,29 +2554,9 @@ def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
 
 
 def migration_034_create_billing_audit_log(conn: sqlite3.Connection) -> None:
-    """Create billing_audit_log table for billing operation audit trail."""
-    logger.info("Migration 034: START billing_audit_log table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS billing_audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL,
-            user_id INTEGER,
-            action TEXT NOT NULL,
-            details TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 034: Created billing_audit_log table")
+    logger.info("Migration 034: Retired public billing audit schema bootstrap")
 
 
 def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
@@ -2804,6 +2564,12 @@ def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS billing_audit_log")
     conn.commit()
     logger.info("Rollback 034: Dropped billing_audit_log table")
+
+
+def rollback_retired_billing_schema_noop(conn: sqlite3.Connection) -> None:
+    """Preserve historical billing tables during OSS rollback flows."""
+    conn.commit()
+    logger.info("Rollback: skipped retired billing schema teardown")
 
 
 def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
@@ -2833,29 +2599,29 @@ def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
             changed = True
         return json.dumps(data) if changed else None
 
-    # Update subscription plans.
-    cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
-    rows = cur.fetchall()
-    for plan_id, limits_json in rows:
-        updated = _normalize_limits_json(limits_json)
-        if updated is not None:
-            conn.execute(
-                "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
-                (updated, plan_id),
-            )
+    if _sqlite_table_exists(conn, "subscription_plans"):
+        cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
+        rows = cur.fetchall()
+        for plan_id, limits_json in rows:
+            updated = _normalize_limits_json(limits_json)
+            if updated is not None:
+                conn.execute(
+                    "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
+                    (updated, plan_id),
+                )
 
-    # Update org custom limits.
-    cur = conn.execute(
-        "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
-    )
-    rows = cur.fetchall()
-    for sub_id, limits_json in rows:
-        updated = _normalize_limits_json(limits_json)
-        if updated is not None:
-            conn.execute(
-                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
-                (updated, sub_id),
-            )
+    if _sqlite_table_exists(conn, "org_subscriptions"):
+        cur = conn.execute(
+            "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
+        )
+        rows = cur.fetchall()
+        for sub_id, limits_json in rows:
+            updated = _normalize_limits_json(limits_json)
+            if updated is not None:
+                conn.execute(
+                    "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
+                    (updated, sub_id),
+                )
 
     conn.commit()
     logger.info("Migration 035: Completed storage_mb limit backfill")
@@ -3662,36 +3428,37 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             payload["enforcement_mode"] = enforcement
         return payload
 
-    cur = conn.execute(
-        "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
-    )
-    rows = cur.fetchall()
-    for org_id, custom_limits_json in rows:
-        if not custom_limits_json:
-            continue
-        try:
-            data = json.loads(custom_limits_json)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        legacy_budgets = data.get("budgets")
-        if not isinstance(legacy_budgets, dict):
-            continue
-        payload = _inflate_legacy_budgets(legacy_budgets)
-        if payload:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                """,
-                (org_id, json.dumps(payload)),
-            )
-        data.pop("budgets", None)
-        conn.execute(
-            "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
-            (json.dumps(data) if data else None, org_id),
+    if _sqlite_table_exists(conn, "org_subscriptions"):
+        cur = conn.execute(
+            "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
         )
+        rows = cur.fetchall()
+        for org_id, custom_limits_json in rows:
+            if not custom_limits_json:
+                continue
+            try:
+                data = json.loads(custom_limits_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            legacy_budgets = data.get("budgets")
+            if not isinstance(legacy_budgets, dict):
+                continue
+            payload = _inflate_legacy_budgets(legacy_budgets)
+            if payload:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (org_id, json.dumps(payload)),
+                )
+            data.pop("budgets", None)
+            conn.execute(
+                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
+                (json.dumps(data) if data else None, org_id),
+            )
 
     conn.commit()
     logger.info("Migration 042: Created org_budgets table and migrated legacy budgets")
@@ -3761,6 +3528,744 @@ def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
         logger.warning(f"Migration 045 skipped or failed: {error}")
 
 
+def migration_072_create_identity_providers_table(conn: sqlite3.Connection) -> None:
+    """Create the identity_providers table for enterprise federation config."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS identity_providers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL,
+            provider_type TEXT NOT NULL DEFAULT 'oidc',
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            display_name TEXT,
+            issuer TEXT NOT NULL,
+            discovery_url TEXT,
+            authorization_url TEXT,
+            token_url TEXT,
+            jwks_url TEXT,
+            client_id TEXT,
+            client_secret_ref TEXT,
+            claim_mapping_json TEXT NOT NULL DEFAULT '{}',
+            provisioning_policy_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(identity_providers)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE identity_providers ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("provider_type", "provider_type TEXT NOT NULL DEFAULT 'oidc'")
+        add_col("owner_scope_type", "owner_scope_type TEXT NOT NULL DEFAULT 'global'")
+        add_col("owner_scope_id", "owner_scope_id INTEGER")
+        add_col("enabled", "enabled INTEGER NOT NULL DEFAULT 0")
+        add_col("display_name", "display_name TEXT")
+        add_col("issuer", "issuer TEXT")
+        add_col("discovery_url", "discovery_url TEXT")
+        add_col("authorization_url", "authorization_url TEXT")
+        add_col("token_url", "token_url TEXT")
+        add_col("jwks_url", "jwks_url TEXT")
+        add_col("client_id", "client_id TEXT")
+        add_col("client_secret_ref", "client_secret_ref TEXT")
+        add_col("claim_mapping_json", "claim_mapping_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("provisioning_policy_json", "provisioning_policy_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_scope "
+        "ON identity_providers(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled "
+        "ON identity_providers(enabled)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_scope_slug "
+        "ON identity_providers(slug, owner_scope_type, COALESCE(owner_scope_id, 0))"
+    )
+    conn.commit()
+    logger.info("Migration 072: Created identity_providers table")
+
+
+def rollback_072_drop_identity_providers_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 072 by dropping the identity_providers table."""
+    conn.execute("DROP TABLE IF EXISTS identity_providers")
+    conn.commit()
+    logger.info("Rollback 072: Dropped identity_providers table")
+
+
+def migration_073_create_federated_identities_table(conn: sqlite3.Connection) -> None:
+    """Create the federated_identities table for local user links."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS federated_identities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_provider_id INTEGER NOT NULL,
+            external_subject TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            external_username TEXT,
+            external_email TEXT,
+            last_claims_hash TEXT,
+            last_seen_at TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (identity_provider_id) REFERENCES identity_providers(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(federated_identities)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE federated_identities ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("external_username", "external_username TEXT")
+        add_col("external_email", "external_email TEXT")
+        add_col("last_claims_hash", "last_claims_hash TEXT")
+        add_col("last_seen_at", "last_seen_at TIMESTAMP")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_identities_provider_subject "
+        "ON federated_identities(identity_provider_id, external_subject)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_user_id "
+        "ON federated_identities(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_provider_id "
+        "ON federated_identities(identity_provider_id)"
+    )
+    conn.commit()
+    logger.info("Migration 073: Created federated_identities table")
+
+
+def rollback_073_drop_federated_identities_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 073 by dropping the federated_identities table."""
+    conn.execute("DROP TABLE IF EXISTS federated_identities")
+    conn.commit()
+    logger.info("Rollback 073: Dropped federated_identities table")
+
+
+def migration_074_create_federated_managed_grants_table(conn: sqlite3.Connection) -> None:
+    """Create the federated_managed_grants table for safe grant/revoke provenance."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS federated_managed_grants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_provider_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            grant_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (identity_provider_id) REFERENCES identity_providers(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(federated_managed_grants)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE federated_managed_grants ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("grant_kind", "grant_kind TEXT NOT NULL DEFAULT 'org'")
+        add_col("target_ref", "target_ref TEXT NOT NULL DEFAULT ''")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_managed_grants_target "
+        "ON federated_managed_grants(identity_provider_id, user_id, grant_kind, target_ref)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_user_id "
+        "ON federated_managed_grants(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_provider_id "
+        "ON federated_managed_grants(identity_provider_id)"
+    )
+    conn.commit()
+    logger.info("Migration 074: Created federated_managed_grants table")
+
+
+def rollback_074_drop_federated_managed_grants_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 074 by dropping the federated_managed_grants table."""
+    conn.execute("DROP TABLE IF EXISTS federated_managed_grants")
+    conn.commit()
+    logger.info("Rollback 074: Dropped federated_managed_grants table")
+
+
+def migration_075_create_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Create the secret_backends table for backend metadata and capabilities."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS secret_backends (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'enabled',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(secret_backends)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE secret_backends ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'enabled'")
+        add_col("capabilities_json", "capabilities_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_secret_backends_status "
+        "ON secret_backends(status)"
+    )
+    conn.commit()
+    logger.info("Migration 075: Created secret_backends table")
+
+
+def rollback_075_drop_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 075 by dropping the secret_backends table."""
+    conn.execute("DROP TABLE IF EXISTS secret_backends")
+    conn.commit()
+    logger.info("Rollback 075: Dropped secret_backends table")
+
+
+def migration_076_create_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Create the managed_secret_refs table for logical secret references."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS managed_secret_refs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backend_name TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL,
+            owner_scope_id INTEGER NOT NULL,
+            provider_key TEXT NOT NULL,
+            backend_ref TEXT NULL,
+            display_name TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_resolved_at TIMESTAMP NULL,
+            expires_at TIMESTAMP NULL,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            revoked_by INTEGER NULL,
+            revoked_at TIMESTAMP NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (backend_name) REFERENCES secret_backends(name) ON DELETE RESTRICT
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(managed_secret_refs)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE managed_secret_refs ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("backend_ref", "backend_ref TEXT")
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("last_resolved_at", "last_resolved_at TIMESTAMP")
+        add_col("expires_at", "expires_at TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_secret_refs_scope_provider "
+        "ON managed_secret_refs(backend_name, owner_scope_type, owner_scope_id, provider_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_scope "
+        "ON managed_secret_refs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_status "
+        "ON managed_secret_refs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 076: Created managed_secret_refs table")
+
+
+def rollback_076_drop_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 076 by dropping the managed_secret_refs table."""
+    conn.execute("DROP TABLE IF EXISTS managed_secret_refs")
+    conn.commit()
+    logger.info("Rollback 076: Dropped managed_secret_refs table")
+
+
+def migration_077_create_sharing_tables(conn: sqlite3.Connection) -> None:
+    """Create tables for shared workspaces and share tokens."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shared_workspaces (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id     TEXT NOT NULL,
+            owner_user_id    INTEGER NOT NULL,
+            share_scope_type TEXT NOT NULL DEFAULT 'team'
+                CHECK (share_scope_type IN ('team', 'org')),
+            share_scope_id   INTEGER NOT NULL,
+            access_level     TEXT NOT NULL DEFAULT 'view_chat'
+                CHECK (access_level IN ('view_chat', 'view_chat_add', 'full_edit')),
+            allow_clone      INTEGER NOT NULL DEFAULT 1,
+            created_by       INTEGER NOT NULL,
+            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at       TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id),
+            FOREIGN KEY (created_by) REFERENCES users(id),
+            UNIQUE(workspace_id, owner_user_id, share_scope_type, share_scope_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shared_ws_owner ON shared_workspaces(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shared_ws_scope ON shared_workspaces(share_scope_type, share_scope_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS share_tokens (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash      TEXT UNIQUE NOT NULL,
+            token_prefix    TEXT NOT NULL,
+            resource_type   TEXT NOT NULL
+                CHECK (resource_type IN ('chatbook', 'workspace')),
+            resource_id     TEXT NOT NULL,
+            owner_user_id   INTEGER NOT NULL,
+            access_level    TEXT NOT NULL DEFAULT 'view_chat',
+            allow_clone     INTEGER NOT NULL DEFAULT 1,
+            password_hash   TEXT,
+            max_uses        INTEGER,
+            use_count       INTEGER NOT NULL DEFAULT 0,
+            expires_at      TIMESTAMP,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at      TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_prefix ON share_tokens(token_prefix)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_owner ON share_tokens(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_resource ON share_tokens(resource_type, resource_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS share_audit_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type      TEXT NOT NULL,
+            actor_user_id   INTEGER,
+            resource_type   TEXT NOT NULL,
+            resource_id     TEXT NOT NULL,
+            owner_user_id   INTEGER NOT NULL,
+            share_id        INTEGER,
+            token_id        INTEGER,
+            metadata_json   TEXT DEFAULT '{}',
+            ip_address      TEXT,
+            user_agent      TEXT,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_audit_created ON share_audit_log(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_audit_owner ON share_audit_log(owner_user_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sharing_config (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_type      TEXT NOT NULL DEFAULT 'global'
+                CHECK (scope_type IN ('global', 'org', 'team')),
+            scope_id        INTEGER,
+            config_key      TEXT NOT NULL,
+            config_value    TEXT NOT NULL,
+            updated_by      INTEGER,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(scope_type, scope_id, config_key)
+        )
+    """)
+
+    conn.commit()
+    logger.info("Migration 077: Created sharing tables (shared_workspaces, share_tokens, share_audit_log, sharing_config)")
+
+
+def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection) -> None:
+    """Add governance-pack source provenance fields and prepared candidate storage."""
+
+    governance_pack_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_packs)").fetchall()
+    }
+    if "source_type" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_type TEXT")
+    if "source_location" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_location TEXT")
+    if "source_ref_requested" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_requested TEXT")
+    if "source_ref_kind" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_kind TEXT")
+    if "source_subpath" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_subpath TEXT")
+    if "source_commit_resolved" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_commit_resolved TEXT")
+    if "pack_content_digest" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN pack_content_digest TEXT")
+    if "source_verified" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verified INTEGER")
+    if "source_verification_mode" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verification_mode TEXT")
+    if "signer_fingerprint" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN signer_fingerprint TEXT")
+    if "signer_identity" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN signer_identity TEXT")
+    if "verified_object_type" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN verified_object_type TEXT")
+    if "verification_result_code" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN verification_result_code TEXT")
+    if "verification_warning_code" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN verification_warning_code TEXT")
+    if "source_fetched_at" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_fetched_at TIMESTAMP")
+    if "fetched_by" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN fetched_by INTEGER")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_source_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_location TEXT NOT NULL,
+            source_ref_requested TEXT,
+            source_ref_kind TEXT,
+            source_subpath TEXT,
+            source_commit_resolved TEXT,
+            pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
+            source_verified INTEGER,
+            source_verification_mode TEXT,
+            signer_fingerprint TEXT,
+            signer_identity TEXT,
+            verified_object_type TEXT,
+            verification_result_code TEXT,
+            verification_warning_code TEXT,
+            source_fetched_at TIMESTAMP,
+            fetched_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    source_candidate_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_pack_source_candidates)").fetchall()
+    }
+    if "source_ref_kind" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN source_ref_kind TEXT")
+    if "pack_document_json" not in source_candidate_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN pack_document_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "signer_fingerprint" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN signer_fingerprint TEXT")
+    if "signer_identity" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN signer_identity TEXT")
+    if "verified_object_type" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN verified_object_type TEXT")
+    if "verification_result_code" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN verification_result_code TEXT")
+    if "verification_warning_code" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN verification_warning_code TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
+        "ON mcp_governance_pack_source_candidates(source_type, source_location)"
+    )
+
+    conn.commit()
+    logger.info("Migration 078: Added governance-pack source provenance schema")
+
+
+def migration_079_add_governance_pack_trust_policy(conn: sqlite3.Connection) -> None:
+    """Add deployment-wide governance-pack trust-policy storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 079: Added governance-pack trust policy schema")
+
+
+def migration_080_create_admin_webhooks_tables(conn: sqlite3.Connection) -> None:
+    """Create admin_webhooks and admin_webhooks_delivery_log tables."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            secret_encrypted TEXT NOT NULL,
+            secret_key_id TEXT,
+            event_types TEXT NOT NULL DEFAULT '[]',
+            description TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            retry_count INTEGER NOT NULL DEFAULT 3 CHECK (retry_count >= 0 AND retry_count <= 10),
+            timeout_seconds INTEGER NOT NULL DEFAULT 10 CHECK (timeout_seconds >= 1 AND timeout_seconds <= 120),
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_webhooks_delivery_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER NOT NULL REFERENCES admin_webhooks(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL,
+            status_code INTEGER,
+            response_body TEXT,
+            latency_ms INTEGER,
+            retry_attempt INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            delivered_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_webhooks_delivery_log_webhook_id "
+        "ON admin_webhooks_delivery_log(webhook_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_webhooks_delivery_log_created_at "
+        "ON admin_webhooks_delivery_log(created_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 080: Created admin_webhooks and delivery_log tables")
+
+
+def migration_081_create_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
+    """Create time-series table for dependency health probe results."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_dependency_health_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            latency_ms INTEGER,
+            error_message TEXT,
+            checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_dep_health_service_checked "
+        "ON admin_dependency_health_history(service_name, checked_at DESC)"
+    )
+
+    conn.commit()
+    logger.info("Migration 081: Created admin_dependency_health_history table")
+
+
+def migration_082_harden_admin_webhooks_and_create_admin_settings(conn: sqlite3.Connection) -> None:
+    """Create admin_settings and migrate admin_webhooks secrets to encrypted storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_settings (
+            setting_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    if not _sqlite_table_exists(conn, "admin_webhooks"):
+        conn.commit()
+        logger.info("Migration 082: Created admin_settings table")
+        return
+
+    table_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_webhooks'"
+    ).fetchone()
+    table_sql = str(table_sql_row[0] if table_sql_row and table_sql_row[0] else "")
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(admin_webhooks)").fetchall()
+    }
+    needs_rebuild = (
+        "secret" in columns
+        or "secret_encrypted" not in columns
+        or "secret_key_id" not in columns
+        or "CHECK (retry_count >=" not in table_sql
+        or "CHECK (timeout_seconds >=" not in table_sql
+    )
+    if not needs_rebuild:
+        conn.commit()
+        logger.info("Migration 082: Admin webhook schema already hardened")
+        return
+
+    previous_row_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM admin_webhooks").fetchall()
+    finally:
+        conn.row_factory = previous_row_factory
+
+    migrated_rows: list[tuple[Any, ...]] = []
+    for row in rows:
+        secret_encrypted = row["secret_encrypted"] if "secret_encrypted" in row.keys() else None
+        secret_key_id = row["secret_key_id"] if "secret_key_id" in row.keys() else None
+        if not secret_encrypted:
+            plaintext_secret = row["secret"] if "secret" in row.keys() else None
+            if not plaintext_secret:
+                raise ValueError(f"Admin webhook {row['id']} is missing a secret for migration")
+            encrypted = encrypt_admin_webhook_secret(str(plaintext_secret))
+            secret_encrypted = encrypted.encrypted_blob
+            secret_key_id = encrypted.key_id
+
+        migrated_rows.append(
+            (
+                row["id"],
+                row["url"],
+                secret_encrypted,
+                secret_key_id,
+                row["event_types"],
+                row["description"],
+                row["active"],
+                row["retry_count"],
+                row["timeout_seconds"],
+                row["created_by"],
+                row["created_at"],
+                row["updated_at"],
+            )
+        )
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE admin_webhooks_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                secret_encrypted TEXT NOT NULL,
+                secret_key_id TEXT,
+                event_types TEXT NOT NULL DEFAULT '[]',
+                description TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 1,
+                retry_count INTEGER NOT NULL DEFAULT 3 CHECK (retry_count >= 0 AND retry_count <= 10),
+                timeout_seconds INTEGER NOT NULL DEFAULT 10 CHECK (timeout_seconds >= 1 AND timeout_seconds <= 120),
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        if migrated_rows:
+            conn.executemany(
+                """
+                INSERT INTO admin_webhooks_new (
+                    id, url, secret_encrypted, secret_key_id, event_types, description,
+                    active, retry_count, timeout_seconds, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                migrated_rows,
+            )
+        conn.execute("DROP TABLE admin_webhooks")
+        conn.execute("ALTER TABLE admin_webhooks_new RENAME TO admin_webhooks")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    conn.commit()
+    logger.info("Migration 082: Hardened admin_webhooks schema and created admin_settings")
+
+
+def rollback_081_drop_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
+    """Rollback migration 081."""
+    conn.execute("DROP TABLE IF EXISTS admin_dependency_health_history")
+    conn.commit()
+    logger.info("Rollback 081: Dropped admin_dependency_health_history table")
+
+
+def rollback_080_drop_admin_webhooks_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 080 by dropping admin webhook tables."""
+    conn.execute("DROP TABLE IF EXISTS admin_webhooks_delivery_log")
+    conn.execute("DROP TABLE IF EXISTS admin_webhooks")
+    conn.commit()
+    logger.info("Rollback 080: Dropped admin webhook tables")
+
+
+def rollback_077_drop_sharing_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 077 by dropping sharing tables."""
+    conn.execute("DROP TABLE IF EXISTS sharing_config")
+    conn.execute("DROP TABLE IF EXISTS share_audit_log")
+    conn.execute("DROP TABLE IF EXISTS share_tokens")
+    conn.execute("DROP TABLE IF EXISTS shared_workspaces")
+    conn.commit()
+    logger.info("Rollback 077: Dropped sharing tables")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -3816,31 +4321,31 @@ def get_authnz_migrations() -> list[Migration]:
             30,
             "Create subscription_plans table",
             migration_030_create_subscription_plans,
-            rollback_030_drop_subscription_plans_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             31,
             "Create org_subscriptions table",
             migration_031_create_org_subscriptions,
-            rollback_031_drop_org_subscriptions_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             32,
             "Create stripe_webhook_events table",
             migration_032_create_stripe_webhook_events,
-            rollback_032_drop_stripe_webhook_events_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             33,
             "Create payment_history table",
             migration_033_create_payment_history,
-            rollback_033_drop_payment_history_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             34,
             "Create billing_audit_log table",
             migration_034_create_billing_audit_log,
-            rollback_034_drop_billing_audit_log_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             35,
@@ -4043,6 +4548,69 @@ def get_authnz_migrations() -> list[Migration]:
             71,
             "Add governance pack upgrade lineage schema",
             migration_071_add_governance_pack_upgrade_lineage,
+        ),
+        Migration(
+            72,
+            "Create identity_providers table",
+            migration_072_create_identity_providers_table,
+            rollback_072_drop_identity_providers_table,
+        ),
+        Migration(
+            73,
+            "Create federated_identities table",
+            migration_073_create_federated_identities_table,
+            rollback_073_drop_federated_identities_table,
+        ),
+        Migration(
+            74,
+            "Create federated_managed_grants table",
+            migration_074_create_federated_managed_grants_table,
+            rollback_074_drop_federated_managed_grants_table,
+        ),
+        Migration(
+            75,
+            "Create secret_backends table",
+            migration_075_create_secret_backends_table,
+            rollback_075_drop_secret_backends_table,
+        ),
+        Migration(
+            76,
+            "Create managed_secret_refs table",
+            migration_076_create_managed_secret_refs_table,
+            rollback_076_drop_managed_secret_refs_table,
+        ),
+        Migration(
+            77,
+            "Create sharing tables",
+            migration_077_create_sharing_tables,
+            rollback_077_drop_sharing_tables,
+        ),
+        Migration(
+            78,
+            "Add governance-pack source provenance",
+            migration_078_add_governance_pack_source_provenance,
+        ),
+        Migration(
+            79,
+            "Add governance-pack trust policy",
+            migration_079_add_governance_pack_trust_policy,
+        ),
+        Migration(
+            80,
+            "Create admin webhooks tables",
+            migration_080_create_admin_webhooks_tables,
+            rollback_080_drop_admin_webhooks_tables,
+        ),
+        Migration(
+            81,
+            "Create dependency health history table",
+            migration_081_create_admin_dependency_health_history,
+            rollback_081_drop_admin_dependency_health_history,
+        ),
+        Migration(
+            82,
+            "Harden admin webhooks schema and create admin settings table",
+            migration_082_harden_admin_webhooks_and_create_admin_settings,
         ),
     ]
 

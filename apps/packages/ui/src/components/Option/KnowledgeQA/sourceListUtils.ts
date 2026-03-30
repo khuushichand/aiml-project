@@ -29,9 +29,16 @@ const SOURCE_TYPE_LABELS: Record<
 > = {
   media_db: { singular: "Document", plural: "Documents" },
   notes: { singular: "Note", plural: "Notes" },
+  note: { singular: "Note", plural: "Notes" },
   characters: { singular: "Character", plural: "Characters" },
   chats: { singular: "Chat", plural: "Chats" },
   kanban: { singular: "Board item", plural: "Board items" },
+  web: { singular: "Web", plural: "Web" },
+  pdf: { singular: "PDF", plural: "PDFs" },
+  transcript: { singular: "Transcript", plural: "Transcripts" },
+  video: { singular: "Video", plural: "Videos" },
+  audio: { singular: "Audio", plural: "Audio" },
+  other: { singular: "Other", plural: "Other" },
   unknown: { singular: "Other", plural: "Other" },
 }
 
@@ -256,7 +263,7 @@ export function getRelevanceDescriptor(
     return {
       percent,
       level: "high",
-      label: "High match",
+      label: "Strong relevance",
       className: "bg-success/15 text-success border border-success/30",
     }
   }
@@ -264,14 +271,14 @@ export function getRelevanceDescriptor(
     return {
       percent,
       level: "moderate",
-      label: "Moderate match",
+      label: "Moderate relevance",
       className: "bg-warn/15 text-warn border border-warn/30",
     }
   }
   return {
     percent,
     level: "low",
-    label: "Low match",
+    label: "Weak relevance",
     className: "bg-danger/15 text-danger border border-danger/30",
   }
 }
@@ -282,7 +289,7 @@ export function formatChunkPosition(chunkId: unknown): string | null {
 
   const slashPattern = normalized.match(/\b(\d+)\s*\/\s*(\d+)\b/)
   if (slashPattern) {
-    return `Chunk ${slashPattern[1]} of ${slashPattern[2]}`
+    return `Section ${slashPattern[1]} of ${slashPattern[2]}`
   }
 
   const chunkPattern = normalized.match(
@@ -290,13 +297,13 @@ export function formatChunkPosition(chunkId: unknown): string | null {
   )
   if (chunkPattern) {
     if (chunkPattern[2]) {
-      return `Chunk ${chunkPattern[1]} of ${chunkPattern[2]}`
+      return `Section ${chunkPattern[1]} of ${chunkPattern[2]}`
     }
-    return `Chunk ${chunkPattern[1]}`
+    return `Section ${chunkPattern[1]}`
   }
 
   if (/^\d{1,4}$/.test(normalized)) {
-    return `Chunk ${normalized}`
+    return `Section ${normalized}`
   }
 
   return null

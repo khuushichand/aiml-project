@@ -102,7 +102,8 @@ def test_qwen3_custom_voice_reuses_prompt_metadata(client, monkeypatch):
         raising=True,
     )
 
-    adapter = Qwen3TTSAdapter({"device": "cpu", "model": "auto"})
+    adapter = Qwen3TTSAdapter({"device": "cpu", "model": "auto", "runtime": "upstream"})
+    adapter._resolve_torch_dtype = lambda: "float32"
 
     class _FakeFactory:
         def get_provider_for_model(self, _model):
@@ -111,6 +112,12 @@ def test_qwen3_custom_voice_reuses_prompt_metadata(client, monkeypatch):
     service = TTSServiceV2()
     service._ensure_factory = AsyncMock(return_value=_FakeFactory())
     service._get_adapter = AsyncMock(return_value=adapter)
+    monkeypatch.setattr(
+        service,
+        "_get_validation_config",
+        lambda: {"providers": {"qwen3_tts": {"runtime": "upstream"}}},
+        raising=True,
+    )
 
     async def _fake_get_tts_service_v2():
         return service

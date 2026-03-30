@@ -8,19 +8,49 @@ import { getProviderDisplayName } from '@/utils/provider-registry'
 
 type ProviderMap = Record<string, Array<{ id: string, context_length?: number, capabilities?: string[] }>>
 
+const isAbortLikeError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false
+  const candidate = error as {
+    name?: unknown
+    message?: unknown
+    code?: unknown
+  }
+  const name = String(candidate.name || "")
+  const message = String(candidate.message || "")
+  const code = String(candidate.code || "")
+  return (
+    name === "AbortError" ||
+    code === "REQUEST_ABORTED" ||
+    /abort/i.test(message)
+  )
+}
+
 export const AvailableModelsList: React.FC = () => {
   const { t } = useTranslation(['settings', 'common'])
   const { data, status, error, refetch, isFetching } = useQuery({
     queryKey: ['tldw-providers-models'],
     queryFn: async () => {
       await tldwClient.initialize()
-      // Prefer flattened metadata; then group by provider
-      const meta = await tldwClient.getModelsMetadata()
-      if (!Array.isArray(meta)) {
+      let modelList: unknown[] | null = null
+      try {
+        // Accept either the legacy flat array or the current { models, total } envelope.
+        const meta = await tldwClient.getModelsMetadata()
+        modelList = Array.isArray(meta)
+          ? meta
+          : meta && typeof meta === "object" && Array.isArray((meta as { models?: unknown[] }).models)
+            ? (meta as { models: unknown[] }).models
+            : null
+      } catch (requestError) {
+        if (isAbortLikeError(requestError)) {
+          return {}
+        }
+        throw requestError
+      }
+      if (!Array.isArray(modelList)) {
         throw new Error("Unexpected models metadata response")
       }
       const normalized: ProviderMap = {}
-      for (const item of (meta as any[])) {
+      for (const item of modelList as any[]) {
         const provider = String(item.provider || 'unknown')
         const id = String(item.id || item.model || item.name)
         const context_length = typeof item.context_length === 'number' ? item.context_length : (typeof item.contextLength === 'number' ? item.contextLength : undefined)

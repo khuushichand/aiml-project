@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -19,21 +21,17 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
 )
-from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.api.v1.API_Deps.setup_deps import (
+    require_local_setup_access,
+    require_shared_audio_installer_access,
+)
 from tldw_Server_API.app.api.v1.schemas.setup_schemas import (
-    AssistantQuestion,
     AudioBundleOperationResponse,
-    AudioBundleProvisionRequest,
-    AudioBundleVerificationRequest,
-    AudioPackExportRequest,
     AudioPackExportResponse,
-    AudioPackImportRequest,
     AudioPackImportResponse,
     AudioReadinessResetResponse,
     AudioRecommendationsResponse,
-    ConfigUpdates,
     SetupAssistantResponse,
-    SetupCompleteRequest,
     SetupCompleteResponse,
     SetupConfigUpdateResponse,
     SetupInstallStatusResponse,
@@ -47,14 +45,119 @@ from tldw_Server_API.app.core.Setup import audio_pack_service
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    DEFAULT_AUDIO_RESOURCE_PROFILE,
     get_audio_bundle_catalog,
 )
+from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.services.auth_service import mark_user_verified
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
-_AUDIO_BUNDLE_LOOKUP_DETAIL = "Audio bundle or resource profile not found."
+
+INVALID_AUDIO_BUNDLE_REQUEST_DETAIL = "Invalid audio bundle request"
+INVALID_AUDIO_PACK_EXPORT_REQUEST_DETAIL = "Invalid audio pack export request"
+AUDIO_BUNDLE_NOT_FOUND_DETAIL = "Audio bundle not found"
+_SUSPICIOUS_SETUP_DETAIL_RE = re.compile(
+    r"traceback|stack(?:\s*trace)?|exception|\/Users\/|[A-Za-z]:\\|\.py:\d+",
+    re.IGNORECASE,
+)
+_SANITIZED_SETUP_DETAIL_MESSAGE = "Internal setup diagnostics were suppressed."
+
+
+class ConfigUpdates(BaseModel):
+    updates: dict[str, dict[str, Any]] = Field(
+        ..., description="Mapping of section -> key/value pairs to persist in config.txt"
+    )
+
+
+class SetupCompleteRequest(BaseModel):
+    disable_first_time_setup: bool | None = Field(
+        False,
+        description="If true, flips enable_first_time_setup to false so the screen stays hidden",
+    )
+    install_plan: InstallPlan | None = Field(
+        None,
+        description="Backend installation instructions to execute after setup completes.",
+    )
+
+
+class AssistantQuestion(BaseModel):
+    question: str = Field(..., min_length=1, description="Natural language question for the setup assistant")
+
+
+def _sanitize_setup_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return (
+            _SANITIZED_SETUP_DETAIL_MESSAGE
+            if _SUSPICIOUS_SETUP_DETAIL_RE.search(value)
+            else value
+        )
+    if isinstance(value, list):
+        return [_sanitize_setup_payload(item) for item in value]
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"details", "exception", "traceback", "stack", "stack_trace"}:
+                continue
+            sanitized[key] = _sanitize_setup_payload(item)
+        return sanitized
+    return value
+
+
+class AudioBundleProvisionRequest(BaseModel):
+    bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to provision.")
+    resource_profile: str = Field(
+        DEFAULT_AUDIO_RESOURCE_PROFILE,
+        min_length=1,
+        description="Selected resource profile within the curated audio bundle.",
+    )
+    safe_rerun: bool = Field(
+        False,
+        description="If true, skip bundle installation only when all expected install steps were previously completed.",
+    )
+    tts_choice: str | None = Field(
+        None,
+        description="Optional curated TTS choice for profiles that expose multiple curated TTS engines.",
+    )
+
+
+class AudioBundleVerificationRequest(BaseModel):
+    bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to verify.")
+    resource_profile: str = Field(
+        DEFAULT_AUDIO_RESOURCE_PROFILE,
+        min_length=1,
+        description="Selected resource profile within the curated audio bundle.",
+    )
+    tts_choice: str | None = Field(
+        None,
+        description="Optional curated TTS choice for profiles that expose multiple curated TTS engines.",
+    )
+
+
+class AudioPackExportRequest(BaseModel):
+    bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to export.")
+    resource_profile: str = Field(
+        DEFAULT_AUDIO_RESOURCE_PROFILE,
+        min_length=1,
+        description="Selected resource profile within the curated audio bundle.",
+    )
+    pack_name: str | None = Field(
+        None,
+        description="Optional filename-friendly pack name for the generated audio pack manifest.",
+    )
+    pack_path: str | None = Field(
+        None,
+        description="Optional path to write the generated audio pack manifest.",
+    )
+    tts_choice: str | None = Field(
+        None,
+        description="Optional curated TTS choice for profiles that expose multiple curated TTS engines.",
+    )
+
+
+class AudioPackImportRequest(BaseModel):
+    pack_path: str = Field(..., min_length=1, description="Filesystem path to an audio pack manifest JSON file.")
 
 
 async def require_admin_and_system_configure(
@@ -129,9 +232,26 @@ async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -
 async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> SetupInstallStatusResponse:
     """Return the current installation plan progress if available."""
 
+    return _get_audio_install_status()
+
+
+def _ensure_audio_installer_available(*, allow_completed_when_disabled: bool) -> None:
+    """Validate whether audio installer actions should remain available."""
     status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    if status_snapshot["enabled"]:
+        return
+
+    if allow_completed_when_disabled and (
+        status_snapshot.get("setup_completed") or status_snapshot.get("completed")
+    ):
+        return
+
+    raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+
+def _get_audio_install_status(*, allow_completed_when_disabled: bool = False) -> dict[str, Any]:
+    """Return the current audio install status payload used by legacy and admin routes."""
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     install_status = install_manager.get_install_status_snapshot()
     if not install_status:
@@ -148,9 +268,20 @@ async def get_audio_recommendations(
 ) -> AudioRecommendationsResponse:
     """Return machine profile information and ranked audio setup bundle recommendations."""
 
-    status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    return _build_audio_recommendations_response(
+        prefer_offline_runtime=prefer_offline_runtime,
+        allow_hosted_fallbacks=allow_hosted_fallbacks,
+    )
+
+
+def _build_audio_recommendations_response(
+    *,
+    prefer_offline_runtime: bool,
+    allow_hosted_fallbacks: bool,
+    allow_completed_when_disabled: bool = False,
+) -> dict[str, Any]:
+    """Build the shared audio recommendations payload."""
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     machine_profile = audio_profile_service.detect_machine_profile()
     recommendations = audio_profile_service.recommend_audio_bundles(
@@ -223,19 +354,35 @@ async def provision_audio_bundle(
 ) -> AudioBundleOperationResponse:
     """Expand and provision a curated audio bundle."""
 
-    status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    return await _execute_audio_bundle_provision(payload)
+
+
+async def _execute_audio_bundle_provision(
+    payload: AudioBundleProvisionRequest,
+    *,
+    allow_completed_when_disabled: bool = False,
+) -> dict[str, Any]:
+    """Execute the bundle provisioning flow shared by legacy and admin routes."""
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     try:
         return await asyncio.to_thread(
             install_manager.execute_audio_bundle,
             payload.bundle_id,
             resource_profile=payload.resource_profile,
+            tts_choice=payload.tts_choice,
             safe_rerun=payload.safe_rerun,
         )
-    except KeyError as exc:
-        _raise_audio_bundle_lookup_not_found(exc)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_AUDIO_BUNDLE_REQUEST_DETAIL,
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=AUDIO_BUNDLE_NOT_FOUND_DETAIL,
+        ) from None
 
 
 @router.post("/audio/verify", openapi_extra={"security": []}, response_model=AudioBundleOperationResponse)
@@ -245,23 +392,82 @@ async def verify_audio_bundle(
 ) -> AudioBundleOperationResponse:
     """Verify the primary STT/TTS paths for a curated audio bundle."""
 
-    status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    result = await _execute_audio_bundle_verification(payload)
+    return _sanitize_setup_payload(result)
+
+
+async def _execute_audio_bundle_verification(
+    payload: AudioBundleVerificationRequest,
+    *,
+    allow_completed_when_disabled: bool = False,
+) -> dict[str, Any]:
+    """Execute bundle verification shared by legacy and admin routes."""
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     try:
         return await install_manager.verify_audio_bundle_async(
             payload.bundle_id,
             resource_profile=payload.resource_profile,
+            tts_choice=payload.tts_choice,
         )
-    except KeyError as exc:
-        _raise_audio_bundle_lookup_not_found(exc)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Audio bundle verification failed via setup endpoint")
+    except ValueError:
         raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to verify audio bundle.",
-        ) from exc
+            status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_AUDIO_BUNDLE_REQUEST_DETAIL,
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=AUDIO_BUNDLE_NOT_FOUND_DETAIL,
+        ) from None
+
+
+@router.get("/admin/install-status")
+async def get_admin_install_status(
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Return installer status for the shared admin audio installer."""
+
+    return _get_audio_install_status(allow_completed_when_disabled=True)
+
+
+@router.get("/admin/audio/recommendations")
+async def get_admin_audio_recommendations(
+    prefer_offline_runtime: bool = True,
+    allow_hosted_fallbacks: bool = True,
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Return admin-gated audio bundle recommendations for the shared installer UI."""
+
+    return _build_audio_recommendations_response(
+        prefer_offline_runtime=prefer_offline_runtime,
+        allow_hosted_fallbacks=allow_hosted_fallbacks,
+        allow_completed_when_disabled=True,
+    )
+
+
+@router.post("/admin/audio/provision")
+async def provision_admin_audio_bundle(
+    payload: AudioBundleProvisionRequest,
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Provision a curated audio bundle through the shared admin installer UI."""
+
+    return await _execute_audio_bundle_provision(payload, allow_completed_when_disabled=True)
+
+
+@router.post("/admin/audio/verify")
+async def verify_admin_audio_bundle(
+    payload: AudioBundleVerificationRequest,
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Verify a curated audio bundle through the shared admin installer UI."""
+
+    result = await _execute_audio_bundle_verification(
+        payload,
+        allow_completed_when_disabled=True,
+    )
+    return _sanitize_setup_payload(result)
 
 
 @router.post("/audio/packs/export", openapi_extra={"security": []}, response_model=AudioPackExportResponse)
@@ -286,6 +492,7 @@ async def export_audio_pack(
                 pack_name=pack_name,
                 bundle_id=payload.bundle_id,
                 resource_profile=payload.resource_profile,
+                tts_choice=payload.tts_choice,
                 installed_assets=readiness.get("installed_asset_manifests"),
                 compatibility=compatibility,
             )
@@ -293,11 +500,20 @@ async def export_audio_pack(
             manifest = audio_pack_service.build_audio_pack_manifest(
                 bundle_id=payload.bundle_id,
                 resource_profile=payload.resource_profile,
+                tts_choice=payload.tts_choice,
                 installed_assets=readiness.get("installed_asset_manifests"),
                 compatibility=compatibility,
             )
-    except KeyError as exc:
-        _raise_audio_bundle_lookup_not_found(exc)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_AUDIO_PACK_EXPORT_REQUEST_DETAIL,
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=AUDIO_BUNDLE_NOT_FOUND_DETAIL,
+        ) from None
 
     return {
         "success": True,
@@ -336,6 +552,8 @@ async def import_audio_pack(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Audio pack not found.") from exc
     except json.JSONDecodeError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Audio pack manifest is not valid JSON.") from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return result
 

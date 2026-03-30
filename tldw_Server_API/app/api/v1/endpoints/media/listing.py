@@ -28,19 +28,21 @@ from tldw_Server_API.app.api.v1.schemas.media_response_models import (
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    get_paginated_files,
-    get_paginated_trash_files,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
     InputError,
-    MediaDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     fetch_keywords_for_media_batch,
-    permanently_delete_item,
+    get_paginated_files,
+    get_paginated_trash_files,
+    search_media,
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+from .....core.DB_Management.media_db.legacy_maintenance import (
+    permanently_delete_item,
+)
 
 router = APIRouter(tags=["Media Management"])
 
@@ -105,6 +107,35 @@ def _parse_csv_values(raw_value: str | None) -> list[str]:
     ]
 
 
+@router.get(
+    "/keywords",
+    summary="List media keywords",
+)
+async def list_media_keywords(
+    query: str | None = Query(None, description="Optional substring filter for keyword suggestions."),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of keywords to return."),
+    db: Any = Depends(get_media_db_for_user),
+) -> dict[str, list[str]]:
+    try:
+        keywords = db.fetch_all_keywords()
+    except (DatabaseError, InputError) as exc:
+        logger.error("Failed to list media keywords: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load media keywords",
+        ) from exc
+
+    normalized_query = str(query or "").strip().lower()
+    if normalized_query:
+        keywords = [
+            keyword
+            for keyword in keywords
+            if normalized_query in str(keyword).lower()
+        ]
+
+    return {"keywords": keywords[:limit]}
+
+
 def _should_delegate_media_search_to_email(
     *,
     search_params: SearchRequest,
@@ -159,7 +190,7 @@ async def list_media_endpoint(
         False,
         description="Include associated keywords for each media item.",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -186,7 +217,7 @@ async def list_media_endpoint(
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_files(
-            db_instance=db,
+            db,
             page=page,
             results_per_page=results_per_page,
         )
@@ -245,8 +276,8 @@ async def list_media_endpoint(
         if include_keywords and media_ids:
             try:
                 keywords_map = fetch_keywords_for_media_batch(
-                    media_ids=media_ids,
-                    db_instance=db,
+                    db,
+                    media_ids,
                 )
                 keywords_available = True
             except (TypeError, InputError, DatabaseError) as exc:
@@ -340,7 +371,7 @@ async def list_media_trash_endpoint(
         False,
         description="Include associated keywords for each media item.",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -363,7 +394,7 @@ async def list_media_trash_endpoint(
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_trash_files(
-            db_instance=db,
+            db,
             page=page,
             results_per_page=results_per_page,
         )
@@ -414,8 +445,8 @@ async def list_media_trash_endpoint(
         if include_keywords and media_ids:
             try:
                 keywords_map = fetch_keywords_for_media_batch(
-                    media_ids=media_ids,
-                    db_instance=db,
+                    db,
+                    media_ids,
                 )
                 keywords_available = True
             except (TypeError, InputError, DatabaseError) as exc:
@@ -497,7 +528,7 @@ async def list_media_trash_endpoint(
 )
 async def empty_media_trash_endpoint(
     response: Response,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> dict[str, Any]:
     """
@@ -615,7 +646,7 @@ async def search_by_metadata(
         None,
         description="Optional sort override: date_desc|date_asc|title_asc|title_desc",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -821,7 +852,7 @@ async def get_by_identifier(
     arxiv_id: Optional[str] = Query(None),
     s2_paper_id: Optional[str] = Query(None),
     group_by_media: bool = Query(True),
-    db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
+    db: Optional[Any] = Depends(try_get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -925,7 +956,7 @@ async def search_media_items(
         le=100,
         description="Results per page",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> Response:
     """
@@ -969,7 +1000,8 @@ async def search_media_items(
                     }
                 )
         else:
-            items_data, total_items = db.search_media_db(
+            items_data, total_items = search_media(
+                db,
                 search_query=query_text_for_match,
                 search_fields=search_params.fields,
                 media_types=search_params.media_types,

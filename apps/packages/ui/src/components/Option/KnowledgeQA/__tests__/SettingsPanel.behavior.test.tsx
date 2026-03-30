@@ -118,4 +118,43 @@ describe("SettingsPanel behavior and copy guardrails", () => {
       screen.getByText("Changes apply to your next search. Previous answers are not affected.")
     ).toBeInTheDocument()
   })
+
+  it("does not crash when expert-mode onboarding storage is blocked", () => {
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+
+    render(<SettingsPanel open onClose={vi.fn()} />)
+
+    expect(() => {
+      fireEvent.click(screen.getByRole("switch", { name: "Basic Mode" }))
+    }).not.toThrow()
+
+    expect(state.toggleExpertMode).toHaveBeenCalledTimes(1)
+
+    getItemSpy.mockRestore()
+    setItemSpy.mockRestore()
+  })
+
+  it("hides the expert-mode onboarding hint when toggling back to basic mode", () => {
+    localStorage.removeItem("knowledgeqa-expert-mode-seen")
+
+    const { rerender } = render(<SettingsPanel open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("switch", { name: "Basic Mode" }))
+    rerender(<SettingsPanel open onClose={vi.fn()} />)
+    expect(screen.getByText("Welcome to Expert Mode")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("switch", { name: "Expert Mode" }))
+    rerender(<SettingsPanel open onClose={vi.fn()} />)
+
+    expect(screen.queryByText("Welcome to Expert Mode")).not.toBeInTheDocument()
+  })
 })

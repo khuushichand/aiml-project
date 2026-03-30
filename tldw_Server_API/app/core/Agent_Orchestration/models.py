@@ -48,11 +48,59 @@ class RunStatus(str, Enum):
 
 
 @dataclass
+class ACPWorkspace:
+    """A persistent workspace binding a project to a filesystem directory.
+
+    Note: ``env_vars`` are stored as plaintext JSON in the per-user SQLite DB.
+    Do not store high-sensitivity secrets here without external encryption.
+    """
+    id: int
+    name: str
+    root_path: str
+    description: str = ""
+    workspace_type: str = "manual"  # manual | discovered | monorepo_child
+    parent_workspace_id: int | None = None
+    env_vars: dict[str, str] = field(default_factory=dict)
+    git_remote_url: str | None = None
+    git_default_branch: str | None = None
+    git_current_branch: str | None = None
+    git_is_dirty: bool | None = None
+    last_health_check: str | None = None
+    health_status: str = "unknown"  # healthy | degraded | missing
+    user_id: int = 0
+    created_at: str = ""
+    updated_at: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "root_path": self.root_path,
+            "description": self.description,
+            "workspace_type": self.workspace_type,
+            "parent_workspace_id": self.parent_workspace_id,
+            "env_vars": dict(self.env_vars),
+            "git_remote_url": self.git_remote_url,
+            "git_default_branch": self.git_default_branch,
+            "git_current_branch": self.git_current_branch,
+            "git_is_dirty": self.git_is_dirty,
+            "last_health_check": self.last_health_check,
+            "health_status": self.health_status,
+            "user_id": self.user_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass
 class AgentProject:
     """A project grouping related tasks."""
     id: int
     name: str
     description: str = ""
+    workspace_id: int | None = None
     user_id: int = 0
     created_at: str = ""
     updated_at: str | None = None
@@ -63,6 +111,7 @@ class AgentProject:
             "id": self.id,
             "name": self.name,
             "description": self.description,
+            "workspace_id": self.workspace_id,
             "user_id": self.user_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,

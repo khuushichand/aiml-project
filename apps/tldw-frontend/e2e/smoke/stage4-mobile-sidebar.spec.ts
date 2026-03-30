@@ -1,4 +1,5 @@
 import { test, expect, seedAuth } from './smoke.setup'
+import { waitForAppShell } from '../utils/helpers'
 
 const LOAD_TIMEOUT = 30_000
 
@@ -16,7 +17,7 @@ test.describe('Stage 4 mobile sidebar behavior', () => {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const headerToggle = page.getByTestId('chat-header-sidebar-toggle')
     await expect(headerToggle).toBeVisible({ timeout: LOAD_TIMEOUT })

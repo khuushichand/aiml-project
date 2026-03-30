@@ -1,9 +1,9 @@
 /**
  * OSINT E2E Tests (Tier 5)
  *
- * The /osint route does not exist in the current codebase.
- * This spec is a placeholder that verifies navigating to the route
- * gracefully shows a 404 or redirects.
+ * Tests the public /for/osint landing page:
+ * - Page loads with the self-hosted hero
+ * - Primary CTA remains on the self-host path
  *
  * Run: npx playwright test e2e/workflows/tier-5-specialized/osint.spec.ts
  */
@@ -19,22 +19,23 @@ test.describe("OSINT", () => {
     skipIfServerUnavailable(serverInfo)
   })
 
-  test("route shows 404 or redirects gracefully", async ({
+  test("public landing page loads with self-hosted CTA", async ({
     authedPage,
     diagnostics,
   }) => {
-    await authedPage.goto("/osint", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
+    await authedPage.goto("/for/osint", { waitUntil: "domcontentloaded" })
 
-    const url = authedPage.url()
-    const has404 = await authedPage
-      .getByText(/404|not found|page not found/i)
-      .first()
-      .isVisible()
-      .catch(() => false)
+    await expect(
+      authedPage.getByRole("heading", {
+        name: /media intelligence without the exposure/i,
+      })
+    ).toBeVisible({ timeout: 15_000 })
 
-    const redirectedAway = !url.includes("/osint")
-    expect(has404 || redirectedAway || true).toBe(true)
+    const primaryCta = authedPage.getByRole("link", {
+      name: /deploy self-hosted/i,
+    })
+    await expect(primaryCta).toBeVisible()
+    await expect(primaryCta).toHaveAttribute("href", "/docs/self-hosting")
 
     await assertNoCriticalErrors(diagnostics)
   })

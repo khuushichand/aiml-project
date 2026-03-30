@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Union
+from typing import Any, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -17,8 +17,6 @@ from tldw_Server_API.app.api.v1.schemas.reading_progress import (
     ViewMode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
 router = APIRouter(tags=["Document Workspace"])
 
 
@@ -26,7 +24,7 @@ router = APIRouter(tags=["Document Workspace"])
 PROGRESS_TABLE = "document_reading_progress"
 
 
-def _ensure_progress_table(db: MediaDatabase) -> None:
+def _ensure_progress_table(db: Any) -> None:
     """
     Ensure the document_reading_progress table exists in the database.
     Creates the table if it doesn't exist, and applies migrations for new columns.
@@ -70,7 +68,7 @@ def _log_missing_media_context(
     operation: str,
     media_id: int,
     user_id: str,
-    db: MediaDatabase,
+    db: Any,
 ) -> None:
     db_path = getattr(db, "db_path_str", getattr(db, "db_path", "<unknown>"))
     logger.warning(
@@ -94,7 +92,7 @@ def _log_missing_media_context(
 )
 async def get_reading_progress(
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> ReadingProgressResponse | ReadingProgressNotFound:
     """
@@ -128,7 +126,7 @@ async def get_reading_progress(
     FROM {PROGRESS_TABLE}
     WHERE media_id = ? AND user_id = ?
     """
-    query = query_template.format_map(locals())  # nosec B608
+    query = query_template.format(PROGRESS_TABLE=PROGRESS_TABLE)  # nosec B608
     try:
         with db.transaction() as conn:
             cursor = conn.execute(query, (media_id, user_id))
@@ -143,27 +141,36 @@ async def get_reading_progress(
     if not row:
         return ReadingProgressNotFound(media_id=media_id, has_progress=False)
 
-    row_dict = dict(row)
-    current_page = row_dict["current_page"]
-    total_pages = row_dict["total_pages"]
-    # Use stored percentage if available (for EPUB), otherwise calculate from page
-    stored_percentage = row_dict.get("percentage")
-    percent_complete = (
-        stored_percentage
-        if stored_percentage is not None
-        else (current_page / total_pages * 100) if total_pages > 0 else 0
-    )
+    try:
+        row_dict = dict(row)
+        current_page = row_dict["current_page"]
+        total_pages = row_dict["total_pages"]
+        # Use stored percentage if available (for EPUB), otherwise calculate from page
+        stored_percentage = row_dict.get("percentage")
+        percent_complete = (
+            stored_percentage
+            if stored_percentage is not None
+            else (current_page / total_pages * 100) if total_pages > 0 else 0
+        )
 
-    return ReadingProgressResponse(
-        media_id=media_id,
-        current_page=current_page,
-        total_pages=total_pages,
-        zoom_level=row_dict["zoom_level"],
-        view_mode=ViewMode(row_dict["view_mode"]),
-        percent_complete=round(percent_complete, 1),
-        cfi=row_dict.get("cfi"),
-        last_read_at=datetime.fromisoformat(row_dict["last_read_at"]),
-    )
+        return ReadingProgressResponse(
+            media_id=media_id,
+            current_page=current_page,
+            total_pages=total_pages,
+            zoom_level=row_dict["zoom_level"],
+            view_mode=ViewMode(row_dict["view_mode"]),
+            percent_complete=round(percent_complete, 1),
+            cfi=row_dict.get("cfi"),
+            last_read_at=datetime.fromisoformat(row_dict["last_read_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "Ignoring corrupt reading progress row for media_id={} user_id={}: {}",
+            media_id,
+            user_id,
+            exc,
+        )
+        return ReadingProgressNotFound(media_id=media_id, has_progress=False)
 
 
 @router.put(
@@ -179,7 +186,7 @@ async def get_reading_progress(
 async def update_reading_progress(
     body: ReadingProgressUpdate,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> ReadingProgressResponse:
     """
@@ -262,6 +269,7 @@ async def update_reading_progress(
 @router.delete(
     "/{media_id:int}/progress",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete Reading Progress",
     responses={
         204: {"description": "Reading progress deleted successfully"},
@@ -270,9 +278,9 @@ async def update_reading_progress(
 )
 async def delete_reading_progress(
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
-) -> None:
+) -> Response:
     """
     Delete reading progress for a document.
 
@@ -311,6 +319,8 @@ async def delete_reading_progress(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete reading progress",
         ) from e
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 __all__ = ["router"]

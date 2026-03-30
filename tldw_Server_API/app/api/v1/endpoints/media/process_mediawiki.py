@@ -16,6 +16,7 @@ from starlette.responses import StreamingResponse
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import (
     guard_backpressure_and_quota,
 )
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.media_mediawiki_deps import (
     get_mediawiki_form_data,
 )
@@ -238,7 +239,7 @@ async def _process_mediawiki_dump(
     "/mediawiki/ingest-dump",
     summary="Ingest and process a MediaWiki XML dump, storing results to database and vector store.",
     tags=["MediaWiki Processing"],
-    dependencies=[Depends(guard_backpressure_and_quota)],
+    dependencies=[Depends(guard_backpressure_and_quota), Depends(guard_storage_quota)],
 )
 async def ingest_mediawiki_dump_endpoint(
     form_data: MediaWikiDumpOptionsForm = Depends(get_mediawiki_form_data),
@@ -266,7 +267,7 @@ async def ingest_mediawiki_dump_endpoint(
     "/mediawiki/process-dump",
     summary="Process a MediaWiki XML dump and return structured content without database storage.",
     tags=["MediaWiki Processing"],
-    dependencies=[Depends(guard_backpressure_and_quota)],
+    dependencies=[Depends(guard_backpressure_and_quota), Depends(guard_storage_quota)],
 )
 async def process_mediawiki_dump_ephemeral_endpoint(
     form_data: MediaWikiDumpOptionsForm = Depends(get_mediawiki_form_data),

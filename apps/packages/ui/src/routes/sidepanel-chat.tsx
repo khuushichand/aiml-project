@@ -28,6 +28,7 @@ import { copilotResumeLastChat } from "@/services/app"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { ServerChatMessage as ApiServerChatMessage } from "@/services/tldw/TldwApiClient"
 import { createSafeStorage } from "@/utils/safe-storage"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { useStorage } from "@plasmohq/storage/hook"
 import { ChevronDown } from "lucide-react"
@@ -37,8 +38,6 @@ import { SidePanelBody } from "~/components/Sidepanel/Chat/body"
 import { SidepanelForm } from "~/components/Sidepanel/Chat/form"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 import { ConnectionBanner } from "~/components/Sidepanel/Chat/ConnectionBanner"
-import { SidepanelChatSidebar } from "~/components/Sidepanel/Chat/Sidebar"
-import NoteQuickSaveModal from "~/components/Sidepanel/Notes/NoteQuickSaveModal"
 import { useMessage } from "~/hooks/useMessage"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useSidepanelChatTabsStore } from "@/store/sidepanel-chat-tabs"
@@ -54,11 +53,11 @@ import { useStoreChatModelSettings } from "@/store/model"
 import { useStoreMessageOption } from "@/store/option"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useArtifactsStore } from "@/store/artifacts"
-import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { restoreQueuedRequests } from "@/utils/chat-request-queue"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { CommandPaletteHost } from "@/components/Common/CommandPaletteHost"
 import type { ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import {
   OPEN_HISTORY_EVENT,
@@ -66,16 +65,31 @@ import {
   type OpenHistoryDetail,
   type TimelineActionDetail
 } from "@/utils/timeline-actions"
+import {
+  getLegacyStorageKey,
+  getTabsStorageKey,
+  type LegacySidepanelChatSnapshot,
+  readSidepanelRuntimeTabId
+} from "./sidepanel-chat-resume"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
   import("@/components/Timeline").then((m) => ({ default: m.TimelineModal }))
 )
-const CommandPalette = lazy(() =>
-  import("@/components/Common/CommandPalette").then((m) => ({
-    default: m.CommandPalette
+const ArtifactsPanel = lazy(() =>
+  import("@/components/Sidepanel/Chat/ArtifactsPanel").then((m) => ({
+    default: m.ArtifactsPanel
   }))
 )
+const LazySidepanelChatSidebar = lazy(() =>
+  import("~/components/Sidepanel/Chat/Sidebar").then((module) => ({
+    default: module.SidepanelChatSidebar
+  }))
+)
+const LazyNoteQuickSaveModal = lazy(
+  () => import("~/components/Sidepanel/Notes/NoteQuickSaveModal")
+)
+
 import type { ChatHistory, Message as ChatMessage } from "~/store/option"
 
 type ServerChatMessageInput = Omit<ApiServerChatMessage, "id"> & {
@@ -103,6 +117,12 @@ type IngestCardState = {
   canRetry: boolean
   starterQuestions: string[]
   timestampSeconds?: number
+}
+
+type SidepanelTabsState = {
+  tabs: SidepanelChatTab[]
+  activeTabId: string | null
+  snapshotsById: Record<string, SidepanelChatSnapshot>
 }
 
 const formatSecondsAsClock = (seconds: number): string => {
@@ -425,6 +445,7 @@ const SidepanelChat = () => {
       area: "local"
     })
   )
+  const backgroundImageStorageRef = React.useRef(createSafeStorage())
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
   >("idle")
@@ -825,28 +846,10 @@ const SidepanelChat = () => {
 
   const [chatBackgroundImage] = useStorage({
     key: CHAT_BACKGROUND_IMAGE_SETTING.key,
-    instance: createSafeStorage()
+    instance: backgroundImageStorageRef.current
   })
   const bgMsg = useBackgroundMessage()
   const lastBgMsgRef = React.useRef<typeof bgMsg | null>(null)
-
-  const getTabsStorageKey = (id: number | null | undefined) =>
-    id != null ? `sidepanelChatTabsState:tab-${id}` : "sidepanelChatTabsState"
-  const getLegacyStorageKey = (id: number | null | undefined) =>
-    id != null ? `sidepanelChatState:tab-${id}` : "sidepanelChatState"
-
-  type LegacySidepanelChatSnapshot = {
-    history: ChatHistory
-    messages: ChatMessage[]
-    chatMode: typeof chatMode
-    historyId: string | null
-  }
-
-  type SidepanelTabsState = {
-    tabs: SidepanelChatTab[]
-    activeTabId: string | null
-    snapshotsById: Record<string, SidepanelChatSnapshot>
-  }
 
   const restoreSidepanelState = async () => {
     // Wait until we've attempted to resolve tab id so we don't
@@ -1045,19 +1048,8 @@ const SidepanelChat = () => {
   React.useEffect(() => {
     // Resolve the tab id associated with this sidepanel instance.
     const fetchTabId = async () => {
-      try {
-        // browser is provided by the extension runtime (see wxt config).
-        const resp: any = await browser.runtime.sendMessage({
-          type: "tldw:get-tab-id"
-        })
-        if (resp && typeof resp.tabId === "number") {
-          setTabId(resp.tabId)
-        } else {
-          setTabId(null)
-        }
-      } catch {
-        setTabId(null)
-      }
+      const resolvedTabId = await readSidepanelRuntimeTabId()
+      setTabId(resolvedTabId)
     }
     fetchTabId()
   }, [])
@@ -2135,22 +2127,24 @@ const SidepanelChat = () => {
   return (
     <div className="flex h-dvh w-full" data-testid="chat-workspace">
       {isSidebarVisible && (
-        <SidepanelChatSidebar
-          open={isSidebarVisible}
-          variant={isDockedSidebar ? "docked" : "overlay"}
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSelectTab={handleSelectTab}
-          onCloseTab={handleCloseTab}
-          onNewTab={handleNewTab}
-          searchQuery={sidebarSearchQuery}
-          onSearchQueryChange={setSidebarSearchQuery}
-          searchInputRef={sidebarSearchInputRef}
-          focusSearchTrigger={sidebarSearchFocusNonce}
-          onOpenLocalHistory={openLocalHistory}
-          onOpenServerChat={openServerChat}
-          onClose={() => setSidebarOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <LazySidepanelChatSidebar
+            open={isSidebarVisible}
+            variant={isDockedSidebar ? "docked" : "overlay"}
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onNewTab={handleNewTab}
+            searchQuery={sidebarSearchQuery}
+            onSearchQueryChange={setSidebarSearchQuery}
+            searchInputRef={sidebarSearchInputRef}
+            focusSearchTrigger={sidebarSearchFocusNonce}
+            onOpenLocalHistory={openLocalHistory}
+            onOpenServerChat={openServerChat}
+            onClose={() => setSidebarOpen(false)}
+          />
+        </Suspense>
       )}
       {!isDockedSidebar && sidebarOpen && (
         <div
@@ -2432,58 +2426,68 @@ const SidepanelChat = () => {
             title={t("common:close", "Close")}
           />
           <div className="fixed inset-y-0 right-0 z-50 w-full max-w-[520px]">
-            <ArtifactsPanel />
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center border-l border-border bg-surface text-sm text-text-muted">
+                  Loading artifacts...
+                </div>
+              }
+            >
+              <ArtifactsPanel />
+            </Suspense>
           </div>
         </>
       )}
-      <NoteQuickSaveModal
-        open={noteModalOpen}
-        title={noteDraftTitle}
-        content={noteDraftContent}
-        suggestedTitle={noteSuggestedTitle}
-        sourceUrl={noteSourceUrl}
-        loading={noteSaving}
-        error={noteError}
-        onTitleChange={handleNoteTitleChange}
-        onContentChange={handleNoteContentChange}
-        onCancel={resetNoteModal}
-        onSave={handleNoteSave}
-        onGenerateFlashcards={handleGenerateFlashcardsFromSelection}
-        modalTitle={t("sidepanel:notes.saveToNotesTitle", "Save to Notes")}
-        saveText={t("common:save", "Save")}
-        cancelText={t("common:cancel", "Cancel")}
-        generateFlashcardsText={t(
-          "sidepanel:notes.generateFlashcards",
-          "Generate flashcards"
-        )}
-        titleLabel={t("sidepanel:notes.titleLabel", "Title")}
-        contentLabel={t("sidepanel:notes.contentLabel", "Content")}
-        titleRequiredText={t("sidepanel:notes.titleRequired", "Title is required to create a note.")}
-        helperText={t("sidepanel:notes.helperText", "Review or edit the selected text, then Save or Cancel.")}
-        sourceLabel={t("sidepanel:notes.sourceLabel", "Source")}
-      />
-      <Suspense fallback={null}>
-        <CommandPalette
-          scope="sidepanel"
-          onNewChat={clearChat}
-          onToggleRag={toggleChatMode}
-          onToggleWebSearch={toggleWebSearchMode}
-          onIngestPage={() => {
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
-            }
-          }}
-          onSwitchModel={() => {
+      {noteModalOpen ? (
+        <Suspense fallback={null}>
+          <LazyNoteQuickSaveModal
+            open={noteModalOpen}
+            title={noteDraftTitle}
+            content={noteDraftContent}
+            suggestedTitle={noteSuggestedTitle}
+            sourceUrl={noteSourceUrl}
+            loading={noteSaving}
+            error={noteError}
+            onTitleChange={handleNoteTitleChange}
+            onContentChange={handleNoteContentChange}
+            onCancel={resetNoteModal}
+            onSave={handleNoteSave}
+            onGenerateFlashcards={handleGenerateFlashcardsFromSelection}
+            modalTitle={t("sidepanel:notes.saveToNotesTitle", "Save to Notes")}
+            saveText={t("common:save", "Save")}
+            cancelText={t("common:cancel", "Cancel")}
+            generateFlashcardsText={t(
+              "sidepanel:notes.generateFlashcards",
+              "Generate flashcards"
+            )}
+            titleLabel={t("sidepanel:notes.titleLabel", "Title")}
+            contentLabel={t("sidepanel:notes.contentLabel", "Content")}
+            titleRequiredText={t("sidepanel:notes.titleRequired", "Title is required to create a note.")}
+            helperText={t("sidepanel:notes.helperText", "Review or edit the selected text, then Save or Cancel.")}
+            sourceLabel={t("sidepanel:notes.sourceLabel", "Source")}
+          />
+        </Suspense>
+      ) : null}
+      <CommandPaletteHost
+        commandPaletteProps={{
+          scope: "sidepanel",
+          onNewChat: clearChat,
+          onToggleRag: toggleChatMode,
+          onToggleWebSearch: toggleWebSearchMode,
+          onIngestPage: () => {
+            requestQuickIngestOpen()
+          },
+          onSwitchModel: () => {
             if (typeof window !== "undefined") {
               window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
             }
-          }}
-          onToggleSidebar={toggleSidebar}
-          onSearchHistory={requestSidebarSearchFocus}
-          onSwitchChat={handleSelectTab}
-          sidepanelChats={commandPaletteChats}
-        />
-      </Suspense>
+          },
+          onToggleSidebar: toggleSidebar,
+          onSearchHistory: requestSidebarSearchFocus,
+          onSwitchChat: handleSelectTab,
+          sidepanelChats: commandPaletteChats
+        }}
+      />
       <Suspense fallback={null}>
         <TimelineModal />
       </Suspense>

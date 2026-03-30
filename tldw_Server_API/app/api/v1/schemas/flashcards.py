@@ -42,6 +42,7 @@ def _coerce_scheduler_settings_envelope(raw: Any) -> Any:
 class DeckCreate(BaseModel):
     name: str = Field(..., description="Deck name (unique)")
     description: Optional[str] = Field(None, description="Deck description")
+    workspace_id: Optional[str] = Field(None, description="Canonical owning workspace ID; null means general scope")
     scheduler_type: DeckSchedulerType = "sm2_plus"
     scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
 
@@ -57,6 +58,7 @@ class DeckCreate(BaseModel):
 class DeckUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    workspace_id: Optional[str] = None
     scheduler_type: Optional[DeckSchedulerType] = None
     scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
     expected_version: Optional[int] = Field(None, ge=1)
@@ -74,6 +76,7 @@ class Deck(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    workspace_id: Optional[str] = None
     created_at: Optional[str] = None
     last_modified: Optional[str] = None
     deleted: bool

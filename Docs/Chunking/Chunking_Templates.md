@@ -108,9 +108,9 @@ Templates endpoints include optional diagnostic headers to help verify that the 
 - `X-Template-DB-Class`: module.ClassName of the DB dependency instance.
 - `X-Template-DB-Capability`: `native` (DB supports templates natively) or `fallback` (endpoints are using an in-memory fallback store for this process).
 - `X-Template-DB-Missing`: Comma-separated list of required methods not found on the DB class.
-- `X-Template-DB-Hint`: Suggests using `tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`.
+- `X-Template-DB-Hint`: Suggests using a native media DB session that implements chunking-template methods.
 
-If you see `fallback`, templates will function but not persist across restarts. Update DI wiring to use Media_DB_v2.MediaDatabase to enable native persistence and full feature support.
+If you see `fallback`, templates will function but not persist across restarts. Update DI wiring to use a native media DB session to enable native persistence and full feature support.
 
 ### Chunking Endpoint Integration
 

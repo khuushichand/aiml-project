@@ -1,12 +1,10 @@
 import React from "react"
-import { useStorage } from "@plasmohq/storage/hook"
 import { Empty } from "antd"
 import { Terminal as TerminalIcon } from "lucide-react"
-import { Terminal } from "xterm"
-import { FitAddon } from "@xterm/addon-fit"
-import "xterm/css/xterm.css"
 import { useTranslation } from "react-i18next"
 
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
+import { buildACPAuthHeaders, resolveACPServerUrl } from "@/services/acp/connection"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 
 type WebSocketWithHeaders = new (
@@ -21,20 +19,6 @@ const buildWsUrl = (baseUrl: string, path: string): string => {
   return url.toString()
 }
 
-const buildAuthHeaders = (
-  authMode: string,
-  apiKey: string,
-  accessToken: string
-): Record<string, string> => {
-  if (authMode === "single-user" && apiKey) {
-    return { "X-API-KEY": apiKey }
-  }
-  if (authMode === "multi-user" && accessToken) {
-    return { Authorization: `Bearer ${accessToken}` }
-  }
-  return {}
-}
-
 const buildAuthProtocols = (headers: Record<string, string>): string[] | undefined => {
   const authHeader = headers.Authorization || headers.authorization
   if (authHeader?.toLowerCase().startsWith("bearer ")) {
@@ -46,6 +30,13 @@ const buildAuthProtocols = (headers: Record<string, string>): string[] | undefin
   }
   return undefined
 }
+
+const loadTerminalRuntime = () =>
+  Promise.all([
+    import("xterm"),
+    import("@xterm/addon-fit"),
+    import("xterm/css/xterm.css"),
+  ])
 
 const createWebSocket = (
   url: string,
@@ -68,10 +59,8 @@ const resolveTokenColor = (tokenName: string, fallbackRgb: string): string => {
 
 export const ACPWorkspacePanel: React.FC = () => {
   const { t } = useTranslation("playground")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
   const containerRef = React.useRef<HTMLDivElement | null>(null)
-  const terminalRef = React.useRef<Terminal | null>(null)
-  const fitAddonRef = React.useRef<FitAddon | null>(null)
-  const wsRef = React.useRef<WebSocket | null>(null)
   const resizeTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const fitTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -80,110 +69,121 @@ export const ACPWorkspacePanel: React.FC = () => {
     s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
   )
 
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
-
   const sshPath = activeSession?.sshWsUrl || ""
 
   React.useEffect(() => {
-    if (!activeSessionId || !sshPath || !containerRef.current) return
+    if (!activeSessionId || !sshPath || !containerRef.current || !connectionConfig) return
 
-    const term = new Terminal({
-      fontFamily: "JetBrains Mono, Menlo, Monaco, monospace",
-      fontSize: 13,
-      theme: {
-        background: resolveTokenColor("--color-bg", "rgb(11 15 26)"),
-        foreground: resolveTokenColor("--color-text", "rgb(220 226 240)"),
-        cursor: resolveTokenColor("--color-focus", "rgb(110 231 255)")
-      },
-      cursorBlink: true,
-    })
-    const fitAddon = new FitAddon()
-    term.loadAddon(fitAddon)
-    term.open(containerRef.current)
-    fitAddon.fit()
+    let cancelled = false
+    let disposeTerminal: (() => void) | null = null
+    const container = containerRef.current
 
-    terminalRef.current = term
-    fitAddonRef.current = fitAddon
+    void (async () => {
+      const [{ Terminal }, { FitAddon }] = await loadTerminalRuntime()
+      if (cancelled) return
 
-    const headers = buildAuthHeaders(authMode, apiKey, accessToken)
-    const protocols = buildAuthProtocols(headers)
-    const wsUrl = buildWsUrl(serverUrl, sshPath)
-    const ws = createWebSocket(wsUrl, headers, protocols)
-    ws.binaryType = "arraybuffer"
-    wsRef.current = ws
+      const term = new Terminal({
+        fontFamily: "JetBrains Mono, Menlo, Monaco, monospace",
+        fontSize: 13,
+        theme: {
+          background: resolveTokenColor("--color-bg", "rgb(11 15 26)"),
+          foreground: resolveTokenColor("--color-text", "rgb(220 226 240)"),
+          cursor: resolveTokenColor("--color-focus", "rgb(110 231 255)")
+        },
+        cursorBlink: true,
+      })
+      const fitAddon = new FitAddon()
+      term.loadAddon(fitAddon)
+      term.open(container)
+      fitAddon.fit()
 
-    ws.onopen = () => {
-      term.focus()
-    }
-    ws.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        term.write(event.data)
-        return
+      const headers = buildACPAuthHeaders(connectionConfig)
+      const protocols = buildAuthProtocols(headers)
+      const wsUrl = buildWsUrl(resolveACPServerUrl(connectionConfig), sshPath)
+      const ws = createWebSocket(wsUrl, headers, protocols)
+      ws.binaryType = "arraybuffer"
+
+      ws.onopen = () => {
+        term.focus()
       }
-      const data = new Uint8Array(event.data)
-      term.write(data)
-    }
-    ws.onerror = () => {
-      term.write("\\r\\n[SSH connection error]\\r\\n")
-    }
-    ws.onclose = () => {
-      term.write("\\r\\n[SSH connection closed]\\r\\n")
-    }
-
-    const disposeInput = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data)
-      }
-    })
-
-    const scheduleResize = (cols: number, rows: number) => {
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current)
-      }
-      resizeTimeoutRef.current = setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols, rows }))
+      ws.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          term.write(event.data)
+          return
         }
-      }, 100)
-    }
-
-    const disposeResize = term.onResize(({ cols, rows }) => {
-      scheduleResize(cols, rows)
-    })
-
-    const scheduleFit = () => {
-      if (fitTimeoutRef.current) {
-        clearTimeout(fitTimeoutRef.current)
+        const data = new Uint8Array(event.data)
+        term.write(data)
       }
-      fitTimeoutRef.current = setTimeout(() => {
-        fitAddon.fit()
-      }, 100)
-    }
+      ws.onerror = () => {
+        term.write("\\r\\n[SSH connection error]\\r\\n")
+      }
+      ws.onclose = () => {
+        term.write("\\r\\n[SSH connection closed]\\r\\n")
+      }
 
-    const handleResize = () => scheduleFit()
-    window.addEventListener("resize", handleResize)
+      const disposeInput = term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data)
+        }
+      })
+
+      const scheduleResize = (cols: number, rows: number) => {
+        if (resizeTimeoutRef.current) {
+          clearTimeout(resizeTimeoutRef.current)
+        }
+        resizeTimeoutRef.current = setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "resize", cols, rows }))
+          }
+        }, 100)
+      }
+
+      const disposeResize = term.onResize(({ cols, rows }) => {
+        scheduleResize(cols, rows)
+      })
+
+      const scheduleFit = () => {
+        if (fitTimeoutRef.current) {
+          clearTimeout(fitTimeoutRef.current)
+        }
+        fitTimeoutRef.current = setTimeout(() => {
+          fitAddon.fit()
+        }, 100)
+      }
+
+      const handleResize = () => scheduleFit()
+      window.addEventListener("resize", handleResize)
+
+      disposeTerminal = () => {
+        disposeInput.dispose()
+        disposeResize.dispose()
+        window.removeEventListener("resize", handleResize)
+        if (resizeTimeoutRef.current) {
+          clearTimeout(resizeTimeoutRef.current)
+          resizeTimeoutRef.current = null
+        }
+        if (fitTimeoutRef.current) {
+          clearTimeout(fitTimeoutRef.current)
+          fitTimeoutRef.current = null
+        }
+        ws.close()
+        term.dispose()
+      }
+
+      if (cancelled && disposeTerminal) {
+        disposeTerminal()
+        disposeTerminal = null
+      }
+    })()
 
     return () => {
-      disposeInput.dispose()
-      disposeResize.dispose()
-      window.removeEventListener("resize", handleResize)
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current)
-        resizeTimeoutRef.current = null
+      cancelled = true
+      if (disposeTerminal) {
+        disposeTerminal()
+        disposeTerminal = null
       }
-      if (fitTimeoutRef.current) {
-        clearTimeout(fitTimeoutRef.current)
-        fitTimeoutRef.current = null
-      }
-      ws.close()
-      term.dispose()
-      terminalRef.current = null
-      fitAddonRef.current = null
     }
-  }, [activeSessionId, sshPath, serverUrl, authMode, apiKey, accessToken])
+  }, [activeSessionId, connectionConfig, sshPath])
 
   if (!activeSessionId) {
     return (

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render } from "@testing-library/react"
+import { render, waitFor } from "@testing-library/react"
 
 import { Playground } from "../Playground"
 import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
@@ -29,6 +29,20 @@ const messageOptionState = vi.hoisted(() => ({
   }
 }))
 
+const sessionPersistenceState = vi.hoisted(() => ({
+  value: {
+    restoreSession: vi.fn(async () => false),
+    sessionScopeReady: true,
+    hasPersistedSession: false,
+    persistedHistoryId: null as string | null,
+    persistedServerChatId: null as string | null
+  }
+}))
+
+const restoreDecisionState = vi.hoisted(() => ({
+  value: false
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, defaultValue?: string) => defaultValue || key
@@ -52,17 +66,11 @@ vi.mock("@/hooks/useMessageOption", () => ({
 }))
 
 vi.mock("@/hooks/usePlaygroundSessionPersistence", () => ({
-  usePlaygroundSessionPersistence: () => ({
-    restoreSession: vi.fn(async () => false),
-    sessionScopeReady: true,
-    hasPersistedSession: false,
-    persistedHistoryId: null,
-    persistedServerChatId: null
-  })
+  usePlaygroundSessionPersistence: () => sessionPersistenceState.value
 }))
 
 vi.mock("@/hooks/playground-session-restore", () => ({
-  shouldRestorePersistedPlaygroundSession: () => false
+  shouldRestorePersistedPlaygroundSession: () => restoreDecisionState.value
 }))
 
 vi.mock("@/services/app", () => ({
@@ -161,6 +169,13 @@ vi.mock("react-router-dom", async () => {
 
 describe("Playground coordinator integration", () => {
   beforeEach(() => {
+    sessionPersistenceState.value.restoreSession = vi.fn(async () => false)
+    sessionPersistenceState.value.sessionScopeReady = true
+    sessionPersistenceState.value.hasPersistedSession = false
+    sessionPersistenceState.value.persistedHistoryId = null
+    sessionPersistenceState.value.persistedServerChatId = null
+    restoreDecisionState.value = false
+
     useChatSurfaceCoordinatorStore.setState({
       routeId: null,
       surface: null,
@@ -184,5 +199,27 @@ describe("Playground coordinator integration", () => {
 
     expect(useChatSurfaceCoordinatorStore.getState().routeId).toBe("chat")
     expect(useChatSurfaceCoordinatorStore.getState().surface).toBe("webui")
+  })
+
+  it("waits for session scope readiness before consuming the one-time restore pass", async () => {
+    const restoreSession = vi.fn(async () => true)
+    sessionPersistenceState.value.restoreSession = restoreSession
+    sessionPersistenceState.value.sessionScopeReady = false
+    sessionPersistenceState.value.hasPersistedSession = false
+    restoreDecisionState.value = false
+
+    const { rerender } = render(<Playground />)
+
+    expect(restoreSession).not.toHaveBeenCalled()
+
+    sessionPersistenceState.value.sessionScopeReady = true
+    sessionPersistenceState.value.hasPersistedSession = true
+    sessionPersistenceState.value.persistedHistoryId = "history-123"
+    restoreDecisionState.value = true
+    rerender(<Playground />)
+
+    await waitFor(() => {
+      expect(restoreSession).toHaveBeenCalledTimes(1)
+    })
   })
 })

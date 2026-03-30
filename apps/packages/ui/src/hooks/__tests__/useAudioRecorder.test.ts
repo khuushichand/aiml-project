@@ -71,6 +71,28 @@ describe("useAudioRecorder", () => {
     expect(mockGetUserMedia).toHaveBeenCalledWith({ audio: true })
   })
 
+  it("passes the selected deviceId to getUserMedia when recording starts", async () => {
+    const { result } = renderHook(() => useAudioRecorder())
+
+    await act(async () => {
+      await result.current.startRecording({ deviceId: "usb-1" })
+    })
+
+    expect(mockGetUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { exact: "usb-1" } }
+    })
+  })
+
+  it("falls back to the default microphone when no deviceId is provided", async () => {
+    const { result } = renderHook(() => useAudioRecorder())
+
+    await act(async () => {
+      await result.current.startRecording({})
+    })
+
+    expect(mockGetUserMedia).toHaveBeenCalledWith({ audio: true })
+  })
+
   it("increments durationMs while recording", async () => {
     const { result } = renderHook(() => useAudioRecorder())
 

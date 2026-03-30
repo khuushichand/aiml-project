@@ -34,6 +34,7 @@ import {
 import { ChevronDown, CopyIcon, SendIcon } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { createSafeStorage } from "@/utils/safe-storage"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectionProblemBanner from "@/components/Common/ConnectionProblemBanner"
@@ -2099,11 +2100,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                           <Button
                             type="primary"
                             size="small"
-                            onClick={() =>
-                              window.dispatchEvent(
-                                new CustomEvent("tldw:open-quick-ingest")
-                              )
-                            }>
+                            onClick={() => requestQuickIngestOpen()}>
                             {t(
                               "review:mediaPage.emptyCta",
                               "Open Quick ingest"

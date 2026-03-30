@@ -34,3 +34,113 @@ def test_create_session_and_checkpoint_round_trip(tmp_path):
 
     assert resolved.status == "resolved"
     assert resolved.user_patch_payload["focus_areas"][1] == "contradictions"
+
+
+def test_research_run_events_round_trip_with_owner_scoped_cursor_reads(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    session = db.create_session(
+        owner_user_id="11",
+        query="Map open questions about battery recycling policy",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={"max_searches": 5},
+    )
+    other_session = db.create_session(
+        owner_user_id="22",
+        query="Separate owner session",
+        source_policy="local_only",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+
+    first = db.record_run_event(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        event_type="status",
+        event_payload={"status": "queued", "phase": "drafting_plan"},
+        phase="drafting_plan",
+        job_id="101",
+    )
+    second = db.record_run_event(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        event_type="progress",
+        event_payload={"progress_percent": 10.0, "progress_message": "planning research"},
+        phase="drafting_plan",
+        job_id="101",
+    )
+    db.record_run_event(
+        owner_user_id=other_session.owner_user_id,
+        session_id=other_session.id,
+        event_type="status",
+        event_payload={"status": "queued", "phase": "drafting_plan"},
+        phase="drafting_plan",
+        job_id="202",
+    )
+
+    assert isinstance(first.id, int)
+    assert second.id > first.id
+
+    events = db.list_run_events_after(
+        owner_user_id=session.owner_user_id,
+        session_id=session.id,
+        after_id=first.id,
+    )
+
+    assert [event.id for event in events] == [second.id]
+    assert events[0].event_type == "progress"
+    assert events[0].event_payload["progress_message"] == "planning research"
+
+
+def test_research_run_events_table_is_created_automatically(tmp_path):
+    import sqlite3
+
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db_path = tmp_path / "research.db"
+    ResearchSessionsDB(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        table_names = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+    assert "research_run_events" in table_names
+
+
+def test_list_sessions_is_owner_scoped_and_sorted_by_created_at_desc(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    older = db.create_session(
+        owner_user_id="1",
+        query="Older run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    newer = db.create_session(
+        owner_user_id="1",
+        query="Newer run",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+    )
+    db.create_session(
+        owner_user_id="2",
+        query="Other owner run",
+        source_policy="local_only",
+        autonomy_mode="autonomous",
+        limits_json={},
+    )
+
+    sessions = db.list_sessions(owner_user_id="1", limit=10)
+
+    assert [session.id for session in sessions] == [newer.id, older.id]
+    assert [session.query for session in sessions] == ["Newer run", "Older run"]
+    assert all(session.owner_user_id == "1" for session in sessions)

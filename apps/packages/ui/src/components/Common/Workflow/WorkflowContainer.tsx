@@ -1,7 +1,24 @@
 import React, { Suspense } from "react"
 import { Spin } from "antd"
 import { useWorkflowsStore } from "@/store/workflows"
-import { SummarizePageWorkflow, QuickSaveWorkflow, AnalyzeBookWorkflow } from "./steps"
+
+const SummarizePageWorkflow = React.lazy(() =>
+  import("./steps/SummarizePageWorkflow").then((module) => ({
+    default: module.SummarizePageWorkflow
+  }))
+)
+
+const QuickSaveWorkflow = React.lazy(() =>
+  import("./steps/QuickSaveWorkflow").then((module) => ({
+    default: module.QuickSaveWorkflow
+  }))
+)
+
+const AnalyzeBookWorkflow = React.lazy(() =>
+  import("./steps/AnalyzeBookWorkflow").then((module) => ({
+    default: module.AnalyzeBookWorkflow
+  }))
+)
 
 /**
  * WorkflowContainer

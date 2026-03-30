@@ -11,7 +11,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class ContentReviewPage extends BasePage {
   constructor(page: Page) {
@@ -26,7 +26,7 @@ export class ContentReviewPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for heading or the empty state
     const heading = this.page.getByText("Content Review")
     const emptyState = this.page.getByText("No drafts yet")

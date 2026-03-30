@@ -90,6 +90,12 @@ vi.mock("~/components/Option/LandingHub", () => ({
   LandingHub: () => <div data-testid="landing-hub">Hub</div>
 }))
 
+vi.mock("@/components/Option/CompanionHome", () => ({
+  CompanionHomeShell: ({ surface }: { surface: "options" | "sidepanel" }) => (
+    <div data-testid="companion-home-shell">{surface}</div>
+  )
+}))
+
 describe("core route identity guardrails", () => {
   beforeEach(() => {
     optionLayoutMock.mockClear()
@@ -102,10 +108,10 @@ describe("core route identity guardrails", () => {
     phase = null
   })
 
-  it("provides unique route-intent headings for home/setup/onboarding-test", () => {
+  it("provides unique route-intent headings for home/setup/onboarding-test", async () => {
     const firstRender = render(<OptionIndex />)
     expect(screen.getByText("Home Onboarding")).toBeInTheDocument()
-    expect(screen.getByTestId("onboarding-wizard")).toBeInTheDocument()
+    expect(await screen.findByTestId("onboarding-wizard")).toBeInTheDocument()
     expect(optionLayoutMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         hideHeader: true,
@@ -198,5 +204,15 @@ describe("core route identity guardrails", () => {
     fireEvent.click(toggle)
 
     expect(toggleDarkModeMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders Companion Home from / after onboarding", async () => {
+    state.hasCompletedFirstRun = true
+
+    render(<OptionIndex />)
+
+    expect(await screen.findByTestId("companion-home-shell")).toBeInTheDocument()
+    expect(screen.getByText("options")).toBeInTheDocument()
+    expect(screen.queryByTestId("landing-hub")).not.toBeInTheDocument()
   })
 })

@@ -1,4 +1,3 @@
-import { getPromptById } from "@/db/dexie/helpers"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { getAllModelSettings } from "@/services/model-settings"
 import { useStoreChatModelSettings, type ChatModelSettings } from "@/store/model"
@@ -37,6 +36,7 @@ import {
   ActorTab
 } from "./tabs"
 import { LlamaCppAdvancedControls } from "./LlamaCppAdvancedControls"
+import { resolveSelectedSystemPromptContent } from "../system-prompt-utils"
 
 type Props = {
   open: boolean
@@ -276,17 +276,9 @@ export const CurrentChatModelSettings = ({
   )
 
   const resetSystemPrompt = useCallback(async () => {
-    let nextValue = ""
-
-    if (selectedSystemPrompt) {
-      try {
-        const prompt = await getPromptById(selectedSystemPrompt)
-        nextValue = prompt?.content ?? ""
-      } catch (error) {
-        console.error("Failed to load selected system prompt for reset:", error)
-      }
-    }
-
+    const nextValue = await resolveSelectedSystemPromptContent(
+      selectedSystemPrompt
+    )
     form.setFieldValue("systemPrompt", nextValue)
     savePrompt(nextValue)
   }, [form, savePrompt, selectedSystemPrompt])

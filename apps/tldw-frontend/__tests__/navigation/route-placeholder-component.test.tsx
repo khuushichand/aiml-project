@@ -89,4 +89,31 @@ describe('RoutePlaceholder recovery', () => {
     await user.click(screen.getByTestId('route-placeholder-go-back'));
     expect(mockBack).toHaveBeenCalledTimes(1);
   });
+
+  it('suppresses the secondary settings link when the primary CTA already opens settings', async () => {
+    const user = userEvent.setup();
+    mockRouter.asPath = '/config';
+
+    render(
+      <RoutePlaceholder
+        title="Configuration Center Is Coming Soon"
+        description="Unified configuration workflows are planned for this route."
+        plannedPath="/config"
+        primaryCtaHref="/settings"
+        primaryCtaLabel="Open Settings"
+      />
+    );
+
+    const primaryCta = screen.getByTestId('route-placeholder-primary');
+    const goBack = screen.getByTestId('route-placeholder-go-back');
+
+    expect(primaryCta).toHaveAttribute('href', '/settings');
+    expect(screen.queryByTestId('route-placeholder-open-settings')).not.toBeInTheDocument();
+
+    await user.tab();
+    expect(primaryCta).toHaveFocus();
+
+    await user.tab();
+    expect(goBack).toHaveFocus();
+  });
 });

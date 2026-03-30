@@ -169,6 +169,18 @@
         ],
       },
       {
+        id: 'kitten_tts',
+        label: 'KittenTTS',
+        hint: 'Small English ONNX voices with first-use Hugging Face downloads. Requires espeak-ng plus phonemizer-fork/espeakng_loader.',
+        variantsLabel: 'Model variants',
+        variants: [
+          { id: 'nano', label: 'Nano 0.8', default: true },
+          { id: 'nano-int8', label: 'Nano 0.8 INT8' },
+          { id: 'micro', label: 'Micro 0.8' },
+          { id: 'mini', label: 'Mini 0.8' },
+        ],
+      },
+      {
         id: 'dia',
         label: 'Dia dialogue TTS',
         hint: 'Conversational PyTorch voices with automatic speaker detection. Downloads nari-labs/dia.',
@@ -378,11 +390,12 @@
           title: 'Pick TTS backends you will run',
           description: 'Decide which voice provider(s) to enable so you avoid installing everything at once.',
           points: [
-            'Set default_tts_provider to the engine you plan to run (e.g. kokoro, openai, elevenlabs).',
-            'Update provider-specific defaults (voice, model) to match installed assets.',
+            'Set default_tts_provider to the engine you plan to run (e.g. kokoro, kitten_tts, openai, elevenlabs).',
+            'Update default_tts_voice and any provider-specific model settings to match the assets you installed.',
           ],
           focus: [
             { section: 'TTS-Settings', key: 'default_tts_provider' },
+            { section: 'TTS-Settings', key: 'default_tts_voice' },
             { section: 'TTS-Settings', key: 'default_openai_tts_model' },
             { section: 'TTS-Settings', key: 'default_kokoro_tts_model' },
           ],

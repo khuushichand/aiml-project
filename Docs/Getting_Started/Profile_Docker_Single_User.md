@@ -26,8 +26,35 @@ SINGLE_USER_API_KEY=replace-with-strong-key
 ## Run
 
 ```bash
-docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
+make quickstart
+
+# Manual equivalent if you are not using make:
+# docker compose --env-file tldw_Server_API/Config_Files/.env \
+#   -f Dockerfiles/docker-compose.yml \
+#   -f Dockerfiles/docker-compose.webui.yml up -d --build
 ```
+
+The default Docker + WebUI quickstart keeps same-origin browser API requests through the WebUI proxy. Treat LAN/custom-host browser access as advanced configuration and leave that off unless you specifically need another device, hostname, or proxy in front of the browser.
+
+By default this profile stores application data in Docker named volumes, not in the repo checkout:
+
+- `app-data` backs `/app/Databases`
+- `chroma-data` backs `/app/Databases/user_databases`
+- `postgres_data` and `redis_data` back the bundled Postgres and Redis containers
+
+Keep `tldw_Server_API/Config_Files/.env` with your backups, because it stores the startup auth mode and single-user API key that the quickstart uses.
+
+`docker compose down` keeps the Docker named volumes. `docker compose down -v` deletes them and removes the persisted databases, user files, and vector storage.
+
+If you prefer host-visible storage for manual backups or inspection, use `Dockerfiles/docker-compose.host-storage.yml` instead of the default compose file:
+
+```bash
+docker compose --env-file tldw_Server_API/Config_Files/.env \
+  -f Dockerfiles/docker-compose.host-storage.yml \
+  -f Dockerfiles/docker-compose.webui.yml up -d --build
+```
+
+That optional variant writes data under `docker-data/` at the repo root and preserves the default quickstart behavior for existing users.
 
 ## Verify
 
@@ -35,11 +62,14 @@ docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docke
 curl -sS http://127.0.0.1:8000/health
 curl -sS http://127.0.0.1:8000/docs > /dev/null && echo "docs-ok"
 curl -sS http://127.0.0.1:8000/api/v1/config/quickstart
+curl -sS http://127.0.0.1:8080 > /dev/null && echo "webui-ok"
 ```
+
+If you later need LAN/custom-host browser access as advanced configuration, switch to the root README WebUI guidance and use the advanced override pair: `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` plus `NEXT_PUBLIC_API_URL=...`.
 
 ## Optional Add-ons
 
-- For accelerated speech-to-text, apply [GPU/STT Add-on](./GPU_STT_Addon.md) after this profile is running.
+- If speech is part of day-one setup, continue with [First-Time Audio Setup: CPU Systems](./First_Time_Audio_Setup_CPU.md) or [First-Time Audio Setup: GPU/Accelerated Systems](./First_Time_Audio_Setup_GPU_Accelerated.md) after this profile is running.
 
 ## Troubleshoot
 

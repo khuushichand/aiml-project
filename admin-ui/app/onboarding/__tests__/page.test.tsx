@@ -62,6 +62,7 @@ const samplePlans: Plan[] = [
 vi.mock('@/lib/api-client', () => ({
   api: {
     getPlans: vi.fn(),
+    getOrganizations: vi.fn(),
     createOnboardingSession: vi.fn(),
   },
 }));
@@ -71,12 +72,14 @@ import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 
 const mockedGetPlans = api.getPlans as ReturnType<typeof vi.fn>;
+const mockedGetOrganizations = api.getOrganizations as ReturnType<typeof vi.fn>;
 const mockedIsBillingEnabled = isBillingEnabled as ReturnType<typeof vi.fn>;
 
 describe('OnboardingPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetPlans.mockResolvedValue(samplePlans);
+    mockedGetOrganizations.mockResolvedValue([]);
     mockedIsBillingEnabled.mockReturnValue(true);
   });
 
@@ -149,5 +152,68 @@ describe('OnboardingPage', () => {
       expect(screen.getByTestId('plan-card-plan-free')).toBeInTheDocument();
       expect(screen.getByTestId('plan-card-plan-pro')).toBeInTheDocument();
     });
+  });
+
+  it('does not advance when the organization slug is already taken', async () => {
+    const user = userEvent.setup();
+    mockedGetOrganizations.mockResolvedValueOnce([{ slug: 'test-org' }]);
+    render(<OnboardingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('org-name-input')).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByTestId('org-name-input'), 'Test Org');
+    await user.type(screen.getByTestId('org-slug-input'), 'test-org');
+    await user.click(screen.getByRole('button', { name: /next/i }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith('Slug is already taken');
+    });
+    expect(screen.getByText('Organization Details')).toBeInTheDocument();
+    expect(screen.queryByText('Select a Plan')).not.toBeInTheDocument();
+  });
+
+  it('ignores stale slug availability responses from older requests', async () => {
+    const user = userEvent.setup();
+    let resolveFirst: ((value: Array<{ slug?: string }>) => void) | undefined;
+    let resolveSecond: ((value: Array<{ slug?: string }>) => void) | undefined;
+
+    mockedGetOrganizations
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          })
+      );
+
+    render(<OnboardingPage />);
+
+    const slugInput = await screen.findByTestId('org-slug-input');
+
+    await user.type(slugInput, 'alpha');
+    slugInput.blur();
+
+    await user.clear(slugInput);
+    await user.type(slugInput, 'beta');
+    slugInput.blur();
+
+    resolveSecond?.([]);
+    await waitFor(() => {
+      expect(screen.getByText('Slug is available')).toBeInTheDocument();
+    });
+
+    resolveFirst?.([{ slug: 'alpha' }]);
+
+    await waitFor(() => {
+      expect(screen.getByText('Slug is available')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Slug is already taken')).not.toBeInTheDocument();
   });
 });

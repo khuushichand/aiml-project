@@ -13,6 +13,7 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathlibPath
+from typing import Any
 from uuid import uuid4
 
 from cachetools import LRUCache
@@ -56,7 +57,6 @@ from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookCha
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
     extract_epub_metadata_from_text,
     process_epub,
@@ -124,6 +124,39 @@ def _resolve_subtitle_persist(request: SubtitleExportRequest) -> bool:
     raw = env_val if env_val not in (None, "") else cfg_val
     resolved = _parse_bool(raw)
     return bool(resolved) if resolved is not None else False
+
+
+def _record_has_tts_hint(record: dict[str, Any] | None) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if record.get("tts_provider") or record.get("tts_model"):
+        return True
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get("tts_provider") or metadata.get("tts_model"))
+
+
+def _apply_default_audiobook_tts_hints(payload: dict[str, Any]) -> None:
+    # Keep the persisted job payload aligned with the API schema:
+    # when subtitles are requested without an explicit TTS hint, the request
+    # follows the Kokoro/alignment-capable path by default.
+    if payload.get("subtitles") is not None and not _record_has_tts_hint(payload):
+        payload["tts_model"] = "kokoro"
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return
+
+    inherited_has_tts_hint = _record_has_tts_hint(payload)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("subtitles") is None:
+            continue
+        if inherited_has_tts_hint or _record_has_tts_hint(item):
+            continue
+        item["tts_model"] = "kokoro"
 
 
 def _resolve_subtitle_ttl_hours(request: SubtitleExportRequest) -> int | None:
@@ -429,7 +462,7 @@ def _parse_progress_message(
 async def parse_audiobook_source(
     request: AudiobookParseRequest,
     _current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ) -> AudiobookParseResponse:
     source = request.source
     input_type = source.input_type
@@ -543,6 +576,7 @@ async def create_audiobook_job(
         priority = 10
 
     payload = request.model_dump()
+    _apply_default_audiobook_tts_hints(payload)
     payload["project_id"] = project_id
     if request.items:
         # Preserve per-item subtitle overrides only when explicitly set.

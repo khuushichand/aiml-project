@@ -518,6 +518,7 @@ class FlashcardsModule(BaseModule):
         try:
             cards = db.list_flashcards(
                 deck_id=args.get("deck_id"),
+                include_workspace_items=True,
                 tag=args.get("tag"),
                 due_status=args.get("due_status", "all"),
                 q=args.get("q"),
@@ -528,6 +529,7 @@ class FlashcardsModule(BaseModule):
             )
             count = db.count_flashcards(
                 deck_id=args.get("deck_id"),
+                include_workspace_items=True,
                 tag=args.get("tag"),
                 due_status=args.get("due_status", "all"),
                 q=args.get("q"),
@@ -770,6 +772,7 @@ class FlashcardsModule(BaseModule):
                 from ....Flashcards.apkg_exporter import export_apkg_from_rows
                 items = db.list_flashcards(
                     deck_id=deck_id,
+                    include_workspace_items=True,
                     tag=tag,
                     q=q,
                     due_status="all",
@@ -791,6 +794,7 @@ class FlashcardsModule(BaseModule):
             delimiter = "\t" if fmt == "tsv" else ","
             csv_bytes = db.export_flashcards_csv(
                 deck_id=deck_id,
+                include_workspace_items=True,
                 tag=tag,
                 q=q,
                 delimiter=delimiter,

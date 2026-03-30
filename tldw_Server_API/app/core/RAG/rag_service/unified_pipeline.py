@@ -28,6 +28,9 @@ from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    managed_media_database,
+)
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputOptions,
     StructuredOutputParseError,
@@ -978,6 +981,35 @@ def _sources_to_data_sources(sources: list[str]) -> list[DataSource]:
     return data_sources
 
 
+def _resolve_sqlite_rag_db_path(
+    explicit_path: Optional[str],
+    *,
+    db: Any = None,
+) -> Optional[str]:
+    """Return a usable SQLite path, suppressing Postgres placeholder values."""
+    raw_path = explicit_path
+    if raw_path is None and db is not None:
+        raw_path = getattr(db, "db_path_str", None)
+        if raw_path is None:
+            raw_path = getattr(db, "db_path", None)
+    if raw_path is None:
+        return None
+
+    normalized = str(raw_path).strip()
+    if not normalized:
+        return None
+
+    backend_type = getattr(db, "backend_type", None)
+    if backend_type is None:
+        backend = getattr(db, "backend", None)
+        backend_type = getattr(backend, "backend_type", None)
+    backend_name = str(getattr(backend_type, "name", backend_type or "")).upper()
+
+    if backend_name == "POSTGRESQL" and normalized in {":memory:", "/:memory:"}:
+        return None
+    return normalized
+
+
 async def unified_rag_pipeline(
     # ========== REQUIRED PARAMETERS ==========
     query: str,
@@ -994,6 +1026,11 @@ async def unified_rag_pipeline(
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
     fts_level: Literal["media", "chunk"] = "media",
+    enable_text_late_chunking: bool = False,
+    chunk_method: Optional[str] = None,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+    chunk_language: Optional[str] = None,
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
     adaptive_hybrid_weights: bool = False,
     enable_intent_routing: bool = False,
@@ -1392,6 +1429,7 @@ async def unified_rag_pipeline(
 
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
+    media_db_path = _resolve_sqlite_rag_db_path(media_db_path, db=media_db)
 
     # ========== SEARCH DEPTH MODE PRESETS ==========
     # Apply parameter presets based on search_depth_mode. Individual parameter
@@ -1629,14 +1667,7 @@ async def unified_rag_pipeline(
             and SQLRetriever is not None
             and any(src == DataSource.SQL for src in resolved_data_sources)
         ):
-            sql_db_path = media_db_path
-            if sql_db_path is None:
-                try:
-                    db_path_val = getattr(media_db, "db_path", None)
-                    if db_path_val:
-                        sql_db_path = str(db_path_val)
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    sql_db_path = None
+            sql_db_path = _resolve_sqlite_rag_db_path(media_db_path, db=media_db)
             if sql_db_path:
                 try:
                     sql_retriever = SQLRetriever(
@@ -2622,7 +2653,12 @@ async def unified_rag_pipeline(
                         use_fts=(search_mode in ["fts", "hybrid"]),
                         use_vector=(search_mode in ["vector", "hybrid"]),
                         include_metadata=True,
-                        fts_level=fts_level
+                        fts_level=fts_level,
+                        enable_text_late_chunking=enable_text_late_chunking,
+                        chunk_method=chunk_method,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        chunk_language=chunk_language,
                     )
                     # Optional date filter
                     if enable_date_filter and date_range and isinstance(date_range, dict):
@@ -2675,7 +2711,7 @@ async def unified_rag_pipeline(
                     # perform a direct Media DB FTS-only search. This guards against
                     # configuration or adapter issues that can cause hybrid retrieval
                     # to silently return an empty set even when media is present.
-                    if (not documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                    if (not documents) and (media_db_path or media_db is not None) and search_mode in ("fts", "hybrid"):
                         try:
                             from .database_retrievers import MediaDBRetriever as _MDBR
                             from .database_retrievers import RetrievalConfig as _RCfg
@@ -2691,6 +2727,7 @@ async def unified_rag_pipeline(
                                 db_path=media_db_path,
                                 config=fb_cfg,
                                 user_id=str(user_id or "0"),
+                                media_db=media_db,
                             )
                             fallback_docs = await fb_retriever.retrieve(
                                 query=query,
@@ -3157,7 +3194,7 @@ async def unified_rag_pipeline(
                 # This is especially important in local/test environments where
                 # vector stores or adapters may be misconfigured but the Media DB
                 # itself contains the uploaded content.
-                if (not result.documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                if (not result.documents) and (media_db_path or media_db is not None) and search_mode in ("fts", "hybrid"):
                     try:
                         from .database_retrievers import MediaDBRetriever as _MDBR
                         from .database_retrievers import RetrievalConfig as _RCfg
@@ -3173,6 +3210,7 @@ async def unified_rag_pipeline(
                             db_path=media_db_path,
                             config=fb_cfg,
                             user_id=str(user_id or "0"),
+                            media_db=media_db,
                         )
                         fallback_docs = await fb_retriever.retrieve(
                             query=query,
@@ -3863,6 +3901,11 @@ async def unified_rag_pipeline(
                             use_vector=(search_mode in ["vector", "hybrid"]),
                             include_metadata=True,
                             fts_level=fts_level,
+                            enable_text_late_chunking=enable_text_late_chunking,
+                            chunk_method=chunk_method,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            chunk_language=chunk_language,
                         )
                         data_sources = list(resolved_data_sources)
                         if not data_sources:
@@ -4072,6 +4115,11 @@ async def unified_rag_pipeline(
                                 use_vector=(search_mode in ["vector", "hybrid"]),
                                 include_metadata=True,
                                 fts_level=fts_level,
+                                enable_text_late_chunking=enable_text_late_chunking,
+                                chunk_method=chunk_method,
+                                chunk_size=chunk_size,
+                                chunk_overlap=chunk_overlap,
+                                chunk_language=chunk_language,
                             )
                             data_sources = list(resolved_data_sources)
 
@@ -5357,28 +5405,36 @@ async def unified_rag_pipeline(
                         pre_claims: list[str] = []
                         if media_db_path and (result.documents or []):
                             from tldw_Server_API.app.core.config import settings as _settings
-                            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-                            db = MediaDatabase(db_path=media_db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
-                            # Collect media IDs present in documents
-                            media_ids: list[int] = []
-                            for d in result.documents:
-                                try:
-                                    mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
-                                    if mid is not None:
-                                        media_ids.append(int(mid))
-                                except (TypeError, ValueError):
-                                    continue
-                            media_ids = list(dict.fromkeys(media_ids))[:5]
-                            if media_ids:
-                                # Fetch a small number of claims per media
-                                for mid in media_ids:
-                                    rows = db.execute_query(
-                                        "SELECT claim_text FROM Claims WHERE media_id = ? AND deleted = 0 LIMIT ?",
-                                        (int(mid), int(claims_max)),
-                                    ).fetchall()
-                                    pre_claims.extend([r[0] for r in rows])
-                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError, sqlite3.Error):
-                                db.close_connection()
+                            with managed_media_database(
+                                client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+                                db_path=media_db_path,
+                                initialize=False,
+                                suppress_close_exceptions=(
+                                    AttributeError,
+                                    RuntimeError,
+                                    TypeError,
+                                    ValueError,
+                                    sqlite3.Error,
+                                ),
+                            ) as db:
+                                # Collect media IDs present in documents
+                                media_ids: list[int] = []
+                                for d in result.documents:
+                                    try:
+                                        mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
+                                        if mid is not None:
+                                            media_ids.append(int(mid))
+                                    except (TypeError, ValueError):
+                                        continue
+                                media_ids = list(dict.fromkeys(media_ids))[:5]
+                                if media_ids:
+                                    # Fetch a small number of claims per media
+                                    for mid in media_ids:
+                                        rows = db.execute_query(
+                                            "SELECT claim_text FROM Claims WHERE media_id = ? AND deleted = 0 LIMIT ?",
+                                            (int(mid), int(claims_max)),
+                                        ).fetchall()
+                                        pre_claims.extend([r[0] for r in rows])
                         if pre_claims:
                             # Verify these claims directly, skipping extraction
                             from tldw_Server_API.app.core.Claims_Extraction.claims_engine import Claim as _Claim
@@ -5542,7 +5598,7 @@ async def unified_rag_pipeline(
                                 try:
                                     if MultiDatabaseRetriever and RetrievalConfig and media_db_path:
                                         mdr = _build_multi_retriever({"media_db": media_db_path})
-                                        conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level)
+                                        conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level, enable_text_late_chunking=enable_text_late_chunking, chunk_method=chunk_method, chunk_size=chunk_size, chunk_overlap=chunk_overlap, chunk_language=chunk_language)
                                         numeric_added: list[Document] = []
                                         for tok in list(nf.missing)[:3]:
                                             try:

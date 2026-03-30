@@ -218,7 +218,13 @@ vi.mock('@/components/Media/ResultsList', () => ({
               type="button"
               data-testid={`result-${key}`}
               aria-pressed={selectedId === result.id}
-              onClick={() => onSelect(result.id)}
+              onClick={() => {
+                if (selectionMode) {
+                  onToggleSelected?.(result.id)
+                  return
+                }
+                onSelect(result.id)
+              }}
             >
               {result.title}
             </button>
@@ -255,6 +261,24 @@ const renderMediaPage = () => {
       </Routes>
     </MemoryRouter>
   )
+}
+
+const enableBulkMode = async () => {
+  fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
+  await screen.findByTestId('media-bulk-toolbar')
+}
+
+const toggleBulkSelection = (id: string | number) => {
+  fireEvent.click(screen.getByTestId(`result-${id}`))
+}
+
+const selectBulkItems = async (...ids: Array<string | number>) => {
+  ids.forEach((id) => {
+    toggleBulkSelection(id)
+  })
+  await waitFor(() => {
+    expect(screen.getByTestId('media-bulk-delete')).not.toBeDisabled()
+  })
 }
 
 describe('ViewMediaPage stage 14 bulk actions baseline', () => {
@@ -299,6 +323,14 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
     mocks.bgRequest.mockReset()
     mocks.bgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
       const path = String(request?.path || '')
+      if (request?.method === 'GET' && path.startsWith('/api/v1/media/?')) {
+        return {
+          items: mocks.queryData,
+          pagination: {
+            total_items: mocks.queryData.length
+          }
+        }
+      }
       if (path.startsWith('/api/v1/media/keywords')) {
         return { keywords: [] }
       }
@@ -319,9 +351,8 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
   it('deletes selected items in bulk mode', async () => {
     renderMediaPage()
 
-    fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
-    fireEvent.click(screen.getByTestId('result-1'))
-    fireEvent.click(screen.getByTestId('result-2'))
+    await enableBulkMode()
+    await selectBulkItems(1, 2)
     fireEvent.click(screen.getByTestId('media-bulk-delete'))
 
     await waitFor(() => {
@@ -344,28 +375,35 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
     const resultsList = screen.getByTestId('results-list')
     const bottomUtilities = screen.getByTestId('media-sidebar-bottom-utilities')
     fireEvent.click(screen.getByTestId('media-library-tools-toggle'))
-    const ingestJobsPanel = screen.getByTestId('media-ingest-jobs-panel')
-    const libraryStatsPanel = screen.getByTestId('media-library-stats-panel')
+    const ingestJobsPanel = screen.findByTestId('media-ingest-jobs-panel')
+    const libraryStatsPanel = screen.findByTestId('media-library-stats-panel')
 
-    expect(
-      resultsList.compareDocumentPosition(bottomUtilities) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(
-      bottomUtilities.compareDocumentPosition(ingestJobsPanel) & Node.DOCUMENT_POSITION_CONTAINED_BY
-    ).toBeTruthy()
-    expect(
-      resultsList.compareDocumentPosition(ingestJobsPanel) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(
-      ingestJobsPanel.compareDocumentPosition(libraryStatsPanel) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+    return Promise.all([ingestJobsPanel, libraryStatsPanel]).then(
+      ([resolvedIngestJobsPanel, resolvedLibraryStatsPanel]) => {
+        expect(
+          resultsList.compareDocumentPosition(bottomUtilities) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy()
+        expect(
+          bottomUtilities.compareDocumentPosition(resolvedIngestJobsPanel) &
+            Node.DOCUMENT_POSITION_CONTAINED_BY
+        ).toBeTruthy()
+        expect(
+          resultsList.compareDocumentPosition(resolvedIngestJobsPanel) &
+            Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy()
+        expect(
+          resolvedIngestJobsPanel.compareDocumentPosition(resolvedLibraryStatsPanel) &
+            Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy()
+      }
+    )
   })
 
   it('adds keywords in bulk mode for selected media items', async () => {
     renderMediaPage()
 
-    fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
-    fireEvent.click(screen.getByTestId('result-1'))
+    await enableBulkMode()
+    await selectBulkItems(1)
     fireEvent.change(screen.getByTestId('media-bulk-keywords-input'), {
       target: { value: 'beta, gamma' }
     })
@@ -385,8 +423,8 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
   it('exports selected items via download blob', async () => {
     renderMediaPage()
 
-    fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
-    fireEvent.click(screen.getByTestId('result-1'))
+    await enableBulkMode()
+    await selectBulkItems(1)
     fireEvent.click(screen.getByTestId('media-bulk-export'))
 
     await waitFor(() => {
@@ -402,8 +440,8 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
   it('creates a collection from bulk selection and opens it in multi-review', async () => {
     renderMediaPage()
 
-    fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
-    fireEvent.click(screen.getByTestId('result-1'))
+    await enableBulkMode()
+    await selectBulkItems(1)
     fireEvent.change(screen.getByTestId('media-bulk-collection-name'), {
       target: { value: 'Reading sprint' }
     })
@@ -430,9 +468,9 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
   it('merges selection into an existing collection and filters by combined members', async () => {
     renderMediaPage()
 
-    fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
+    await enableBulkMode()
 
-    fireEvent.click(screen.getByTestId('result-1'))
+    await selectBulkItems(1)
     fireEvent.change(screen.getByTestId('media-bulk-collection-name'), {
       target: { value: 'Reading sprint' }
     })
@@ -446,7 +484,7 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
       target: { value: '' }
     })
 
-    fireEvent.click(screen.getByTestId('result-2'))
+    await selectBulkItems(2)
     fireEvent.change(screen.getByTestId('media-bulk-collection-name'), {
       target: { value: 'Reading sprint' }
     })
@@ -461,9 +499,9 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
   it('keeps bulk keyword tagging scoped to the active collection filter', async () => {
     renderMediaPage()
 
-    fireEvent.click(screen.getByTestId('media-bulk-mode-toggle'))
+    await enableBulkMode()
 
-    fireEvent.click(screen.getByTestId('result-1'))
+    await selectBulkItems(1)
     fireEvent.change(screen.getByTestId('media-bulk-collection-name'), {
       target: { value: 'Tag scope' }
     })

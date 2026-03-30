@@ -33,7 +33,8 @@ try:
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User, _single_user_instance
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.config import settings
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_document_version
+    from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import get_document_version
 except ImportError as e:
     raise ImportError(f"Could not locate the FastAPI app instance or dependencies: {e}")
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ChunkMethod, MediaType, PdfEngine
@@ -334,6 +335,35 @@ def check_media_item_result(result, expected_status, check_db_fields=False): # D
         f"Expected None or empty error for Success status, got '{result['error']}'"
 
 
+def skip_if_valid_video_url_unreachable(response) -> None:
+    """Skip tests when the external YouTube fixture is temporarily unavailable."""
+    if response.status_code != 207:
+        return
+
+    data = response.json()
+    if data.get("errors_count", 0) <= 0:
+        return
+
+    def _is_download_failure(message: str) -> bool:
+        return "Download failed" in message or "DownloadError" in message
+
+    result_errors = [
+        result
+        for result in data.get("results", [])
+        if isinstance(result, dict) and result.get("status") == "Error"
+    ]
+    for result in result_errors:
+        if result.get("input_ref") == VALID_VIDEO_URL and _is_download_failure(str(result.get("error", ""))):
+            pytest.skip("YouTube video download failed - likely due to bot protection or transient network access")
+
+    combined_errors = " ".join(
+        [str(data.get("errors", []))]
+        + [str(result.get("error", "")) for result in result_errors]
+    )
+    if len(result_errors) == 1 and _is_download_failure(combined_errors):
+        pytest.skip("YouTube video download failed - likely due to bot protection or transient network access")
+
+
 # --- Test Classes ---
 
 class TestProcessVideos:
@@ -351,16 +381,7 @@ class TestProcessVideos:
             "end_time": TEST_VIDEO_END_TIME,
         }
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
-
-        # YouTube may return 403 errors due to bot protection or other download failures
-        if response.status_code == 207:  # Multi-status means some items failed
-            data = response.json()
-            errors = data.get("errors", [])
-            # Check for download failures which often indicate YouTube blocking
-            if data.get("errors_count", 0) > 0:
-                error_str = str(errors)
-                if "Download failed" in error_str and VALID_VIDEO_URL in error_str:
-                    pytest.skip("YouTube video download failed - likely due to bot protection or rate limiting")
+        skip_if_valid_video_url_unreachable(response)
 
         data = check_batch_response(response, 200, expected_processed=1, expected_errors=0, check_results_len=1)
         result = data["results"][0]
@@ -411,15 +432,7 @@ class TestProcessVideos:
 
         if response.status_code == 400 and "error parsing the body" in response.text.lower():
             pytest.fail("Still getting 400 'error parsing body' after auth fix (video multi).")
-
-        # YouTube may return 403 errors due to bot protection
-        if response.status_code == 207:  # Multi-status means some items failed
-            data = response.json()
-            errors = data.get("errors", [])
-            if data.get("errors_count", 0) > 0:
-                error_str = str(errors)
-                if "Download failed" in error_str and VALID_VIDEO_URL in error_str:
-                    pytest.skip("YouTube video download failed - likely due to bot protection or rate limiting")
+        skip_if_valid_video_url_unreachable(response)
 
         data = check_batch_response(response, 200, expected_processed=2, expected_errors=0, check_results_len=2)
         check_media_item_result(data["results"][0], "Success", check_db_fields=True)
@@ -439,16 +452,7 @@ class TestProcessVideos:
             "end_time": TEST_VIDEO_END_TIME,
         }
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
-
-        # YouTube may return 403 errors for both URLs
-        if response.status_code == 207:
-            data = response.json()
-            errors = data.get("errors", [])
-            # If YouTube URL failed with download error, skip the test
-            if data.get("errors_count", 0) >= 1:
-                error_str = str(errors)
-                if "Download failed" in error_str and VALID_VIDEO_URL in error_str:
-                    pytest.skip("YouTube video download failed - likely due to bot protection or rate limiting")
+        skip_if_valid_video_url_unreachable(response)
 
         # No sleep needed for sync processing endpoint failures
         data = check_batch_response(response, 207, expected_processed=1, expected_errors=1, check_results_len=2)
@@ -557,6 +561,8 @@ class TestProcessAudios:
             if (
                 "Download failed" in error_str
                 or "Host could not be resolved" in error_str
+                or "nodename nor servname provided" in error_str
+                or "Name or service not known" in error_str
             ) and VALID_AUDIO_URL in error_str:
                 pytest.skip(
                     "Audio URL download failed or host could not be resolved "

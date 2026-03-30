@@ -26,6 +26,30 @@ def _sample_studio_data() -> str:
     )
 
 
+def _sample_visual_style_snapshot() -> str:
+    return json.dumps(
+        {
+            "id": "timeline",
+            "scope": "builtin",
+            "name": "Timeline",
+            "version": 1,
+            "description": "Chronology-first slides",
+            "generation_rules": {"chronology_bias": "high"},
+            "artifact_preferences": ["timeline", "stat_group"],
+            "fallback_policy": {"mode": "ordered-bullets"},
+            "resolution": {
+                "base_theme": "beige",
+                "resolved_theme": "beige",
+                "resolved_marp_theme": None,
+                "style_pack": "editorial_print",
+                "style_pack_version": 1,
+                "token_overrides": {"surface": "#f5efe6"},
+                "resolved_settings": {"controls": False, "progress": False},
+            },
+        }
+    )
+
+
 def test_slides_db_create_and_get(tmp_path):
     db_path = tmp_path / "Slides.db"
     db = SlidesDatabase(db_path=db_path, client_id="tester")
@@ -73,6 +97,41 @@ def test_slides_db_template_id(tmp_path):
     )
     fetched = db.get_presentation_by_id(row.id)
     assert fetched.template_id == "clean-dark"
+    db.close_connection()
+
+
+def test_slides_db_visual_style_snapshot_round_trip(tmp_path):
+    db_path = tmp_path / "Slides.db"
+    db = SlidesDatabase(db_path=db_path, client_id="tester")
+    row = db.create_presentation(
+        presentation_id=None,
+        title="History Deck",
+        description=None,
+        theme="black",
+        marp_theme=None,
+        settings=None,
+        studio_data=None,
+        slides=_sample_slides(),
+        slides_text="Deck Intro A B",
+        source_type="manual",
+        source_ref=None,
+        source_query=None,
+        custom_css=None,
+        visual_style_id="timeline",
+        visual_style_scope="builtin",
+        visual_style_name="Timeline",
+        visual_style_version=1,
+        visual_style_snapshot=_sample_visual_style_snapshot(),
+    )
+    fetched = db.get_presentation_by_id(row.id)
+    assert fetched.visual_style_id == "timeline"
+    assert fetched.visual_style_scope == "builtin"
+    assert fetched.visual_style_name == "Timeline"
+    assert fetched.visual_style_version == 1
+    snapshot = json.loads(fetched.visual_style_snapshot)
+    assert snapshot["id"] == "timeline"
+    assert "custom_css" not in snapshot
+    assert snapshot["resolution"]["resolved_theme"] == "beige"
     db.close_connection()
 
 
@@ -178,16 +237,50 @@ def test_slides_db_version_snapshots(tmp_path):
         source_ref=None,
         source_query=None,
         custom_css=None,
+        visual_style_id="timeline",
+        visual_style_scope="builtin",
+        visual_style_name="Timeline",
+        visual_style_version=1,
+        visual_style_snapshot=_sample_visual_style_snapshot(),
     )
     versions, total = db.list_presentation_versions(presentation_id=row.id, limit=10, offset=0)
     assert total == 1
     payload = json.loads(versions[0].payload_json)
     assert payload["title"] == "Deck"
     assert json.loads(payload["studio_data"]) == json.loads(_sample_studio_data())
+    assert payload["visual_style_id"] == "timeline"
+    payload_snapshot = json.loads(payload["visual_style_snapshot"])
+    assert payload_snapshot["id"] == "timeline"
+    assert "custom_css" not in payload_snapshot
+    assert payload_snapshot["resolution"]["resolved_theme"] == "beige"
 
     updated = db.update_presentation(
         presentation_id=row.id,
-        update_fields={"title": "Updated", "studio_data": json.dumps({"origin": "workspace_playground"})},
+        update_fields={
+            "title": "Updated",
+            "studio_data": json.dumps({"origin": "workspace_playground"}),
+            "visual_style_id": "exam-focused-bullet",
+            "visual_style_scope": "builtin",
+            "visual_style_name": "Exam-Focused Bullet",
+            "visual_style_version": 1,
+            "visual_style_snapshot": json.dumps(
+                {
+                    "id": "exam-focused-bullet",
+                    "scope": "builtin",
+                    "name": "Exam-Focused Bullet",
+                    "version": 1,
+                    "resolution": {
+                        "base_theme": "black",
+                        "resolved_theme": "black",
+                        "resolved_marp_theme": None,
+                        "style_pack": "brutalist_editorial",
+                        "style_pack_version": 1,
+                        "token_overrides": {"surface": "#000000"},
+                        "resolved_settings": {"controls": True, "progress": True},
+                    },
+                }
+            ),
+        },
         expected_version=row.version,
     )
     versions, total = db.list_presentation_versions(presentation_id=row.id, limit=10, offset=0)
@@ -195,6 +288,11 @@ def test_slides_db_version_snapshots(tmp_path):
     assert versions[0].version == updated.version
     latest_payload = json.loads(versions[0].payload_json)
     assert json.loads(latest_payload["studio_data"]) == {"origin": "workspace_playground"}
+    assert latest_payload["visual_style_id"] == "exam-focused-bullet"
+    latest_snapshot = json.loads(latest_payload["visual_style_snapshot"])
+    assert latest_snapshot["id"] == "exam-focused-bullet"
+    assert "custom_css" not in latest_snapshot
+    assert latest_snapshot["resolution"]["resolved_theme"] == "black"
     db.close_connection()
 
 

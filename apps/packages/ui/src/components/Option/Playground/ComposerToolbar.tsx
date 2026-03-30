@@ -38,12 +38,15 @@ export type ComposerToolbarProps = {
   mcpControl: React.ReactNode
   // Row action controls (pre-rendered by parent)
   sendControl: React.ReactNode
+  researchLaunchButton?: React.ReactNode
   attachmentButton: React.ReactNode
   toolsButton: React.ReactNode
   voiceChatButton: React.ReactNode
   modelUsageBadge: React.ReactNode
   // Prompt select
   selectedSystemPrompt: string | undefined
+  systemPrompt: string | undefined
+  setSystemPrompt: (prompt: string) => void
   setSelectedSystemPrompt: (id: string | undefined) => void
   setSelectedQuickPrompt: (prompt: string | undefined) => void
   // Ephemeral toggle
@@ -115,11 +118,14 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     modelSelectButton,
     mcpControl,
     sendControl,
+    researchLaunchButton,
     attachmentButton,
     toolsButton,
     voiceChatButton,
     modelUsageBadge,
     selectedSystemPrompt,
+    systemPrompt,
+    setSystemPrompt,
     setSelectedSystemPrompt,
     setSelectedQuickPrompt,
     temporaryChat,
@@ -429,13 +435,21 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     () => (
       <PromptSelect
         selectedSystemPrompt={selectedSystemPrompt}
+        systemPrompt={systemPrompt}
+        setSystemPrompt={setSystemPrompt}
         setSelectedSystemPrompt={setSelectedSystemPrompt}
         setSelectedQuickPrompt={setSelectedQuickPrompt}
         iconClassName="h-4 w-4"
         className="text-text-muted hover:text-text"
       />
     ),
-    [selectedSystemPrompt, setSelectedQuickPrompt, setSelectedSystemPrompt]
+    [
+      selectedSystemPrompt,
+      setSelectedQuickPrompt,
+      setSelectedSystemPrompt,
+      setSystemPrompt,
+      systemPrompt
+    ]
   )
 
   const characterSelectControl = React.useMemo(
@@ -750,6 +764,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             temporaryChat={temporaryChat}
             onFocusConnectionCard={onFocusConnectionCard}
           />
+          {researchLaunchButton}
           {voiceChatButton}
           {attachmentButton}
           {toolsButton}
@@ -774,6 +789,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
         <div className="ml-auto flex flex-nowrap items-center gap-2">
           {compareControl}
           {dictationButton}
+          {researchLaunchButton}
           {voiceChatButton}
           {attachmentButton}
           {toolsButton}
@@ -848,6 +864,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
               {chatSettingsButton}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {researchLaunchButton}
               {voiceChatButton}
               {attachmentButton}
               {toolsButton}

@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import Iterator, Mapping
 
 #
 # Local Imports
@@ -17,8 +18,9 @@ import os as _env_os
 # 3rd-party Libraries
 import sys
 import threading
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +48,15 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    get_user_media_db_path,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    managed_media_database,
+)
+from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
+    list_claims_rebuild_media_ids,
 )
 
 # Backward-compat for Starlette variants that expose 413 as
@@ -103,6 +114,22 @@ _REQUEST_GUARD_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+
+@contextmanager
+def _claims_rebuild_db_session(
+    app_settings: Mapping[str, Any],
+) -> Iterator[tuple[int, str, Any]]:
+    """Yield one managed Media DB session for the claims rebuild worker loop."""
+    user_id = int(app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+    db_path = str(get_user_media_db_path(user_id))
+    client_id = str(app_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"))
+    with managed_media_database(
+        client_id=client_id,
+        db_path=db_path,
+        initialize=False,
+    ) as db:
+        yield user_id, db_path, db
 
 _early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
 try:
@@ -895,6 +922,7 @@ else:
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import router as character_memory_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 
     # Workspace Endpoints
@@ -995,6 +1023,13 @@ else:
     except _IMPORT_EXCEPTIONS as _discord_err:
         logger.warning(f"Discord endpoints unavailable; skipping import: {_discord_err}")
         _HAS_DISCORD = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.telegram import router as telegram_router
+
+        _HAS_TELEGRAM = True
+    except _IMPORT_EXCEPTIONS as _telegram_err:
+        logger.warning(f"Telegram endpoints unavailable; skipping import: {_telegram_err}")
+        _HAS_TELEGRAM = False
     try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
@@ -1158,6 +1193,7 @@ elif _MINIMAL_TEST_APP:
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import router as character_memory_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
     from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
@@ -1226,6 +1262,9 @@ else:
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+    # Sharing Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.sharing import router as sharing_router
+    from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
@@ -3002,8 +3041,6 @@ async def lifespan(app: FastAPI):
             get_claims_rebuild_service as _get_claims_svc,
         )
         from tldw_Server_API.app.core.config import settings as _app_settings
-        from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path as _get_media_db_path
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MediaDB
 
         _claims_enabled = bool(_app_settings.get("CLAIMS_REBUILD_ENABLED", False))
         _claims_interval = int(_app_settings.get("CLAIMS_REBUILD_INTERVAL_SEC", 3600))
@@ -3017,40 +3054,16 @@ async def lifespan(app: FastAPI):
             svc = _get_claims_svc()
             while True:
                 try:
-                    # Single-user path; for multi-user extend with per-user iteration
-                    user_id = int(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
-                    db_path = _get_media_db_path(user_id)
-                    db = _MediaDB(
-                        db_path=db_path, client_id=str(_app_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"))
-                    )
-                    # Find media missing claims
-                    if _claims_policy == "missing":
-                        sql = (
-                            "SELECT m.id FROM Media m "
-                            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-                            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-                            ") LIMIT 25"
+                    with _claims_rebuild_db_session(_app_settings) as (_, db_path, db):
+                        mids = list_claims_rebuild_media_ids(
+                            db,
+                            policy=_claims_policy,
+                            stale_days=int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),
+                            compare_media_last_modified=False,
+                            limit=25,
                         )
-                    elif _claims_policy == "all":
-                        sql = "SELECT m.id FROM Media m WHERE m.deleted=0 AND m.is_trash=0 LIMIT 25"
-                    else:
-                        # rudimentary stale policy: claims older than N days since media last_modified
-                        int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
-                        sql = (
-                            "SELECT m.id FROM Media m "
-                            "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-                            "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?) "
-                            "LIMIT 25"
-                        )
-                    if _claims_policy == "stale":
-                        rows = db.execute_query(sql, (int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),)).fetchall()
-                    else:
-                        rows = db.execute_query(sql).fetchall()
-                    mids = [int(r[0]) for r in rows]
-                    for mid in mids:
-                        svc.submit(media_id=mid, db_path=db_path)
-                    with suppress(_STARTUP_GUARD_EXCEPTIONS):
-                        db.close_connection()
+                        for mid in mids:
+                            svc.submit(media_id=mid, db_path=db_path)
                 except _STARTUP_GUARD_EXCEPTIONS as e:
                     logger.warning(f"Claims rebuild loop error: {e}")
                 await _asyncio.sleep(_claims_interval)
@@ -4872,6 +4885,53 @@ def _compute_openapi_cors_allow_origin(
     return None
 
 
+_cors_allow_all_origins = False
+_cors_allow_credentials = False
+_cors_allow_origin_regex: str | None = None
+_cors_allowed_openapi_origins: set[str] = set()
+
+
+def _compute_runtime_cors_allow_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    if _cors_allow_all_origins and not _cors_allow_credentials:
+        return "*"
+
+    normalized_origin = str(origin).rstrip("/")
+    if normalized_origin in _cors_allowed_openapi_origins:
+        return origin
+
+    if _cors_allow_origin_regex:
+        try:
+            import re as _re
+
+            if _re.match(_cors_allow_origin_regex, origin):
+                return origin
+        except _REQUEST_GUARD_EXCEPTIONS:
+            return None
+
+    if _cors_allow_all_origins:
+        return origin
+    return None
+
+
+def _apply_runtime_cors_headers(request: Request, response: Any) -> Any:
+    allow_origin = _compute_runtime_cors_allow_origin(request.headers.get("origin"))
+    if not allow_origin:
+        return response
+
+    response.headers.setdefault("Access-Control-Allow-Origin", allow_origin)
+    if allow_origin != "*":
+        response.headers.setdefault("Vary", "Origin")
+    if _cors_allow_credentials:
+        response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    response.headers.setdefault(
+        "Access-Control-Expose-Headers",
+        "X-Request-ID, traceparent, X-Trace-Id"
+    )
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Global exception handler – surfaces tracebacks that BaseHTTPMiddleware
 # layers would otherwise swallow, producing only a bare
@@ -4899,9 +4959,12 @@ async def _global_unhandled_exception_handler(request, exc):
         url=request.url,
         exc=exc,
     )
-    return _JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
+    return _apply_runtime_cors_headers(
+        request,
+        _JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        ),
     )
 
 
@@ -4912,9 +4975,12 @@ async def _client_disconnect_exception_handler(request: Request, exc: ClientDisc
         method=request.method,
         url=request.url,
     )
-    return _JSONResponse(
-        status_code=499,
-        content={"detail": "Client disconnected"},
+    return _apply_runtime_cors_headers(
+        request,
+        _JSONResponse(
+            status_code=499,
+            content={"detail": "Client disconnected"},
+        ),
     )
 
 
@@ -5146,6 +5212,7 @@ async def _display_startup_info_and_warm():
 from tldw_Server_API.app.core.config import (
     ALLOWED_ORIGINS,
     API_V1_PREFIX,
+    resolve_runtime_allowed_origins,
     is_production_environment,
     route_enabled,
     should_allow_cors_credentials,
@@ -5156,7 +5223,14 @@ from tldw_Server_API.app.core.config import (
 if should_disable_cors():
     logger.warning("CORS middleware disabled via configuration/ENV flag.")
 else:
-    origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
+    origins, _cors_origin_source, _cors_origin_fallback = resolve_runtime_allowed_origins(ALLOWED_ORIGINS)
+    if _cors_origin_fallback:
+        logger.warning(
+            "ALLOWED_ORIGINS resolved to an empty list outside production. "
+            "Using local browser defaults (localhost/127.0.0.1) so self-hosted setup keeps working. "
+            "Set ALLOWED_ORIGINS only if you need a different browser origin."
+        )
+    origins = _resolve_cors_origins_or_raise(origins)
     _cors_allow_credentials = should_allow_cors_credentials()
     _cors_enforce_explicit_origins = is_production_environment()
     _validate_cors_configuration_or_raise(
@@ -5544,6 +5618,7 @@ elif _MINIMAL_TEST_APP:
     include_router_idempotent(app, chat_loop_router, prefix=f"{API_V1_PREFIX}")
     include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    include_router_idempotent(app, character_memory_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character-memory"])
     include_router_idempotent(
         app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
@@ -5689,20 +5764,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_health_router, tags=["rag-health"])
     except _IMPORT_EXCEPTIONS as _rag_health_min_err:
         logger.debug(f"Skipping rag_health router in minimal test app: {_rag_health_min_err}")
-    # Billing endpoints (required by billing integration tests)
+    # Consent management endpoints
     try:
-        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+        from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
 
-        app.include_router(billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except _IMPORT_EXCEPTIONS as _billing_min_err:
-        logger.debug(f"Skipping billing router in minimal test app: {_billing_min_err}")
-    # Billing webhooks (optional; keep consistent with full app)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
-
-        app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except _IMPORT_EXCEPTIONS as _billing_webhooks_min_err:
-        logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
+        app.include_router(consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
+    except _IMPORT_EXCEPTIONS as _consent_min_err:
+        logger.debug("Skipping consent router in minimal test app: {}", _consent_min_err)
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
@@ -5747,6 +5815,12 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _discord_min_err:
         logger.debug(f"Skipping discord router in minimal test app: {_discord_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.telegram import router as telegram_router
+
+        app.include_router(telegram_router, prefix=f"{API_V1_PREFIX}", tags=["telegram"])
+    except _IMPORT_EXCEPTIONS as _telegram_min_err:
+        logger.debug(f"Skipping telegram router in minimal test app: {_telegram_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
@@ -5783,11 +5857,27 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _reminders_min_err:
         logger.debug(f"Skipping reminders router in minimal test app: {_reminders_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.integrations_control_plane import (
+            router as integrations_control_plane_router,
+        )
+
+        app.include_router(integrations_control_plane_router, prefix=f"{API_V1_PREFIX}", tags=["integrations"])
+    except _IMPORT_EXCEPTIONS as _integrations_cp_min_err:
+        logger.debug(f"Skipping integrations control plane router in minimal test app: {_integrations_cp_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduled_tasks_control_plane import (
+            router as scheduled_tasks_control_plane_router,
+        )
+
+        app.include_router(scheduled_tasks_control_plane_router, prefix=f"{API_V1_PREFIX}", tags=["scheduled-tasks"])
+    except _IMPORT_EXCEPTIONS as _scheduled_tasks_cp_min_err:
+        logger.debug(f"Skipping scheduled tasks control plane router in minimal test app: {_scheduled_tasks_cp_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.notifications import router as notifications_router
 
         app.include_router(notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
     except _IMPORT_EXCEPTIONS as _notifications_min_err:
-        logger.debug(f"Skipping notifications router in minimal test app: {_notifications_min_err}")
+        logger.debug("Skipping notifications router in minimal test app: {}", _notifications_min_err)
     # Chatbooks endpoints (export/import, jobs, download)
     try:
         from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -5795,6 +5885,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     except _IMPORT_EXCEPTIONS as _chatbooks_min_err:
         logger.debug(f"Skipping chatbooks router in minimal test app: {_chatbooks_min_err}")
+    # Sharing endpoints (workspace sharing, tokens, admin)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sharing import router as sharing_router
+
+        app.include_router(sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
+    except _IMPORT_EXCEPTIONS as _sharing_min_err:
+        logger.debug("Skipping sharing router in minimal test app: {}", _sharing_min_err)
     # Personalization scaffold endpoints (opt-in/profile/memories) needed for unit tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.personalization import router as personalization_router
@@ -6190,6 +6287,7 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    _include_if_enabled("consent", consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
     logger.info("Auth router consolidated: endpoints/auth.py")
     if "users_router" in locals() and users_router is not None:
         _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
@@ -6237,20 +6335,6 @@ else:
         _include_if_enabled("org-invites", org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
     except ImportError as _inv_err:
         logger.warning(f"Skipping org_invites router due to import error: {_inv_err}")
-    # Billing and subscription management endpoints
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
-
-        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _bill_err:
-        logger.warning(f"Skipping billing router due to import error: {_bill_err}")
-    # Stripe webhook handler (no auth required)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
-
-        _include_if_enabled("billing-webhooks", billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _wh_err:
-        logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     try:
@@ -6301,6 +6385,10 @@ else:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    if "character_memory_router" in locals():
+        _include_if_enabled(
+            "character-memory", character_memory_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character-memory"]
+        )
     if "workspaces_router" in locals():
         _include_if_enabled(
             "workspaces", workspaces_router, prefix=f"{API_V1_PREFIX}/workspaces", tags=["workspaces"]
@@ -6344,6 +6432,10 @@ else:
         _include_if_enabled("slack", slack_router, prefix=f"{API_V1_PREFIX}", tags=["slack"], default_stable=False)
     if _HAS_DISCORD and "discord_router" in locals():
         _include_if_enabled("discord", discord_router, prefix=f"{API_V1_PREFIX}", tags=["discord"], default_stable=False)
+    if _HAS_TELEGRAM and "telegram_router" in locals():
+        _include_if_enabled(
+            "telegram", telegram_router, prefix=f"{API_V1_PREFIX}", tags=["telegram"], default_stable=False
+        )
     try:
         # Optional outputs artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router
@@ -6426,13 +6518,45 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Reminders endpoint not available: {_e}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.integrations_control_plane import (
+            router as _integrations_control_plane_router,
+        )
+
+        _include_if_enabled(
+            "integrations",
+            _integrations_control_plane_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["integrations"],
+            default_stable=False,
+        )
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Integrations control plane endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduled_tasks_control_plane import (
+            router as _scheduled_tasks_control_plane_router,
+        )
+
+        _include_if_enabled(
+            "scheduled-tasks",
+            _scheduled_tasks_control_plane_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["scheduled-tasks"],
+            default_stable=False,
+        )
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Scheduled tasks control plane endpoint not available: {_e}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.notifications import router as _notifications_router
 
         _include_if_enabled("notifications", _notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Notifications endpoint not available: {_e}")
     _reading_import_enabled = True
-    if _EXPLICIT_PYTEST_RUNTIME and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING"):
+    if (
+        _EXPLICIT_PYTEST_RUNTIME
+        and _MINIMAL_TEST_APP
+        and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING")
+    ):
         _reading_import_enabled = False
         logger.info("Skipping reading endpoint imports in pytest startup (set MINIMAL_TEST_INCLUDE_READING=1 to enable)")
     if _reading_import_enabled:
@@ -6692,6 +6816,7 @@ else:
         )
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    _include_if_enabled("sharing", sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
     _include_if_enabled("llm", mlx_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])

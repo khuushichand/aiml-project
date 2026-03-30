@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs'
 
 import { resolveExtensionId } from './extension-id'
+import { prioritizeExtensionBuildCandidates } from './extension-paths'
 
 async function waitForStorageSeed(page: Page) {
   await page.waitForFunction(
@@ -130,7 +131,16 @@ export interface LaunchWithExtensionResult {
   extensionId: string
   optionsUrl: string
   sidepanelUrl: string
-  openSidepanel: () => Promise<Page>
+  openSidepanel: (target?: string) => Promise<Page>
+}
+
+const resolveSidepanelUrl = (baseUrl: string, target?: string): string => {
+  const normalized = String(target || "").trim()
+  if (!normalized) return baseUrl
+  if (normalized.startsWith("?") || normalized.startsWith("#")) {
+    return `${baseUrl}${normalized}`
+  }
+  return `${baseUrl}#${normalized.startsWith("/") ? normalized : `/${normalized}`}`
 }
 
 export async function launchWithExtension(
@@ -157,11 +167,11 @@ export async function launchWithExtension(
   }
 
   // Pick the first existing extension build so tests work whether dev output or prod build is present.
-  const rawCandidates = [
+  const rawCandidates = prioritizeExtensionBuildCandidates([
     extensionPath,
     path.resolve('.output/chrome-mv3'),
     path.resolve('build/chrome-mv3')
-  ].filter((p) => p && fs.existsSync(p))
+  ]).filter((p) => p && fs.existsSync(p))
   const candidates = rawCandidates.filter(isExtensionBuildDir)
   const allowDev = ['1', 'true', 'yes'].includes(
     String(process.env.TLDW_E2E_ALLOW_DEV || '').toLowerCase()
@@ -251,56 +261,6 @@ export async function launchWithExtension(
     sw.on('console', (msg) => {
       console.log('[SW_CONSOLE]', msg.type(), msg.text())
     })
-
-    // Add a second test listener in the service worker to verify message dispatching
-    try {
-      const listenerResult = await sw.evaluate(() => {
-        const w = globalThis as any
-        let testListenerCalled = false
-        let testListenerMessage: any = null
-
-        // Add a test listener using chrome.runtime directly
-        if (w.chrome?.runtime?.onMessage?.addListener) {
-          w.chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
-            console.log('[TEST_LISTENER] Received message in test listener:', message?.type)
-            if (message?.type === 'e2e:test-listener') {
-              testListenerCalled = true
-              testListenerMessage = message
-              sendResponse({ ok: true, source: 'test-listener' })
-              return true
-            }
-            return false
-          })
-          return { ok: true, listenerAdded: true }
-        }
-        return { ok: false, error: 'no chrome.runtime.onMessage.addListener' }
-      })
-      console.log('[E2E_DEBUG] Test listener added:', JSON.stringify(listenerResult))
-
-      // Now try sending a message to the test listener
-      const testResult = await sw.evaluate(async () => {
-        const w = globalThis as any
-        return new Promise((resolve) => {
-          const timeout = setTimeout(() => resolve({ ok: false, error: 'test-listener timeout' }), 3000)
-          try {
-            w.chrome.runtime.sendMessage({ type: 'e2e:test-listener', data: 'test' }, (response: any) => {
-              clearTimeout(timeout)
-              if (w.chrome.runtime.lastError) {
-                resolve({ ok: false, error: w.chrome.runtime.lastError.message, lastError: true })
-              } else {
-                resolve(response || { ok: false, error: 'no response' })
-              }
-            })
-          } catch (err: any) {
-            clearTimeout(timeout)
-            resolve({ ok: false, error: err?.message })
-          }
-        })
-      })
-      console.log('[E2E_DEBUG] Test listener ping result:', JSON.stringify(testResult))
-    } catch (err) {
-      console.log('[E2E_DEBUG] Test listener error:', err)
-    }
   } else {
     console.log('[E2E_DEBUG] No service worker found after waiting')
   }
@@ -478,9 +438,11 @@ export async function launchWithExtension(
     )
   }
 
-  async function openSidepanel() {
+  async function openSidepanel(target?: string) {
     const p = await context.newPage()
-    await p.goto(sidepanelUrl, { waitUntil: 'domcontentloaded' })
+    await p.goto(resolveSidepanelUrl(sidepanelUrl, target), {
+      waitUntil: 'domcontentloaded'
+    })
     // Ensure the sidepanel tab is visible; some UI only renders when visible.
     try {
       await p.bringToFront()

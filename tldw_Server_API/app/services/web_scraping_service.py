@@ -16,8 +16,11 @@ from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    get_media_repository,
+    managed_media_database,
+)
 from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.testing import env_flag_enabled
@@ -423,28 +426,16 @@ async def process_web_scraping_task(
                     )
                 effective_user_id = user_id
                 db_path = get_user_media_db_path(effective_user_id)
-                db = create_media_database(
+                with managed_media_database(
                     client_id="webscraping_legacy_service",
                     db_path=db_path,
-                )
+                    initialize=False,
+                ) as db:
 
-                # Persist each article in the DB
-                media_ids = []
-                try:
+                    # Persist each article in the DB
+                    media_ids = []
                     for article in result_list:
-                        # Construct info_dict
-                        {
-                            "title": article.get("title", "Untitled"),
-                            "author": "Unknown",
-                            "source": article.get("url", ""),
-                            "scrape_method": scrape_method
-                        }
                         # We'll treat article['content'] as the main text
-                        # If there's a summary, store it in summary field
-                        summary = article.get("summary", "No summary available")
-                        # "Segments" is how your DB manager expects text. We'll store one big chunk:
-                        [{"Text": article.get("content", "")}]
-
                         # Combine content and metadata
                         content_text = article.get("content", "")
 
@@ -491,7 +482,7 @@ async def process_web_scraping_task(
                         except Exception:
                             chunks_for_sql = []
 
-                        media_id, media_uuid, message = db.add_media_with_keywords(
+                        media_id, media_uuid, message = get_media_repository(db).add_media_with_keywords(
                             url=article.get("url", ""),
                             title=article.get("title", "Untitled"),
                             media_type="web_document",
@@ -508,9 +499,6 @@ async def process_web_scraping_task(
                         )
                         if media_id:
                             media_ids.append(media_id)
-                finally:
-                    # Close database connection
-                    db.close_connection()
 
                 return {
                     "status": "persist-ok",

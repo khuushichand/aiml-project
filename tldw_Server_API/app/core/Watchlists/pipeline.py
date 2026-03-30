@@ -45,7 +45,8 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
@@ -140,6 +141,30 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def _ingest_watchlist_media(
+    *,
+    media_db: Any,
+    url: str,
+    title: str,
+    media_type: str,
+    content: str,
+    author: str | None,
+    keywords: list[str],
+    overwrite: bool = False,
+) -> tuple[Any, Any, Any]:
+    """Route watchlist media ingest through the repository API for real DB sessions."""
+    media_writer = get_media_repository(media_db)
+    return media_writer.add_media_with_keywords(
+        url=url,
+        title=title,
+        media_type=media_type,
+        content=content,
+        author=author,
+        keywords=keywords,
+        overwrite=overwrite,
+    )
 
 
 def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
@@ -590,133 +615,142 @@ async def run_watchlist_job(
     elif isinstance(job_output_prefs, dict) and isinstance(job_output_prefs.get("persist_to_media_db"), bool):
         persist_to_media_db = bool(job_output_prefs.get("persist_to_media_db"))
 
-    # Resolve per-user media DB path and instantiate when requested
-    mdb = None
-    if persist_to_media_db:
-        media_db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
-        mdb = create_media_database(client_id=str(user_id), db_path=media_db_path)
-
-    normalized_user_id = str(user_id)
-    companion_activity_db: PersonalizationDB | None = None
-    companion_capture_enabled = False
-    if capture_companion_activity and companion_route and is_personalization_enabled():
-        companion_activity_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
-        companion_profile = companion_activity_db.get_or_create_profile(normalized_user_id)
-        companion_capture_enabled = bool(companion_profile.get("enabled", 0))
-
-    # Fetch scope and sources
-    scope = {}
+    stack = contextlib.ExitStack()
     try:
-        scope = json.loads(job.scope_json or "{}") if job.scope_json else {}
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        # Resolve per-user media DB path and instantiate when requested
+        mdb = None
+        if persist_to_media_db:
+            media_db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
+            mdb = stack.enter_context(
+                managed_media_database(
+                    client_id=str(user_id),
+                    db_path=media_db_path,
+                    initialize=True,
+                    suppress_close_exceptions=_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS,
+                )
+            )
+
+        normalized_user_id = str(user_id)
+        companion_activity_db: PersonalizationDB | None = None
+        companion_capture_enabled = False
+        if capture_companion_activity and companion_route and is_personalization_enabled():
+            companion_activity_db = PersonalizationDB.for_user(user_id)
+            companion_profile = companion_activity_db.get_or_create_profile(normalized_user_id)
+            companion_capture_enabled = bool(companion_profile.get("enabled", 0))
+
+        # Fetch scope and sources
         scope = {}
-    override_ids: list[int] = []
-    if source_ids_override:
-        seen_override: set[int] = set()
-        for raw_id in source_ids_override:
-            try:
-                source_id = int(raw_id)
-            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                continue
-            if source_id <= 0 or source_id in seen_override:
-                continue
-            seen_override.add(source_id)
-            override_ids.append(source_id)
-
-    if override_ids:
-        sources = _select_sources_for_scope(db, {"sources": override_ids})
-    else:
-        sources = _select_sources_for_scope(db, scope or {})
-
-    items_found = 0
-    items_ingested = 0
-    # Allow tags on source to flow into ingestion keywords
-    def _keywords_for_source(sr: SourceRow) -> list[str]:
         try:
-            return [t for t in (sr.tags or []) if t]
+            scope = json.loads(job.scope_json or "{}") if job.scope_json else {}
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-            return []
-
-    # TEST_MODE short-circuit for offline tests: do not perform network
-    test_mode = is_test_mode()
-
-    # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
-    job_filters: list[dict[str, Any]] = []
-    job_require_include: bool | None = None
-    try:
-        if getattr(job, "job_filters_json", None):
-            raw = json.loads(job.job_filters_json or "{}")
-            job_filters = normalize_filters(raw)
-            if isinstance(raw, dict) and "require_include" in raw:
+            scope = {}
+        override_ids: list[int] = []
+        if source_ids_override:
+            seen_override: set[int] = set()
+            for raw_id in source_ids_override:
                 try:
-                    job_require_include = bool(raw.get("require_include"))
+                    source_id = int(raw_id)
                 except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                    job_require_include = None
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-        job_filters = []
-        job_require_include = None
+                    continue
+                if source_id <= 0 or source_id in seen_override:
+                    continue
+                seen_override.add(source_id)
+                override_ids.append(source_id)
 
-    async def _org_require_include_default() -> bool:
-        # Read from active org metadata when available; fallback to env var
+        if override_ids:
+            sources = _select_sources_for_scope(db, {"sources": override_ids})
+        else:
+            sources = _select_sources_for_scope(db, scope or {})
+
+        items_found = 0
+        items_ingested = 0
+        # Allow tags on source to flow into ingestion keywords
+        def _keywords_for_source(sr: SourceRow) -> list[str]:
+            try:
+                return [t for t in (sr.tags or []) if t]
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                return []
+
+        # TEST_MODE short-circuit for offline tests: do not perform network
+        test_mode = is_test_mode()
+
+        # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
+        job_filters: list[dict[str, Any]] = []
+        job_require_include: bool | None = None
         try:
-            scope = get_scope()
-            org_id = getattr(scope, "effective_org_id", None) if scope else None
-            if org_id is not None:
-                pool = await get_db_pool()
-                row = await pool.fetchone("SELECT metadata FROM organizations WHERE id = ?", int(org_id))
-                if row is not None:
-                    meta = row.get("metadata")
+            if getattr(job, "job_filters_json", None):
+                raw = json.loads(job.job_filters_json or "{}")
+                job_filters = normalize_filters(raw)
+                if isinstance(raw, dict) and "require_include" in raw:
                     try:
-                        import json as _json
-                        if isinstance(meta, str):
-                            meta_dict = _json.loads(meta)
-                        elif isinstance(meta, (dict,)):
-                            meta_dict = meta
-                        else:
-                            meta_dict = None
-                        if isinstance(meta_dict, dict):
-                            # Accept either nested or flat key
-                            if isinstance(meta_dict.get("watchlists"), dict):
-                                val = meta_dict.get("watchlists", {}).get("require_include_default")
-                                if isinstance(val, bool):
-                                    return val
-                            flat = meta_dict.get("watchlists_require_include_default")
-                            if isinstance(flat, bool):
-                                return flat
+                        job_require_include = bool(raw.get("require_include"))
                     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                        pass
+                        job_require_include = None
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-            pass
+            job_filters = []
+            job_require_include = None
+
+        async def _org_require_include_default() -> bool:
+            # Read from active org metadata when available; fallback to env var
+            try:
+                scope = get_scope()
+                org_id = getattr(scope, "effective_org_id", None) if scope else None
+                if org_id is not None:
+                    pool = await get_db_pool()
+                    row = await pool.fetchone("SELECT metadata FROM organizations WHERE id = ?", int(org_id))
+                    if row is not None:
+                        meta = row.get("metadata")
+                        try:
+                            import json as _json
+                            if isinstance(meta, str):
+                                meta_dict = _json.loads(meta)
+                            elif isinstance(meta, (dict,)):
+                                meta_dict = meta
+                            else:
+                                meta_dict = None
+                            if isinstance(meta_dict, dict):
+                                # Accept either nested or flat key
+                                if isinstance(meta_dict.get("watchlists"), dict):
+                                    val = meta_dict.get("watchlists", {}).get("require_include_default")
+                                    if isinstance(val, bool):
+                                        return val
+                                flat = meta_dict.get("watchlists_require_include_default")
+                                if isinstance(flat, bool):
+                                    return flat
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                            pass
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                pass
+            try:
+                return env_flag_enabled("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT")
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                return False
+
+        include_rules_exist = any((str(f.get("action")) == "include") for f in job_filters)
+        org_default = await _org_require_include_default()
+        effective_require_include = job_require_include if (job_require_include is not None) else org_default
+        include_gating_active = bool(effective_require_include and include_rules_exist)
+
+        # Filter evaluation statistics
+        filter_stats: dict[str, Any] = {
+            "filters_matched": 0,
+            "filters_actions": {"include": 0, "exclude": 0, "flag": 0},
+            "filter_tallies": {},
+        }
+
+        # Bounded debug logging for filter decisions
         try:
-            return env_flag_enabled("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT")
+            _max_debug = int(os.getenv("WATCHLISTS_FILTER_DEBUG_MAX", "100") or 100)
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-            return False
+            _max_debug = 100
+        _debug_count = 0
 
-    include_rules_exist = any((str(f.get("action")) == "include") for f in job_filters)
-    org_default = await _org_require_include_default()
-    effective_require_include = job_require_include if (job_require_include is not None) else org_default
-    include_gating_active = bool(effective_require_include and include_rules_exist)
+        # History/backfill counters for the run
+        history_pages_total = 0
+        history_any_stop = False
+        history_used = False
 
-    # Filter evaluation statistics
-    filter_stats: dict[str, Any] = {
-        "filters_matched": 0,
-        "filters_actions": {"include": 0, "exclude": 0, "flag": 0},
-        "filter_tallies": {},
-    }
-
-    # Bounded debug logging for filter decisions
-    try:
-        _max_debug = int(os.getenv("WATCHLISTS_FILTER_DEBUG_MAX", "100") or 100)
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-        _max_debug = 100
-    _debug_count = 0
-
-    # History/backfill counters for the run
-    history_pages_total = 0
-    history_any_stop = False
-    history_used = False
-
-    for src in sources:
+        for src in sources:
             source_companion_events: list[dict[str, Any]] = []
             if _run_is_cancelled(db, run.id):
                 logger.info(f"watchlists.run_cancelled: stopping run {run.id} before source {getattr(src, 'id', '?')}")
@@ -893,7 +927,7 @@ async def run_watchlist_job(
                             import random as _rnd
                             j = int(secs * jitter_pct)
                             if j > 0:
-                                secs = max(0, secs + _rnd.randint(-j, j))
+                                secs = max(0, secs + _rnd.randint(-j, j))  # nosec B311
                             from datetime import timedelta as _td
                             defer_until_val = (datetime.utcnow().replace(tzinfo=timezone.utc) + _td(seconds=secs)).isoformat()
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
@@ -1075,7 +1109,8 @@ async def run_watchlist_job(
                         summary_text = article.get("content") or it.get("summary") or ""
                         if persist_to_media_db and mdb is not None:
                             try:
-                                media_id, media_uuid, _msg = mdb.add_media_with_keywords(
+                                media_id, media_uuid, _msg = _ingest_watchlist_media(
+                                    media_db=mdb,
                                     url=article.get("url") or link,
                                     title=article.get("title") or (it.get("title") or "Untitled"),
                                     media_type="article",
@@ -1388,7 +1423,8 @@ async def run_watchlist_job(
                             flagged = False
                         if persist_to_media_db and mdb is not None:
                             try:
-                                media_id, media_uuid, _msg = mdb.add_media_with_keywords(
+                                media_id, media_uuid, _msg = _ingest_watchlist_media(
+                                    media_db=mdb,
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     media_type="article",
@@ -1531,92 +1567,94 @@ async def run_watchlist_job(
                             exc,
                         )
 
-    stats = {"items_found": items_found, "items_ingested": items_ingested}
-    try:
-        if filter_stats["filters_matched"]:
-            stats["filters_matched"] = int(filter_stats["filters_matched"])  # type: ignore[assignment]
-            stats["filters_actions"] = filter_stats["filters_actions"]
-            stats["filter_tallies"] = filter_stats["filter_tallies"]
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-        pass
-    # Attach history/backfill counters when used
-    try:
-        if history_used:
-            stats["history"] = {
-                "pages_fetched": int(history_pages_total),
-                "stop_on_seen_triggered": bool(history_any_stop),
-            }
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-        pass
-
-    if _run_is_cancelled(db, run.id):
-        cancelled_error = "cancelled_by_user"
+        stats = {"items_found": items_found, "items_ingested": items_ingested}
         try:
-            cancelled_run = db.get_run(run.id)
-            if getattr(cancelled_run, "error_msg", None):
-                cancelled_error = str(cancelled_run.error_msg)
+            if filter_stats["filters_matched"]:
+                stats["filters_matched"] = int(filter_stats["filters_matched"])  # type: ignore[assignment]
+                stats["filters_actions"] = filter_stats["filters_actions"]
+                stats["filter_tallies"] = filter_stats["filter_tallies"]
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             pass
-        db.update_run(
-            run.id,
-            status="cancelled",
-            finished_at=_utcnow_iso(),
-            stats_json=json.dumps(stats),
-            error_msg=cancelled_error,
-        )
-        db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=_compute_next_run(job.schedule_expr, job.schedule_timezone))
-        return {"run_id": run.id, "status": "cancelled", **stats}
+        # Attach history/backfill counters when used
+        try:
+            if history_used:
+                stats["history"] = {
+                    "pages_fetched": int(history_pages_total),
+                    "stop_on_seen_triggered": bool(history_any_stop),
+                }
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+            pass
 
-    db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
-
-    # Update job history
-    next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
-    db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=next_run)
-    try:
-        if isinstance(job_output_prefs, dict):
-            _maybe_promote_feed_schedule(db=db, job=job, job_output_prefs=job_output_prefs)
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"collections schedule auto-promote failed for job {job_id}: {exc}")
-
-    # Auto-generate output if configured
-    try:
-        auto_output_id = await _maybe_auto_generate_output(
-            db=db,
-            collections_db=collections_db,
-            user_id=user_id,
-            run=run,
-            job=job,
-            job_output_prefs=job_output_prefs,
-            stats=stats,
-        )
-        if auto_output_id:
-            stats["auto_output_id"] = auto_output_id
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"auto-output generation failed for run {run.id}: {exc}")
-
-    # Trigger audio briefing workflow if configured
-    try:
-        if isinstance(job_output_prefs, dict) and job_output_prefs.get("generate_audio"):
-            from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
-                trigger_audio_briefing,
+        if _run_is_cancelled(db, run.id):
+            cancelled_error = "cancelled_by_user"
+            try:
+                cancelled_run = db.get_run(run.id)
+                if getattr(cancelled_run, "error_msg", None):
+                    cancelled_error = str(cancelled_run.error_msg)
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                pass
+            db.update_run(
+                run.id,
+                status="cancelled",
+                finished_at=_utcnow_iso(),
+                stats_json=json.dumps(stats),
+                error_msg=cancelled_error,
             )
+            db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=_compute_next_run(job.schedule_expr, job.schedule_timezone))
+            return {"run_id": run.id, "status": "cancelled", **stats}
 
-            audio_task_id = await trigger_audio_briefing(
-                user_id=user_id,
-                job_id=job_id,
-                run_id=run.id,
-                output_prefs=job_output_prefs,
+        db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
+
+        # Update job history
+        next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
+        db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=next_run)
+        try:
+            if isinstance(job_output_prefs, dict):
+                _maybe_promote_feed_schedule(db=db, job=job, job_output_prefs=job_output_prefs)
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"collections schedule auto-promote failed for job {job_id}: {exc}")
+
+        # Auto-generate output if configured
+        try:
+            auto_output_id = await _maybe_auto_generate_output(
                 db=db,
+                collections_db=collections_db,
+                user_id=user_id,
+                run=run,
+                job=job,
+                job_output_prefs=job_output_prefs,
+                stats=stats,
             )
-            if audio_task_id:
-                stats["audio_briefing_task_id"] = audio_task_id
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Audio briefing trigger failed for job {job_id}: {exc}")
+            if auto_output_id:
+                stats["auto_output_id"] = auto_output_id
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"auto-output generation failed for run {run.id}: {exc}")
 
-    # Persist post-run augmentation fields (e.g., auto_output_id, audio_briefing_task_id).
-    try:
-        db.update_run(run.id, stats_json=json.dumps(stats))
-    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"post-run stats persistence failed for run {run.id}: {exc}")
+        # Trigger audio briefing workflow if configured
+        try:
+            if isinstance(job_output_prefs, dict) and job_output_prefs.get("generate_audio"):
+                from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
+                    trigger_audio_briefing,
+                )
 
-    return {"run_id": run.id, **stats}
+                audio_task_id = await trigger_audio_briefing(
+                    user_id=user_id,
+                    job_id=job_id,
+                    run_id=run.id,
+                    output_prefs=job_output_prefs,
+                    db=db,
+                )
+                if audio_task_id:
+                    stats["audio_briefing_task_id"] = audio_task_id
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Audio briefing trigger failed for job {job_id}: {exc}")
+
+        # Persist post-run augmentation fields (e.g., auto_output_id, audio_briefing_task_id).
+        try:
+            db.update_run(run.id, stats_json=json.dumps(stats))
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"post-run stats persistence failed for run {run.id}: {exc}")
+
+        return {"run_id": run.id, **stats}
+    finally:
+        stack.close()

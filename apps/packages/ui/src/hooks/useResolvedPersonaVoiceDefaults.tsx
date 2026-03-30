@@ -3,6 +3,10 @@ import { useStorage } from "@plasmohq/storage/hook"
 
 import { useSttSettings } from "@/hooks/useSttSettings"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
+import {
+  DEFAULT_TLDW_TTS_VOICE,
+  DEFAULT_TTS_PROVIDER
+} from "@/services/tts"
 
 export type PersonaConfirmationMode =
   | "always"
@@ -42,8 +46,6 @@ export type ResolvedPersonaVoiceDefaults = {
 }
 
 const DEFAULT_STT_LANGUAGE = "en-US"
-const DEFAULT_TTS_PROVIDER = "browser"
-const DEFAULT_TLDW_VOICE = "af_heart"
 const DEFAULT_OPENAI_VOICE = "alloy"
 const DEFAULT_CONFIRMATION_MODE: PersonaConfirmationMode = "destructive_only"
 export const PERSONA_TURN_DETECTION_BALANCED_DEFAULTS = {
@@ -84,7 +86,7 @@ const resolveDefaultTtsVoice = (
   if (normalizedProvider === "elevenlabs") {
     return normalizeText(elevenLabsVoice) || ""
   }
-  return normalizeText(tldwVoice) || DEFAULT_TLDW_VOICE
+  return normalizeText(tldwVoice) || DEFAULT_TLDW_TTS_VOICE
 }
 
 export const useResolvedPersonaVoiceDefaults = (
@@ -101,7 +103,7 @@ export const useResolvedPersonaVoiceDefaults = (
     DEFAULT_STT_LANGUAGE
   )
   const [ttsProvider] = useStorage("ttsProvider", DEFAULT_TTS_PROVIDER)
-  const [tldwTtsVoice] = useStorage("tldwTtsVoice", DEFAULT_TLDW_VOICE)
+  const [tldwTtsVoice] = useStorage("tldwTtsVoice", DEFAULT_TLDW_TTS_VOICE)
   const [openAITTSVoice] = useStorage("openAITTSVoice", DEFAULT_OPENAI_VOICE)
   const [elevenLabsVoiceId] = useStorage("elevenLabsVoiceId", "")
 

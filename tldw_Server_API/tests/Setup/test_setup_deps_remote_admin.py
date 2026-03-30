@@ -101,3 +101,38 @@ async def test_require_local_setup_access_calls_admin_guard(monkeypatch):
     await setup_deps.require_local_setup_access(_make_request())
 
     assert called["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_require_shared_audio_installer_access_rejects_non_admin(monkeypatch):
+    async def fake_get_auth_principal(_request):
+        return AuthPrincipal(kind="user", user_id=999, roles=["user"], permissions=[], is_admin=False)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_auth_principal",
+        fake_get_auth_principal,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await setup_deps.require_shared_audio_installer_access(_make_request())
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_shared_audio_installer_access_allows_admin_claims(monkeypatch):
+    async def fake_get_auth_principal(_request):
+        return AuthPrincipal(
+            kind="user",
+            user_id=999,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=False,
+        )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_auth_principal",
+        fake_get_auth_principal,
+    )
+
+    await setup_deps.require_shared_audio_installer_access(_make_request())

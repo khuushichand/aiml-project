@@ -1,4 +1,5 @@
 import type { TldwConfig } from "@/services/tldw/TldwApiClient"
+import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 
 type StreamEventType = "snapshot" | "run_update" | "log" | "complete" | "heartbeat"
 
@@ -153,7 +154,7 @@ export const buildWatchlistsRunWebSocketUrl = (
     throw new Error("tldw server is not configured")
   }
 
-  const base = serverUrl.replace(/^http/i, "ws").replace(/\/$/, "")
+  const base = resolveBrowserWebSocketBase(serverUrl)
   const params = new URLSearchParams()
 
   if (config.authMode === "multi-user") {

@@ -5,6 +5,11 @@ import { getStoredTldwServerURL } from "@/services/tldw-server"
 import { apiSend } from "@/services/api-send"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
+  resolveWebUiQuickstartServerUrl,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
+import {
   ConnectionPhase,
   type ConnectionState,
   type KnowledgeStatus,
@@ -167,19 +172,21 @@ const ensurePlaceholderConfig = async (): Promise<string | null> => {
   }
 }
 
-const deriveKnowledgeStatusFromHealth = (raw: any): KnowledgeStatus => {
+const deriveKnowledgeStatusFromHealth = (raw: unknown): KnowledgeStatus => {
   try {
     if (!raw || typeof raw !== "object") {
       return "ready"
     }
-    const components = (raw as any).components
+    const obj = raw as Record<string, unknown>
+    const components = obj.components
     if (components && typeof components === "object") {
-      const search =
-        (components as any).search_index || (components as any).searchIndex
+      const comp = components as Record<string, unknown>
+      const search = comp.search_index || comp.searchIndex
       if (search && typeof search === "object") {
-        const status = String((search as any).status || "").toLowerCase()
-        const message = String((search as any).message || "")
-        const rawCount = (search as any).fts_table_count
+        const s = search as Record<string, unknown>
+        const status = String(s.status || "").toLowerCase()
+        const message = String(s.message || "")
+        const rawCount = s.fts_table_count
         const ftsCount =
           typeof rawCount === "number" && Number.isFinite(rawCount)
             ? rawCount
@@ -212,6 +219,40 @@ const getCurrentBrowserOrigin = (): string | null => {
   if (typeof window === "undefined") return null
   try {
     return window.location?.origin ?? null
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin: getCurrentBrowserOrigin(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
+    })
   } catch {
     return null
   }
@@ -282,7 +323,10 @@ const probeServerLiveness = async (
     if (controller) {
       timeoutId = setTimeout(() => controller.abort(), safeTimeoutMs)
     }
-    const response = await fetch(`${String(serverUrl).replace(/\/$/, "")}${HEALTH_LIVENESS_PATH}`, {
+    const response = await fetch(resolveBrowserRequestTransport({
+      config: { serverUrl },
+      path: HEALTH_LIVENESS_PATH
+    }).url, {
       method: "GET",
       credentials: "omit",
       signal: controller?.signal
@@ -395,6 +439,10 @@ const initialState: ConnectionState = {
 const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const cfg = await tldwClient.getConfig()
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    if (quickstartWebUiServerUrl) {
+      return quickstartWebUiServerUrl
+    }
     if (cfg?.serverUrl) return cfg.serverUrl
   } catch {
     // ignore config read errors
@@ -403,6 +451,10 @@ const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const storage = createSafeStorage()
     const cfg = await storage.get<TldwConfig>("tldwConfig")
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    if (quickstartWebUiServerUrl) {
+      return quickstartWebUiServerUrl
+    }
     if (cfg?.serverUrl) return cfg.serverUrl
   } catch {
     // ignore storage read errors
@@ -453,12 +505,10 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
   state: initialState,
 
   async checkOnce() {
-    console.log('[CONN_DEBUG] checkOnce called')
     const prev = get().state
 
     // Avoid overlapping checks
     if (prev.isChecking) {
-      console.log('[CONN_DEBUG] checkOnce skipped - already checking')
       return
     }
 
@@ -467,7 +517,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     const persistedServerUrl = await getPersistedServerUrl()
     const forceUnconfigured = await getForceUnconfiguredFlag()
     const bypass = await getOfflineBypassFlag()
-    console.log('[CONN_DEBUG] flags loaded', { persistedFirstRun, persistedServerUrl, forceUnconfigured, bypass })
 
     const currentState =
       !prev.hasCompletedFirstRun && persistedFirstRun
@@ -570,13 +619,22 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
     try {
       let cfg = await tldwClient.getConfig()
-      let serverUrl = cfg?.serverUrl ?? null
-      console.log('[CONN_DEBUG] tldwClient.getConfig result', {
-        hasConfig: !!cfg,
-        serverUrl: cfg?.serverUrl,
-        authMode: cfg?.authMode,
-        hasApiKey: !!cfg?.apiKey
-      })
+      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+      const recoveryProbeSourceServerUrl = cfg?.serverUrl ?? currentState.serverUrl ?? null
+      let serverUrl = quickstartWebUiServerUrl ?? cfg?.serverUrl ?? null
+
+      if (
+        quickstartWebUiServerUrl &&
+        cfg?.serverUrl !== quickstartWebUiServerUrl
+      ) {
+        await tldwClient.updateConfig({ serverUrl: quickstartWebUiServerUrl })
+        cfg = {
+          ...(cfg || {}),
+          serverUrl: quickstartWebUiServerUrl,
+          authMode: cfg?.authMode || "single-user"
+        } as TldwConfig
+        serverUrl = quickstartWebUiServerUrl
+      }
 
       if (!serverUrl) {
         try {
@@ -651,7 +709,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       }
 
       await tldwClient.initialize()
-      console.log('[CONN_DEBUG] tldwClient initialized, starting health check')
 
       // Request health via background for detailed status codes.
       // Health endpoints may require auth; apiSend injects headers based
@@ -660,11 +717,9 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         (!cfg.apiKey &&
           !cfg.accessToken &&
           cfg.authMode !== "multi-user")
-      console.log('[CONN_DEBUG] health check noAuth', { noAuthForHealth, hasApiKey: !!cfg?.apiKey, authMode: cfg?.authMode })
 
       const healthPromise = (async () => {
         try {
-          console.log('[CONN_DEBUG] calling apiSend for health')
           const resp = await apiSend({
             path: HEALTH_LIVENESS_PATH,
             method: 'GET',
@@ -675,10 +730,8 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             // health should run with auth.
             noAuth: noAuthForHealth
           })
-          console.log('[CONN_DEBUG] apiSend health response', { ok: resp?.ok, status: resp?.status, error: resp?.error })
           return { ok: Boolean(resp?.ok), status: Number(resp?.status) || 0, error: resp?.ok ? null : (resp?.error || null) }
         } catch (e) {
-          console.log('[CONN_DEBUG] apiSend health exception', { error: String(e) })
           return { ok: false, status: 0, error: (e as Error)?.message || 'Network error' }
         }
       })()
@@ -688,34 +741,29 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           setTimeout(() => resolve({ ok: false, status: 0, error: 'timeout' }), CONNECTION_TIMEOUT_MS)
         )
       ])
-      console.log('[CONN_DEBUG] health check result', { ok: healthResult.ok, status: healthResult.status, error: healthResult.error })
 
-      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(serverUrl)
+      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(
+        quickstartWebUiServerUrl ? recoveryProbeSourceServerUrl : serverUrl
+      )
       if (
         !healthResult.ok &&
         healthResult.status === 0 &&
         isNetworkTransportFailure(healthResult.error) &&
         fallbackServerUrl
       ) {
-        console.log("[CONN_DEBUG] attempting stale-host recovery probe", {
-          from: serverUrl,
-          to: fallbackServerUrl
-        })
         const probeOk = await probeServerLiveness(
           fallbackServerUrl,
           Math.min(5_000, CONNECTION_TIMEOUT_MS)
         )
-        console.log("[CONN_DEBUG] stale-host recovery probe result", {
-          serverUrl: fallbackServerUrl,
-          ok: probeOk
-        })
         if (probeOk) {
-          await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
-          serverUrl = fallbackServerUrl
-          cfg = {
-            ...(cfg || {}),
-            serverUrl: fallbackServerUrl
-          } as TldwConfig
+          if (!quickstartWebUiServerUrl) {
+            await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
+            serverUrl = fallbackServerUrl
+            cfg = {
+              ...(cfg || {}),
+              serverUrl: fallbackServerUrl
+            } as TldwConfig
+          }
           const fallbackNoAuth = !cfg ||
             (!cfg.apiKey &&
               !cfg.accessToken &&
@@ -731,11 +779,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             status: Number(fallbackResp?.status) || 0,
             error: fallbackResp?.ok ? null : (fallbackResp?.error || null)
           }
-          console.log("[CONN_DEBUG] stale-host recovery health result", {
-            ok: healthResult.ok,
-            status: healthResult.status,
-            error: healthResult.error
-          })
         }
       }
 
@@ -756,7 +799,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
       if (ok && shouldRefreshKnowledge) {
         try {
-          console.log('[CONN_DEBUG] starting RAG health check')
           // Add timeout to RAG health check to prevent hanging
           // Increased from 5s to 15s to avoid false "offline" status when RAG is slow but working
           const ragPromise = tldwClient.ragHealth()
@@ -764,7 +806,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             setTimeout(() => resolve(null), 15000)
           )
           const rag = await Promise.race([ragPromise, ragTimeout])
-          console.log('[CONN_DEBUG] RAG health result', { hasResult: !!rag, timedOut: rag === null })
           if (rag !== null) {
             knowledgeStatus = deriveKnowledgeStatusFromHealth(rag)
           } else {
@@ -776,7 +817,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             knowledgeError = "no-index"
           }
         } catch (e) {
-          console.log('[CONN_DEBUG] RAG health error', { error: String(e) })
           knowledgeStatus = "offline"
           knowledgeLastCheckedAt = Date.now()
           knowledgeError = (e as Error)?.message ?? "unknown-error"
@@ -830,13 +870,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         return
       }
 
-      console.log('[CONN_DEBUG] about to set final state', {
-        ok,
-        phase: ok ? 'CONNECTED' : 'ERROR',
-        serverUrl,
-        knowledgeStatus,
-        errorKind
-      })
       set({
         state: {
           ...currentState,
@@ -861,7 +894,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           checksSinceConfigChange: nextChecksSinceConfigChange
         }
       })
-      console.log('[CONN_DEBUG] state updated, new state:', get().state.phase, get().state.isConnected)
     } catch (error) {
       const fallbackError =
         maybeAnnotateCorsMismatchError({

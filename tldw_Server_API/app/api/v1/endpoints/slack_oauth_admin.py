@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import key_hint_for_a
 async def slack_oauth_start_impl(
     *,
     user: User,
+    workspace_org_id: int | None,
     oauth_client_id: Callable[[], str | None],
     oauth_redirect_uri: Callable[[], str],
     oauth_state_ttl_seconds: Callable[[], int],
@@ -35,7 +36,10 @@ async def slack_oauth_start_impl(
     expires_at = now + timedelta(seconds=max(1, oauth_state_ttl_seconds()))
 
     state_repo = await get_oauth_state_repo()
-    state_secret = encrypt_slack_payload({"nonce": secrets.token_urlsafe(24)})
+    state_payload: dict[str, Any] = {"nonce": secrets.token_urlsafe(24)}
+    if workspace_org_id is not None:
+        state_payload["org_id"] = int(workspace_org_id)
+    state_secret = encrypt_slack_payload(state_payload)
     await state_repo.create_state(
         state=state,
         user_id=int(user.id),
@@ -74,6 +78,8 @@ async def slack_oauth_callback_impl(
     oauth_token_url: Callable[[], str],
     slack_oauth_token_exchange: Callable[..., Awaitable[dict[str, Any]]],
     get_user_secret_repo: Callable[[], Awaitable[Any]],
+    get_workspace_provider_installations_repo: Callable[[], Awaitable[Any]],
+    resolve_workspace_org_id: Callable[[int], Awaitable[int]],
     decrypt_slack_payload: Callable[[Any], Any],
     normalize_installations_payload: Callable[[Any], dict[str, Any]],
     encrypt_slack_payload: Callable[[dict[str, Any]], str],
@@ -103,6 +109,16 @@ async def slack_oauth_callback_impl(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OAuth state is missing redirect metadata",
         )
+
+    state_payload = decrypt_slack_payload(state_record.get("pkce_verifier_encrypted"))
+    state_org_id: int | None = None
+    if isinstance(state_payload, dict):
+        try:
+            candidate = int(state_payload.get("org_id"))
+            if candidate > 0:
+                state_org_id = candidate
+        except (TypeError, ValueError):
+            state_org_id = None
 
     user_id_raw = state_record.get("user_id")
     try:
@@ -190,6 +206,17 @@ async def slack_oauth_callback_impl(
         updated_by=user_id,
     )
 
+    workspace_repo = await get_workspace_provider_installations_repo()
+    org_id = state_org_id if state_org_id is not None else await resolve_workspace_org_id(user_id)
+    await workspace_repo.upsert_installation(
+        org_id=int(org_id),
+        provider="slack",
+        external_id=team_id,
+        display_name=team_name,
+        installed_by_user_id=user_id,
+        disabled=False,
+    )
+
     return {
         "ok": True,
         "status": "installed",
@@ -265,6 +292,8 @@ async def slack_admin_delete_installation_impl(
     user: User,
     coerce_nonempty_string: Callable[[Any], str | None],
     get_user_secret_repo: Callable[[], Awaitable[Any]],
+    get_workspace_provider_installations_repo: Callable[[], Awaitable[Any]],
+    resolve_workspace_org_id: Callable[[int], Awaitable[int]],
     decrypt_slack_payload: Callable[[Any], Any],
     normalize_installations_payload: Callable[[Any], dict[str, Any]],
     encrypt_slack_payload: Callable[[dict[str, Any]], str],
@@ -307,6 +336,14 @@ async def slack_admin_delete_installation_impl(
             created_by=user_id,
             updated_by=user_id,
         )
+
+    workspace_repo = await get_workspace_provider_installations_repo()
+    org_id = await resolve_workspace_org_id(user_id)
+    await workspace_repo.delete_installation(
+        org_id=int(org_id),
+        provider="slack",
+        external_id=cleaned_team_id,
+    )
     return {"ok": True, "status": "deleted", "team_id": cleaned_team_id}
 
 
@@ -317,6 +354,8 @@ async def slack_admin_set_installation_state_impl(
     user: User,
     coerce_nonempty_string: Callable[[Any], str | None],
     get_user_secret_repo: Callable[[], Awaitable[Any]],
+    get_workspace_provider_installations_repo: Callable[[], Awaitable[Any]],
+    resolve_workspace_org_id: Callable[[int], Awaitable[int]],
     decrypt_slack_payload: Callable[[Any], Any],
     normalize_installations_payload: Callable[[Any], dict[str, Any]],
     encrypt_slack_payload: Callable[[dict[str, Any]], str],
@@ -351,6 +390,15 @@ async def slack_admin_set_installation_state_impl(
         updated_at=now,
         created_by=user_id,
         updated_by=user_id,
+    )
+
+    workspace_repo = await get_workspace_provider_installations_repo()
+    org_id = await resolve_workspace_org_id(user_id)
+    await workspace_repo.set_disabled(
+        org_id=int(org_id),
+        provider="slack",
+        external_id=cleaned_team_id,
+        disabled=disabled,
     )
     return {
         "ok": True,

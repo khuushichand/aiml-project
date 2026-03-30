@@ -65,6 +65,28 @@ async def test_get_active_org_id_uses_primary_org(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_active_org_id_accepts_primary_org_id_alias(monkeypatch):
+    principal = _DummyPrincipal(user_id=22)
+
+    async def fake_get_user_orgs(p: object):
+        assert p is principal
+        return [{"id": 321}, {"id": 654}]
+
+    async def fake_membership(*_args, **_kwargs):
+        raise AssertionError("membership lookup should not be called without org_id/header")
+
+    monkeypatch.setattr(org_deps, "_get_user_org_membership", fake_membership)
+    monkeypatch.setattr(org_deps, "get_user_orgs", fake_get_user_orgs)
+
+    org_id = await org_deps.get_active_org_id(
+        principal=principal,
+        x_tldw_org_id=None,
+        org_id=None,
+    )
+    assert org_id == 321
+
+
+@pytest.mark.asyncio
 async def test_get_active_org_id_returns_none_when_no_orgs(monkeypatch):
     principal = _DummyPrincipal(user_id=3)
 

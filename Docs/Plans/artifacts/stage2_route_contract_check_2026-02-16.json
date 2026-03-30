@@ -1,1 +1,117 @@
-{"status":"archived_placeholder","source":"Original stage2 contract check artifact was not retained in this repository snapshot."}
+{
+  "generatedAt": "2026-03-23T13:34:25.720Z",
+  "baseUrl": "http://localhost:8091",
+  "routeCount": 11,
+  "results": [
+    {
+      "route": "/admin/data-ops",
+      "status": 200,
+      "finalPath": "/admin/data-ops",
+      "redirected": false,
+      "hasPlaceholderPanel": false,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/admin/watchlists-runs",
+      "status": 200,
+      "finalPath": "/admin/watchlists-runs",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/admin/watchlists-items",
+      "status": 200,
+      "finalPath": "/admin/watchlists-items",
+      "redirected": false,
+      "hasPlaceholderPanel": false,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/connectors",
+      "status": 200,
+      "finalPath": "/connectors",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/connectors/sources",
+      "status": 200,
+      "finalPath": "/connectors/sources",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/connectors/jobs",
+      "status": 200,
+      "finalPath": "/connectors/jobs",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/connectors/browse",
+      "status": 200,
+      "finalPath": "/connectors/browse",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/profile",
+      "status": 200,
+      "finalPath": "/profile",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/config",
+      "status": 200,
+      "finalPath": "/config",
+      "redirected": false,
+      "hasPlaceholderPanel": true,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/admin/orgs",
+      "status": 200,
+      "finalPath": "/admin/orgs",
+      "redirected": false,
+      "hasPlaceholderPanel": false,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    },
+    {
+      "route": "/admin/maintenance",
+      "status": 200,
+      "finalPath": "/admin/maintenance",
+      "redirected": false,
+      "hasPlaceholderPanel": false,
+      "hasRedirectPanel": false,
+      "hasExpectedTitle": true,
+      "hasAdminGuard": false
+    }
+  ]
+}

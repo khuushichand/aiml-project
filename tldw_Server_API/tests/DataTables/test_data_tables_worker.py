@@ -4,7 +4,7 @@ import pytest
 
 from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import DATA_TABLES_MAX_ROWS_LIMIT
 from tldw_Server_API.app.core.Data_Tables import jobs_worker
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
@@ -129,3 +129,59 @@ def test_extract_json_payload_rejects_malformed_json():
     with pytest.raises(DataTablesJobError) as exc:
         jobs_worker._extract_json_payload("not valid json")
     assert "llm_response_invalid_json" in str(exc.value)
+
+
+def test_extract_media_text_uses_document_version_before_transcript(monkeypatch):
+    class StubDb:
+        def get_media_by_id(
+            self,
+            media_id: int,
+            include_deleted: bool = False,
+            include_trash: bool = False,
+        ):
+            return {"id": media_id, "content": ""}
+
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_document_version",
+        lambda db, media_id, version_number=None, include_content=True: {
+            "content": "document version fallback"
+        },
+    )
+
+    def _should_not_call_transcription(*args, **kwargs):
+        raise AssertionError("get_latest_transcription should not be called when document version exists")
+
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_latest_transcription",
+        _should_not_call_transcription,
+    )
+
+    result = jobs_worker._extract_media_text(StubDb(), 7)
+    assert result == "document version fallback"
+
+
+def test_extract_media_text_uses_transcript_when_document_version_missing(monkeypatch):
+    class StubDb:
+        def get_media_by_id(
+            self,
+            media_id: int,
+            include_deleted: bool = False,
+            include_trash: bool = False,
+        ):
+            return {"id": media_id, "content": ""}
+
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_document_version",
+        lambda db, media_id, version_number=None, include_content=True: None,
+    )
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_latest_transcription",
+        lambda db, media_id: "transcript fallback",
+    )
+
+    result = jobs_worker._extract_media_text(StubDb(), 8)
+    assert result == "transcript fallback"

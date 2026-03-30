@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { tldwClient } from "@/services/tldw"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
 import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { Annotation, AnnotationColor } from "@/components/DocumentWorkspace/types"
@@ -27,7 +28,10 @@ function syncAnnotationsWithBeacon(
   }
 
   try {
-    const url = `${serverUrl}/api/v1/media/${mediaId}/annotations/sync`
+    const url = resolveBrowserRequestTransport({
+      config: { serverUrl },
+      path: `/api/v1/media/${mediaId}/annotations/sync`
+    }).url
     const payload = JSON.stringify({
       annotations: pendingAnnotations.map((ann) => ({
         location: String(ann.location),

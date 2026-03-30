@@ -1,6 +1,7 @@
 import React from "react"
 import { Moon, Sun } from "lucide-react"
 
+import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import {
   useConnectionActions,
   useConnectionState,
@@ -9,11 +10,25 @@ import {
 import { ConnectionPhase } from "@/types/connection"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { useDarkMode } from "@/hooks/useDarkmode"
-import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import OptionLayout from "~/components/Layouts/Layout"
-import { LandingHub } from "~/components/Option/LandingHub"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
+
+const LazyOnboardingWizard = React.lazy(() =>
+  import("@/components/Option/Onboarding/OnboardingWizard").then((module) => ({
+    default: module.OnboardingWizard
+  }))
+)
+
+const LazyCompanionHomeShell = React.lazy(() =>
+  import("@/components/Option/CompanionHome").then((module) => ({
+    default: module.CompanionHomeShell
+  }))
+)
+
+const LazyOptionHostedHome = React.lazy(() => import("./option-hosted-home"))
 
 const OptionIndex = () => {
+  const hostedMode = isHostedTldwDeployment()
   const { phase } = useConnectionState()
   const { hasCompletedFirstRun } = useConnectionUxState()
   const { checkOnce, beginOnboarding, markFirstRunComplete } = useConnectionActions()
@@ -22,6 +37,10 @@ const OptionIndex = () => {
   const [didHydrate, setDidHydrate] = React.useState(false)
 
   React.useEffect(() => {
+    if (hostedMode) {
+      setDidHydrate(true)
+      return
+    }
     let cancelled = false
     const run = async () => {
       try {
@@ -34,15 +53,17 @@ const OptionIndex = () => {
     return () => {
       cancelled = true
     }
-  }, [checkOnce])
+  }, [checkOnce, hostedMode])
 
   React.useEffect(() => {
+    if (hostedMode) return
     if (hasCompletedFirstRun) {
       void checkOnce()
     }
-  }, [checkOnce, hasCompletedFirstRun])
+  }, [checkOnce, hasCompletedFirstRun, hostedMode])
 
   React.useEffect(() => {
+    if (hostedMode) return
     if (!didHydrate) return
     if (hasCompletedFirstRun) return
     if (onboardingInitiated.current) return
@@ -50,9 +71,26 @@ const OptionIndex = () => {
 
     onboardingInitiated.current = true
     void beginOnboarding()
-  }, [beginOnboarding, didHydrate, hasCompletedFirstRun, phase])
+  }, [beginOnboarding, didHydrate, hasCompletedFirstRun, hostedMode, phase])
 
   useFocusComposerOnConnect(phase ?? null)
+
+  if (hostedMode) {
+    return (
+      <OptionLayout hideHeader hideSidebar>
+        <React.Suspense
+          fallback={
+            <PageAssistLoader
+              label="Loading home..."
+              description="Preparing your workspace"
+            />
+          }
+        >
+          <LazyOptionHostedHome />
+        </React.Suspense>
+      </OptionLayout>
+    )
+  }
 
   // During first-time setup, hide the connection shell entirely and show only
   // the onboarding wizard (“Welcome — Let’s get you connected”).
@@ -85,23 +123,41 @@ const OptionIndex = () => {
             </button>
           </div>
         </div>
-        <OnboardingWizard
-          onFinish={async () => {
-            try {
-              await markFirstRunComplete()
-            } catch {
-              // ignore markFirstRunComplete failures here; connection state will self-heal on next load
-            }
-            void checkOnce().catch(() => undefined)
-          }}
-        />
+        <React.Suspense
+          fallback={
+            <PageAssistLoader
+              label="Loading setup..."
+              description="Preparing onboarding"
+            />
+          }
+        >
+          <LazyOnboardingWizard
+            onFinish={async () => {
+              try {
+                await markFirstRunComplete()
+              } catch {
+                // ignore markFirstRunComplete failures here; connection state will self-heal on next load
+              }
+              void checkOnce().catch(() => undefined)
+            }}
+          />
+        </React.Suspense>
       </OptionLayout>
     )
   }
 
   return (
     <OptionLayout>
-      <LandingHub />
+      <React.Suspense
+        fallback={
+          <PageAssistLoader
+            label="Loading home..."
+            description="Preparing your dashboard"
+          />
+        }
+      >
+        <LazyCompanionHomeShell surface="options" />
+      </React.Suspense>
     </OptionLayout>
   )
 }

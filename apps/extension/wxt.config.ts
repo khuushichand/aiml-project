@@ -54,6 +54,7 @@ export default defineConfig({
       }
     },
     build: {
+      modulePreload: false,
       rollupOptions: {
         onwarn(warning, warn) {
           if (

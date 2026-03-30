@@ -64,6 +64,54 @@ class TestJWTServiceUnit:
         assert "iat" in payload
         assert "jti" in payload
 
+    def test_create_admin_reauth_token(self, jwt_service):
+
+        """Test creating a dedicated admin reauthentication token."""
+        token = jwt_service.create_admin_reauth_token(
+            email="admin@example.com",
+            user_id=7,
+            expires_in_minutes=5,
+        )
+
+        assert token is not None
+        assert isinstance(token, str)
+
+        payload = jwt_service.verify_token(token, token_type="admin_reauth")
+
+        assert payload["sub"] == "7"
+        assert payload["user_id"] == 7
+        assert payload["email"] == "admin@example.com"
+        assert payload["type"] == "admin_reauth"
+        assert "exp" in payload
+        assert "iat" in payload
+        assert "jti" in payload
+
+    def test_create_magic_link_token_does_not_log_raw_email(self, jwt_service, monkeypatch):
+
+        """Token creation debug logs should not emit the raw recipient email."""
+        jwt_service.settings.PII_REDACT_LOGS = False
+        debug_calls: list[tuple[object, ...]] = []
+
+        def _capture_debug(*args):  # noqa: ANN002
+            debug_calls.append(args)
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.AuthNZ.jwt_service.logger.debug",
+            _capture_debug,
+        )
+
+        token = jwt_service.create_magic_link_token(
+            email="person@example.com",
+            user_id=42,
+            expires_in_minutes=5,
+        )
+
+        assert isinstance(token, str)
+        assert debug_calls
+        combined = " ".join(str(part) for call in debug_calls for part in call)
+        assert "person@example.com" not in combined
+        assert "42" in combined or "redacted" in combined.lower()
+
     def test_decode_access_token_valid(self, jwt_service):
 
         """Test decoding a valid access token."""

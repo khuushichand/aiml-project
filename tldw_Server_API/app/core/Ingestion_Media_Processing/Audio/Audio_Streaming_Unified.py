@@ -513,9 +513,13 @@ class SileroTurnDetector:
         # Backend: original Silero via torch.hub
         try:
             try:
-                from .VAD_Lib import _lazy_import_silero_vad  # type: ignore
+                from .VAD_Lib import (
+                    _lazy_import_silero_vad,  # type: ignore
+                    get_silero_vad_unavailable_reason,
+                )
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 _lazy_import_silero_vad = None  # type: ignore
+                get_silero_vad_unavailable_reason = lambda: None  # type: ignore
 
             if _lazy_import_silero_vad is None:
                 self.unavailable_reason = "silero_vad_not_available"
@@ -528,8 +532,12 @@ class SileroTurnDetector:
                 VADIterator = utils[3]
 
             if not model or VADIterator is None:
-                self.unavailable_reason = "silero_vad_not_available"
-                logger.warning("Silero VAD unavailable; continuing without auto-commit")
+                self.unavailable_reason = (
+                    get_silero_vad_unavailable_reason() or "silero_vad_not_available"
+                )
+                logger.warning(
+                    f"Silero VAD unavailable ({self.unavailable_reason}); continuing without auto-commit"
+                )
                 return
 
             self._iterator = VADIterator(

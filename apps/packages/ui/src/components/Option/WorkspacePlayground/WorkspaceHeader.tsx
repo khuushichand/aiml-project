@@ -31,7 +31,8 @@ import {
   Upload,
   MoreHorizontal,
   Settings,
-  Star
+  Star,
+  Share2
 } from "lucide-react"
 import type {
   SavedWorkspace,
@@ -66,6 +67,7 @@ import {
   formatWorkspaceLastAccessed,
   groupWorkspacesByCollection
 } from "./workspace-header.utils"
+import { ShareDialog } from "./ShareDialog"
 import {
   normalizeWorkspaceBannerImage,
   WorkspaceBannerImageNormalizationError
@@ -89,6 +91,7 @@ interface WorkspaceHeaderProps {
   rightPaneOpen: boolean
   onToggleLeftPane: () => void
   onToggleRightPane: () => void
+  onOpenSplitWorkspace?: () => void
   /** Hide pane toggle buttons (for mobile layout) */
   hideToggles?: boolean
   /** Approximate persisted workspace payload bytes in local storage */
@@ -141,6 +144,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   rightPaneOpen,
   onToggleLeftPane,
   onToggleRightPane,
+  onOpenSplitWorkspace,
   hideToggles = false,
   storageUsedBytes,
   storageQuotaBytes,
@@ -195,6 +199,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       return next
     })
   }, [])
+  const [shareDialogOpen, setShareDialogOpen] = React.useState(false)
   const [bannerModalOpen, setBannerModalOpen] = React.useState(false)
   const [bannerTitleDraft, setBannerTitleDraft] = React.useState("")
   const [bannerSubtitleDraft, setBannerSubtitleDraft] = React.useState("")
@@ -1437,6 +1442,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             ),
             onClick: handleOpenCustomizeBannerModal
           },
+          ...(onOpenSplitWorkspace
+            ? [
+                {
+                  key: "split-workspace",
+                  icon: <PanelLeftOpen className="h-4 w-4" />,
+                  label: t(
+                    "playground:workspace.splitWorkspace",
+                    "Split workspace"
+                  ),
+                  onClick: onOpenSplitWorkspace
+                }
+              ]
+            : []),
           { type: "divider" as const, key: "divider-current-actions" }
         ]
       : []),
@@ -1639,6 +1657,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             <ChevronDown className="h-4 w-4 text-text-muted" />
           </button>
         </Dropdown>
+
+        {/* Share Button */}
+        <Tooltip title={t("playground:workspace.share", "Share workspace")}>
+          <button
+            type="button"
+            data-testid="workspace-share-button"
+            className="flex items-center justify-center rounded-lg border border-border bg-surface p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text"
+            aria-label={t("playground:workspace.share", "Share workspace")}
+            onClick={() => setShareDialogOpen(true)}
+          >
+            <Share2 className="h-4 w-4" />
+          </button>
+        </Tooltip>
 
         {/* Settings Kebab Menu */}
         <Dropdown
@@ -2402,6 +2433,15 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           )}
         </div>
       </Modal>
+
+      {/* Share Dialog */}
+      {workspaceId && (
+        <ShareDialog
+          workspaceId={workspaceId}
+          open={shareDialogOpen}
+          onClose={() => setShareDialogOpen(false)}
+        />
+      )}
     </header>
   )
 }

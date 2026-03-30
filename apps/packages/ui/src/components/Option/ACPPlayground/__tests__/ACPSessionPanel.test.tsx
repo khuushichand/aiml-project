@@ -8,6 +8,10 @@ const { useStorageMock } = vi.hoisted(() => ({
   useStorageMock: vi.fn(),
 }))
 
+const { getConfigMock } = vi.hoisted(() => ({
+  getConfigMock: vi.fn(),
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -27,6 +31,12 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@plasmohq/storage/hook", () => ({
   useStorage: useStorageMock,
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getConfig: getConfigMock,
+  },
 }))
 
 vi.mock("../ACPSessionCreateModal", () => ({
@@ -49,6 +59,12 @@ describe("ACPSessionPanel filters and sorting", () => {
 
     useStorageMock.mockImplementation((_key: string, defaultValue: unknown) => {
       return [defaultValue, vi.fn(), { isLoading: false }] as const
+    })
+    getConfigMock.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "test-key",
+      accessToken: "",
     })
   })
 
@@ -276,6 +292,9 @@ describe("ACPSessionPanel filters and sorting", () => {
     )
 
     render(<ACPSessionPanel />)
+    await waitFor(() => {
+      expect(getConfigMock).toHaveBeenCalled()
+    })
 
     fireEvent.click(screen.getByTestId(`acp-session-fork-${alphaId}`))
 
@@ -324,6 +343,9 @@ describe("ACPSessionPanel filters and sorting", () => {
     )
 
     render(<ACPSessionPanel />)
+    await waitFor(() => {
+      expect(getConfigMock).toHaveBeenCalled()
+    })
 
     fireEvent.click(screen.getByTestId(`acp-session-fork-${alphaId}`))
 
@@ -389,6 +411,9 @@ describe("ACPSessionPanel filters and sorting", () => {
     )
 
     render(<ACPSessionPanel />)
+    await waitFor(() => {
+      expect(getConfigMock).toHaveBeenCalled()
+    })
 
     fireEvent.click(screen.getByTestId(`acp-session-fork-${alphaId}`))
 

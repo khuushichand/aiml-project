@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect, seedAuth } from './smoke.setup';
+import { waitForAppShell } from '../utils/helpers';
 
 const LOAD_TIMEOUT = 30_000;
 const OUTPUT_DATE = process.env.TLDW_STAGE2_OUTPUT_DATE;
@@ -14,6 +15,7 @@ type RouteContract = {
   route: string;
   expectedTitle: string;
   disallowedFinalPaths: string[];
+  expectedUi: 'placeholder' | 'real';
 };
 
 type RouteContractResult = {
@@ -24,68 +26,80 @@ type RouteContractResult = {
   hasPlaceholderPanel: boolean;
   hasRedirectPanel: boolean;
   hasExpectedTitle: boolean;
+  hasAdminGuard: boolean;
 };
 
 const ROUTE_CONTRACTS: RouteContract[] = [
   {
     route: '/admin/data-ops',
-    expectedTitle: 'Data Operations Is Coming Soon',
+    expectedTitle: 'Data Operations',
     disallowedFinalPaths: ['/admin/server'],
+    expectedUi: 'real',
   },
   {
     route: '/admin/watchlists-runs',
     expectedTitle: 'Watchlist Runs Admin Is Coming Soon',
     disallowedFinalPaths: ['/admin/server'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/admin/watchlists-items',
-    expectedTitle: 'Watchlist Items Admin Is Coming Soon',
+    expectedTitle: 'Watchlists Items',
     disallowedFinalPaths: ['/admin/server'],
+    expectedUi: 'real',
   },
   {
     route: '/connectors',
     expectedTitle: 'Connectors Hub Is Coming Soon',
     disallowedFinalPaths: ['/settings'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/connectors/sources',
     expectedTitle: 'Connector Sources Is Coming Soon',
     disallowedFinalPaths: ['/settings'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/connectors/jobs',
     expectedTitle: 'Connector Jobs Is Coming Soon',
     disallowedFinalPaths: ['/settings'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/connectors/browse',
     expectedTitle: 'Connector Browse Is Coming Soon',
     disallowedFinalPaths: ['/settings'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/profile',
     expectedTitle: 'Profile Page Is Coming Soon',
     disallowedFinalPaths: ['/settings'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/config',
     expectedTitle: 'Configuration Center Is Coming Soon',
     disallowedFinalPaths: ['/settings'],
+    expectedUi: 'placeholder',
   },
   {
     route: '/admin/orgs',
-    expectedTitle: 'Organization Management Is Coming Soon',
+    expectedTitle: 'Organizations & Teams',
     disallowedFinalPaths: ['/admin/server'],
+    expectedUi: 'real',
   },
   {
     route: '/admin/maintenance',
-    expectedTitle: 'Maintenance Console Is Coming Soon',
+    expectedTitle: 'Maintenance Console',
     disallowedFinalPaths: ['/admin/server'],
+    expectedUi: 'real',
   },
 ];
 
 test.describe('Stage 2 route contracts', () => {
-  test('wrong-content routes render placeholders and do not misroute', async ({ page }, testInfo) => {
+  test('routes render their intended surface and do not misroute', async ({ page }, testInfo) => {
     await seedAuth(page);
     const results: RouteContractResult[] = [];
 
@@ -94,17 +108,31 @@ test.describe('Stage 2 route contracts', () => {
         waitUntil: 'domcontentloaded',
         timeout: LOAD_TIMEOUT,
       });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+      await waitForAppShell(page, LOAD_TIMEOUT);
+
+      const placeholderPanel = page.getByTestId('route-placeholder-panel');
+      const redirectPanel = page.getByTestId('route-redirect-panel');
+      const expectedHeading = page.getByRole('heading', { name: contract.expectedTitle });
+      const adminGuardAlert = page.locator('.ant-alert-warning, .ant-alert-error').first();
+
+      if (contract.expectedUi === 'placeholder') {
+        await expect(
+          placeholderPanel,
+          `Expected ${contract.route} to mount its placeholder panel`
+        ).toBeVisible({ timeout: LOAD_TIMEOUT });
+      } else {
+        await expect(
+          expectedHeading.or(adminGuardAlert),
+          `Expected ${contract.route} to mount either heading "${contract.expectedTitle}" or an admin guard alert`
+        ).toBeVisible({ timeout: LOAD_TIMEOUT });
+      }
 
       const status = response?.status() ?? 0;
       const finalPath = new URL(page.url()).pathname;
-      const hasPlaceholderPanel = await page
-        .getByTestId('route-placeholder-panel')
-        .isVisible()
-        .catch(() => false);
-      const hasRedirectPanel = (await page.getByTestId('route-redirect-panel').count()) > 0;
-      const hasExpectedTitle =
-        (await page.getByRole('heading', { name: contract.expectedTitle }).count()) > 0;
+      const hasPlaceholderPanel = await placeholderPanel.isVisible().catch(() => false);
+      const hasRedirectPanel = (await redirectPanel.count()) > 0;
+      const hasExpectedTitle = await expectedHeading.isVisible().catch(() => false);
+      const hasAdminGuard = await adminGuardAlert.isVisible().catch(() => false);
       const redirected = finalPath !== contract.route;
 
       results.push({
@@ -115,6 +143,7 @@ test.describe('Stage 2 route contracts', () => {
         hasPlaceholderPanel,
         hasRedirectPanel,
         hasExpectedTitle,
+        hasAdminGuard,
       });
 
       expect(
@@ -135,17 +164,29 @@ test.describe('Stage 2 route contracts', () => {
         `Route ${contract.route} unexpectedly landed on disallowed path ${finalPath}`
       ).toBe(false);
       expect(
-        hasPlaceholderPanel,
-        `Expected ${contract.route} to render route placeholder panel`
-      ).toBe(true);
-      expect(
         hasRedirectPanel,
         `Expected ${contract.route} to avoid RouteRedirect panel`
       ).toBe(false);
-      expect(
-        hasExpectedTitle,
-        `Expected ${contract.route} placeholder title to be "${contract.expectedTitle}"`
-      ).toBe(true);
+
+      if (contract.expectedUi === 'placeholder') {
+        expect(
+          hasPlaceholderPanel,
+          `Expected ${contract.route} to render route placeholder panel`
+        ).toBe(true);
+        expect(
+          hasExpectedTitle,
+          `Expected ${contract.route} placeholder title to be "${contract.expectedTitle}"`
+        ).toBe(true);
+      } else {
+        expect(
+          hasPlaceholderPanel,
+          `Expected ${contract.route} to avoid the route placeholder panel because it now renders a real page`
+        ).toBe(false);
+        expect(
+          hasExpectedTitle || hasAdminGuard,
+          `Expected ${contract.route} to render either heading "${contract.expectedTitle}" or an admin guard alert`
+        ).toBe(true);
+      }
     }
 
     const artifact = {

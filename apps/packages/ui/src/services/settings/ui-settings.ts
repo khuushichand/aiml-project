@@ -84,6 +84,10 @@ export const CHAT_BACKGROUND_IMAGE_SETTING = defineSetting(
   coerceOptionalString
 )
 
+export const CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB = 15
+export const CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH =
+  CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB * 1_000_000
+
 const SPLASH_CARD_NAME_SET = new Set(DEFAULT_SPLASH_CARD_NAMES)
 
 const coerceSplashCardNameArray = (value: unknown): string[] => {
@@ -332,6 +336,7 @@ export const HEADER_SHORTCUT_IDS = [
   "characters",
   "chat-dictionaries",
   "world-books",
+  "deep-research",
   "knowledge-qa",
   "media",
   "document-workspace",
@@ -340,6 +345,8 @@ export const HEADER_SHORTCUT_IDS = [
   "flashcards",
   "notes",
   "watchlists",
+  "integrations",
+  "scheduled-tasks",
   "collections",
   "skills",
   "model-playground",
@@ -357,12 +364,15 @@ export const HEADER_SHORTCUT_IDS = [
   "acp-playground",
   "workflows",
   "admin-server",
+  "admin-integrations",
   "documentation",
   "chatbooks-playground",
   "moderation-playground",
   "admin-llamacpp",
   "admin-mlx",
-  "settings"
+  "settings",
+  "account",
+  "billing"
 ] as const
 export type HeaderShortcutId = (typeof HEADER_SHORTCUT_IDS)[number]
 
@@ -370,16 +380,21 @@ export const DEFAULT_HEADER_SHORTCUT_SELECTION = [
   ...HEADER_SHORTCUT_IDS
 ] as HeaderShortcutId[]
 
+const REQUIRED_HEADER_SHORTCUT_IDS: HeaderShortcutId[] = [
+  "workflows",
+  "acp-playground",
+  "integrations",
+  "scheduled-tasks",
+  "admin-integrations"
+]
+
 const coerceHeaderShortcutSelection = (
   value: unknown,
   fallback: HeaderShortcutId[]
 ): HeaderShortcutId[] => {
   if (!Array.isArray(value)) return fallback
   const allowed = new Set<HeaderShortcutId>(HEADER_SHORTCUT_IDS)
-  const required = new Set<HeaderShortcutId>([
-    "workflows",
-    "acp-playground"
-  ])
+  const required = new Set<HeaderShortcutId>(REQUIRED_HEADER_SHORTCUT_IDS)
   const unique = new Set<HeaderShortcutId>()
   for (const entry of value) {
     if (typeof entry !== "string") continue
@@ -427,7 +442,7 @@ export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
   "chat",
   "prompts",
   "characters",
-  "chat-dictionaries",
+  "deep-research",
   "world-books",
   "knowledge-qa",
   "media",

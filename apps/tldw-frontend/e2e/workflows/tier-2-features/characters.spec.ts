@@ -122,8 +122,12 @@ test.describe("Characters Workflow", () => {
       systemPrompt: "You are a test character that will be deleted."
     })
 
-    // Wait for creation to complete and list to refresh
-    await authedPage.waitForTimeout(2000)
+    await expect
+      .poll(
+        async () => await charPage.isCharacterVisible(name),
+        { timeout: 10_000 }
+      )
+      .toBe(true)
 
     // Now delete and verify the API call
     const [deleteResult] = await Promise.all([

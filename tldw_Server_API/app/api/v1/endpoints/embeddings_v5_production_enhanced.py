@@ -1215,7 +1215,7 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: int | None =
 
 class CompactorRunRequest(BaseModel):
     user_id: str | None = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
-    media_db_path: str | None = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
+    media_db_path: str | None = Field(default=None, description="Override path to the per-user media database; defaults to settings")
 
 
 class CompactorRunResponse(BaseModel):
@@ -4521,7 +4521,7 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
             # Optional heartbeat comment
             yield ":\n\n"
             # Jittered interval around 5s
-            await _asyncio.sleep(_random.uniform(4.5, 5.5))
+            await _asyncio.sleep(_random.uniform(4.5, 5.5))  # nosec B311 - non-cryptographic retry jitter
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Keep the stream alive; emit a sanitized error and log details server-side
             try:
@@ -4529,7 +4529,7 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
                 yield f"event: error\ndata: {json.dumps({'error': 'Temporary service error'})}\n\n"
             except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 pass
-            await _asyncio.sleep(_random.uniform(4.5, 5.5))
+            await _asyncio.sleep(_random.uniform(4.5, 5.5))  # nosec B311 - non-cryptographic retry jitter
 
 
 @router.get(
@@ -4588,7 +4588,7 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
                         logger.exception("Provider error during orchestrator snapshot")
                         await stream.error("provider_error", "Temporary service error", data=None, close=False)
                     # Jittered ~5s cadence
-                    await asyncio.sleep(_random.uniform(4.5, 5.5))
+                    await asyncio.sleep(_random.uniform(4.5, 5.5))  # nosec B311 - non-cryptographic retry jitter
 
             producer = asyncio.create_task(_produce())
             try:

@@ -11,7 +11,6 @@ import contextlib
 import json
 import os
 import sqlite3
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -141,25 +140,6 @@ CREATE TABLE IF NOT EXISTS workflow_step_runs (
     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS workflow_step_attempts (
-    attempt_id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    step_run_id TEXT NOT NULL,
-    step_id TEXT NOT NULL,
-    attempt_number INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    started_at TIMESTAMPTZ NOT NULL,
-    ended_at TIMESTAMPTZ,
-    duration_ms INTEGER,
-    reason_code_core TEXT,
-    reason_code_detail TEXT,
-    retryable BOOLEAN,
-    error_summary TEXT,
-    metadata_json TEXT,
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS workflow_events (
     event_id BIGSERIAL PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -189,13 +169,29 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS workflow_research_waits (
+    wait_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workflow_run_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    research_run_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    checkpoint_type TEXT NOT NULL,
+    wait_status TEXT NOT NULL,
+    wait_payload_json TEXT NOT NULL,
+    active_poll_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    resumed_at TIMESTAMPTZ,
+    FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at);
-CREATE INDEX IF NOT EXISTS idx_step_attempts_run_attempts ON workflow_step_attempts(run_id, attempt_number, started_at);
-CREATE INDEX IF NOT EXISTS idx_step_attempts_run_step_attempts ON workflow_step_attempts(run_id, step_id, attempt_number, started_at);
-CREATE INDEX IF NOT EXISTS idx_step_attempts_step_run_attempts ON workflow_step_attempts(step_run_id, attempt_number, started_at);
     CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_research_wait_run_step ON workflow_research_waits(workflow_run_id, step_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_research_wait_lookup ON workflow_research_waits(research_run_id, checkpoint_id, wait_status);
 
 -- Ensure uniqueness of per-run event sequence
     CREATE UNIQUE INDEX IF NOT EXISTS ux_events_run_seq ON workflow_events(run_id, event_seq);
@@ -484,7 +480,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 8
+    _CURRENT_SCHEMA_VERSION = 7
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -726,7 +722,6 @@ class WorkflowsDatabase:
             5: self._backend_migrate_to_v5,
             6: self._backend_migrate_to_v6,
             7: self._backend_migrate_to_v7,
-            8: self._backend_migrate_to_v8,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -948,53 +943,34 @@ class WorkflowsDatabase:
         backend = self.backend
         ident = backend.escape_identifier
         backend.execute(
-            f"CREATE TABLE IF NOT EXISTS {ident('workflow_step_attempts')} ("
-            f"attempt_id TEXT PRIMARY KEY,"
-            f"tenant_id TEXT NOT NULL,"
-            f"run_id TEXT NOT NULL,"
-            f"step_run_id TEXT NOT NULL,"
-            f"step_id TEXT NOT NULL,"
-            f"attempt_number INTEGER NOT NULL,"
-            f"status TEXT NOT NULL,"
-            f"started_at TIMESTAMPTZ NOT NULL,"
-            f"ended_at TIMESTAMPTZ,"
-            f"duration_ms INTEGER,"
-            f"reason_code_core TEXT,"
-            f"reason_code_detail TEXT,"
-            f"retryable BOOLEAN,"
-            f"error_summary TEXT,"
-            f"metadata_json TEXT,"
-            f"FOREIGN KEY ({ident('run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')}) ON DELETE CASCADE"
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_research_waits')} ("
+            f"{ident('wait_id')} TEXT PRIMARY KEY,"
+            f"{ident('tenant_id')} TEXT NOT NULL,"
+            f"{ident('workflow_run_id')} TEXT NOT NULL,"
+            f"{ident('step_id')} TEXT NOT NULL,"
+            f"{ident('research_run_id')} TEXT NOT NULL,"
+            f"{ident('checkpoint_id')} TEXT NOT NULL,"
+            f"{ident('checkpoint_type')} TEXT NOT NULL,"
+            f"{ident('wait_status')} TEXT NOT NULL,"
+            f"{ident('wait_payload_json')} TEXT NOT NULL,"
+            f"{ident('active_poll_seconds')} DOUBLE PRECISION NOT NULL DEFAULT 0,"
+            f"{ident('created_at')} TIMESTAMPTZ NOT NULL,"
+            f"{ident('updated_at')} TIMESTAMPTZ NOT NULL,"
+            f"{ident('resumed_at')} TIMESTAMPTZ,"
+            f"FOREIGN KEY ({ident('workflow_run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')}) ON DELETE CASCADE"
             ")",
             connection=conn,
         )
-
-    def _backend_migrate_to_v8(self, conn) -> None:
-        if not self.backend:
-            return
-        backend = self.backend
-        ident = backend.escape_identifier
-        index_definitions = (
-            (
-                "idx_step_attempts_run_attempts",
-                ("run_id", "attempt_number", "started_at"),
-            ),
-            (
-                "idx_step_attempts_run_step_attempts",
-                ("run_id", "step_id", "attempt_number", "started_at"),
-            ),
-            (
-                "idx_step_attempts_step_run_attempts",
-                ("step_run_id", "attempt_number", "started_at"),
-            ),
+        backend.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {ident('ux_workflow_research_wait_run_step')} "
+            f"ON {ident('workflow_research_waits')} ({ident('workflow_run_id')}, {ident('step_id')})",
+            connection=conn,
         )
-        for index_name, columns in index_definitions:
-            cols = ", ".join(ident(column) for column in columns)
-            backend.execute(
-                f"CREATE INDEX IF NOT EXISTS {ident(index_name)} "  # nosec B608
-                f"ON {ident('workflow_step_attempts')} ({cols})",
-                connection=conn,
-            )
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS {ident('idx_workflow_research_wait_lookup')} "
+            f"ON {ident('workflow_research_waits')} ({ident('research_run_id')}, {ident('checkpoint_id')}, {ident('wait_status')})",
+            connection=conn,
+        )
 
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
@@ -1119,29 +1095,6 @@ class WorkflowsDatabase:
             """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS workflow_step_attempts (
-                attempt_id TEXT PRIMARY KEY,
-                tenant_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                step_run_id TEXT NOT NULL,
-                step_id TEXT NOT NULL,
-                attempt_number INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_ms INTEGER,
-                reason_code_core TEXT,
-                reason_code_detail TEXT,
-                retryable INTEGER,
-                error_summary TEXT,
-                metadata_json TEXT,
-                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
-            );
-            """
-        )
-
         # Events
         cur.execute(
             """
@@ -1164,15 +1117,6 @@ class WorkflowsDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_step_attempts_run_attempts ON workflow_step_attempts(run_id, attempt_number, started_at)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_step_attempts_run_step_attempts ON workflow_step_attempts(run_id, step_id, attempt_number, started_at)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_step_attempts_step_run_attempts ON workflow_step_attempts(step_run_id, attempt_number, started_at)"
         )
         # Partial indexes for frequently accessed statuses (supported on modern SQLite)
         try:
@@ -1269,6 +1213,36 @@ class WorkflowsDatabase:
                 FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
             );
             """
+        )
+        self._conn.commit()
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_research_waits (
+                wait_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                workflow_run_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                checkpoint_id TEXT NOT NULL,
+                checkpoint_type TEXT NOT NULL,
+                wait_status TEXT NOT NULL,
+                wait_payload_json TEXT NOT NULL,
+                active_poll_seconds REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                resumed_at TEXT,
+                FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
+            );
+            """
+        )
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_research_wait_run_step "
+            "ON workflow_research_waits(workflow_run_id, step_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_research_wait_lookup "
+            "ON workflow_research_waits(research_run_id, checkpoint_id, wait_status)"
         )
         self._conn.commit()
 
@@ -1985,146 +1959,6 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def create_step_attempt(
-        self,
-        *,
-        tenant_id: str,
-        run_id: str,
-        step_run_id: str,
-        step_id: str,
-        attempt_number: int,
-        status: str = "running",
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        attempt_id = str(uuid.uuid4())
-        started_at = _utcnow_iso()
-        params = (
-            attempt_id,
-            tenant_id,
-            run_id,
-            step_run_id,
-            step_id,
-            int(attempt_number),
-            status,
-            started_at,
-            json.dumps(metadata or {}),
-        )
-        query = """
-            INSERT INTO workflow_step_attempts(
-                attempt_id, tenant_id, run_id, step_run_id, step_id,
-                attempt_number, status, started_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                self._execute_backend(query, params, connection=conn)
-            return attempt_id
-
-        try:
-            self._conn.execute(query, params)
-            self._conn.commit()
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e).lower():
-                self._sqlite_retry_execute(query, params)
-                self._sqlite_retry_commit()
-            else:
-                raise
-        return attempt_id
-
-    def complete_step_attempt(
-        self,
-        *,
-        attempt_id: str,
-        status: str,
-        reason_code_core: str | None = None,
-        reason_code_detail: str | None = None,
-        retryable: bool | None = None,
-        error_summary: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        ended_at = _utcnow_iso()
-        duration_ms = None
-        row = None
-        query_started = "SELECT started_at FROM workflow_step_attempts WHERE attempt_id = ?"
-        if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                row = self._row_from_result(self._execute_backend(query_started, (attempt_id,), connection=conn))
-        else:
-            row = self._conn.cursor().execute(query_started, (attempt_id,)).fetchone()
-        try:
-            started_raw = row["started_at"] if row else None
-            if started_raw:
-                started_dt = datetime.fromisoformat(str(started_raw))
-                ended_dt = datetime.fromisoformat(ended_at)
-                duration_ms = max(0, int((ended_dt - started_dt).total_seconds() * 1000))
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            duration_ms = None
-
-        params = (
-            status,
-            ended_at,
-            duration_ms,
-            reason_code_core,
-            reason_code_detail,
-            retryable,
-            error_summary,
-            json.dumps(metadata or {}),
-            attempt_id,
-        )
-        query = """
-            UPDATE workflow_step_attempts
-            SET status = ?, ended_at = ?, duration_ms = ?, reason_code_core = ?, reason_code_detail = ?,
-                retryable = ?, error_summary = ?, metadata_json = ?
-            WHERE attempt_id = ?
-        """
-        if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                self._execute_backend(query, params, connection=conn)
-            return
-
-        try:
-            self._conn.execute(query, params)
-            self._conn.commit()
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e).lower():
-                self._sqlite_retry_execute(query, params)
-                self._sqlite_retry_commit()
-            else:
-                raise
-
-    def list_step_attempts(
-        self,
-        *,
-        run_id: str,
-        step_id: str | None = None,
-        step_run_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        query = "SELECT * FROM workflow_step_attempts WHERE run_id = ?"
-        params: list[Any] = [str(run_id)]
-        if step_id is not None:
-            query += " AND step_id = ?"
-            params.append(str(step_id))
-        if step_run_id is not None:
-            query += " AND step_run_id = ?"
-            params.append(str(step_run_id))
-        query += " ORDER BY attempt_number ASC, started_at ASC"
-
-        rows: list[Any]
-        if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                result = self._execute_backend(query, tuple(params), connection=conn)
-            rows = self._rows_from_result(result)
-        else:
-            rows = self._conn.cursor().execute(query, params).fetchall()
-
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            data = self._row_to_dict(row)
-            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
-                data["metadata_json"] = json.loads(data.get("metadata_json") or "{}")
-            out.append(data)
-        return out
-
     def get_latest_step_run(self, *, run_id: str, step_id: str) -> dict[str, Any] | None:
         """Return the most recent step run for a run/step_id pair."""
         query = """
@@ -2146,35 +1980,6 @@ class WorkflowsDatabase:
             return dict(row) if row else None
         finally:
             self._release_sqlite(conn)
-
-    def list_step_runs(self, *, run_id: str) -> list[dict[str, Any]]:
-        query = """
-            SELECT * FROM workflow_step_runs
-            WHERE run_id = ?
-            ORDER BY started_at ASC, step_run_id ASC
-        """
-        params = (str(run_id),)
-        rows: list[Any]
-        if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                result = self._execute_backend(query, params, connection=conn)
-            rows = self._rows_from_result(result)
-        else:
-            conn = self._acquire_sqlite()
-            try:
-                rows = conn.cursor().execute(query, params).fetchall()
-            finally:
-                self._release_sqlite(conn)
-
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            data = self._row_to_dict(row)
-            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
-                data["inputs_json"] = json.loads(data.get("inputs_json") or "{}")
-            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
-                data["outputs_json"] = json.loads(data.get("outputs_json") or "{}")
-            out.append(data)
-        return out
 
     def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
         """Persist the current attempt count for a step run."""
@@ -2499,6 +2304,218 @@ class WorkflowsDatabase:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+
+    # ---------- Research wait links ----------
+    def upsert_research_wait_link(
+        self,
+        *,
+        wait_id: str,
+        tenant_id: str,
+        workflow_run_id: str,
+        step_id: str,
+        research_run_id: str,
+        checkpoint_id: str,
+        checkpoint_type: str,
+        wait_status: str,
+        wait_payload: dict[str, Any],
+        active_poll_seconds: float,
+    ) -> None:
+        now = _utcnow_iso()
+        params = (
+            str(wait_id),
+            str(tenant_id),
+            str(workflow_run_id),
+            str(step_id),
+            str(research_run_id),
+            str(checkpoint_id),
+            str(checkpoint_type),
+            str(wait_status),
+            json.dumps(wait_payload or {}),
+            float(active_poll_seconds),
+            now,
+            now,
+        )
+        query = """
+            INSERT INTO workflow_research_waits(
+                wait_id,
+                tenant_id,
+                workflow_run_id,
+                step_id,
+                research_run_id,
+                checkpoint_id,
+                checkpoint_type,
+                wait_status,
+                wait_payload_json,
+                active_poll_seconds,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workflow_run_id, step_id) DO UPDATE SET
+                research_run_id = excluded.research_run_id,
+                checkpoint_id = excluded.checkpoint_id,
+                checkpoint_type = excluded.checkpoint_type,
+                wait_status = excluded.wait_status,
+                wait_payload_json = excluded.wait_payload_json,
+                active_poll_seconds = excluded.active_poll_seconds,
+                updated_at = excluded.updated_at
+        """
+
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+
+    def get_research_wait_link(self, *, workflow_run_id: str, step_id: str) -> dict[str, Any] | None:
+        query = """
+            SELECT * FROM workflow_research_waits
+            WHERE workflow_run_id = ? AND step_id = ?
+            LIMIT 1
+        """
+        params = (str(workflow_run_id), str(step_id))
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, params, connection=conn)
+            row = self._row_from_result(result)
+            return row.to_dict() if row else None
+
+        conn = self._acquire_sqlite()
+        try:
+            row = conn.cursor().execute(query, params).fetchone()
+            return dict(row) if row else None
+        finally:
+            self._release_sqlite(conn)
+
+    def claim_research_waits_for_resume(
+        self,
+        *,
+        research_run_id: str,
+        checkpoint_id: str,
+    ) -> list[dict[str, Any]]:
+        now = _utcnow_iso()
+        select_query = """
+            SELECT * FROM workflow_research_waits
+            WHERE research_run_id = ? AND checkpoint_id = ? AND wait_status = 'waiting'
+            ORDER BY created_at ASC
+        """
+        update_query = """
+            UPDATE workflow_research_waits
+            SET wait_status = 'resuming', updated_at = ?
+            WHERE wait_id = ? AND wait_status = 'waiting'
+        """
+        params = (str(research_run_id), str(checkpoint_id))
+
+        if self._using_backend():
+            claimed: list[dict[str, Any]] = []
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(select_query, params, connection=conn)
+                rows = self._rows_from_result(result)
+                for row in rows:
+                    wait_row = row.to_dict()
+                    update_result = self._execute_backend(
+                        update_query,
+                        (now, wait_row["wait_id"]),
+                        connection=conn,
+                    )
+                    if update_result.rowcount:
+                        wait_row["wait_status"] = "resuming"
+                        wait_row["updated_at"] = now
+                        claimed.append(wait_row)
+            return claimed
+
+        conn = self._acquire_sqlite()
+        try:
+            cur = conn.cursor()
+            rows = [dict(row) for row in cur.execute(select_query, params).fetchall()]
+            claimed: list[dict[str, Any]] = []
+            for row in rows:
+                cur.execute(update_query, (now, row["wait_id"]))
+                if cur.rowcount:
+                    row["wait_status"] = "resuming"
+                    row["updated_at"] = now
+                    claimed.append(row)
+            conn.commit()
+            return claimed
+        finally:
+            self._release_sqlite(conn)
+
+    def mark_research_wait_resumed(self, *, wait_id: str) -> None:
+        now = _utcnow_iso()
+        query = """
+            UPDATE workflow_research_waits
+            SET wait_status = 'resumed', resumed_at = ?, updated_at = ?
+            WHERE wait_id = ?
+        """
+        params = (now, now, str(wait_id))
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+
+    def reset_research_wait_for_retry(self, *, wait_id: str) -> None:
+        now = _utcnow_iso()
+        query = """
+            UPDATE workflow_research_waits
+            SET wait_status = 'waiting', updated_at = ?
+            WHERE wait_id = ? AND wait_status = 'resuming'
+        """
+        params = (now, str(wait_id))
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+
+    def cancel_research_wait_links_for_run(self, *, workflow_run_id: str) -> None:
+        now = _utcnow_iso()
+        query = """
+            UPDATE workflow_research_waits
+            SET wait_status = 'cancelled', updated_at = ?
+            WHERE workflow_run_id = ? AND wait_status IN ('waiting', 'resuming')
+        """
+        params = (now, str(workflow_run_id))
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 self._execute_backend(query, params, connection=conn)

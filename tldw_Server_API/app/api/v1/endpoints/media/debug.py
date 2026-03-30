@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.media_response_models import DebugSchemaResponse
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 router = APIRouter()
 
@@ -17,7 +18,7 @@ router = APIRouter()
     tags=["Media Debug"],
 )
 async def debug_schema(
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> DebugSchemaResponse:
     """
     Return basic schema and row-count diagnostics for the media database.

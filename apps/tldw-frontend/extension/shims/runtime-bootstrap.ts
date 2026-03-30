@@ -13,6 +13,10 @@ import {
   THEME_SETTING,
   UI_MODE_SETTING
 } from "@/services/settings/ui-settings"
+import {
+  resolveWebUiQuickstartServerUrl,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null
@@ -71,18 +75,176 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
   return raw.replace(/\/$/, "")
 }
 
+const getCurrentBrowserOrigin = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return normalizeBaseUrl(window.location?.origin)
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin: getCurrentBrowserOrigin(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
+    })
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserHostname = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const hostname = String(window.location?.hostname || "").trim().toLowerCase()
+    return hostname || null
+  } catch {
+    return null
+  }
+}
+
+const isLocalhostLikeHostname = (value?: string | null): boolean => {
+  const normalized = String(value || "").trim().toLowerCase()
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  )
+}
+
+const parsePrivateIpv4Host = (value?: string | null): number[] | null => {
+  const normalized = String(value || "").trim().toLowerCase()
+  const match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!match) return null
+
+  const parts = match.slice(1).map((raw) => Number(raw))
+  if (parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return null
+  }
+
+  const [a, b] = parts
+  if (a === 10) return parts
+  if (a === 192 && b === 168) return parts
+  if (a === 172 && b >= 16 && b <= 31) return parts
+  return null
+}
+
+const formatHostnameForUrl = (value: string): string => {
+  return value.includes(":") && !value.startsWith("[") ? `[${value}]` : value
+}
+
+const deriveCurrentHostRecoveryServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
+  if (!configuredServerUrl) return null
+
+  const browserHostname = getCurrentBrowserHostname()
+  if (!browserHostname) return null
+
+  try {
+    const parsed = new URL(String(configuredServerUrl))
+    const configuredHost = String(parsed.hostname || "").trim().toLowerCase()
+    if (!configuredHost || configuredHost === browserHostname) return null
+
+    const configuredPrivateIp = parsePrivateIpv4Host(configuredHost)
+    const browserPrivateIp = parsePrivateIpv4Host(browserHostname)
+    const configuredIsLocal = isLocalhostLikeHostname(configuredHost)
+    const browserIsLocal = isLocalhostLikeHostname(browserHostname)
+
+    const shouldRecover =
+      (configuredPrivateIp && browserIsLocal) ||
+      (configuredIsLocal && browserPrivateIp) ||
+      (configuredPrivateIp && browserPrivateIp)
+    if (!shouldRecover) return null
+
+    const port = parsed.port || "8000"
+    return `${parsed.protocol}//${formatHostnameForUrl(browserHostname)}:${port}`
+  } catch {
+    return null
+  }
+}
+
+const DEFAULT_TLDW_SERVER_URL = "http://127.0.0.1:8000"
+
 const seedTldwConfigFromEnv = async (): Promise<void> => {
   if (typeof window === "undefined") return
 
-  const serverUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL)
+  const explicitWebHost = (() => {
+    try {
+      return normalizeBaseUrl(window.localStorage.getItem("tldw-api-host"))
+    } catch {
+      return null
+    }
+  })()
+  const repairedExplicitWebHost =
+    deriveCurrentHostRecoveryServerUrl(explicitWebHost) || explicitWebHost
+  const envDefaultServerUrl =
+    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) || DEFAULT_TLDW_SERVER_URL
+  const repairedEnvDefaultServerUrl =
+    deriveCurrentHostRecoveryServerUrl(envDefaultServerUrl) ||
+    envDefaultServerUrl
+  const initialQuickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+  const initialServerUrl =
+    initialQuickstartWebUiServerUrl ||
+    repairedExplicitWebHost ||
+    repairedEnvDefaultServerUrl
   const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
   const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
 
-  if (!serverUrl && !apiKey && !apiBearer) return
+  if (initialServerUrl && explicitWebHost !== initialServerUrl) {
+    try {
+      window.localStorage.setItem("tldw-api-host", initialServerUrl)
+    } catch {
+      // Best-effort only; ignore storage failures in web contexts.
+    }
+  }
 
   try {
     const storage = createSafeStorage()
     const existing = (await storage.get<TldwConfig>("tldwConfig").catch(() => null)) || null
+    const storedServerUrl =
+      (await storage.get<string>("tldwServerUrl").catch(() => null)) || null
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    const serverUrl =
+      quickstartWebUiServerUrl ||
+      repairedExplicitWebHost ||
+      repairedEnvDefaultServerUrl
+
+    if (!serverUrl && !apiKey && !apiBearer) return
+
+    if (serverUrl && initialServerUrl !== serverUrl) {
+      try {
+        window.localStorage.setItem("tldw-api-host", serverUrl)
+      } catch {
+        // Best-effort only; ignore storage failures in web contexts.
+      }
+    }
 
     const next: TldwConfig = {
       ...(existing || {}),
@@ -91,10 +253,14 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
     }
 
     let changed = false
+    let shouldSyncStoredServerUrl = false
 
-    if (!next.serverUrl && serverUrl) {
+    if (serverUrl && next.serverUrl !== serverUrl) {
       next.serverUrl = serverUrl
       changed = true
+    }
+    if (next.serverUrl && storedServerUrl !== next.serverUrl) {
+      shouldSyncStoredServerUrl = true
     }
 
     if (!next.apiKey && !next.accessToken) {
@@ -109,7 +275,7 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
       }
     }
 
-    if (changed) {
+    if (changed || shouldSyncStoredServerUrl) {
       await storage.set("tldwConfig", next)
       if (next.serverUrl) {
         await storage.set("tldwServerUrl", next.serverUrl)

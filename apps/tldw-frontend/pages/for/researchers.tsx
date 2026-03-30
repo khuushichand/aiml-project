@@ -13,20 +13,20 @@ import {
   LandingFeatures,
   LandingTestimonials,
   LandingComparison,
-  LandingPricing,
   LandingCTA,
 } from "@web/components/landing"
 
 export default function ResearchersPage() {
+  const description = "Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
   return (
     <LandingLayout
       title="tldw for Academic Researchers"
-      description="Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
+      description={description}
       segment="researchers"
     >
       <LandingHero
         headline="Your Research Data Deserves Better Than\n$1.50/Minute Transcription and NVivo"
-        subheadline="Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
+        subheadline={description}
         primaryCTA={{ text: "Start Self-Hosting Free", href: "/docs/self-hosting" }}
         secondaryCTA={{ text: "View Documentation", href: "/docs" }}
         badges={["Open Source", "IRB Compliant", "Self-Hosted"]}
@@ -112,52 +112,6 @@ export default function ResearchersPage() {
           { feature: "Literature Management", tldw: true, competitors: { "NVivo": false, "Otter.ai": false, "Manual Transcription": false } },
           { feature: "Price", tldw: "Free", competitors: { "NVivo": "$1,000+", "Otter.ai": "$100+/mo", "Manual Transcription": "$15/hr" } },
         ]}
-      />
-
-      <LandingPricing
-        headline="Priced for Academic Budgets"
-        tiers={[
-          {
-            name: "Self-Hosted",
-            price: "Free",
-            description: "Perfect for PhD students, unfunded projects",
-            features: [
-              "Unlimited transcription",
-              "Full search and RAG",
-              "All file formats",
-              "Community support",
-            ],
-            cta: { text: "Download", href: "/docs/self-hosting" },
-          },
-          {
-            name: "Researcher Pro",
-            price: "$29",
-            period: "month",
-            description: "Perfect for funded projects, small labs",
-            features: [
-              "Cloud sync and backup",
-              "20 hours transcription/month",
-              "Priority support",
-              "Citation export",
-            ],
-            cta: { text: "Start Trial", href: "/signup" },
-            highlighted: true,
-          },
-          {
-            name: "Lab License",
-            price: "$199",
-            period: "month",
-            description: "Perfect for research groups, centers",
-            features: [
-              "10 seats included",
-              "Shared knowledge bases",
-              "Collaboration tools",
-              "University SSO",
-            ],
-            cta: { text: "Contact Us", href: "/contact" },
-          },
-        ]}
-        footnote="40% off with .edu email. 60% student discount with verification."
       />
 
       <LandingCTA

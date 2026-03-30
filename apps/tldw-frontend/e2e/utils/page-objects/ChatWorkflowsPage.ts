@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class ChatWorkflowsPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class ChatWorkflowsPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for heading or connection gate offline message
     const heading = this.page.getByRole("heading", { name: /chat workflows/i })
     const connectionGate = this.page.getByText("Chat Workflows depends on your connected tldw server")

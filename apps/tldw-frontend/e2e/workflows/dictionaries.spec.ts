@@ -89,7 +89,9 @@ test.describe("Chat Dictionaries Workflow", () => {
 
       const originalName = `${testPrefix}-edit-src`
       await dictPage.createDictionary(originalName, "Original desc")
-      await authedPage.waitForTimeout(1000)
+      await expect(await dictPage.findDictionaryRow(originalName)).toBeVisible({
+        timeout: 10_000
+      })
 
       // Open edit modal
       await dictPage.clickEditOnRow(originalName)
@@ -237,11 +239,12 @@ test.describe("Chat Dictionaries Workflow", () => {
 
       const name = `${testPrefix}-entries`
       await dictPage.createDictionary(name, "For entry tests")
-      await authedPage.waitForTimeout(1000)
+      await expect(await dictPage.findDictionaryRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       // Open entry manager
       await dictPage.clickManageEntries(name)
-      await authedPage.waitForTimeout(500)
 
       // Add an entry
       await dictPage.fillEntryForm("hello", "hi", "literal")
@@ -252,8 +255,9 @@ test.describe("Chat Dictionaries Workflow", () => {
       expect(addResult.status).toBeLessThan(300)
 
       // Verify entry appears
-      const entryCount = await dictPage.getEntryCount()
-      expect(entryCount).toBeGreaterThanOrEqual(1)
+      await expect
+        .poll(async () => dictPage.getEntryCount(), { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(1)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -276,7 +280,6 @@ test.describe("Chat Dictionaries Workflow", () => {
       }
 
       await dictPage.clickManageEntries(names[0])
-      await authedPage.waitForTimeout(500)
 
       // Click validate
       try {
@@ -309,7 +312,6 @@ test.describe("Chat Dictionaries Workflow", () => {
       }
 
       await dictPage.clickManageEntries(names[0])
-      await authedPage.waitForTimeout(500)
 
       // Use preview with sample text
       try {
@@ -344,7 +346,9 @@ test.describe("Chat Dictionaries Workflow", () => {
 
       const name = `${testPrefix}-del`
       await dictPage.createDictionary(name, "To be deleted")
-      await authedPage.waitForTimeout(1000)
+      await expect(await dictPage.findDictionaryRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       // Delete
       const [deleteResult] = await Promise.all([
@@ -358,7 +362,6 @@ test.describe("Chat Dictionaries Workflow", () => {
       expect(deleteResult.status).toBeLessThan(300)
 
       // Verify row is removed
-      await authedPage.waitForTimeout(1000)
       const row = await dictPage.findDictionaryRow(name)
       await expect(row).toBeHidden({ timeout: 10_000 })
 

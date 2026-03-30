@@ -51,6 +51,7 @@ from uuid import uuid4
 # 3rd-Party Imports
 import aiosqlite
 from loguru import logger
+from tldw_Server_API.app.core.AuthNZ.audit_integrity import compute_event_hash
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection_async,
 )
@@ -350,9 +351,9 @@ class AuditEventType(Enum):
     AUTH_LOGIN_SUCCESS = "auth.login.success"
     AUTH_LOGIN_FAILURE = "auth.login.failure"
     AUTH_LOGOUT = "auth.logout"
-    AUTH_TOKEN_CREATED = "auth.token.created"
-    AUTH_TOKEN_REFRESHED = "auth.token.refreshed"
-    AUTH_TOKEN_REVOKED = "auth.token.revoked"
+    AUTH_TOKEN_CREATED = "auth.token.created"  # nosec B105
+    AUTH_TOKEN_REFRESHED = "auth.token.refreshed"  # nosec B105
+    AUTH_TOKEN_REVOKED = "auth.token.revoked"  # nosec B105
     AUTH_SESSION_EXPIRED = "auth.session.expired"
 
     # User Management
@@ -361,8 +362,8 @@ class AuditEventType(Enum):
     USER_DELETED = "user.deleted"
     USER_ACTIVATED = "user.activated"
     USER_DEACTIVATED = "user.deactivated"
-    USER_PASSWORD_CHANGED = "user.password.changed"
-    USER_PASSWORD_RESET = "user.password.reset"
+    USER_PASSWORD_CHANGED = "user.password.changed"  # nosec B105
+    USER_PASSWORD_RESET = "user.password.reset"  # nosec B105
 
     # Data Operations
     DATA_READ = "data.read"
@@ -469,6 +470,9 @@ class AuditEvent:
     # Additional metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # Hash chain for tamper-proofing
+    chain_hash: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage"""
         normalized_metadata = _normalize_json_value(self.metadata)
@@ -495,6 +499,7 @@ class AuditEvent:
             "pii_detected": self.pii_detected,
             "compliance_flags": json.dumps(normalized_flags, ensure_ascii=False),
             "metadata": json.dumps(normalized_metadata, ensure_ascii=False),
+            "chain_hash": self.chain_hash,
         }
 
         # Add context fields
@@ -533,7 +538,7 @@ class PIIDetector:
         "bank_account": r"(?:\b\d{9}[-\s]?\d{8,17}\b|(?:account|acct|routing)[\s#:]*\d{8,17}\b)",
         "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]?){0,16}\b",
         "api_key": r"\b(?:sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b",
-        "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+        "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",  # nosec B105
     }
 
     # Back-compat for modules that read PIIDetector.PII_PATTERNS directly
@@ -1034,6 +1039,9 @@ class UnifiedAuditService:
         self.event_buffer: list[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
 
+        # Hash chain state for tamper-proofing
+        self._last_chain_hash: str = ""
+
         # Background tasks
         self._flush_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -1069,6 +1077,7 @@ class UnifiedAuditService:
         """
         self._owner_loop = asyncio.get_running_loop()
         await self._init_database()
+        self._last_chain_hash = await self._load_last_chain_hash()
         # In test mode, avoid opening a persistent pooled connection to prevent
         # lingering aiosqlite worker threads that can keep the interpreter alive.
         # Non-test mode uses a pooled connection for performance.
@@ -1079,6 +1088,24 @@ class UnifiedAuditService:
         # tight loops and starve the event loop.
         if start_background_tasks and not self._test_mode:
             await self.start_background_tasks()
+
+    async def _load_last_chain_hash(self) -> str:
+        """Resume the tamper-evident chain from the most recently inserted event."""
+        try:
+            async with self._read_db() as db:
+                async with db.execute(
+                    "SELECT chain_hash FROM audit_events "
+                    "WHERE chain_hash IS NOT NULL AND chain_hash != '' "
+                    "ORDER BY rowid DESC LIMIT 1"
+                ) as cursor:
+                    row = await cursor.fetchone()
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Failed to resume audit hash chain: {exc}")
+            return ""
+
+        if not row:
+            return ""
+        return str(row[0] or "")
 
     def _build_event_columns(self) -> list[str]:
         columns = [
@@ -1093,6 +1120,7 @@ class UnifiedAuditService:
             "resource_type", "resource_id", "action", "result", "error_message",
             "duration_ms", "tokens_used", "estimated_cost", "result_count",
             "risk_score", "pii_detected", "compliance_flags", "metadata",
+            "chain_hash",
         ])
         return columns
 
@@ -1191,7 +1219,10 @@ class UnifiedAuditService:
                     compliance_flags TEXT,
 
                     -- Metadata
-                    metadata TEXT
+                    metadata TEXT,
+
+                    -- Hash chain for tamper-proofing
+                    chain_hash TEXT
                 )
             """
         else:
@@ -1233,7 +1264,10 @@ class UnifiedAuditService:
                     compliance_flags TEXT,
 
                     -- Metadata
-                    metadata TEXT
+                    metadata TEXT,
+
+                    -- Hash chain for tamper-proofing
+                    chain_hash TEXT
                 )
             """
         expected_types = {
@@ -1265,6 +1299,7 @@ class UnifiedAuditService:
             "pii_detected": "BOOLEAN",
             "compliance_flags": "TEXT",
             "metadata": "TEXT",
+            "chain_hash": "TEXT",
         }
         if not self._shared_mode:
             expected_types.pop("tenant_user_id", None)
@@ -2330,6 +2365,26 @@ class UnifiedAuditService:
             return deduped
         return [event for event in deduped if event.event_id not in existing_ids]
 
+    def _apply_chain_hashes(self, records: list[dict[str, Any]]) -> None:
+        """Compute and assign chain hashes to a batch of event records.
+
+        Mutates each record in-place, setting the ``chain_hash`` key.
+        Updates ``self._last_chain_hash`` so subsequent batches continue
+        the chain.
+        """
+        prev = self._last_chain_hash
+        for rec in records:
+            event_dict = {
+                "action": rec.get("action", ""),
+                "user_id": rec.get("context_user_id"),
+                "timestamp": rec.get("timestamp", ""),
+                "detail": rec.get("event_type", ""),
+            }
+            h = compute_event_hash(event_dict, prev)
+            rec["chain_hash"] = h
+            prev = h
+        self._last_chain_hash = prev
+
     async def flush(self, *, raise_on_failure: bool = False) -> bool:
         """Flush buffered events to database.
 
@@ -2362,6 +2417,7 @@ class UnifiedAuditService:
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
                             self._ensure_record_tenant_ids(records)
+                            self._apply_chain_hashes(records)
                             await db.executemany(self._event_insert_sql, records)
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
@@ -2376,6 +2432,7 @@ class UnifiedAuditService:
 
                             # Batch insert
                             self._ensure_record_tenant_ids(records)
+                            self._apply_chain_hashes(records)
                             await db.executemany(self._event_insert_sql, records)
 
                             # Update daily statistics

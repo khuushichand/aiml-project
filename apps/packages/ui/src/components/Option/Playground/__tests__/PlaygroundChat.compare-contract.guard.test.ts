@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 
 describe("PlaygroundChat compare continuation contract guard", () => {
   it("keeps explicit continuation and resume notices for compare flow", () => {
-    const sourcePath = path.resolve(__dirname, "../PlaygroundChat.tsx")
+    const sourcePath = path.resolve(__dirname, "../PlaygroundCompareCluster.tsx")
     const source = fs.readFileSync(sourcePath, "utf8")
 
     expect(source).toContain("playground:composer.compareContinueContract")

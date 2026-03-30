@@ -126,6 +126,69 @@ export const useVoiceChatMessages = () => {
     [historyId, saveMessageOnSuccess, setHistory, setHistoryId, setMessages]
   )
 
+  const failTurn = React.useCallback(
+    async (reason: string) => {
+      const turn = currentTurnRef.current
+      if (!turn) return
+
+      const finalText = turn.assistantText.trim()
+      const interruptedAt = Date.now()
+      if (!finalText) {
+        setMessages((prev) =>
+          prev.filter((message) => message.id !== turn.assistantId)
+        )
+        currentTurnRef.current = null
+        return
+      }
+
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === turn.assistantId
+            ? updateActiveVariant(message, {
+                message: finalText,
+                generationInfo: {
+                  ...(message.generationInfo || {}),
+                  interrupted: true,
+                  interruptionReason: reason,
+                  interruptedAt
+                }
+              })
+            : message
+        )
+      )
+
+      setHistory((prev) => {
+        const last = prev[prev.length - 1]
+        if (last?.role === "assistant" && last.content === finalText) {
+          return prev
+        }
+        return [...prev, { role: "assistant", content: finalText }]
+      })
+
+      await saveMessageOnSuccess({
+        historyId,
+        setHistoryId,
+        isRegenerate: false,
+        selectedModel: turn.modelName,
+        message: turn.userText,
+        image: "",
+        fullText: finalText,
+        source: [],
+        message_source: "server",
+        generationInfo: {
+          interrupted: true,
+          interruptionReason: reason,
+          interruptedAt
+        },
+        userMessageId: turn.userId,
+        assistantMessageId: turn.assistantId
+      })
+
+      currentTurnRef.current = null
+    },
+    [historyId, saveMessageOnSuccess, setHistory, setHistoryId, setMessages]
+  )
+
   const resetTurn = React.useCallback(() => {
     currentTurnRef.current = null
   }, [])
@@ -166,6 +229,7 @@ export const useVoiceChatMessages = () => {
     beginTurn,
     appendAssistantDelta,
     finalizeAssistant,
+    failTurn,
     resetTurn,
     abandonTurn,
     activeAssistantId: currentTurnRef.current?.assistantId || null

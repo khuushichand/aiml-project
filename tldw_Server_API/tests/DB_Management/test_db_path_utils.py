@@ -130,3 +130,17 @@ def test_user_db_base_dir_test_fallback_is_not_repo_local(monkeypatch):
 
     assert resolved != repo_local_default
     assert repo_local_default not in resolved.parents
+
+
+def test_user_db_base_dir_test_fallback_uses_unique_run_tag(monkeypatch):
+    monkeypatch.delenv("USER_DB_BASE_DIR", raising=False)
+    monkeypatch.delenv("USER_DB_BASE", raising=False)
+    monkeypatch.delenv("TLDW_TEST_RUN_ID", raising=False)
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", None)
+    monkeypatch.setitem(settings, "USER_DB_BASE", None)
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: True)
+
+    resolved = DatabasePaths.get_user_db_base_dir()
+
+    assert resolved.name != "default"

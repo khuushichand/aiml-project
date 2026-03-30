@@ -37,6 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
 from tldw_Server_API.app.core.Audio.error_payloads import _maybe_debug_details
 from tldw_Server_API.app.core.Audio.streaming_exceptions import QuotaExceeded
+from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC, EXPECTED_REDIS_EXC, _get_failopen_cap_minutes
 from tldw_Server_API.app.core.Usage.audio_quota import (
     active_streams_count,
@@ -67,7 +68,9 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import upsert_transcript
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
+    upsert_transcript,
+)
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -81,6 +84,7 @@ from tldw_Server_API.app.core.Streaming import speech_chat_service
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils import normalize_model_and_variant
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
@@ -435,6 +439,71 @@ def _resolve_default_streaming_model() -> tuple[str, str, str]:
         variant = "onnx"
 
     return model, variant, whisper_model_size
+
+
+def _resolve_audio_chat_streaming_model(
+    *,
+    raw_model: Any,
+    variant_override: Any,
+    current_model: str,
+    current_variant: str,
+    current_whisper_model_size: str,
+    explicit_whisper_model_size: Any = None,
+) -> tuple[str, str, str]:
+    """Normalize client STT identifiers into the canonical streaming selector fields."""
+
+    model = current_model
+    variant = current_variant
+    whisper_model_size = current_whisper_model_size
+
+    raw_model_str = str(raw_model or "").strip()
+    explicit_whisper_size = str(explicit_whisper_model_size or "").strip()
+    if not raw_model_str:
+        normalized_model, normalized_variant = normalize_model_and_variant(
+            None,
+            current_model=current_model,
+            current_variant=current_variant,
+            variant_override=variant_override,
+        )
+        return normalized_model, normalized_variant, whisper_model_size
+
+    provider_name = ""
+    resolved_model_id = raw_model_str
+    resolved_variant = None
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            get_stt_provider_registry,
+        )
+
+        registry = get_stt_provider_registry()
+        provider_name, resolved_model_id, resolved_variant = registry.resolve_provider_for_model(raw_model_str)
+        provider_name = str(provider_name or "").strip().lower()
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"Could not resolve chat streaming STT provider for '{raw_model_str}': {exc}")
+
+    if provider_name in {"faster-whisper", "whisper"}:
+        resolved_whisper_model = explicit_whisper_size or str(resolved_model_id or raw_model_str).strip()
+        return "whisper", variant, _map_openai_audio_model_to_whisper(resolved_whisper_model)
+
+    if provider_name == "parakeet":
+        normalized_model, normalized_variant = normalize_model_and_variant(
+            raw_model_str,
+            current_model="parakeet",
+            current_variant=current_variant,
+            variant_override=variant_override or resolved_variant,
+        )
+        return normalized_model, normalized_variant, whisper_model_size
+
+    if provider_name in {"canary", "qwen3-asr"}:
+        return provider_name, variant, whisper_model_size
+
+    normalized_model, normalized_variant = normalize_model_and_variant(
+        raw_model_str,
+        current_model=current_model,
+        current_variant=current_variant,
+        variant_override=variant_override,
+    )
+    return normalized_model, normalized_variant, whisper_model_size
 
 
 def _compose_transcript_snapshot(full_text: str, latest_text: str) -> str:
@@ -1435,10 +1504,19 @@ async def websocket_audio_chat_stream(
 
         config = _new_unified_streaming_config()
         try:
-            config.model = stt_cfg.get("model", config.model)
             variant_override = stt_cfg.get("variant") or stt_cfg.get("model_variant")
-            if variant_override:
-                config.model_variant = variant_override
+            (
+                config.model,
+                config.model_variant,
+                config.whisper_model_size,
+            ) = _resolve_audio_chat_streaming_model(
+                raw_model=stt_cfg.get("model"),
+                variant_override=variant_override,
+                current_model=config.model,
+                current_variant=config.model_variant,
+                current_whisper_model_size=config.whisper_model_size,
+                explicit_whisper_model_size=stt_cfg.get("whisper_model_size"),
+            )
             config.sample_rate = stt_cfg.get("sample_rate", config.sample_rate)
             config.enable_partial = stt_cfg.get("enable_partial", config.enable_partial)
             config.enable_vad = bool(stt_cfg.get("enable_vad", config.enable_vad))

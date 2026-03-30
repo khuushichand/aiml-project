@@ -11,7 +11,14 @@ import {
 } from "antd"
 import { useTranslation } from "react-i18next"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { getTTSProvider, getTTSSettings, setTTSSettings } from "@/services/tts"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TLDW_TTS_VOICE,
+  DEFAULT_TTS_PROVIDER,
+  getTTSProvider,
+  getTTSSettings,
+  setTTSSettings
+} from "@/services/tts"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { getTtsProviderLabel } from "@/services/tts-providers"
 import {
@@ -35,7 +42,6 @@ import { withTemplateFallback } from "@/utils/template-guards"
 const { Text, Title, Paragraph } = Typography
 const SAMPLE_TEXT =
   "Sample: Hi there, this is the TTS playground reading a short passage so you can preview voice and speed."
-
 const TtsPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["playground", "settings", "common"])
   const [text, setText] = React.useState("")
@@ -51,10 +57,10 @@ const TtsPlaygroundPage: React.FC = () => {
     undefined
   )
   const [tldwModel, setTldwModel] = React.useState<string | undefined>(
-    undefined
+    DEFAULT_TLDW_TTS_MODEL
   )
   const [tldwVoice, setTldwVoice] = React.useState<string | undefined>(
-    undefined
+    DEFAULT_TLDW_TTS_VOICE
   )
   const [openAiModel, setOpenAiModel] = React.useState<string | undefined>(
     undefined
@@ -62,7 +68,7 @@ const TtsPlaygroundPage: React.FC = () => {
   const [openAiVoice, setOpenAiVoice] = React.useState<string | undefined>(
     undefined
   )
-  const provider = ttsSettings?.ttsProvider || "browser"
+  const provider = ttsSettings?.ttsProvider || DEFAULT_TTS_PROVIDER
   const isTldw = provider === "tldw"
   const inferredProviderKey = React.useMemo(() => {
     if (!isTldw) return null
@@ -119,8 +125,8 @@ const TtsPlaygroundPage: React.FC = () => {
     if (!ttsSettings) return
     setElevenVoiceId(ttsSettings.elevenLabsVoiceId || undefined)
     setElevenModelId(ttsSettings.elevenLabsModel || undefined)
-    setTldwModel(ttsSettings.tldwTtsModel || undefined)
-    setTldwVoice(ttsSettings.tldwTtsVoice || undefined)
+    setTldwModel(ttsSettings.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL)
+    setTldwVoice(ttsSettings.tldwTtsVoice || DEFAULT_TLDW_TTS_VOICE)
     setOpenAiModel(ttsSettings.openAITTSModel || undefined)
     setOpenAiVoice(ttsSettings.openAITTSVoice || undefined)
   }, [ttsSettings])
@@ -324,7 +330,7 @@ const TtsPlaygroundPage: React.FC = () => {
     setDuration(0)
   }
 
-  const providerLabel = getTtsProviderLabel(ttsSettings?.ttsProvider)
+  const providerLabel = getTtsProviderLabel(provider)
 
   const activeProviderCaps = React.useMemo(
     (): { key: string; caps: TldwTtsProviderCapabilities } | null => {
@@ -374,6 +380,20 @@ const TtsPlaygroundPage: React.FC = () => {
     }
     return []
   }, [providersInfo, activeProviderCaps, tldwVoiceCatalog])
+
+  React.useEffect(() => {
+    if (!isTldw || providerVoices.length === 0) {
+      return
+    }
+    const currentVoice = String(tldwVoice || "").trim()
+    const availableVoices = providerVoices
+      .map((voice) => voice.id || voice.name || "")
+      .filter(Boolean)
+    if (currentVoice && availableVoices.includes(currentVoice)) {
+      return
+    }
+    setTldwVoice(availableVoices[0])
+  }, [isTldw, providerVoices, tldwVoice])
 
   const openAiVoiceOptions = React.useMemo(() => {
     if (!openAiModel) {
@@ -677,7 +697,7 @@ const TtsPlaygroundPage: React.FC = () => {
                         style={{ minWidth: 160 }}
                         value={tldwModel || ""}
                         onChange={(e) => setTldwModel(e.target.value)}
-                        placeholder="kokoro"
+                        placeholder={DEFAULT_TLDW_TTS_MODEL}
                       />
                     )}
                   </div>

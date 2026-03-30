@@ -12,7 +12,9 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
-- `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
+- `ALLOWED_ORIGINS`: Optional browser-origin allowlist. Comma-separated or JSON array.
+  - Local self-hosting already permits common `localhost` and `127.0.0.1` browser origins by default.
+  - Set this only when your browser UI runs from another origin, such as a LAN IP, reverse proxy host, or custom port.
 - `CORS_ALLOW_CREDENTIALS`: Enable credentialed CORS responses (`true|false`). Default `false`.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
 - `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
@@ -355,6 +357,11 @@ The following env vars are retained as **deprecated compatibility knobs** during
 - `JWT_SECRET_KEY`: JWT signing secret (>=32 chars). Required for `multi_user` in production.
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: Access token lifetime (default 30).
 - `REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token lifetime (default 7).
+- `PUBLIC_WEB_BASE_URL`: Public web app origin used for hosted auth links (for example `https://app.example.com`). When unset, auth emails fall back to `BASE_URL`.
+- `PUBLIC_PASSWORD_RESET_PATH`: Public hosted path for password reset completion (default `/auth/reset-password`).
+- `PUBLIC_EMAIL_VERIFICATION_PATH`: Public hosted path for email verification completion (default `/auth/verify-email`).
+- `PUBLIC_MAGIC_LINK_PATH`: Public hosted path for magic-link sign-in completion (default `/auth/magic-link`).
+- Hosted SaaS profile: expect `AUTH_MODE=multi_user`, PostgreSQL `DATABASE_URL`, `tldw_production=true`, and `PUBLIC_WEB_BASE_URL=https://<public-app-origin>`.
 - `REDIS_URL`: Optional Redis URL for sessions (`redis://` or `rediss://`).
 - `ENABLE_REGISTRATION`: Enable user registration (`true|false`).
 - `REQUIRE_REGISTRATION_CODE`: Require code to register (`true|false`).
@@ -379,8 +386,14 @@ The following env vars are retained as **deprecated compatibility knobs** during
 - `SHOW_API_KEY_ON_STARTUP`: In single-user mode, show API key once at startup (`true|false`). Avoid in production.
 - `REDIS_ENABLED`: Boolean hint used in logs/metrics reporting.
 
+## Billing
+- `BILLING_ALLOWED_REDIRECT_HOSTS`: Comma-separated exact or wildcard host allowlist for checkout success, cancel, and billing portal return URLs.
+- `BILLING_REDIRECT_ALLOWLIST_REQUIRED`: Require `BILLING_ALLOWED_REDIRECT_HOSTS` to be set before billing redirects are accepted (`true|false`).
+- `BILLING_REDIRECT_REQUIRE_HTTPS`: Reject non-HTTPS billing redirect URLs when enabled (`true|false`).
+- Hosted SaaS profile: set `BILLING_REDIRECT_ALLOWLIST_REQUIRED=true`, `BILLING_REDIRECT_REQUIRE_HTTPS=true`, and include the `PUBLIC_WEB_BASE_URL` host in `BILLING_ALLOWED_REDIRECT_HOSTS`.
+
 Config file support (optional):
-- Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
+- Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `public_web_base_url`, `public_password_reset_path`, `public_email_verification_path`, `public_magic_link_path`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
 - Section `[Image-Generation]` in `Config_Files/config.txt` can define:
   - General: `default_backend`, `enabled_backends`
   - Limits: `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`

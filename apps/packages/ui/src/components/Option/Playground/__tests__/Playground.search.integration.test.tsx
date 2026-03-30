@@ -259,12 +259,13 @@ describe("Playground thread search integration", () => {
     })
   })
 
-  it("opens chat workflows from the header action", () => {
+  it("does not render the deprecated chat workflows header action", () => {
     render(<Playground />)
 
-    fireEvent.click(screen.getByTestId("playground-chat-workflows-trigger"))
-
-    expect(routerState.navigate).toHaveBeenCalledWith("/chat-workflows")
+    expect(
+      screen.queryByTestId("playground-chat-workflows-trigger")
+    ).not.toBeInTheDocument()
+    expect(routerState.navigate).not.toHaveBeenCalled()
   })
 
   it("shows mobile artifacts sheet context and returns focus to trigger when closing", async () => {

@@ -10,11 +10,14 @@ const state = vi.hoisted(() => ({
     hasAudio: true,
     hasStt: true,
     hasTts: true,
-    hasVoiceChat: true
+    hasVoiceChat: true,
+    hasVoiceConversationTransport: true
   } as any,
   loading: false,
   apiSend: vi.fn(),
-  fetchVoices: vi.fn()
+  fetchVoices: vi.fn(),
+  fetchVoiceCatalog: vi.fn(),
+  inferProviderFromModel: vi.fn(() => null)
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
@@ -31,7 +34,14 @@ vi.mock("@/services/api-send", () => ({
 
 vi.mock("@/services/tldw/audio-voices", () => ({
   fetchTldwVoices: (...args: unknown[]) =>
-    (state.fetchVoices as (...args: unknown[]) => unknown)(...args)
+    (state.fetchVoices as (...args: unknown[]) => unknown)(...args),
+  fetchTldwVoiceCatalog: (...args: unknown[]) =>
+    (state.fetchVoiceCatalog as (...args: unknown[]) => unknown)(...args)
+}))
+
+vi.mock("@/services/tts-provider", () => ({
+  inferTldwProviderFromModel: (...args: unknown[]) =>
+    (state.inferProviderFromModel as (...args: unknown[]) => unknown)(...args)
 }))
 
 const buildWrapper = () => {
@@ -53,12 +63,18 @@ describe("useTldwAudioStatus", () => {
       hasAudio: true,
       hasStt: true,
       hasTts: true,
-      hasVoiceChat: true
+      hasVoiceChat: true,
+      hasVoiceConversationTransport: true
     }
     state.loading = false
     state.apiSend.mockReset()
+    state.apiSend.mockResolvedValue({ ok: false, status: 404 })
     state.fetchVoices.mockReset()
+    state.fetchVoiceCatalog.mockReset()
+    state.inferProviderFromModel.mockReset()
+    state.inferProviderFromModel.mockReturnValue(null)
     state.fetchVoices.mockResolvedValue([])
+    state.fetchVoiceCatalog.mockResolvedValue([])
   })
 
   it("runs split STT/TTS probes when capabilities are available", async () => {
@@ -84,6 +100,7 @@ describe("useTldwAudioStatus", () => {
     expect(result.current.hasStt).toBe(true)
     expect(result.current.hasTts).toBe(true)
     expect(result.current.hasVoiceChat).toBe(true)
+    expect(result.current.hasVoiceConversationTransport).toBe(true)
     expect(result.current.hasAudio).toBe(true)
     expect(result.current.healthState).toBe("healthy")
     expect(state.apiSend).toHaveBeenCalledWith(
@@ -178,6 +195,131 @@ describe("useTldwAudioStatus", () => {
     expect(result.current.sttHealthState).toBe("healthy")
   })
 
+  it("marks TTS unhealthy when the selected provider is not runtime-ready", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasStt: false,
+      hasTts: true,
+      hasVoiceChat: false
+    }
+    state.inferProviderFromModel.mockReturnValue("qwen3_tts")
+    state.apiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        status: "healthy",
+        providers: {
+          details: {
+            qwen3_tts: {
+              status: "disabled",
+              availability: "disabled"
+            }
+          }
+        }
+      }
+    })
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          ttsProvider: "browser",
+          tldwTtsModel: "Qwen3-TTS-0.8B"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.ttsHealthState).toBe("unhealthy")
+  })
+
+  it("does not reuse tldw provider health when voice chat is configured for openai", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasStt: false,
+      hasTts: true,
+      hasVoiceChat: false
+    }
+    state.inferProviderFromModel.mockReturnValue("kokoro")
+    state.apiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        status: "healthy",
+        providers: {
+          details: {
+            kokoro: {
+              status: "disabled",
+              availability: "disabled"
+            },
+            openai: {
+              status: "enabled",
+              availability: "enabled"
+            }
+          }
+        }
+      }
+    })
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          ttsProvider: "openai",
+          tldwTtsModel: "kokoro"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.ttsHealthState).toBe("healthy")
+  })
+
+  it("fails open when the selected provider is not described in the health payload", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasStt: false,
+      hasTts: true,
+      hasVoiceChat: false
+    }
+    state.inferProviderFromModel.mockReturnValue("kokoro")
+    state.apiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        status: "healthy",
+        providers: {
+          details: {}
+        }
+      }
+    })
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          ttsProvider: "browser",
+          tldwTtsModel: "kokoro"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.ttsHealthState).toBe("healthy")
+  })
+
   it("fail-opens STT health for non-whisper providers that report not-ready models", async () => {
     state.capabilities = {
       hasAudio: true,
@@ -227,6 +369,86 @@ describe("useTldwAudioStatus", () => {
 
     expect(result.current.hasStt).toBe(true)
     expect(result.current.hasTts).toBe(true)
+    expect(result.current.hasVoiceConversationTransport).toBe(false)
     expect(result.current.hasAudio).toBe(true)
+  })
+
+  it("keeps strict voice conversation transport disabled when only broad voice flags exist", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasVoiceChat: true
+    }
+
+    const { result } = renderHook(() => useTldwAudioStatus(), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(result.current.sttHealthLoading).toBe(false)
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.hasVoiceChat).toBe(true)
+    expect(result.current.hasVoiceConversationTransport).toBe(false)
+  })
+
+  it("treats provider catalog voices as available before falling back to custom voices", async () => {
+    state.fetchVoices.mockResolvedValue([])
+    state.fetchVoiceCatalog.mockResolvedValue([
+      { voice_id: "Bella", name: "Bella", provider: "kitten_tts" }
+    ])
+    state.inferProviderFromModel.mockReturnValue("kitten_tts")
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          requireVoices: true,
+          tldwTtsModel: "KittenML/kitten-tts-nano-0.8"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.voicesLoading).toBe(false)
+    })
+
+    expect(result.current.voicesAvailable).toBe(true)
+    expect(state.fetchVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
+    expect(state.fetchVoices).not.toHaveBeenCalled()
+  })
+
+  it("does not mark TTS unavailable when catalog voices prove the selected provider is reachable", async () => {
+    state.capabilities = {
+      hasAudio: false,
+      hasStt: false,
+      hasTts: false,
+      hasVoiceChat: false
+    }
+    state.fetchVoiceCatalog.mockResolvedValue([
+      { voice_id: "Bella", name: "Bella", provider: "kitten_tts" }
+    ])
+    state.inferProviderFromModel.mockReturnValue("kitten_tts")
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          requireVoices: true,
+          tldwTtsModel: "KittenML/kitten-tts-nano-0.8"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.voicesLoading).toBe(false)
+    })
+
+    expect(result.current.voicesAvailable).toBe(true)
+    expect(result.current.ttsHealthState).toBe("unknown")
+    expect(state.fetchVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
+    expect(state.apiSend).not.toHaveBeenCalled()
   })
 })

@@ -107,6 +107,7 @@ describe("createBranchMessage", () => {
       historyId: "local-history-id",
       setHistoryId,
       serverChatId: "parent-chat-id",
+      scope: { type: "workspace", workspaceId: "workspace-1" },
       setServerChatId,
       setServerChatState,
       setServerChatVersion,
@@ -128,13 +129,24 @@ describe("createBranchMessage", () => {
     const result = await branchMessage(0)
 
     expect(result).toBe("new-branch-chat-id")
-    expect(mockTldwClient.getChat).toHaveBeenCalledWith("parent-chat-id")
+    expect(mockTldwClient.getChat).toHaveBeenCalledWith("parent-chat-id", {
+      scope: { type: "workspace", workspaceId: "workspace-1" }
+    })
     expect(mockTldwClient.createChat).toHaveBeenCalledWith(
       expect.objectContaining({
         parent_conversation_id: "parent-chat-id",
         character_id: 2,
         state: "in-progress"
-      })
+      }),
+      { scope: { type: "workspace", workspaceId: "workspace-1" } }
+    )
+    expect(mockTldwClient.addChatMessage).toHaveBeenCalledWith(
+      "new-branch-chat-id",
+      expect.objectContaining({
+        role: "user",
+        content: "hello"
+      }),
+      { scope: { type: "workspace", workspaceId: "workspace-1" } }
     )
     expect(notification.error).not.toHaveBeenCalled()
   })

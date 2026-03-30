@@ -24,6 +24,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
 )
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
@@ -37,6 +38,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
@@ -209,6 +211,40 @@ def _resolve_media_ingest_queue(form_data: AddMediaForm) -> str:
     return heavy_queue
 
 
+def _create_media_ingest_job(
+    *,
+    jm: JobManager,
+    selected_queue: str,
+    payload: dict[str, Any],
+    current_user: User,
+    batch_id: str,
+    request_id: str | None,
+    trace_id: str | None,
+) -> dict[str, Any]:
+    try:
+        return jm.create_job(
+            domain="media_ingest",
+            queue=selected_queue,
+            job_type="media_ingest_item",
+            payload=payload,
+            batch_group=batch_id,
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=3,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    except BadRequestError as exc:
+        message = str(exc).strip() or "Invalid media ingest job request"
+        normalized = message.lower()
+        status_code = (
+            status.HTTP_429_TOO_MANY_REQUESTS
+            if "concurrent job limit" in normalized
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
 def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
     roles = {
         str(role).strip().lower()
@@ -357,6 +393,7 @@ def _resolve_batch_or_session_id(
     dependencies=[
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
+        Depends(guard_storage_quota),
     ],
 )
 async def submit_media_ingest_jobs(
@@ -396,15 +433,12 @@ async def submit_media_ingest_jobs(
             "input_ref": str(url).strip(),
             "options": options,
         }
-        row = jm.create_job(
-            domain="media_ingest",
-            queue=selected_queue,
-            job_type="media_ingest_item",
+        row = _create_media_ingest_job(
+            jm=jm,
+            selected_queue=selected_queue,
             payload=payload,
-            batch_group=batch_id,
-            owner_user_id=str(current_user.id),
-            priority=5,
-            max_retries=3,
+            current_user=current_user,
+            batch_id=batch_id,
             request_id=rid,
             trace_id=tp or None,
         )
@@ -462,15 +496,12 @@ async def submit_media_ingest_jobs(
                     "cleanup_temp_dir": True,
                     "options": options,
                 }
-                row = jm.create_job(
-                    domain="media_ingest",
-                    queue=selected_queue,
-                    job_type="media_ingest_item",
+                row = _create_media_ingest_job(
+                    jm=jm,
+                    selected_queue=selected_queue,
                     payload=payload,
-                    batch_group=batch_id,
-                    owner_user_id=str(current_user.id),
-                    priority=5,
-                    max_retries=3,
+                    current_user=current_user,
+                    batch_id=batch_id,
                     request_id=rid,
                     trace_id=tp or None,
                 )
@@ -486,6 +517,8 @@ async def submit_media_ingest_jobs(
                         status=row.get("status"),
                     )
                 )
+            except HTTPException:
+                raise
             except Exception as exc:
                 logger.warning("Failed to stage upload for ingest jobs: {}", exc)
                 errors.append(f"Upload staging failed: {exc}")

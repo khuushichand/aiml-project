@@ -5,7 +5,7 @@ import pytest
 
 from tldw_Server_API.app.services import quiz_generator
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.services.quiz_generator import (
     _build_test_mode_questions,
     generate_quiz_from_sources,

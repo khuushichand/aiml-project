@@ -7,12 +7,16 @@ Ensures consistent database file locations across the application.
 import hashlib
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import Callable, Optional, Union
 
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.media_db.constants import (
+    MEDIA_DB_FILENAME,
+)
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
@@ -20,10 +24,20 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SAFE_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_TEST_FALLBACK_RUN_TAG = uuid.uuid4().hex[:8]
 
 
 def _is_test_context() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+
+
+def _get_test_fallback_run_tag() -> str:
+    explicit_tag = str(os.getenv("TLDW_TEST_RUN_ID") or "").strip()
+    if explicit_tag:
+        return explicit_tag
+
+    worker_tag = str(os.getenv("PYTEST_XDIST_WORKER") or "").strip() or "default"
+    return f"{worker_tag}-{_TEST_FALLBACK_RUN_TAG}"
 
 
 def _normalize_user_id(user_id: UserId) -> str:
@@ -198,7 +212,7 @@ class DatabasePaths:
     """Centralized database path management."""
 
     # Database file names
-    MEDIA_DB_NAME = "Media_DB_v2.db"
+    MEDIA_DB_NAME = MEDIA_DB_FILENAME
     CHACHA_DB_NAME = "ChaChaNotes.db"
     PROMPTS_DB_NAME = "user_prompts_v2.sqlite"
     AUDIT_DB_NAME = "unified_audit.db"
@@ -207,7 +221,6 @@ class DatabasePaths:
     GUARDIAN_DB_NAME = "Guardian.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
-    CHAT_WORKFLOWS_DB_NAME = "chat_workflows.db"
     RESEARCH_SESSIONS_DB_NAME = "ResearchSessions.db"
     KANBAN_DB_NAME = "Kanban.db"
     SLIDES_DB_NAME = "Slides.db"
@@ -219,7 +232,6 @@ class DatabasePaths:
     AUDIT_SUBDIR = "audit"
     EVALUATIONS_SUBDIR = "evaluations"
     WORKFLOWS_SUBDIR = "workflows"
-    CHAT_WORKFLOWS_SUBDIR = "chat_workflows"
     PROMPT_STUDIO_SUBDIR = "prompt_studio_dbs"
     OUTPUTS_SUBDIR = "outputs"
     OUTPUTS_TEMP_SUBDIR = "outputs_tmp"
@@ -237,12 +249,22 @@ class DatabasePaths:
     def get_user_db_base_dir(*, allow_legacy_alias: bool = False) -> Path:
         env_user_db_base = os.getenv("USER_DB_BASE_DIR")
         settings_user_db_base = settings.get("USER_DB_BASE_DIR")
-        if _is_test_context() and env_user_db_base:
-            user_db_base = env_user_db_base
-        else:
-            user_db_base = settings_user_db_base or env_user_db_base
         project_root = Path(get_project_root())
         default_base = (project_root / "Databases" / "user_databases").resolve()
+        user_db_base = settings_user_db_base or env_user_db_base
+        if _is_test_context() and env_user_db_base:
+            try:
+                settings_candidate = Path(settings_user_db_base) if settings_user_db_base else None
+                if settings_candidate is not None:
+                    settings_candidate = settings_candidate.expanduser()
+                    if not settings_candidate.is_absolute():
+                        settings_candidate = (project_root / settings_candidate).resolve()
+                    else:
+                        settings_candidate = settings_candidate.resolve()
+            except Exception:
+                settings_candidate = None
+            if settings_candidate is None or settings_candidate == default_base:
+                user_db_base = env_user_db_base
         if _is_test_context() and not env_user_db_base:
             try:
                 candidate = Path(settings_user_db_base) if settings_user_db_base else None
@@ -268,11 +290,7 @@ class DatabasePaths:
             if _is_test_context():
                 import tempfile
 
-                run_tag = (
-                    os.getenv("TLDW_TEST_RUN_ID")
-                    or os.getenv("PYTEST_XDIST_WORKER")
-                    or "default"
-                )
+                run_tag = _get_test_fallback_run_tag()
                 safe_run_tag = "".join(
                     ch if ch.isalnum() or ch in "-_." else "_"
                     for ch in str(run_tag)
@@ -440,20 +458,17 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
 
     @staticmethod
+    def get_chat_workflows_db_path(user_id: Optional[UserId]) -> Path:
+        """Backward-compatible alias for the per-user workflows database path."""
+        return DatabasePaths.get_workflows_db_path(user_id)
+
+    @staticmethod
     def get_workflows_scheduler_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's workflows scheduler database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         workflows_dir = user_dir / DatabasePaths.WORKFLOWS_SUBDIR
         _ensure_dir(workflows_dir, label="workflows scheduler")
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
-
-    @staticmethod
-    def get_chat_workflows_db_path(user_id: Optional[UserId]) -> Path:
-        """Get the path to the user's chat workflows database."""
-        user_dir = DatabasePaths.get_user_base_directory(user_id)
-        chat_workflows_dir = user_dir / DatabasePaths.CHAT_WORKFLOWS_SUBDIR
-        _ensure_dir(chat_workflows_dir, label="chat workflows")
-        return chat_workflows_dir / DatabasePaths.CHAT_WORKFLOWS_DB_NAME
 
     @staticmethod
     def get_research_sessions_db_path(user_id: Optional[UserId]) -> Path:
@@ -622,7 +637,6 @@ class DatabasePaths:
             "personalization": DatabasePaths.get_personalization_db_path(user_id),
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
-            "chat_workflows": DatabasePaths.get_chat_workflows_db_path(user_id),
             "research_sessions": DatabasePaths.get_research_sessions_db_path(user_id),
             "kanban": DatabasePaths.get_kanban_db_path(user_id),
             "slides": DatabasePaths.get_slides_db_path(user_id),

@@ -14,7 +14,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import httpx
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
 
 @dataclass(frozen=True)
@@ -218,16 +219,19 @@ def _load_media_title_map(db_path: Path) -> Dict[str, List[str]]:
         raise FileNotFoundError(f"Media DB not found: {db_path}")
 
     title_map: Dict[str, List[str]] = {}
-    db = MediaDatabase(db_path=str(db_path), client_id="rag_bench_corpus")
-    with db.transaction():
-        rows = db.execute_query("SELECT id, title FROM Media WHERE deleted = 0").fetchall()
-    for row in rows:
-        media_id = row.get("id")
-        title = row.get("title")
-        if not title:
-            continue
-        key = _normalize_title(str(title))
-        title_map.setdefault(key, []).append(str(media_id))
+    db = create_media_database("rag_bench_corpus", db_path=str(db_path))
+    try:
+        with db.transaction():
+            rows = db.execute_query("SELECT id, title FROM Media WHERE deleted = 0").fetchall()
+        for row in rows:
+            media_id = row.get("id")
+            title = row.get("title")
+            if not title:
+                continue
+            key = _normalize_title(str(title))
+            title_map.setdefault(key, []).append(str(media_id))
+    finally:
+        db.close_connection()
     return title_map
 
 
@@ -298,12 +302,12 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--media-db",
         default=None,
-        help="Path to Media_DB_v2.db for dataset regeneration.",
+        help="Path to the per-user media DB for dataset regeneration.",
     )
     parser.add_argument(
         "--user-id",
         default=None,
-        help="User id used to derive Media_DB_v2.db when --media-db is omitted.",
+        help="User id used to derive the per-user media DB when --media-db is omitted.",
     )
     parser.add_argument(
         "--namespace",
@@ -433,7 +437,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.media_db:
             db_path = _resolve_path(repo_root, args.media_db)
         elif args.user_id:
-            db_path = repo_root / "Databases" / "user_databases" / str(args.user_id) / "Media_DB_v2.db"
+            db_path = (
+                repo_root
+                / "Databases"
+                / "user_databases"
+                / str(args.user_id)
+                / DatabasePaths.MEDIA_DB_NAME
+            )
         else:
             raise ValueError("Provide --media-db or --user-id for dataset regeneration.")
 

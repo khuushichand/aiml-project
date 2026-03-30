@@ -23,6 +23,7 @@ import {
 import { Role, Permission, User } from '@/types';
 import { Label } from '@/components/ui/label';
 import Link from 'next/link';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type RateLimits = {
   requests_per_minute?: number | null;
@@ -550,7 +551,7 @@ export default function RoleDetailPage() {
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           {loading ? (
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <CardSkeleton />
           ) : !role ? (
             <>
               <Alert variant="destructive">

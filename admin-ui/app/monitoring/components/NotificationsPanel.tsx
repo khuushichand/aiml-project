@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Bell, Mail, Webhook, Send, X, AlertCircle, MessageSquare, ToggleLeft, ToggleRight } from 'lucide-react';
 import type { NotificationSettings, NotificationChannel, RecentNotification } from '../types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type NotificationsPanelProps = {
   settings: NotificationSettings | null;
@@ -526,7 +527,7 @@ export default function NotificationsPanel({
   if (loading) {
     return (
       <NotificationsPanelShell enabledChannels={0} loading={loading} saving={saving} onTest={onTest}>
-        <div className="text-center text-muted-foreground py-8">Loading...</div>
+        <CardSkeleton />
       </NotificationsPanelShell>
     );
   }

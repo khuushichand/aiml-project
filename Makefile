@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-local quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
 
 PYTHON ?= python3
 VENV_DIR ?= .venv
@@ -10,7 +10,9 @@ TLDW_ENV_FILE ?= tldw_Server_API/Config_Files/.env
 TLDW_ENV_TEMPLATE ?= tldw_Server_API/Config_Files/.env.example
 DOCKER_BASE_COMPOSE ?= Dockerfiles/docker-compose.yml
 DOCKER_WEBUI_COMPOSE ?= Dockerfiles/docker-compose.webui.yml
-NEXT_PUBLIC_API_URL ?= http://localhost:8000
+NEXT_PUBLIC_API_URL ?=
+NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE ?= quickstart
+TLDW_INTERNAL_API_ORIGIN ?= http://app:8000
 DOCKER_BUILD ?= false
 DOCKER_BUILD_FLAG = $(if $(filter true TRUE 1 yes YES,$(DOCKER_BUILD)),--build,)
 PYPI_BUILD_ARGS ?= --no-isolation
@@ -54,18 +56,21 @@ quickstart-install:
 	@if [ "$$(uname -s)" = "Linux" ]; then \
 		echo "[quickstart-install] Linux audio note: if PyAudio build/install fails, install PortAudio headers (e.g., sudo apt install -y portaudio19-dev python3-pyaudio)."; \
 	fi
-	@$(MAKE) quickstart PYTHON=$(VENV_PYTHON)
+	@$(MAKE) quickstart-local PYTHON=$(VENV_PYTHON)
 
-quickstart: quickstart-prereqs
-	@echo "[quickstart] Setting up tldw_server for first-time use..."
+quickstart-local: quickstart-prereqs
+	@echo "[quickstart-local] Setting up local tldw_server development..."
 	@mkdir -p $(dir $(TLDW_ENV_FILE))
-	@test -f $(TLDW_ENV_FILE) || (cp $(TLDW_ENV_TEMPLATE) $(TLDW_ENV_FILE) && echo "[quickstart] Created $(TLDW_ENV_FILE) from template - set SINGLE_USER_API_KEY before exposing beyond localhost.")
-	@echo "[quickstart] Initializing auth (non-interactive)..."
+	@test -f $(TLDW_ENV_FILE) || (cp $(TLDW_ENV_TEMPLATE) $(TLDW_ENV_FILE) && echo "[quickstart-local] Created $(TLDW_ENV_FILE) from template - set SINGLE_USER_API_KEY before exposing beyond localhost.")
+	@echo "[quickstart-local] Initializing auth (non-interactive)..."
 	$(PYTHON) -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
-	@echo "[quickstart] Starting server on http://127.0.0.1:8000"
-	@echo "[quickstart] Verify with: curl http://localhost:8000/health"
-	@echo "[quickstart] API docs at: http://127.0.0.1:8000/docs"
+	@echo "[quickstart-local] Starting server on http://127.0.0.1:8000"
+	@echo "[quickstart-local] Verify with: curl http://localhost:8000/health"
+	@echo "[quickstart-local] API docs at: http://127.0.0.1:8000/docs"
 	$(PYTHON) -m uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
+
+quickstart:
+	@$(MAKE) quickstart-docker-webui
 
 tooling-install:
 	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[tooling-install] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
@@ -94,8 +99,15 @@ quickstart-docker: quickstart-docker-bootstrap
 quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] Starting API + WebUI via Docker Compose..."
 	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker-webui] docker not found. Install Docker and retry." && exit 1)
-	@echo "[quickstart-docker-webui] Using NEXT_PUBLIC_API_URL=$(NEXT_PUBLIC_API_URL)"
-	NEXT_PUBLIC_API_URL="$(NEXT_PUBLIC_API_URL)" docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
+	@echo "[quickstart-docker-webui] Deployment mode: $(NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE)"
+	@echo "[quickstart-docker-webui] Internal API origin: $(TLDW_INTERNAL_API_ORIGIN)"
+	@if [ -n "$(NEXT_PUBLIC_API_URL)" ]; then \
+		echo "[quickstart-docker-webui] Browser API override: $(NEXT_PUBLIC_API_URL)"; \
+	fi
+	NEXT_PUBLIC_API_URL="$(NEXT_PUBLIC_API_URL)" \
+	NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE="$(NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE)" \
+	TLDW_INTERNAL_API_ORIGIN="$(TLDW_INTERNAL_API_ORIGIN)" \
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
 	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
 	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"

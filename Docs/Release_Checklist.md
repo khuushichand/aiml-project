@@ -70,7 +70,7 @@ Run the test suite and confirm that core backend behavior is stable and covered.
 
 - [ ] From the repo root, run `python -m pytest -m "unit" -v` and confirm all unit tests pass.
 - [ ] Run `python -m pytest -m "integration" -v` and confirm integration tests pass, or that any skips are intentional and documented.
-- [ ] Confirm tests involving `Media_DB_v2`, notes/chats databases, and `users.db` pass with the default SQLite configuration.
+- [ ] Confirm tests involving the per-user content DB, notes/chats databases, and `users.db` pass with the default SQLite configuration.
 - [ ] Run AuthNZ PostgreSQL fixture tests (for example `tldw_Server_API/tests/AuthNZ/`) when Postgres is available and confirm they pass or skip cleanly based on the fixture (no hangs or unexpected failures).
 - [ ] Verify embeddings and RAG tests pass with at least one configured embedding provider (mocked or real).
 - [ ] Verify OpenAI-compatible `/chat/completions` tests pass with mocked providers and that provider routing and error handling tests succeed.
@@ -116,7 +116,7 @@ Confirm that the Web UI integrates correctly with the backend and that core user
 
 Ensure database schemas, migrations, and upgrade paths are safe and well understood.
 
-- [ ] For each database (`Databases/users.db`, `Databases/evaluations.db`, per-user `Media_DB_v2.db`, per-user `ChaChaNotes.db`), verify that any schema changes are reflected in migration scripts or initialization logic.
+- [ ] For each database (`Databases/users.db`, `Databases/evaluations.db`, the per-user content DB, per-user `ChaChaNotes.db`), verify that any schema changes are reflected in migration scripts or initialization logic.
 - [ ] Ensure any schema changes are described and scripted according to `Docs/Database_Migrations.md`.
 - [ ] Test an upgrade flow by starting from a database created by the previous release and launching the new server, confirming that it starts and runs without manual intervention or with clearly documented migration steps.
 - [ ] Verify that data created by the current version remains readable and usable by the previous minor version where compatibility is expected, or document incompatibilities clearly.

@@ -37,9 +37,6 @@ test.describe("Ingest -> Evaluate -> Review journey", () => {
 
       // Try to trigger an evaluation run
       await evalsPage.runEvaluation()
-
-      // Allow time for the evaluation to register
-      await page.waitForTimeout(2_000)
     })
 
     await test.step("Check content review page", async () => {

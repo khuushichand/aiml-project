@@ -199,6 +199,7 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
     localStorage.removeItem("watchlists:orientation-dismissed:v1")
+    localStorage.removeItem("watchlists:secondary-expanded:v1")
   })
 
   afterEach(() => {
@@ -207,6 +208,7 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
     localStorage.removeItem("watchlists:orientation-dismissed:v1")
+    localStorage.removeItem("watchlists:secondary-expanded:v1")
   })
 
   it("shows per-tab orientation and explicit Activity to Reports next action", () => {
@@ -229,12 +231,14 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     mocks.state.activeTab = "sources"
     rerender(<WatchlistsPlaygroundPage />)
     fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-monitors"))
-    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("sources")
+    expect(localStorage.getItem("watchlists:secondary-expanded:v1")).toContain("\"monitors\":true")
 
     mocks.state.activeTab = "jobs"
     rerender(<WatchlistsPlaygroundPage />)
     fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-activity"))
-    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("runs")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("items")
+    expect(localStorage.getItem("watchlists:secondary-expanded:v1")).toContain("\"activity\":true")
 
     mocks.state.activeTab = "runs"
     rerender(<WatchlistsPlaygroundPage />)

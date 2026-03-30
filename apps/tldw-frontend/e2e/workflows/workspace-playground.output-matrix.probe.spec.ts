@@ -7,206 +7,38 @@ import {
   skipIfServerUnavailable,
   assertNoCriticalErrors,
 } from "../utils/fixtures"
+import { expectApiCall } from "../utils/api-assertions"
 import {
-  TEST_CONFIG,
-  fetchWithApiKey,
-  generateTestId,
   seedAuth,
+  fetchWithApiKey,
+  TEST_CONFIG,
+  generateTestId,
 } from "../utils/helpers"
 import { WorkspacePlaygroundPage } from "../utils/page-objects"
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 }
 
-type WorkspaceProbeOutput = {
-  label: string
-  textDownload: boolean
-}
-
-const BACKEND_SUPPORTED_OUTPUTS: WorkspaceProbeOutput[] = [
-  { label: "Report", textDownload: true },
-  { label: "Compare Sources", textDownload: true },
-  { label: "Timeline", textDownload: true },
-  { label: "Quiz", textDownload: true },
-  { label: "Flashcards", textDownload: true },
-  { label: "Mind Map", textDownload: true },
-  { label: "Data Table", textDownload: true },
-]
-
-const hasErrorText = (content: string) =>
-  /error encountered|generation failed|generation canceled before completion|interrupted|no usable|download failed|could not|api key/i.test(
-    content,
-  )
-const WORKSPACE_EMBEDDING_PROVIDER = "huggingface"
-const WORKSPACE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-
-type WorkspaceProbeSource = {
+type LiveWorkspaceSource = {
   mediaId: number
   title: string
-  type: "pdf" | "video" | "audio" | "website" | "document" | "text"
-  url?: string
+  type: "document"
+  url: string
 }
 
-const setWorkspaceSelectedModel = async (
-  page: Parameters<typeof seedAuth>[0],
-  modelId: string,
-): Promise<void> => {
-  await page.evaluate((nextModel) => {
-    const store = (window as { __tldw_useStoreMessageOption?: unknown })
-      .__tldw_useStoreMessageOption as
-        | {
-            setState?: (nextState: Record<string, unknown>) => void
-          }
-        | undefined
-    if (!store?.setState) {
-      throw new Error("Message option store is unavailable on window")
-    }
-    store.setState({ selectedModel: nextModel })
-  }, modelId)
-}
+const normalizeWhitespace = (value: string): string =>
+  value.replace(/\s+/g, " ").trim()
 
-const fetchWithApiKeyTimeout = async (
-  url: string,
-  init: RequestInit,
-  timeoutMs = 5_000,
-): Promise<Response | null> => {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    return await fetchWithApiKey(url, TEST_CONFIG.apiKey, {
-      ...init,
-      signal: controller.signal,
-    })
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-const cleanupMediaItem = async (mediaId: number | null): Promise<void> => {
-  if (!Number.isFinite(mediaId) || (mediaId as number) <= 0) {
-    return
-  }
-
-  const targetId = Math.trunc(mediaId as number)
-  const trashResponse = await fetchWithApiKeyTimeout(
-    `${TEST_CONFIG.serverUrl}/api/v1/media/${targetId}`,
-    { method: "DELETE" },
-  )
-
-  if (
-    trashResponse &&
-    !trashResponse.ok &&
-    trashResponse.status !== 204 &&
-    trashResponse.status !== 404
-  ) {
-    throw new Error(
-      `Soft delete for media ${targetId} returned HTTP ${trashResponse.status}`,
-    )
-  }
-
-  const permanentResponse = await fetchWithApiKeyTimeout(
-    `${TEST_CONFIG.serverUrl}/api/v1/media/${targetId}/permanent`,
-    { method: "DELETE" },
-  )
-
-  if (
-    permanentResponse &&
-    !permanentResponse.ok &&
-    permanentResponse.status !== 204 &&
-    permanentResponse.status !== 404
-  ) {
-    throw new Error(
-      `Permanent delete for media ${targetId} returned HTTP ${permanentResponse.status}`,
-    )
-  }
-}
-
-const fetchLiveMediaDetail = async (
-  mediaId: number,
-  timeoutMs = 30_000,
-): Promise<Record<string, unknown>> => {
-  const response = await fetchWithApiKeyTimeout(
-    `${TEST_CONFIG.serverUrl}/api/v1/media/${mediaId}?include_content=true&include_versions=false&include_version_content=false`,
-    { method: "GET" },
-    timeoutMs,
-  )
-  if (!response?.ok) {
-    throw new Error(`GET /api/v1/media/${mediaId} returned HTTP ${response.status}`)
-  }
-  let payload: unknown
-  try {
-    payload = await response.json()
-  } catch (error) {
-    throw new Error(
-      `Failed to parse media detail response for ${mediaId}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    )
-  }
-  if (!payload || typeof payload !== "object") {
-    throw new Error(`GET /api/v1/media/${mediaId} returned a non-object payload`)
-  }
-  return payload as Record<string, unknown>
-}
-
-const getWorkspaceProbeProcessingDetail = (
-  mediaId: number,
-  detailPayload: Record<string, unknown>,
-): Record<string, unknown> => {
-  const processing = detailPayload.processing
-  if (!processing || typeof processing !== "object") {
-    throw new Error(
-      `GET /api/v1/media/${mediaId} returned no processing payload: ${JSON.stringify(
-        detailPayload,
-      )}`,
-    )
-  }
-
-  const processingRecord = processing as Record<string, unknown>
-  const hasChunkingStatus = Object.prototype.hasOwnProperty.call(
-    processingRecord,
-    "chunking_status",
-  )
-  const hasVectorProcessingStatus = Object.prototype.hasOwnProperty.call(
-    processingRecord,
-    "vector_processing_status",
-  )
-
-  if (!hasChunkingStatus || !hasVectorProcessingStatus) {
-    throw new Error(
-      `GET /api/v1/media/${mediaId} omitted workspace readiness fields. The audited backend should include processing.chunking_status and processing.vector_processing_status even before embeddings complete. This usually means the local backend is stale or not running the current branch. Payload: ${JSON.stringify(
-        detailPayload,
-      )}`,
-    )
-  }
-
-  return processingRecord
-}
-
-const createLiveWorkspaceProbeSource = async (
+const seedLiveWorkspaceDocument = async (
   title: string,
   content: string,
-): Promise<WorkspaceProbeSource> => {
+): Promise<LiveWorkspaceSource> => {
+  const fileName = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.txt`
   const body = new FormData()
   body.append("media_type", "document")
   body.append("title", title)
-  body.append("generate_embeddings", "true")
-  body.append("embedding_dispatch_mode", "background")
-  body.append("embedding_provider", WORKSPACE_EMBEDDING_PROVIDER)
-  body.append("embedding_model", WORKSPACE_EMBEDDING_MODEL)
   body.append("perform_analysis", "false")
-  body.append("perform_chunking", "true")
-  body.append("overwrite", "false")
-  body.append("chunk_method", "words")
-  body.append("chunk_size", "128")
-  body.append("chunk_overlap", "16")
-  body.append(
-    "files",
-    new Blob([content], { type: "text/plain" }),
-    `${title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.txt`,
-  )
+  body.append("perform_chunking", "false")
+  body.append("files", new Blob([content], { type: "text/plain" }), fileName)
 
   const response = await fetchWithApiKey(
     `${TEST_CONFIG.serverUrl}/api/v1/media/add`,
@@ -218,230 +50,505 @@ const createLiveWorkspaceProbeSource = async (
   )
   if (!response.ok) {
     throw new Error(
-      `Failed to create workspace output probe media: HTTP ${response.status}`,
+      `Failed to seed output-matrix media "${title}": ${response.status} ${await response.text()}`,
     )
   }
 
-  let payload: Record<string, unknown> | null = null
-  try {
-    payload = (await response.json()) as Record<string, unknown>
-  } catch (error) {
-    throw new Error(
-      `Failed to parse workspace output probe media add response: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    )
-  }
-  const createdCandidate =
-    payload?.results?.[0]?.media_id ??
-    payload?.results?.[0]?.db_id ??
-    payload?.result?.media_id ??
-    payload?.result?.db_id ??
-    payload?.media_id ??
-    payload?.db_id ??
-    payload?.id
-  const mediaId = Number(createdCandidate)
+  const payload = await response.json().catch(() => ({}))
+  const result = Array.isArray(payload?.results)
+    ? payload.results[0]
+    : payload?.result || payload
+  const mediaId = Number(result?.db_id ?? result?.media_id ?? result?.id)
   if (!Number.isFinite(mediaId) || mediaId <= 0) {
     throw new Error(
-      `Workspace output probe media add returned no media id: ${JSON.stringify(payload)}`,
+      `Output-matrix media seed for "${title}" returned no usable media id: ${JSON.stringify(
+        payload,
+      )}`,
     )
   }
 
-  const uploadResult = payload?.results?.[0] ?? payload?.result ?? payload
-  expect(
-    uploadResult?.embeddings_scheduled,
-    `Expected workspace output probe media to schedule embeddings, received ${JSON.stringify(
-      payload,
-    )}`,
-  ).toBeTruthy()
-
-  let liveMediaDetail = await fetchLiveMediaDetail(mediaId)
-  getWorkspaceProbeProcessingDetail(mediaId, liveMediaDetail)
+  const expectedSnippet = normalizeWhitespace(content).slice(0, 48)
   await expect
     .poll(
       async () => {
-        liveMediaDetail = await fetchLiveMediaDetail(mediaId)
-        return getWorkspaceProbeProcessingDetail(mediaId, liveMediaDetail)
-          .vector_processing_status ?? null
+        const details = await fetchWithApiKey(
+          `${TEST_CONFIG.serverUrl}/api/v1/media/${mediaId}?include_content=true&include_versions=false&include_version_content=false`,
+          TEST_CONFIG.apiKey,
+        )
+        if (!details.ok) return ""
+        const body = await details.json().catch(() => ({}))
+        return normalizeWhitespace(
+          String(
+            body?.content?.text ??
+              body?.content?.content ??
+              body?.transcript ??
+              "",
+          ),
+        )
       },
       {
-        timeout: 60_000,
-        message: `Timed out waiting for workspace output probe embeddings: ${JSON.stringify(
-          liveMediaDetail,
-        )}`,
+        timeout: 30_000,
+        message: `Media ${mediaId} never exposed usable content for the workspace output matrix`,
       },
     )
-    .toBe(1)
+    .toContain(expectedSnippet)
 
   return {
     mediaId,
     title,
     type: "document",
-    url: `https://example.com/workspace-output-probe/${mediaId}`,
+    url: `file://${fileName}`,
   }
 }
 
-const buildLiveProbeDocuments = (
-  uniqueSlug: string,
-): Array<{ title: string; content: string }> => {
-  const upperSlug = uniqueSlug.toUpperCase()
-  return [
-    {
-      title: `Workspace Output Briefing Alpha ${uniqueSlug}`,
-      content: [
-        `Program Alpha briefing ${upperSlug} covers a cross-functional migration effort.`,
-        "In March 2023 the team audited 48 legacy workflows and found slow manual review as the main blocker.",
-        "In June 2023 the team launched an evidence review board with members from research, security, and operations.",
-        "In September 2023 the project introduced source-grounded summaries, weekly checkpoints, and incident rehearsal drills.",
-        "The briefing groups work into four themes: governance, evidence quality, delivery cadence, and operator training.",
-        "Governance requires a review board, named owners, and written escalation paths.",
-        "Evidence quality requires citations, contradiction checks, and freshness reviews every Friday.",
-        "Delivery cadence requires a published roadmap with milestones in October 2023, January 2024, and April 2024.",
-        "Operator training requires scenario drills, postmortems, and a searchable lessons-learned log.",
-      ].join("\n"),
-    },
-    {
-      title: `Workspace Output Briefing Beta ${uniqueSlug}`,
-      content: [
-        `Program Beta briefing ${upperSlug} documents how a second team responded to the same migration program.`,
-        "In April 2023 the Beta team prioritized privacy review, source permissions, and data retention policy updates.",
-        "In July 2023 the team published a comparative scorecard for analyst speed, answer trust, and source coverage.",
-        "In November 2023 the team adopted a staged rollout with pilot, beta, and general availability checkpoints.",
-        "The briefing compares three recommendations: tighten privacy defaults, expand source coverage, and shorten analyst feedback loops.",
-        "Privacy defaults include shorter retention windows, explicit source labels, and reviewer approval before sharing.",
-        "Source coverage includes PDF manuals, HTML policy pages, and internal meeting notes tagged by topic.",
-        "Feedback loops include weekly office hours, a bug queue triage every Tuesday, and monthly readiness reviews.",
-        "The concluding recommendation is to align governance, privacy, and evidence review so rollout decisions stay explainable.",
-      ].join("\n"),
-    },
-  ]
+const buildLiveWorkspaceSources = async (): Promise<LiveWorkspaceSource[]> => {
+  const fixtureId = generateTestId("workspace-output-matrix")
+  return Promise.all([
+    seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Alpha`,
+      `Workspace output matrix alpha briefing for Project Falcon.
+January 10, 2026: Pilot rollout launched to two teams.
+February 14, 2026: Training completed for 40 operators.
+March 20, 2026: Full rollout completed.
+Key metrics:
+- Rollout completion improved from 68 percent to 80 percent, a gain of 12 percent.
+- Customer retention improved from 70 percent to 81 percent, a gain of 11 percent.
+Key findings:
+- Training cadence and weekly office hours reduced rollout blockers.
+- Leaders recommend keeping the training playbook and phased launches.
+Token ${fixtureId}-alpha.`,
+    ),
+    seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Beta`,
+      `Workspace output matrix beta review for Project Falcon.
+January 12, 2026: Baseline survey completed.
+February 18, 2026: Onboarding changes shipped.
+March 22, 2026: Retention review published.
+Key metrics:
+- Retention improved from 64 percent to 82 percent, a gain of 18 percent.
+- Rollout completion improved from 71 percent to 79 percent, a gain of 8 percent.
+Key findings:
+- Both teams agree training helped adoption.
+- Beta reviewers note retention gains were stronger than rollout gains.
+- Reviewers recommend expanding onboarding experiments and measuring long-term retention.
+Token ${fixtureId}-beta.`,
+    ),
+  ])
 }
 
-const setupLiveProbeWorkspace = async (args: {
-  authedPage: Parameters<typeof seedAuth>[0]
-  workspacePage: WorkspacePlaygroundPage
-  availableModel: string
-  uniqueSlug: string
-  documentCount: number
-}): Promise<number[]> => {
-  const { authedPage, workspacePage, availableModel, uniqueSlug, documentCount } = args
-  const createdMediaIds: number[] = []
+const OUTPUTS = [
+  { label: "Audio Summary", validation: "audio_summary" },
+  { label: "Summary", validation: "summary" },
+  { label: "Report", validation: "report" },
+  { label: "Compare Sources", validation: "compare_sources" },
+  { label: "Timeline", validation: "timeline" },
+  { label: "Data Table", validation: "data_table" },
+  { label: "Mind Map", validation: "mindmap" },
+  { label: "Slides", validation: "slides" },
+  { label: "Quiz", validation: "quiz" },
+  { label: "Flashcards", validation: "flashcards" },
+] as const
+
+const FAILURE_TEXT_PATTERN =
+  /failed to generate|generation failed|error encountered|encountered an error|no usable|download failed|could not/i
+const SOURCE_SIGNAL_PATTERN =
+  /(rollout|retention|training|onboarding|falcon|12\s*percent|18\s*percent|12%|18%|january|february|march)/i
+
+const hasErrorText = (content: string) => FAILURE_TEXT_PATTERN.test(content)
+
+const getMeaningfulLines = (content: string): string[] =>
+  content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+const readDownloadedText = (artifactPath: string): string =>
+  readFileSync(artifactPath, "utf8")
+
+const assertNoFailureText = (content: string, label: string) => {
+  expect(content.trim().length, `${label} download should not be empty`).toBeGreaterThan(
+    20,
+  )
+  expect(
+    hasErrorText(content),
+    `${label} download should not include failure text`,
+  ).toBe(false)
+}
+
+const validateNarrativeArtifact = (
+  label: string,
+  content: string,
+  options?: { minLength?: number; requireSourceSignal?: boolean },
+) => {
+  assertNoFailureText(content, label)
+  expect(
+    content.trim().length,
+    `${label} should contain substantive text`,
+  ).toBeGreaterThan(options?.minLength ?? 80)
+  const sentenceCount = (content.match(/[.!?](?:\s|$)/g) ?? []).length
+  expect(
+    Math.max(getMeaningfulLines(content).length, sentenceCount),
+    `${label} should contain more than a fragment`,
+  ).toBeGreaterThan(1)
+  if (options?.requireSourceSignal ?? true) {
+    expect(
+      SOURCE_SIGNAL_PATTERN.test(content),
+      `${label} should reference source claims`,
+    ).toBe(true)
+  }
+}
+
+const validateReportArtifact = (content: string) => {
+  validateNarrativeArtifact("Report", content, { minLength: 120 })
+  const matchedSections = [
+    "Executive Summary",
+    "Key Findings",
+    "Detailed Analysis",
+    "Conclusions",
+    "Recommendations",
+  ].filter((section) => new RegExp(section, "i").test(content))
+  expect(
+    matchedSections.length,
+    "Report should contain multiple expected report sections",
+  ).toBeGreaterThanOrEqual(2)
+}
+
+const validateCompareSourcesArtifact = (content: string) => {
+  validateNarrativeArtifact("Compare Sources", content, { minLength: 120 })
+  expect(
+    /(agree|disagree|conflict|difference|compare|comparison)/i.test(content),
+    "Compare Sources should read like a comparison",
+  ).toBe(true)
+}
+
+const validateTimelineArtifact = (content: string) => {
+  validateNarrativeArtifact("Timeline", content, { minLength: 60 })
+  expect(
+    /(\bJanuary\b|\bFebruary\b|\bMarch\b|\b2026\b|(^[-*]\s)|(\btimeline\b)|(\bchronolog))/im.test(
+      content,
+    ),
+    "Timeline should contain dated or timeline-like structure",
+  ).toBe(true)
+}
+
+const validateDataTableArtifact = (content: string) => {
+  assertNoFailureText(content, "Data Table")
+  const lines = getMeaningfulLines(content)
+  expect(
+    lines.length,
+    "Data Table should include a header and at least one row",
+  ).toBeGreaterThanOrEqual(3)
+  expect(/^\|.+\|$/.test(lines[0]), "Data Table header should be pipe-delimited").toBe(
+    true,
+  )
+  const headerColumnCount = lines[0].split("|").filter(Boolean).length
+  expect(
+    headerColumnCount,
+    "Data Table should contain multiple columns",
+  ).toBeGreaterThanOrEqual(2)
+  for (const line of lines.slice(2, 5)) {
+    expect(
+      line.split("|").filter(Boolean).length,
+      "Data Table rows should have the same column count as the header",
+    ).toBe(headerColumnCount)
+  }
+  expect(
+    SOURCE_SIGNAL_PATTERN.test(content),
+    "Data Table should reference the source claims",
+  ).toBe(true)
+}
+
+const extractMermaid = (content: string): string => {
+  const fenced = content.match(/```(?:mermaid)?\s*([\s\S]*?)```/i)
+  return (fenced?.[1] ?? content).trim()
+}
+
+const validateMindMapArtifact = (content: string) => {
+  assertNoFailureText(content, "Mind Map")
+  const mermaid = extractMermaid(content)
+  expect(/\bmindmap\b/i.test(mermaid), "Mind Map should be Mermaid mindmap syntax").toBe(
+    true,
+  )
+  expect(
+    getMeaningfulLines(mermaid).length,
+    "Mind Map should contain multiple Mermaid nodes",
+  ).toBeGreaterThanOrEqual(3)
+}
+
+const validateSlidesArtifact = (content: string) => {
+  assertNoFailureText(content, "Slides")
+  expect(/^#\s+/m.test(content), "Slides markdown should contain a title heading").toBe(
+    true,
+  )
+  expect(
+    /(^##\s+)|(\bslide\b)/im.test(content),
+    "Slides markdown should contain slide sections",
+  ).toBe(true)
+  expect(
+    SOURCE_SIGNAL_PATTERN.test(content),
+    "Slides markdown should reference the source claims",
+  ).toBe(true)
+}
+
+const validateQuizArtifact = (content: string) => {
+  assertNoFailureText(content, "Quiz")
+  const parsed = JSON.parse(content) as {
+    title?: string
+    questions?: Array<{
+      question?: string
+      options?: unknown[]
+      answer?: string
+    }>
+  }
+  expect(typeof parsed.title).toBe("string")
+  expect(Array.isArray(parsed.questions), "Quiz should export a questions array").toBe(
+    true,
+  )
+  expect(parsed.questions?.length ?? 0, "Quiz should contain at least one question").toBeGreaterThan(
+    0,
+  )
+  const firstQuestion = parsed.questions?.[0]
+  expect(typeof firstQuestion?.question).toBe("string")
+  expect(Array.isArray(firstQuestion?.options)).toBe(true)
+  expect((firstQuestion?.options?.length ?? 0) >= 2).toBe(true)
+}
+
+const validateFlashcardsArtifact = (content: string) => {
+  assertNoFailureText(content, "Flashcards")
+  if (content.trim().startsWith("{") || content.trim().startsWith("[")) {
+    const parsed = JSON.parse(content) as Array<Record<string, unknown>> | Record<string, unknown>
+    expect(parsed).toBeTruthy()
+    return
+  }
+  expect(/Front:/i.test(content), "Flashcards export should contain card fronts").toBe(true)
+  expect(/Back:/i.test(content), "Flashcards export should contain card backs").toBe(true)
+}
+
+const validateDownloadedArtifact = (
+  output: (typeof OUTPUTS)[number],
+  artifactPath: string,
+  suggestedFilename: string,
+) => {
+  const lowerName = suggestedFilename.toLowerCase()
+  if (output.validation === "slides" && !lowerName.endsWith(".md")) {
+    expect(statSync(artifactPath).size).toBeGreaterThan(32)
+    return
+  }
+
+  const content = readDownloadedText(artifactPath)
+  switch (output.validation) {
+    case "audio_summary":
+      validateNarrativeArtifact("Audio Summary", content, { minLength: 80 })
+      return
+    case "summary":
+      validateNarrativeArtifact("Summary", content, { minLength: 80 })
+      return
+    case "report":
+      validateReportArtifact(content)
+      return
+    case "compare_sources":
+      validateCompareSourcesArtifact(content)
+      return
+    case "timeline":
+      validateTimelineArtifact(content)
+      return
+    case "data_table":
+      validateDataTableArtifact(content)
+      return
+    case "mindmap":
+      validateMindMapArtifact(content)
+      return
+    case "slides":
+      validateSlidesArtifact(content)
+      return
+    case "quiz":
+      validateQuizArtifact(content)
+      return
+    case "flashcards":
+      validateFlashcardsArtifact(content)
+      return
+    default:
+      throw new Error(`Unhandled artifact validation kind: ${String(output.validation)}`)
+  }
+}
+
+const disableNextJsPortalPointerInterception = async (
+  page: import("@playwright/test").Page,
+) => {
+  await page.evaluate(() => {
+    document.querySelectorAll("nextjs-portal").forEach((portal) => {
+      ;(portal as HTMLElement).style.pointerEvents = "none"
+    })
+  })
+}
+
+const activateButton = async (
+  page: import("@playwright/test").Page,
+  button: import("@playwright/test").Locator,
+) => {
+  try {
+    await button.click({ timeout: 5_000 })
+  } catch (error) {
+    if (!String(error).includes("nextjs-portal")) {
+      throw error
+    }
+    await button.focus()
+    await expect(button).toBeFocused({ timeout: 5_000 })
+    await button.press("Enter")
+  }
+}
+
+const prepareWorkspaceForOutput = async (
+  page: import("@playwright/test").Page,
+  outputLabel: string,
+) => {
+  const workspacePage = new WorkspacePlaygroundPage(page)
+  const liveSources = await buildLiveWorkspaceSources()
 
   await workspacePage.goto()
   await workspacePage.waitForReady()
-  await setWorkspaceSelectedModel(authedPage, availableModel)
-
-  const liveSources: WorkspaceProbeSource[] = []
-  for (const document of buildLiveProbeDocuments(uniqueSlug).slice(0, documentCount)) {
-    const source = await createLiveWorkspaceProbeSource(document.title, document.content)
-    createdMediaIds.push(source.mediaId)
-    liveSources.push(source)
-  }
-
+  await workspacePage.resetWorkspace(`Workspace ${generateTestId(outputLabel)}`)
   await workspacePage.seedSources(liveSources)
   await expect
     .poll(async () => (await workspacePage.getSourceIds()).length, {
       timeout: 10_000,
     })
-    .toBeGreaterThanOrEqual(documentCount)
+    .toBeGreaterThanOrEqual(2)
 
   const sourceIds = await workspacePage.getSourceIds()
-  for (const sourceId of sourceIds.slice(0, documentCount)) {
-    await workspacePage.selectSourceById(sourceId)
-    await workspacePage.expectSourceSelected(sourceId)
-  }
+  await workspacePage.selectSourceById(sourceIds[0])
+  await workspacePage.selectSourceById(sourceIds[1])
+  await workspacePage.expectSourceSelected(sourceIds[0])
+  await workspacePage.expectSourceSelected(sourceIds[1])
+  await expect(workspacePage.getStudioArtifactCards()).toHaveCount(0)
 
-  return createdMediaIds
+  return workspacePage
 }
 
-const verifyGeneratedOutputs = async (
-  authedPage: Parameters<typeof seedAuth>[0],
-  outputs: WorkspaceProbeOutput[],
-): Promise<void> => {
-  const cards = authedPage.locator("[data-testid^='studio-artifact-card-']")
+const verifyDownloadedArtifact = async (
+  download: import("@playwright/test").Download,
+  output: (typeof OUTPUTS)[number],
+) => {
+  const artifactPath = path.join(
+    process.cwd(),
+    "test-results",
+    download.suggestedFilename(),
+  )
+  await download.saveAs(artifactPath)
+  validateDownloadedArtifact(output, artifactPath, download.suggestedFilename())
+}
 
-  for (const output of outputs) {
-    const beforeCount = await cards.count()
-    await authedPage.getByRole("button", { name: output.label, exact: true }).click()
+const generateAndDownloadOutput = async (
+  page: import("@playwright/test").Page,
+  workspacePage: WorkspacePlaygroundPage,
+  output: (typeof OUTPUTS)[number],
+) => {
+  const cards = workspacePage.getStudioArtifactCards()
+  const chatCompletionCall =
+    output.label === "Data Table"
+      ? expectApiCall(
+          page,
+          { method: "POST", url: "/api/v1/chat/completions" },
+          20_000,
+        )
+      : null
 
-    await expect(cards).toHaveCount(beforeCount + 1, { timeout: 90_000 })
-    const artifactCard = cards.first()
-    await expect(artifactCard).toBeVisible({ timeout: 30_000 })
+  const outputButton = workspacePage.getStudioOutputButton(output.label)
+  await disableNextJsPortalPointerInterception(page)
+  await expect(outputButton).toBeVisible({ timeout: 15_000 })
+  await expect(outputButton).toBeEnabled({ timeout: 15_000 })
+  await outputButton.scrollIntoViewIfNeeded()
+  await activateButton(page, outputButton)
 
-    await expect
-      .poll(
-        async () => {
-          const downloadVisible = await artifactCard
-            .getByRole("button", { name: "Download" })
-            .isVisible()
-            .catch(() => false)
-          if (downloadVisible) {
-            return "completed"
-          }
+  await expect(cards).toHaveCount(1, { timeout: 90_000 })
+  const artifactCard = cards.first()
+  await expect(artifactCard).toBeVisible({ timeout: 30_000 })
+  await expect(artifactCard).toContainText(output.label, { timeout: 30_000 })
 
-          const cardText = (await artifactCard.textContent()) || ""
-          if (
-            /failed|encountered an error|generation canceled before completion|interrupted|no usable|api key/i.test(
-              cardText,
-            )
-          ) {
-            return `failed:${cardText}`
-          }
-
-          return "pending"
-        },
-        {
-          timeout: 120_000,
-          message: `${output.label} did not reach a completed state`,
-        },
+  if (chatCompletionCall) {
+    const { request, response } = await chatCompletionCall
+    const responseBody = await response.json().catch(() => null)
+    if (response.status() !== 200) {
+      throw new Error(
+        `Data Table chat completion failed with ${response.status()}: ${JSON.stringify({
+          requestBody: request.postDataJSON(),
+          responseBody,
+        })}`,
       )
-      .toBe("completed")
-
-    const downloadButton = artifactCard.getByRole("button", { name: "Download" })
-    await expect(downloadButton).toBeVisible({ timeout: 30_000 })
-
-    if (output.label === "Slides") {
-      await downloadButton.click()
-      const markdownOption = authedPage
-        .getByRole("button", { name: /Markdown/i })
-        .last()
-      await expect(markdownOption).toBeVisible({ timeout: 10_000 })
-      const download = await Promise.all([
-        authedPage.waitForEvent("download", { timeout: 30_000 }),
-        markdownOption.click(),
-      ]).then(([event]) => event)
-      const artifactPath = path.join(
-        process.cwd(),
-        "test-results",
-        download.suggestedFilename(),
-      )
-      await download.saveAs(artifactPath)
-      const content = readFileSync(artifactPath, "utf8")
-      expect(content.trim().length).toBeGreaterThan(20)
-      expect(hasErrorText(content)).toBe(false)
-      continue
-    }
-
-    const download = await Promise.all([
-      authedPage.waitForEvent("download", { timeout: 30_000 }),
-      downloadButton.click(),
-    ]).then(([event]) => event)
-
-    const artifactPath = path.join(
-      process.cwd(),
-      "test-results",
-      download.suggestedFilename(),
-    )
-    await download.saveAs(artifactPath)
-
-    if (output.textDownload) {
-      const content = readFileSync(artifactPath, "utf8")
-      expect(content.trim().length).toBeGreaterThan(20)
-      expect(hasErrorText(content)).toBe(false)
-    } else {
-      expect(statSync(artifactPath).size).toBeGreaterThan(32)
     }
   }
+
+  await expect
+    .poll(
+      async () => {
+        const downloadVisible = await artifactCard
+          .getByRole("button", { name: "Download" })
+          .isVisible()
+          .catch(() => false)
+        if (downloadVisible) {
+          return "completed"
+        }
+
+        const cardText = (await artifactCard.textContent()) || ""
+        if (/failed|encountered an error|no usable/i.test(cardText)) {
+          return `failed:${cardText}`
+        }
+
+        return "pending"
+      },
+      {
+        timeout: output.label === "Slides" ? 180_000 : 120_000,
+        message: `${output.label} did not reach a completed state`,
+      },
+    )
+    .toBe("completed")
+
+  await expect(artifactCard).not.toContainText(/failed|encountered an error/i, {
+    timeout: 5_000,
+  })
+
+  const downloadButton = artifactCard.getByRole("button", { name: "Download" })
+  await expect(downloadButton).toBeVisible({ timeout: 30_000 })
+  await disableNextJsPortalPointerInterception(page)
+  await downloadButton.scrollIntoViewIfNeeded()
+
+  if (output.label === "Slides") {
+    const directSlidesDownload = page
+      .waitForEvent("download", { timeout: 3_000 })
+      .then((event) => event)
+      .catch(() => null)
+    await disableNextJsPortalPointerInterception(page)
+    await activateButton(page, downloadButton)
+    const markdownOption = page.getByRole("button", { name: /Markdown/i }).last()
+    const download =
+      (await directSlidesDownload) ||
+      (await markdownOption.isVisible({ timeout: 3_000 }).catch(() => false)
+        ? await (async () => {
+            await disableNextJsPortalPointerInterception(page)
+            await markdownOption.scrollIntoViewIfNeeded()
+            return Promise.all([
+              page.waitForEvent("download", { timeout: 30_000 }),
+              activateButton(page, markdownOption),
+            ]).then(([event]) => event)
+          })()
+        : null)
+
+    if (!download) {
+      throw new Error(
+        "Slides export did not trigger a direct download or show a format picker",
+      )
+    }
+
+    await verifyDownloadedArtifact(download, output)
+    return
+  }
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 30_000 }),
+    activateButton(page, downloadButton),
+  ]).then(([event]) => event)
+
+  await verifyDownloadedArtifact(download, output)
 }
 
 test.describe("Workspace Playground output matrix probe", () => {
@@ -450,73 +557,21 @@ test.describe("Workspace Playground output matrix probe", () => {
     await page.setViewportSize(DESKTOP_VIEWPORT)
   })
 
-  test("generates and downloads live backend-supported research outputs", async ({
-    authedPage,
-    serverInfo,
-    diagnostics,
-  }) => {
-    test.setTimeout(420_000)
-    skipIfServerUnavailable(serverInfo)
-    const availableModel = serverInfo.models?.[0]
-    test.skip(
-      !availableModel,
-      "Skipping workspace output matrix probe: no live chat models reported by /api/v1/llm/providers",
-    )
+  for (const output of OUTPUTS) {
+    test(`generates and downloads ${output.label}`, async ({
+      authedPage,
+      serverInfo,
+      diagnostics,
+    }) => {
+      test.setTimeout(output.label === "Slides" ? 240_000 : 180_000)
+      skipIfServerUnavailable(serverInfo)
 
-    const workspacePage = new WorkspacePlaygroundPage(authedPage)
-    const uniqueSlug = generateTestId("workspace-output-probe")
-    let createdMediaIds: number[] = []
-
-    try {
-      createdMediaIds = await setupLiveProbeWorkspace({
+      const workspacePage = await prepareWorkspaceForOutput(
         authedPage,
-        workspacePage,
-        availableModel: availableModel!,
-        uniqueSlug,
-        documentCount: 2,
-      })
-      await verifyGeneratedOutputs(authedPage, BACKEND_SUPPORTED_OUTPUTS)
+        output.label.toLowerCase().replace(/\s+/g, "-"),
+      )
+      await generateAndDownloadOutput(authedPage, workspacePage, output)
       await assertNoCriticalErrors(diagnostics)
-    } finally {
-      for (const mediaId of createdMediaIds) {
-        await cleanupMediaItem(mediaId)
-      }
-    }
-  })
-
-  test("generates and downloads live slides for a document-backed workspace source", async ({
-    authedPage,
-    serverInfo,
-    diagnostics,
-  }) => {
-    test.setTimeout(300_000)
-    skipIfServerUnavailable(serverInfo)
-    const availableModel = serverInfo.models?.[0]
-    test.skip(
-      !availableModel,
-      "Skipping workspace slides probe: no live chat models reported by /api/v1/llm/providers",
-    )
-
-    const workspacePage = new WorkspacePlaygroundPage(authedPage)
-    const uniqueSlug = generateTestId("workspace-slides-probe")
-    let createdMediaIds: number[] = []
-
-    try {
-      createdMediaIds = await setupLiveProbeWorkspace({
-        authedPage,
-        workspacePage,
-        availableModel: availableModel!,
-        uniqueSlug,
-        documentCount: 1,
-      })
-      await verifyGeneratedOutputs(authedPage, [
-        { label: "Slides", textDownload: true },
-      ])
-      await assertNoCriticalErrors(diagnostics)
-    } finally {
-      for (const mediaId of createdMediaIds) {
-        await cleanupMediaItem(mediaId)
-      }
-    }
-  })
+    })
+  }
 })

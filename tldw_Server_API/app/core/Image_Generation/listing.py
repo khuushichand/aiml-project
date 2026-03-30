@@ -8,6 +8,9 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Image_Generation.capabilities import (
+    resolve_backend_reference_image_capability,
+)
 from tldw_Server_API.app.core.Image_Generation.adapter_registry import get_registry
 from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
 
@@ -95,7 +98,6 @@ def _resolve_supported_formats(name: str) -> list[str] | None:
     cleaned = {str(v).strip() for v in formats if v and str(v).strip()}
     return sorted(cleaned) if cleaned else None
 
-
 def list_image_models_for_catalog() -> list[dict[str, Any]]:
     cfg = get_image_generation_config()
     registry = get_registry()
@@ -150,7 +152,10 @@ def list_image_models_for_catalog() -> list[dict[str, Any]]:
             "id": f"image/{name}",
             "name": name,
             "type": "image",
-            "capabilities": {"image_generation": True},
+            "capabilities": {
+                "image_generation": True,
+                "image_reference_input": resolve_backend_reference_image_capability(name, config=cfg).supported,
+            },
             "modalities": {"input": ["text"], "output": ["image"]},
             "is_configured": bool(is_configured),
         }

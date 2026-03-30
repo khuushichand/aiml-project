@@ -299,14 +299,23 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   const { data: attemptsData } = useAttemptsQuery({ limit: 200, offset: 0 })
   const detailQuizId = pendingQuizId ?? activeQuizId
   const { data: quizDetails } = useQuizQuery(detailQuizId, { enabled: detailQuizId != null })
+  const directPreviewQuizId = startQuizId ?? highlightQuizId ?? null
+  const { data: directPreviewQuiz } = useQuizQuery(directPreviewQuizId, {
+    enabled: directPreviewQuizId != null && detailQuizId == null
+  })
   const startAttemptMutation = useStartAttemptMutation()
   const submitAttemptMutation = useSubmitAttemptMutation()
 
   const quizzes = data?.items ?? []
   const attempts = attemptsData?.items ?? []
   const total = data?.count ?? 0
+  const injectedDirectPreview = directPreviewQuiz != null && !quizzes.some((quiz) => quiz.id === directPreviewQuiz.id)
+  const visibleTotal = total + (injectedDirectPreview ? 1 : 0)
   const sortedQuizzes = React.useMemo(() => {
     const items = [...quizzes]
+    if (directPreviewQuiz && !items.some((quiz) => quiz.id === directPreviewQuiz.id)) {
+      items.unshift(directPreviewQuiz)
+    }
     if (sortBy === "name_asc") {
       items.sort((left, right) => left.name.localeCompare(right.name))
     } else if (sortBy === "questions_desc") {
@@ -319,7 +328,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       })
     }
     return items
-  }, [quizzes, sortBy])
+  }, [directPreviewQuiz, quizzes, sortBy])
 
   const {
     storageUnavailable,
@@ -2438,7 +2447,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         pagination={{
           current: page,
           pageSize,
-          total,
+          total: visibleTotal,
           showSizeChanger: true,
           locale: {
             items_per_page: t("option:quiz.itemsPerPage", { defaultValue: "items/page" })

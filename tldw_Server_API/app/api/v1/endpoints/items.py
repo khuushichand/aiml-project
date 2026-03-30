@@ -17,7 +17,11 @@ from tldw_Server_API.app.api.v1.schemas.items_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, InputError
+from tldw_Server_API.app.core.DB_Management.media_db.api import search_media
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    DatabaseError,
+    InputError,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -136,7 +140,8 @@ async def list_items(
 
     # Legacy fallback to Media DB when collections layer has no data
     try:
-        rows, total = db.search_media_db(
+        rows, total = search_media(
+            db,
             search_query=q,
             search_fields=["title", "content"],
             media_types=None,
@@ -190,7 +195,8 @@ async def get_item(
         raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     try:
-        rows, _total = db.search_media_db(
+        rows, _total = search_media(
+            db,
             search_query=None,
             search_fields=["title", "content"],
             media_types=None,
@@ -252,8 +258,11 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
         return None
     # Fetch tags per item
     try:
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import fetch_keywords_for_media, get_document_version
-        tag_list = fetch_keywords_for_media(media_id=int(row.get("id")), db_instance=db)
+        from tldw_Server_API.app.core.DB_Management.media_db.api import (
+            fetch_keywords_for_media,
+            get_document_version,
+        )
+        tag_list = fetch_keywords_for_media(db=db, media_id=int(row.get("id")))
     except _ITEMS_NONCRITICAL_EXCEPTIONS:
         tag_list = []
 

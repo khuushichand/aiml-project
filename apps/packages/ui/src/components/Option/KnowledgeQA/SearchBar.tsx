@@ -33,12 +33,50 @@ type SearchBarProps = {
   className?: string
   autoFocus?: boolean
   showWebToggle?: boolean
+  widthMode?: "compact" | "wide"
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tagName = target.tagName.toUpperCase()
+  return (
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT" ||
+    target.isContentEditable
+  )
+}
+
+function isInteractiveControlTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return Boolean(
+    target.closest(
+      [
+        "button",
+        "a[href]",
+        "input",
+        "textarea",
+        "select",
+        "[role='button']",
+        "[role='link']",
+        "[role='menuitem']",
+        "[role='option']",
+        "[role='switch']",
+        "[role='tab']",
+      ].join(",")
+    )
+  )
+}
+
+function isKnowledgeSearchInputTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement && target.id === "knowledge-search-input"
 }
 
 export function SearchBar({
   className,
   autoFocus = true,
   showWebToggle = true,
+  widthMode = "compact",
 }: SearchBarProps) {
   const {
     query,
@@ -117,16 +155,24 @@ export function SearchBar({
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const targetIsEditable = isEditableTarget(e.target)
+      const targetIsInteractiveControl = isInteractiveControlTarget(e.target)
+      const targetIsKnowledgeSearchInput = isKnowledgeSearchInputTarget(e.target)
+
       // Focus search bar on "/" key
       if (e.key === "/" && !e.metaKey && !e.ctrlKey) {
-        const target = e.target as HTMLElement
-        if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+        if (!targetIsEditable) {
           e.preventDefault()
           inputRef.current?.focus()
         }
       }
       // Cmd+K for new search
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "k" &&
+        (!targetIsEditable || targetIsKnowledgeSearchInput) &&
+        (!targetIsInteractiveControl || targetIsKnowledgeSearchInput)
+      ) {
         e.preventDefault()
         clearResults()
         setQuery("")
@@ -157,8 +203,18 @@ export function SearchBar({
   useEffect(() => {
     if (!shouldShowSuggestions) {
       setActiveSuggestionIndex(-1)
+      return
     }
-  }, [shouldShowSuggestions])
+    setActiveSuggestionIndex((previous) => {
+      if (previous < 0) {
+        return previous
+      }
+      if (suggestions.length === 0) {
+        return -1
+      }
+      return Math.min(previous, suggestions.length - 1)
+    })
+  }, [shouldShowSuggestions, suggestions.length])
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -198,7 +254,10 @@ export function SearchBar({
   }, [clearResults, setQuery])
 
   return (
-    <form onSubmit={handleSubmit} className={cn("w-full max-w-3xl mx-auto", className)}>
+    <form
+      onSubmit={handleSubmit}
+      className={cn("mx-auto w-full", widthMode === "compact" && "max-w-3xl", className)}
+    >
       <p id="knowledge-qa-search-description" className="sr-only">
         Ask questions about your documents and get AI-powered answers with citations from your knowledge base.
       </p>
@@ -254,8 +313,16 @@ export function SearchBar({
               return
             }
             if (e.key === "Enter" && activeSuggestionIndex >= 0) {
+              const activeSuggestion = suggestions[activeSuggestionIndex]
+              if (!activeSuggestion) {
+                e.preventDefault()
+                setActiveSuggestionIndex(
+                  suggestions.length > 0 ? suggestions.length - 1 : -1
+                )
+                return
+              }
               e.preventDefault()
-              applySuggestion(suggestions[activeSuggestionIndex])
+              applySuggestion(activeSuggestion)
               return
             }
             if (e.key === "Escape") {

@@ -19,6 +19,7 @@ export const RoutePlaceholder: React.FC<RoutePlaceholderProps> = ({
 }) => {
   const router = useRouter();
   const routeLabel = String(router.asPath || '/');
+  const showSettingsShortcut = primaryCtaHref !== '/settings';
 
   return (
     <div className="flex min-h-[70vh] w-full items-center justify-center px-6 py-12">
@@ -52,13 +53,15 @@ export const RoutePlaceholder: React.FC<RoutePlaceholderProps> = ({
           >
             {primaryCtaLabel}
           </Link>
-          <Link
-            href="/settings"
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
-            data-testid="route-placeholder-open-settings"
-          >
-            Open Settings
-          </Link>
+          {showSettingsShortcut ? (
+            <Link
+              href="/settings"
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              data-testid="route-placeholder-open-settings"
+            >
+              Open Settings
+            </Link>
+          ) : null}
           <button
             type="button"
             className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"

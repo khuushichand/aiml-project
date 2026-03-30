@@ -137,6 +137,47 @@ def test_docs_info_exposes_slides_and_presentation_studio_capabilities(
     assert safe_config["supported_features"]["hasPresentationRender"] is True
 
 
+def test_docs_info_exposes_audio_capabilities_from_audio_and_websocket_routes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.txt"
+    _write_minimal_config(config_path)
+
+    monkeypatch.setenv("TLDW_CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    config_mod._route_toggle_policy.cache_clear()
+
+    safe_config = config_info.load_safe_config()
+
+    assert safe_config["capabilities"]["hasAudio"] is True
+    assert safe_config["capabilities"]["hasStt"] is True
+    assert safe_config["capabilities"]["hasTts"] is True
+    assert safe_config["capabilities"]["hasVoiceChat"] is True
+    assert safe_config["capabilities"]["hasVoiceConversationTransport"] is True
+    assert safe_config["supported_features"] == safe_config["capabilities"]
+
+
+def test_docs_info_disables_voice_transport_when_audio_websocket_route_disabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.txt"
+    _write_minimal_config(config_path)
+
+    monkeypatch.setenv("TLDW_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("ROUTES_DISABLE", "audio-websocket")
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    config_mod._route_toggle_policy.cache_clear()
+
+    safe_config = config_info.load_safe_config()
+
+    assert safe_config["capabilities"]["hasAudio"] is True
+    assert safe_config["capabilities"]["hasStt"] is True
+    assert safe_config["capabilities"]["hasTts"] is True
+    assert safe_config["capabilities"]["hasVoiceChat"] is True
+    assert safe_config["capabilities"]["hasVoiceConversationTransport"] is False
+
+
 def test_docs_info_endpoint_returns_placeholder_api_key(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.txt"
     _write_minimal_config(config_path)

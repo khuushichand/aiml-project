@@ -1,5 +1,5 @@
 import asyncio
-from types import SimpleNamespace
+from contextlib import contextmanager
 
 import pytest
 
@@ -40,17 +40,63 @@ async def test_embeddings_worker_retryable_backoff_from_result(monkeypatch):
     assert getattr(excinfo.value, "backoff_seconds", None) == 12
 
 
-def test_embedding_config_for_user_prefers_resolved_test_db_base(monkeypatch, tmp_path):
-    monkeypatch.setattr(jobs_worker, "settings", {"EMBEDDING_CONFIG": {}, "USER_DB_BASE_DIR": "Databases/user_databases"})
+def test_load_media_content_uses_managed_media_database(monkeypatch):
+    class _Db:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def get_media_by_id(
+            self,
+            media_id,
+            include_deleted: bool = False,
+            include_trash: bool = False,
+        ):
+            assert media_id == 42
+            return {"id": media_id, "content": "hello embeddings", "title": "Doc"}
+
+        def close_connection(self) -> None:
+            self.closed = True
+
+    db = _Db()
+    managed_calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def _fake_managed_media_database(client_id, *, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        try:
+            yield db
+        finally:
+            db.close_connection()
+
+    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda user_id: f"/tmp/{user_id}.db")
+    monkeypatch.setattr(jobs_worker, "managed_media_database", _fake_managed_media_database, raising=False)
     monkeypatch.setattr(
-        DatabasePaths,
-        "get_user_db_base_dir",
-        staticmethod(lambda: tmp_path / "isolated-user-dbs"),
+        jobs_worker,
+        "create_media_database",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
     )
 
-    config = jobs_worker._embedding_config_for_user()
+    result = jobs_worker._load_media_content(42, "user-42")
 
-    assert config["USER_DB_BASE_DIR"] == str(tmp_path / "isolated-user-dbs")
+    assert result == {
+        "media_item": {"id": 42, "content": "hello embeddings", "title": "Doc"},
+        "content": {"id": 42, "content": "hello embeddings", "title": "Doc"},
+    }
+    assert db.closed is True
+    assert managed_calls == [
+        {
+            "client_id": "embeddings_jobs_worker",
+            "initialize": False,
+            "kwargs": {"db_path": "/tmp/user-42.db"},
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -296,115 +342,90 @@ async def test_embeddings_worker_storage_uses_user_scoped_chroma_manager(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_embeddings_worker_marks_non_retryable_media_error(monkeypatch):
+async def test_embeddings_worker_storage_uses_first_normalized_chunk_type(monkeypatch, tmp_path):
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path = artifact_dir / "chunks.json"
+    embeddings_path = artifact_dir / "embeddings.json"
+
+    chunks_path.write_text(
+        (
+            '[{"text": "hello embeddings", "chunk_type": "   ", "metadata": {"kind": "code_fence"}, '
+            '"index": 0, "start": 0, "end": 16}]'
+        ),
+        encoding="utf-8",
+    )
+    embeddings_path.write_text(
+        '{"embeddings": [[0.1, 0.2, 0.3]], "embedding_model": "test-model", "embedding_provider": "test-provider"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(jobs_worker, "_artifact_dir", lambda *_, **__: artifact_dir)
+    monkeypatch.setattr(
+        jobs_worker,
+        "_load_media_content",
+        lambda *_: {"media_item": {"title": "Doc", "author": "A"}, "content": {"content": "hello embeddings"}},
+    )
+    monkeypatch.setattr(jobs_worker, "invalidate_rag_caches", lambda *_, **__: None)
+    monkeypatch.setattr(jobs_worker, "_embedding_config_for_user", lambda: {"USER_DB_BASE_DIR": str(tmp_path)})
+
     captured: dict[str, object] = {}
 
-    async def fake_generate_embeddings_for_media(**_kwargs):
-        return {"status": "error", "error": "embedding backend unavailable", "retryable": False}
+    class FakeChromaDBManager:
+        def __init__(self, *, user_id, user_embedding_config):
+            captured["user_id"] = user_id
+            captured["user_embedding_config"] = user_embedding_config
 
-    monkeypatch.setattr(jobs_worker, "generate_embeddings_for_media", fake_generate_embeddings_for_media)
-    monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
+        def store_in_chroma(
+            self,
+            collection_name,
+            texts,
+            embeddings,
+            ids,
+            metadatas,
+            embedding_model_id_for_dim_check=None,
+        ):
+            captured["collection_name"] = collection_name
+            captured["texts"] = texts
+            captured["embeddings"] = embeddings
+            captured["ids"] = ids
+            captured["metadatas"] = metadatas
+            captured["embedding_model_id_for_dim_check"] = embedding_model_id_for_dim_check
+
+    monkeypatch.setattr(jobs_worker, "ChromaDBManager", FakeChromaDBManager)
+
+    result = await jobs_worker._handle_storage_job(
+        job={"id": 1, "uuid": "job-1"},
+        payload={},
+        media_id=42,
+        user_id="user-42",
+        embedding_model="test-model",
+        embedding_provider="test-provider",
+        root_uuid=None,
+    )
+
+    assert result["embedding_count"] == 1
+    assert captured["metadatas"][0]["chunk_type"] == "code"
+
+
+def test_normalize_chunk_type_logs_noncritical_failures(monkeypatch):
+    debug_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def fail_normalization(_value):
+        raise ValueError("bad chunk metadata")
+
+    monkeypatch.setattr(jobs_worker.Chunker, "normalize_chunk_type", fail_normalization)
     monkeypatch.setattr(
-        jobs_worker,
-        "_mark_media_embeddings_error",
-        lambda *, user_id, media_id, error_message: captured.setdefault(
-            "error",
-            (user_id, media_id, error_message),
-        ),
+        jobs_worker.logger,
+        "debug",
+        lambda message, *args: debug_calls.append((message, args)),
     )
 
-    job = {
-        "job_type": "content_embeddings",
-        "payload": {
-            "item_id": 777,
-            "content": "hello error",
-        },
-        "owner_user_id": "user-777",
-    }
+    result = jobs_worker._normalize_chunk_type({"bad": "metadata"})
 
-    with pytest.raises(jobs_worker.EmbeddingsJobError):
-        await jobs_worker._handle_job(job)
-
-    assert captured["error"] == ("user-777", 777, "embedding backend unavailable")
-
-
-@pytest.mark.asyncio
-async def test_embeddings_worker_malformed_custom_content_does_not_mark_media_error(monkeypatch):
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
-    monkeypatch.setattr(
-        jobs_worker,
-        "_mark_media_embeddings_error",
-        lambda *, user_id, media_id, error_message: captured.setdefault(
-            "error",
-            (user_id, media_id, error_message),
-        ),
-    )
-
-    job = {
-        "job_type": "content_embeddings",
-        "payload": {
-            "item_id": 555,
-            "content": "custom content payload",
-            "collection_name": "kanban_user_1",
-        },
-        "owner_user_id": "user-555",
-    }
-
-    with pytest.raises(jobs_worker.EmbeddingsJobError) as excinfo:
-        await jobs_worker._handle_job(job)
-
-    assert "missing document_id" in str(excinfo.value)
-    assert "error" not in captured
-
-
-def test_mark_media_embeddings_complete_is_best_effort(monkeypatch):
-    fake_db = SimpleNamespace(close_connection=lambda: None)
-
-    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
-    monkeypatch.setattr(jobs_worker, "create_media_database", lambda **_: fake_db)
-
-    def fail_mark_media_as_processed(**_kwargs):
-        raise RuntimeError("db write failed")
-
-    monkeypatch.setattr(jobs_worker, "mark_media_as_processed", fail_mark_media_as_processed)
-
-    jobs_worker._mark_media_embeddings_complete(user_id="user-1", media_id=1)
-
-
-def test_mark_media_embeddings_complete_tolerates_database_open_failures(monkeypatch):
-    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
-    monkeypatch.setattr(
-        jobs_worker,
-        "create_media_database",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("db open failed")),
-    )
-
-    jobs_worker._mark_media_embeddings_complete(user_id="user-1", media_id=1)
-
-
-def test_mark_media_embeddings_error_is_best_effort(monkeypatch):
-    fake_db = SimpleNamespace(
-        mark_embeddings_error=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")),
-        close_connection=lambda: None,
-    )
-
-    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
-    monkeypatch.setattr(jobs_worker, "create_media_database", lambda **_: fake_db)
-
-    jobs_worker._mark_media_embeddings_error(user_id="user-1", media_id=1, error_message="boom")
-
-
-def test_mark_media_embeddings_error_tolerates_database_open_failures(monkeypatch):
-    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
-    monkeypatch.setattr(
-        jobs_worker,
-        "create_media_database",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("db open failed")),
-    )
-
-    jobs_worker._mark_media_embeddings_error(user_id="user-1", media_id=1, error_message="boom")
+    assert result is None
+    assert debug_calls
+    assert "Failed to normalize chunk type candidate" in debug_calls[0][0]
 
 
 @pytest.mark.asyncio

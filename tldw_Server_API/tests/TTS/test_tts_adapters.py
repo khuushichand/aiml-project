@@ -345,6 +345,30 @@ class TestAdapterRegistry:
         assert adapter is not None
         assert adapter.status == ProviderStatus.AVAILABLE
 
+    def test_legacy_kokoro_provider_config_aliases_generic_fields(self):
+        """Legacy flattened config should expose Kokoro ONNX settings under adapter keys."""
+        registry = TTSAdapterRegistry(
+            {
+                "kokoro_enabled": True,
+                "kokoro_config": {
+                    "enabled": True,
+                    "use_onnx": True,
+                    "model_path": "models/kokoro/onnx/model.onnx",
+                    "voices_json": "models/kokoro/onnx/voices-v1.0.bin",
+                    "voice_dir": "models/kokoro/voices",
+                    "device": "cpu",
+                },
+            }
+        )
+
+        provider_config = registry._get_provider_config(TTSProvider.KOKORO)
+
+        assert provider_config["kokoro_use_onnx"] is True
+        assert provider_config["kokoro_model_path"] == "models/kokoro/onnx/model.onnx"
+        assert provider_config["kokoro_voices_json"] == "models/kokoro/onnx/voices-v1.0.bin"
+        assert provider_config["kokoro_voice_dir"] == "models/kokoro/voices"
+        assert provider_config["kokoro_device"] == "cpu"
+
     async def test_disabled_provider(self):
         """Test disabled provider"""
         config = {"openai_enabled": False}
@@ -352,6 +376,16 @@ class TestAdapterRegistry:
 
         adapter = await registry.get_adapter(TTSProvider.OPENAI)
         assert adapter is None
+
+    async def test_close_all_skips_resource_manager_when_no_adapters_initialized(self):
+        """Cleanup should not lazily create the TTS resource manager."""
+        registry = TTSAdapterRegistry({})
+
+        with patch(
+            "tldw_Server_API.app.core.TTS.adapter_registry.get_resource_manager",
+            new=AsyncMock(side_effect=AssertionError("resource manager should not be created during close_all")),
+        ):
+            await registry.close_all()
 
     async def test_find_adapter_for_requirements(self):
         """Test finding adapter by requirements"""
@@ -372,6 +406,74 @@ class TestAdapterRegistry:
         caps = await registry.get_all_capabilities()
         assert TTSProvider.OPENAI in caps
         assert caps[TTSProvider.OPENAI].provider_name == "OpenAI"
+
+    async def test_get_all_capabilities_uses_static_kitten_capabilities_without_init(self):
+        """Static KittenTTS capability discovery should not initialize the runtime."""
+
+        class StaticKittenAdapter(TTSAdapter):
+            STATIC_CAPABILITY_DISCOVERY = True
+
+            async def initialize(self) -> bool:
+                raise AssertionError("Kitten static capability discovery should not initialize the adapter")
+
+            async def generate(self, request: TTSRequest) -> TTSResponse:
+                return TTSResponse(audio_data=b"unused")
+
+            async def get_capabilities(self) -> TTSCapabilities:
+                return TTSCapabilities(
+                    provider_name="KittenTTS",
+                    supported_languages={"en"},
+                    supported_voices=[VoiceInfo(id="Bella", name="Bella")],
+                    supported_formats={AudioFormat.WAV, AudioFormat.MP3, AudioFormat.PCM},
+                    max_text_length=5000,
+                    supports_streaming=True,
+                    sample_rate=24000,
+                    default_format=AudioFormat.WAV,
+                )
+
+        registry = TTSAdapterRegistry({"providers": {"kitten_tts": {"enabled": True}}})
+        registry.register_adapter(TTSProvider.KITTEN_TTS, StaticKittenAdapter)
+
+        caps = await registry.get_all_capabilities()
+
+        assert TTSProvider.KITTEN_TTS in caps
+        assert caps[TTSProvider.KITTEN_TTS].provider_name == "KittenTTS"
+
+    async def test_get_all_capabilities_keeps_static_kitten_capabilities_after_failed_init(self):
+        """Failed runtime init must not suppress static capability discovery for KittenTTS."""
+
+        class StaticKittenAdapter(TTSAdapter):
+            STATIC_CAPABILITY_DISCOVERY = True
+
+            async def initialize(self) -> bool:
+                raise RuntimeError("simulated runtime init failure")
+
+            async def generate(self, request: TTSRequest) -> TTSResponse:
+                return TTSResponse(audio_data=b"unused")
+
+            async def get_capabilities(self) -> TTSCapabilities:
+                return TTSCapabilities(
+                    provider_name="KittenTTS",
+                    supported_languages={"en"},
+                    supported_voices=[VoiceInfo(id="Bella", name="Bella")],
+                    supported_formats={AudioFormat.WAV, AudioFormat.MP3, AudioFormat.PCM},
+                    max_text_length=5000,
+                    supports_streaming=True,
+                    sample_rate=24000,
+                    default_format=AudioFormat.WAV,
+                )
+
+        registry = TTSAdapterRegistry({"providers": {"kitten_tts": {"enabled": True}}})
+        registry.register_adapter(TTSProvider.KITTEN_TTS, StaticKittenAdapter)
+
+        failed_adapter = await registry.get_adapter(TTSProvider.KITTEN_TTS)
+
+        assert failed_adapter is None
+
+        caps = await registry.get_all_capabilities()
+
+        assert TTSProvider.KITTEN_TTS in caps
+        assert caps[TTSProvider.KITTEN_TTS].provider_name == "KittenTTS"
 
     def test_status_summary(self):
         """Test status summary"""
@@ -416,6 +518,10 @@ class TestTTSAdapterFactory:
 
         assert factory.get_provider_for_model("open_ai") == TTSProvider.OPENAI
         assert factory.get_provider_for_model("vibevoice-realtime") == TTSProvider.VIBEVOICE_REALTIME
+        assert factory.get_provider_for_model("kitten_tts") == TTSProvider.KITTEN_TTS
+        assert factory.get_provider_for_model("kitten-tts") == TTSProvider.KITTEN_TTS
+        assert factory.get_provider_for_model("KittenML/kitten-tts-nano-0.8") == TTSProvider.KITTEN_TTS
+        assert factory.get_provider_for_model("KittenML/kitten-tts-nano-0.8-fp32") == TTSProvider.KITTEN_TTS
 
     async def test_get_best_adapter(self):
         """Test getting best adapter for requirements"""

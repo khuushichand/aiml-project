@@ -9,6 +9,7 @@
 
 import { test, expect, seedAuth, getCriticalIssues, DiagnosticsData } from "../smoke/smoke.setup"
 import { Page } from "@playwright/test"
+import { waitForAppShell } from "../utils/helpers"
 import {
   PAGE_MAPPINGS,
   WEBUI_ONLY_PAGES,
@@ -35,8 +36,7 @@ async function testPageLoads(
     timeout: LOAD_TIMEOUT
   })
 
-  // Wait for network to settle
-  await page.waitForLoadState("networkidle", { timeout: NETWORK_TIMEOUT }).catch(() => {})
+  await waitForAppShell(page, NETWORK_TIMEOUT)
 
   // Check HTTP status
   const status = response?.status()
@@ -198,10 +198,17 @@ test.describe("Shared Components - Basic Load", () => {
       // Additional check: verify no infinite loading states
       const loadingSpinners = await page.locator("[data-testid='loading-spinner'], .ant-spin-spinning").count()
 
-      // Wait a bit for loading to complete
-      await page.waitForTimeout(2000)
-
-      const stillLoading = await page.locator("[data-testid='loading-spinner'], .ant-spin-spinning").count()
+      let stillLoading = loadingSpinners
+      if (loadingSpinners > 0) {
+        await expect
+          .poll(
+            async () => page.locator("[data-testid='loading-spinner'], .ant-spin-spinning").count(),
+            { timeout: 2_000 }
+          )
+          .not.toBe(loadingSpinners)
+          .catch(() => {})
+        stillLoading = await page.locator("[data-testid='loading-spinner'], .ant-spin-spinning").count()
+      }
 
       // If there are fewer spinners now, loading is progressing
       // If spinners persist, might be stuck

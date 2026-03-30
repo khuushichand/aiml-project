@@ -1,4 +1,5 @@
 import type { TldwConfig } from "@/services/tldw/TldwApiClient"
+import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 
 export const buildPersonaWebSocketUrl = (
   config: Pick<TldwConfig, "serverUrl" | "authMode" | "apiKey" | "accessToken">
@@ -8,7 +9,7 @@ export const buildPersonaWebSocketUrl = (
     throw new Error("tldw server is not configured")
   }
 
-  const base = serverUrl.replace(/^http/i, "ws").replace(/\/$/, "")
+  const base = resolveBrowserWebSocketBase(serverUrl)
   const params = new URLSearchParams()
 
   if (config.authMode === "multi-user") {
@@ -27,4 +28,3 @@ export const buildPersonaWebSocketUrl = (
 
   return `${base}/api/v1/persona/stream?${params.toString()}`
 }
-

@@ -152,7 +152,7 @@ describe('ContentViewer stage 14 export action', () => {
     )
 
     fireEvent.click(screen.getByTestId('menu-item-export-media'))
-    expect(screen.getByTestId('media-export-modal')).toBeInTheDocument()
+    expect(await screen.findByTestId('media-export-modal')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('media-export-format-markdown'))
     fireEvent.click(screen.getByTestId('media-export-confirm'))
@@ -177,6 +177,7 @@ describe('ContentViewer stage 14 export action', () => {
     )
 
     fireEvent.click(screen.getByTestId('menu-item-export-media'))
+    await screen.findByTestId('media-export-confirm')
     fireEvent.click(screen.getByTestId('media-export-confirm'))
 
     await waitFor(() => {
@@ -210,6 +211,7 @@ describe('ContentViewer stage 14 export action', () => {
     )
 
     fireEvent.click(screen.getByTestId('menu-item-export-media'))
+    await screen.findByTestId('media-export-format-bibtex')
     fireEvent.click(screen.getByTestId('media-export-format-bibtex'))
     fireEvent.click(screen.getByTestId('media-export-confirm'))
 

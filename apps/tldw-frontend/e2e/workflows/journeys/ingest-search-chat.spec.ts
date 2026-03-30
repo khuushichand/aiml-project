@@ -5,7 +5,6 @@
  * then chats about it with RAG context.
  */
 import { test, expect, skipIfServerUnavailable, skipIfNoModels } from "../../utils/fixtures"
-import { expectApiCall } from "../../utils/api-assertions"
 import { ChatPage, SearchPage } from "../../utils/page-objects"
 import { ingestAndWaitForReady, waitForStreamComplete } from "../../utils/journey-helpers"
 
@@ -39,29 +38,22 @@ test.describe("Ingest -> Search -> Chat journey", () => {
     })
 
     await test.step("Chat about ingested content with RAG context", async () => {
-      // Wait briefly to avoid rate limiting from prior API calls
-      await page.waitForTimeout(3_000)
-
       const chatPage = new ChatPage(page)
       await chatPage.goto()
       await chatPage.waitForReady()
 
-      // Set up API call expectation for chat completions
-      const chatApiCall = expectApiCall(page, {
-        method: "POST",
-        url: "/api/v1/chat/completions",
-      }, 60_000)
-
       await chatPage.sendMessage("What is Playwright? Use the ingested content to answer.")
-
-      const { response } = await chatApiCall
-      expect(response.status()).toBeLessThan(500)
 
       // Wait for the response to stream in
       await waitForStreamComplete(page)
 
       // Verify an assistant message appeared
       await chatPage.waitForResponse()
+
+      const messages = await chatPage.getMessages()
+      const assistantMessages = messages.filter((message) => message.role === "assistant")
+      expect(assistantMessages.length).toBeGreaterThan(0)
+      expect(assistantMessages.at(-1)?.content ?? "").toMatch(/playwright/i)
     })
   })
 })

@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     IncidentEventCreateRequest,
     IncidentItem,
     IncidentListResponse,
+    IncidentNotifyResponse,
     IncidentUpdateRequest,
     MaintenanceRotationRunCreateRequest,
     MaintenanceRotationRunCreateResponse,
@@ -47,6 +48,9 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     delete_incident as svc_delete_incident,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    get_incident as svc_get_incident,
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     get_maintenance_state as svc_get_maintenance_state,
@@ -535,7 +539,7 @@ async def update_incident(
     actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
     update_fields = payload.model_dump(exclude_unset=True)
     workflow_fields: dict[str, Any] = {}
-    for field_name in ("root_cause", "impact", "action_items"):
+    for field_name in ("root_cause", "impact", "runbook_url", "action_items"):
         if field_name in payload.model_fields_set:
             workflow_fields[field_name] = update_fields[field_name]
     try:
@@ -644,6 +648,56 @@ async def delete_incident(
         metadata={},
     )
     return MessageResponse(message="incident_deleted")
+
+
+@router.post("/incidents/{incident_id}/notify", response_model=IncidentNotifyResponse)
+async def notify_incident(
+    incident_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentNotifyResponse:
+    """Send a notification about an incident to configured webhook channels.
+
+    Dispatches an ``incident.notify`` event to all active admin webhooks
+    with the incident's severity, title, status, and affected services.
+    """
+    _require_platform_admin(principal)
+
+    # Fetch the incident
+    incident = svc_get_incident(incident_id=incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="incident_not_found")
+
+    from tldw_Server_API.app.services.admin_webhooks_service import get_admin_webhooks_service
+
+    svc = get_admin_webhooks_service()
+    payload = {
+        "incident_id": incident.get("id"),
+        "title": incident.get("title"),
+        "severity": incident.get("severity"),
+        "status": incident.get("status"),
+        "summary": incident.get("summary"),
+        "tags": incident.get("tags", []),
+        "notified_by": principal.email or principal.username or str(principal.user_id),
+    }
+    delivered = await svc.dispatch_event("incident.notify", payload)
+
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.notify",
+        metadata={"delivered_to": delivered},
+    )
+
+    return IncidentNotifyResponse(
+        notified=True,
+        incident_id=incident_id,
+        webhooks_delivered=delivered,
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------------

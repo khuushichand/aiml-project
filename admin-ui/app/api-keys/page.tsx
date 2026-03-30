@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -10,7 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
 import { Select } from '@/components/ui/select';
-import { TableSkeleton } from '@/components/ui/skeleton';
+import { CardSkeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
@@ -25,7 +26,9 @@ import {
 import { api } from '@/lib/api-client';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 import type { UserWithKeyCount } from '@/types';
-import { Key, RotateCw, Search } from 'lucide-react';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
+import { AlertTriangle, Key, RotateCw, Search, ShieldOff } from 'lucide-react';
 
 const USER_PAGE_LIMIT = 100;
 
@@ -40,6 +43,8 @@ function ApiKeysPageContent() {
   const [partialLoadWarning, setPartialLoadWarning] = useState('');
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [bulkRotating, setBulkRotating] = useState(false);
+  const [bulkRevoking, setBulkRevoking] = useState(false);
+  const [bulkMutating, setBulkMutating] = useState(false);
 
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [ownerFilter, setOwnerFilter] = useUrlState<string>('owner', { defaultValue: '' });
@@ -218,7 +223,7 @@ function ApiKeysPageContent() {
   };
 
   const handleRotateSelected = async () => {
-    if (selectedRows.length === 0 || bulkRotating) return;
+    if (selectedRows.length === 0 || bulkMutating) return;
 
     const confirmed = await confirm({
       title: 'Rotate selected keys',
@@ -230,6 +235,7 @@ function ApiKeysPageContent() {
     if (!confirmed) return;
 
     try {
+      setBulkMutating(true);
       setBulkRotating(true);
       const results = await Promise.allSettled(
         selectedRows.map((row) => api.rotateApiKey(String(row.ownerUserId), row.keyId))
@@ -251,16 +257,81 @@ function ApiKeysPageContent() {
       toastError('Bulk rotation failed', message);
     } finally {
       setBulkRotating(false);
+      setBulkMutating(false);
     }
   };
+
+  const handleRevokeSelected = async () => {
+    if (selectedRows.length === 0 || bulkMutating) return;
+
+    const confirmed = await confirm({
+      title: 'Revoke selected keys',
+      message: `Revoke ${selectedRows.length} key(s)? These keys will be permanently deactivated.`,
+      confirmText: 'Revoke',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      setBulkMutating(true);
+      setBulkRevoking(true);
+      const results = await Promise.allSettled(
+        selectedRows.map((row) => api.revokeApiKey(String(row.ownerUserId), row.keyId))
+      );
+      const successCount = results.filter((r) => r.status === 'fulfilled').length;
+      const failureCount = results.length - successCount;
+      if (successCount > 0) {
+        toastSuccess('Keys Revoked', `${successCount} key(s) revoked successfully.`);
+      }
+      if (failureCount > 0) {
+        toastError('Some revocations failed', `${failureCount} key(s) failed to revoke.`);
+      }
+      clearSelection();
+      await loadUnifiedApiKeys();
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Bulk revocation failed';
+      toastError('Bulk revocation failed', message);
+    } finally {
+      setBulkRevoking(false);
+      setBulkMutating(false);
+    }
+  };
+
+  // Compute expiring-soon count for banner
+  const expiringWithin7Days = rows.filter((row) => {
+    if (!row.expiresAt) return false;
+    const daysUntil = (new Date(row.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+    return daysUntil > 0 && daysUntil <= 7;
+  }).length;
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold">API Keys</h1>
-            <p className="text-muted-foreground">Unified API key inventory across all users</p>
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">API Keys</h1>
+              <p className="text-muted-foreground">Unified API key inventory across all users</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link href="/users">
+                <Button variant="outline">
+                  <Key className="mr-2 h-4 w-4" />
+                  Create Key
+                </Button>
+              </Link>
+              <ExportMenu
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: rows as unknown as Record<string, unknown>[],
+                    filename: 'api-keys',
+                    format,
+                  });
+                }}
+                disabled={rows.length === 0}
+              />
+            </div>
           </div>
 
           {error && (
@@ -290,7 +361,8 @@ function ApiKeysPageContent() {
           </Card>
 
           <div className="mb-6 grid gap-4 md:grid-cols-4">
-            <Card>
+            <Card className="cursor-pointer hover:border-primary transition-colors"
+              onClick={() => updateFilter(setStatusFilter, 'active')}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Keys Needing Rotation</CardTitle>
               </CardHeader>
@@ -299,7 +371,8 @@ function ApiKeysPageContent() {
                 <p className="text-xs text-muted-foreground">&gt;180 days old</p>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="cursor-pointer hover:border-primary transition-colors"
+              onClick={() => updateFilter(setStatusFilter, 'active')}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Expiring Soon</CardTitle>
               </CardHeader>
@@ -308,7 +381,8 @@ function ApiKeysPageContent() {
                 <p className="text-xs text-muted-foreground">Within 30 days</p>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="cursor-pointer hover:border-primary transition-colors"
+              onClick={() => updateFilter(setStatusFilter, 'active')}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Inactive Keys</CardTitle>
               </CardHeader>
@@ -327,6 +401,22 @@ function ApiKeysPageContent() {
               </CardContent>
             </Card>
           </div>
+
+          {expiringWithin7Days > 0 && (
+            <Alert className="mb-6 border-yellow-200 bg-yellow-50">
+              <AlertTriangle className="h-4 w-4 text-yellow-700" />
+              <AlertDescription className="text-yellow-900">
+                <strong>{expiringWithin7Days} key{expiringWithin7Days !== 1 ? 's' : ''}</strong> expiring within 7 days.{' '}
+                <Button
+                  variant="link"
+                  className="text-yellow-900 underline p-0 h-auto"
+                  onClick={() => updateFilter(setStatusFilter, 'active')}
+                >
+                  View expiring keys
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Card className="mb-6">
             <CardHeader>
@@ -396,12 +486,22 @@ function ApiKeysPageContent() {
                   </Button>
                   <Button
                     onClick={handleRotateSelected}
-                    disabled={selectedRowIds.size === 0 || bulkRotating}
+                    disabled={selectedRowIds.size === 0 || bulkMutating}
                     loading={bulkRotating}
                     loadingText="Rotating..."
                   >
                     <RotateCw className="mr-2 h-4 w-4" />
                     Rotate Selected ({selectedRowIds.size})
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleRevokeSelected}
+                    disabled={selectedRowIds.size === 0 || bulkMutating}
+                    loading={bulkRevoking}
+                    loadingText="Revoking..."
+                  >
+                    <ShieldOff className="mr-2 h-4 w-4" />
+                    Revoke Selected ({selectedRowIds.size})
                   </Button>
                 </div>
               </div>
@@ -459,9 +559,69 @@ function ApiKeysPageContent() {
               )}
             </CardContent>
           </Card>
+
+          {/* Recent Key Activity */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Recent Key Activity</CardTitle>
+              <CardDescription>Latest API key create, rotate, and revoke events from audit log</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <KeyActivitySection />
+            </CardContent>
+          </Card>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+function KeyActivitySection() {
+  const [logs, setLogs] = useState<Array<{ id: number; timestamp: string; user_id: number; action: string; resource: string; details?: string }>>([]);
+  const [loadingLogs, setLoadingLogs] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.getAuditLogs({ resource: 'api_key', limit: '10' })
+      .then((data) => {
+        if (cancelled) return;
+        const items = Array.isArray(data) ? data : (data as { items?: unknown[] })?.items ?? [];
+        setLogs(items as typeof logs);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLogs([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingLogs(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loadingLogs) return <CardSkeleton />;
+  if (logs.length === 0) return <p className="text-sm text-muted-foreground">No recent key activity.</p>;
+
+  return (
+    <div className="space-y-2 max-h-48 overflow-y-auto">
+      {logs.map((log) => (
+        <div key={log.id} className="flex items-center justify-between p-2 rounded bg-muted/30 text-sm">
+          <div>
+            <span className="font-medium">{log.action}</span>
+            <span className="text-muted-foreground ml-2">by User {log.user_id}</span>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {new Date(log.timestamp).toLocaleString()}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -2,10 +2,12 @@ import hashlib
 import json
 import os
 import tempfile
+from unittest.mock import AsyncMock
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
+import tldw_Server_API.app.services.claims_review_metrics_scheduler as scheduler_mod
 from tldw_Server_API.app.services.claims_review_metrics_scheduler import run_claims_review_metrics_once
 
 
@@ -120,5 +122,41 @@ async def test_claims_review_metrics_scheduler_writes_daily() -> None:
             end_date="2024-01-10",
         )
         assert len(rows_again) == 2
+    finally:
+        db.close_connection()
+
+
+@pytest.mark.asyncio
+async def test_claims_review_metrics_scheduler_does_not_send_caller_db_to_thread(monkeypatch) -> None:
+    db = _seed_review_metrics_db()
+    try:
+        to_thread_mock = AsyncMock(side_effect=AssertionError("to_thread should not be used for caller-owned db"))
+        monkeypatch.setattr(scheduler_mod.asyncio, "to_thread", to_thread_mock)
+
+        captured: dict[str, object] = {}
+
+        def _fake_aggregator(*, db, target_user_id=None, report_date=None, lookback_days=None) -> int:
+            captured["db"] = db
+            captured["target_user_id"] = target_user_id
+            captured["report_date"] = report_date
+            captured["lookback_days"] = lookback_days
+            return 7
+
+        written = await run_claims_review_metrics_once(
+            aggregator=_fake_aggregator,
+            db=db,
+            target_user_id="1",
+            report_date="2024-01-10",
+            lookback_days=3,
+        )
+
+        assert written == 7
+        assert captured == {
+            "db": db,
+            "target_user_id": "1",
+            "report_date": "2024-01-10",
+            "lookback_days": 3,
+        }
+        to_thread_mock.assert_not_awaited()
     finally:
         db.close_connection()

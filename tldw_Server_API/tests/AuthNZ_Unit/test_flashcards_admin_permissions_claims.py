@@ -67,7 +67,14 @@ def _build_app_with_flashcards(principal: AuthPrincipal) -> FastAPI:
         def __init__(self):
             pass
 
-        def list_decks(self, limit: int, offset: int, include_deleted: bool = False):
+        def list_decks(
+            self,
+            limit: int,
+            offset: int,
+            include_deleted: bool = False,
+            workspace_id: Optional[str] = None,
+            include_workspace_items: bool = False,
+        ):
             return []
 
         def add_deck(self, name: str, description: Optional[str]):

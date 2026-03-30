@@ -24,6 +24,7 @@ import { buildMessageSteeringSnippet } from "@/utils/message-steering"
 import { useStoreMessageOption } from "@/store/option"
 import type { ChatHistory, Message, ToolChoice } from "~/store/option"
 import type { ToolCall } from "@/types/tool-calls"
+import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
 import type {
   MessageSteeringFlags,
   MessageSteeringPromptTemplates
@@ -42,6 +43,7 @@ export type ChatModeParamsBase = {
   selectedModel: string
   useOCR: boolean
   toolChoice?: ToolChoice
+  conversationId?: string
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
   saveMessageOnSuccess: (data: SaveMessageData) => Promise<string | null>
   saveMessageOnError: (data: SaveMessageErrorData) => Promise<string | null>
@@ -66,6 +68,7 @@ export type ChatModeParamsBase = {
   messageSteering?: MessageSteeringFlags
   messageSteeringPrompts?: MessageSteeringPromptTemplates
   imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
+  researchContext?: ChatResearchContext
 }
 
 export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
@@ -168,7 +171,8 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     assistantParentMessageId,
     documents,
     regenerateFromMessage,
-    imageEventSyncPolicy
+    imageEventSyncPolicy,
+    conversationId
   } = params
 
   const resolvedAssistantMessageId = assistantMessageId ?? generateID()
@@ -328,6 +332,9 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     clearTimeout(streamingTimer)
     streamingTimer = null
   }
+
+  const abortCancelStreamingUpdate = () => cancelStreamingUpdate()
+  signal.addEventListener("abort", abortCancelStreamingUpdate)
 
   if (mode.setupMessages) {
     const setup = mode.setupMessages(context)
@@ -489,7 +496,9 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
 
     const modelClient = await pageAssistModel({
       model: selectedModel,
-      toolChoice
+      toolChoice,
+      conversationId,
+      researchContext: context.researchContext
     })
 
     let generationInfo: unknown = undefined
@@ -515,8 +524,31 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     let reasoningStartTime: Date | null = null
     let reasoningEndTime: Date | null = null
     let apiReasoning = false
+    let streamTransportInterrupted = false
+    let streamTransportInterruptionReason: string | null = null
 
     for await (const chunk of chunks) {
+      if (signal.aborted) break
+
+      const interruptionEvent =
+        chunk && typeof chunk === "object" && !Array.isArray(chunk)
+          ? (chunk as Record<string, unknown>)
+          : null
+      if (
+        typeof interruptionEvent?.event === "string" &&
+        interruptionEvent.event.toLowerCase() ===
+          "stream_transport_interrupted"
+      ) {
+        streamTransportInterrupted = true
+        const detail =
+          typeof interruptionEvent.detail === "string"
+            ? interruptionEvent.detail.trim()
+            : ""
+        streamTransportInterruptionReason =
+          detail.length > 0 ? detail : streamTransportInterruptionReason
+        continue
+      }
+
       const chunkState = consumeStreamingChunk(
         { fullText, contentToSave, apiReasoning },
         chunk as StreamingChunk
@@ -549,8 +581,22 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     }
 
     cancelStreamingUpdate()
+    signal.removeEventListener("abort", abortCancelStreamingUpdate)
     const toolCalls = extractToolCalls(generationInfo)
     applyMcpModuleDisclosureFromToolCalls(toolCalls)
+    const finalGenerationInfo = streamTransportInterrupted
+      ? {
+          ...(generationInfo && typeof generationInfo === "object" && !Array.isArray(generationInfo)
+            ? generationInfo
+            : {}),
+          interrupted: true,
+          partialResponseSaved: true,
+          streamTransportInterrupted: true,
+          streamTransportInterruptionReason:
+            streamTransportInterruptionReason ||
+            "Stream transport interrupted; partial response saved."
+        }
+      : generationInfo
     setMessagesWithTransition((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId
@@ -558,7 +604,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
               updateActiveVariant(msg, {
                 message: fullText,
                 sources,
-                generationInfo,
+                generationInfo: finalGenerationInfo,
                 toolCalls,
                 reasoning_time_taken: timetaken
               })
@@ -597,7 +643,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       assistantParentMessageId: resolvedAssistantParentMessageId ?? null,
       documents,
       isContinue: mode.isContinue,
-      generationInfo: generationInfo as any,
+      generationInfo: finalGenerationInfo as any,
       prompt_content: promptContent,
       prompt_id: promptId,
       reasoning_time_taken: timetaken,
@@ -607,6 +653,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     })
   } catch (e) {
     cancelStreamingUpdate()
+    signal.removeEventListener("abort", abortCancelStreamingUpdate)
     const assistantContent = buildAssistantErrorContent(fullText, e)
     const interruptionReason =
       e instanceof Error && e.message.trim().length > 0
@@ -660,6 +707,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       throw e
     }
   } finally {
+    signal.removeEventListener("abort", abortCancelStreamingUpdate)
     setIsProcessing(false)
     setStreaming(false)
     setAbortController(null)

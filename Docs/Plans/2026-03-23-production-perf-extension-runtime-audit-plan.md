@@ -1,0 +1,476 @@
+# Production Perf And Extension Runtime Audit Plan
+
+## Stage 1: Production Web Perf Baseline
+**Goal**: Run the Next.js app from a production build instead of the dev server and capture route-level performance evidence.
+**Success Criteria**: A production build is generated, served locally, and measured on a representative route set with actionable findings or an explicit "no product perf regression found" result.
+**Tests**: `bun run build` or `bun run compile`; production server smoke via `curl`; route perf capture against the production URL.
+**Status**: Complete
+
+## Stage 2: Built Extension Runtime Review
+**Goal**: Build the real WXT extension and exercise its options and sidepanel runtime against the live backend.
+**Success Criteria**: The extension loads from an unpacked build, key entry points render, and any runtime errors or blocked flows are documented with repro steps.
+**Tests**: `bun run build:chrome`; existing extension Playwright/runtime review scripts against the built artifact.
+**Status**: Complete
+
+## Stage 3: Fix And Verify Real Findings
+**Goal**: Implement only issues reproduced in the production web or built-extension environments and verify them.
+**Success Criteria**: Any discovered defects are fixed with targeted regression coverage and revalidated in the same environment where they were found.
+**Tests**: Focused Vitest/Playwright/pytest as appropriate; Bandit on touched scope.
+**Status**: Complete
+
+## Notes
+- Production web perf did not reveal a new product-side regression; the biggest timings remained dev/build related rather than route-specific runtime regressions.
+- The production route audit still shows meaningful runtime overhead on a subset of pages even with low resource counts, which points to client-side JavaScript execution and hydration cost more than network transfer. Current worst routes in `apps/tldw-frontend/ux-audit-v3/data/` are `/for/osint` (~24.1s FCP), `/settings/splash` (~19.0s FCP), `/document-workspace` (~12.8s FCP), `/settings/mcp-hub` (~11.9s FCP), `/workflow-editor` (~10.8s FCP), and `/chat` (~6.3s FCP).
+- The packaged extension startup cost was dominated by a shared preloaded chunk, and the biggest root cause was confirmed in the real build path under `apps/packages/ui/src/routes/`, not just the legacy extension route wrappers. Splitting the shared route shell so sidepanel no longer imports the monolithic option registry reduced the common preload from about `11.1 MB` to `8.86 MB` in `apps/extension/.output/chrome-mv3/chunks/react-instance-check-*.js`, a drop of roughly `2.2 MB` or `20%`.
+- The current packaged preload shape is healthier but still not ideal:
+  - `options.html` now preloads route-local chunks such as `companion`, `mcp`, `katex`, and `flashcards-generate-handoff`, instead of forcing all of that weight into the shared chunk.
+  - `sidepanel.html` now preloads only the shared `react-instance-check-*.js` chunk, which confirms the sidepanel no longer drags the full options route graph into startup.
+- Lazy-loading UI diagnostics in `apps/packages/ui/src/routes/app-route.tsx` was verified and kept, but it only reduced the shared chunk by about `5 KB`, so diagnostics were not the main contributor.
+- The current best remaining shared-chunk targets are:
+  - `apps/packages/ui/src/i18n/index.ts` plus `apps/packages/ui/src/i18n/lang/en.ts`, because all English namespaces are still statically imported into startup. The English locale payload alone is about `414 KB` across the namespace JSON files, and it is still part of startup instead of being route- or locale-lazy.
+  - The remaining common application shell under `apps/packages/ui/src/entries/shared/AppShell.tsx`, which still pulls shared providers, settings hooks, and splash/page-assist state into every extension surface.
+  - Route-local option bundles that are still very large once the options surface boots, especially `option-repo2txt-*.js` (~`2.05 MB`), `options-*.js` (~`1.10 MB`), `option-document-workspace-*.js` (~`566 KB`), and `option-watchlists-*.js` (~`468 KB`). Those no longer block sidepanel startup, but they still dominate options startup and should be split or deferred further where possible.
+  - Heavy libraries that remain present in the built graph, especially `cytoscape.esm-*.js` (~`442 KB`), `xlsx-*.js` (~`429 KB`), and `mermaid.core-*.js` (~`428 KB`). These are no longer the main sidepanel problem, but they are still strong candidates for stricter route-local loading and on-demand import boundaries.
+- The first i18n startup trim is now implemented. `apps/packages/ui/src/i18n/lang/en.ts` only keeps the startup namespaces in the eager English fallback bundle, and route-local namespaces now rely on the existing lazy loader path. On the packaged `chrome-mv3` build this reduced the shared `react-instance-check-*.js` chunk from about `8,855,889` bytes to `8,729,884` bytes, a drop of `126,005` bytes (about `1.4%`).
+- The second i18n startup split is now implemented as a route-shell bootstrap in `apps/packages/ui/src/routes/app-route.tsx`. The shared eager English fallback bundle in `apps/packages/ui/src/i18n/lang/en.ts` is now `common` only, while `RouteShell` preloads route-specific namespaces before mounting route-heavy content. On the packaged `chrome-mv3` build this reduced the shared `react-instance-check-*.js` chunk again from `8,729,884` bytes to `8,585,111` bytes, a further drop of `144,773` bytes (about `1.7%`), or `270,778` bytes total from the pre-i18n-split baseline (`8,855,889` bytes, about `3.1%`).
+- Vite now only reports `apps/packages/ui/src/assets/locale/en/common.json` as both statically and dynamically imported. That means the remaining i18n startup overhead is much narrower: `common` is now the only confirmed English namespace still pinned into the shared startup chunk.
+- The packaged runtime smoke in `apps/extension/tests/e2e/built-extension-runtime.spec.ts` still passes outside the sandbox after the route-shell bootstrap change. The raw injected `chrome.runtime.sendMessage` / `runtime.connect` probes continue to time out from Playwright-evaluated worlds, but the real packaged options and sidepanel surfaces render correctly with seeded config, so the runtime harness caveat remains unchanged rather than regressing.
+- `WorkflowIntegrationHost` is now lazy-loaded in both `apps/packages/ui/src/entries/shared/options-app.tsx` and `apps/packages/ui/src/entries/shared/sidepanel-app.tsx` instead of being imported eagerly by the extension entry apps. On the packaged `chrome-mv3` build this reduced the shared `react-instance-check-*.js` chunk from `8,585,111` bytes to `7,597,843` bytes, a further drop of `987,268` bytes (about `11.5%`), or `1,258,046` bytes total from the pre-i18n/perf baseline (`8,855,889` bytes, about `14.2%`).
+- The packaged runtime smoke still passes after the workflow-host split. In the latest outside-sandbox run, `options.html` continued to render the companion home surface and `sidepanel.html#/chat` reached the connected chat state instead of the earlier setup-only fallback, so the lazy workflow host did not regress the packaged startup path.
+- `options.html` still preloads a large set of route-local chunks, including `CompanionHomeShell`, `katex`, `flashcards-generate-handoff`, and related helpers. `sidepanel.html` still preloads only the shared `react-instance-check-*.js` chunk. That keeps sidepanel startup healthier, but it makes the options entry shell the clearest remaining extension perf target.
+- Vite now calls out one additional chunking leak beyond `common.json`: `apps/packages/ui/src/components/Common/NotesDock/NotesDockPanel.tsx` is both statically and dynamically imported, so the next likely extension-shell perf win is to make `NotesDockHost` fully lazy instead of partially eager.
+- `NotesDockPanel` is no longer statically re-exported from `apps/packages/ui/src/components/Common/NotesDock/index.tsx`. That removed the Vite static-plus-dynamic import warning for Notes Dock and reduced the packaged shared `react-instance-check-*.js` chunk from `7,597,843` bytes to `7,581,330` bytes, a small but real drop of `16,513` bytes (about `0.2%`).
+- `CurrentChatModelSettings` is now lazy-loaded from `apps/packages/ui/src/components/Layouts/Layout.tsx` and only mounted once the user opens the model settings drawer. That reduced the packaged shared `react-instance-check-*.js` chunk from `7,581,330` bytes to `7,377,184` bytes, a further drop of `204,146` bytes (about `2.7%`), or `1,478,705` bytes total from the earlier `8,855,889` baseline (about `16.7%`).
+- The `CurrentChatModelSettings` split also surfaced an important bundler constraint: WXT/Vite still adds the lazy settings chunk and its dependencies to `options.html` via `modulepreload`, so this cut materially helps the shared chunk and sidepanel startup more than it helps the options entry. After the split, `sidepanel.html` still preloads `1` module while `options.html` preloads `40`, including `CurrentChatModelSettings-*.js`.
+- The remaining extension startup overhead is now concentrated in the options entry rather than the shared shell. The heaviest packaged chunks are still `option-repo2txt-*.js` (~`2.05 MB`), `options-*.js` (~`1.10 MB`), `index-*.js` (~`778 KB`), `option-document-workspace-*.js` (~`568 KB`), `option-watchlists-*.js` (~`469 KB`), `cytoscape.esm-*.js` (~`442 KB`), `mermaid.core-*.js` (~`429 KB`), and `xlsx-*.js` (~`429 KB`). That makes the default options home surface and its route-local preload graph the next high-value optimization target.
+- Built-extension storage seeding is now normalized in `apps/extension/tests/e2e/utils/extension-build.ts`, so packaged pages receive the intended `tldwConfig` instead of a doubly nested payload.
+- The packaged Quick Ingest path now falls back to direct mode when runtime messaging is present but unhealthy in `apps/packages/ui/src/services/tldw/quick-ingest-batch.ts`, which removes the original built-extension deadlock at the background-session handoff.
+- The real-server workflow helper in `apps/test-utils/real-server-workflows.ts` now correctly clicks through the Review step instead of treating the `Start Processing` label as proof that processing already began.
+- The dedicated built runtime probe in `apps/extension/tests/e2e/built-extension-runtime.spec.ts` was revalidated outside the sandbox and now passes after removing invalid raw-runtime expectations. The raw `chrome.runtime.sendMessage` / `runtime.connect` probes executed from Playwright-evaluated worlds still time out, but the real packaged app-level path in `apps/extension/tests/e2e/background-proxy-api.spec.ts` now passes once it opens the actual `/chat` sidepanel route. That means the earlier “packaged MV3 message bus is broken” conclusion was a bad harness contract, not a confirmed product regression.
+- The options route graph is now deferred instead of being part of the initial extension entry shell. `apps/packages/ui/src/routes/options-route-shell.tsx` uses a small startup registry plus `DeferredOptionsRoute`, which removed the old `option-*` route chunks from the `options.html` preload graph. That cleanup fixed the startup shape, but it did not materially change the shared `react-instance-check-*.js` size by itself, which showed that the next bottleneck lived in build preload policy and always-mounted shell code instead of route registration.
+- `apps/extension/wxt.config.ts` now disables HTML `modulepreload` emission via `build.modulePreload = false`. This removed every modulepreload tag from both packaged entry documents while keeping the real built runtime healthy outside the sandbox. After the change, `options.html` and `sidepanel.html` both dropped to `0` modulepreloads and stayed on a single entry script each, which is a higher-value startup win than another small shared-chunk reshuffle.
+- The extension entry shell now defers two more always-mounted UI surfaces:
+  - `apps/packages/ui/src/components/Common/CommandPaletteHost.tsx` lazy-mounts the command palette on first actual open instead of importing `CommandPalette` directly into `Layout`.
+  - `apps/packages/ui/src/components/Layouts/QuickIngestButton.tsx` lazy-loads `QuickIngestWizardModal` so the wizard no longer rides the base shell import path.
+- Those two lazy boundaries reduced the packaged shared `react-instance-check-*.js` chunk from `7,370,185` bytes to `7,228,243` bytes, a further drop of `141,942` bytes (about `1.9%`) while keeping the packaged runtime smoke green outside the sandbox. They also produced true on-demand chunks for the deferred UI surfaces, with `CommandPalette-*.js` at about `27.4 KB` and `QuickIngestWizardModal-*.js` at about `72.8 KB`.
+- The startup picture is better defined now:
+  - shared shell: `react-instance-check-*.js` is still the main common payload at about `7.23 MB`
+  - options entry: `options-*.js` remains about `1.07 MB`
+  - sidepanel entry: the base `sidepanel-*.js` entry is now comparatively small, and sidepanel startup benefits directly from every shared-shell cut
+- The biggest remaining options-entry win is now implemented. `apps/packages/ui/src/routes/option-startup-routes.tsx` no longer treats `/chat`, `/media`, and `/media-multi` as startup-critical routes, and `/` now goes through `apps/packages/ui/src/routes/option-home-resolver.tsx`, which lazy-loads `option-index`. That moves chat/media/home code off the base entry and leaves the full route graph to `DeferredOptionsRoute`.
+- The measured impact is dramatic:
+  - packaged `options-*.js` dropped from about `1,065,594` bytes to about `2,217` bytes
+  - `options.html` dropped from about `1,009` bytes to about `932` bytes while staying at `0` modulepreloads
+  - the base options entry no longer statically references `flashcards-generate-handoff`, `CurrentChatModelSettings`, or `CompanionHomeShell`
+- This confirms that the remaining options startup cost was mostly coming from the startup route set, not just shell widgets. The route graph split is now doing what it should: the base options shell is nearly empty, and route-specific work only arrives after the resolver loads it.
+- The packaged runtime smoke still passes outside the sandbox after the startup route cut, and a focused local route test now verifies that deferred routes such as `/chat` still resolve through `DeferredOptionsRoute`.
+- The next runtime hotspot is clearer because the base entry is now tiny: `WorkflowIntegrationHost-*.js` is still about `774 KB`, and the root `/` options home path still auto-loads it after boot. That is no longer a base-entry problem, but it is likely the next best production-like perf target if we want to improve time-to-interactive on the default home surface itself.
+- The remaining best optimization targets are now narrower and more structural:
+  - `apps/packages/ui/src/assets/locale/en/common.json` is still pinned into startup according to Vite, so `common` remains the last confirmed eager English namespace.
+  - The default options shell still pays for a large base entry (`options-*.js` about `1.07 MB`) even after moving route wiring, command palette, and Quick Ingest modal off the direct startup path. That suggests the next wins are likely in the core app shell and always-mounted option-home logic rather than leaf modal components.
+  - `CurrentChatModelSettings-*.js` (~`103 KB`) and `QuickIngestWizardModal-*.js` (~`72.8 KB`) are now correctly isolated, which confirms the remaining cost is no longer those surfaces.
+- The latest root-route cuts supersede the earlier “options preload fanout” and “WorkflowIntegrationHost is the next hotspot” conclusions:
+  - `options.html` and `sidepanel.html` now both stay at `0` `modulepreload` tags, so HTML preload fanout is no longer the bottleneck.
+  - `WorkflowIntegrationHost-*.js` is now only about `4.9 KB`. The earlier `~774 KB` hotspot was the lazily loaded `WorkflowLanding-*.js` bundle, which is not part of the default `/` startup path because the root route renders Companion Home and `WorkflowIntegrationHost` explicitly skips auto-opening on `/`.
+- `apps/packages/ui/src/routes/option-index.tsx` is now split along the actual mutually exclusive runtime branches:
+  - onboarding is lazy via `OnboardingWizard-*.js`
+  - companion home is lazy via `CompanionHomeShell`’s emitted chunk (`index-owR_KrHB.js` in the latest build, about `26.1 KB`)
+  - hosted mode is lazy via `option-hosted-home-*.js`
+- The measured impact on the packaged `chrome-mv3` build is substantial even after the startup-route split:
+  - `option-index-*.js` dropped from `76,543` bytes to `5,819` bytes after lazy-loading onboarding and companion home
+  - `option-index-*.js` then dropped again to `2,605` bytes after moving the hosted-only hero into `option-hosted-home-*.js` (`3,520` bytes)
+  - `OnboardingWizard-*.js` now sits on its own boundary at `61,727` bytes instead of riding the root route
+  - the base `options-*.js` entry remains about `2.2 KB`
+- The current default options-home startup path is therefore much narrower than before: shared shell (`react-instance-check-*.js` at `7,228,237` bytes) plus a tiny base entry (`~2.2 KB`), a tiny root resolver (`option-index-*.js` at `2.6 KB`), and the actual home surface chunk (`CompanionHomeShell` at `~26.1 KB`).
+- That means the easiest root-route wins are largely exhausted. The next meaningful production-like extension perf targets are now:
+  - the remaining shared shell payload in `react-instance-check-*.js`, especially anything still pinned through `apps/packages/ui/src/entries/shared/AppShell.tsx`
+  - the last eager locale pin in `apps/packages/ui/src/assets/locale/en/common.json`
+  - very large route-local feature chunks that still dominate once users navigate there, especially repo2txt, document workspace, watchlists, Cytoscape, Mermaid, XLSX, and PDF worker surfaces
+- The `AppShell` diagnosis turned out to be the biggest remaining shared-shell win. `apps/packages/ui/src/entries/shared/AppShell.tsx` no longer statically imports `LocaleJsonDiagnostics`; it now lazy-loads that component only in development. On the packaged `chrome-mv3` build this reduced `react-instance-check-*.js` from `7,228,237` bytes to `2,405,410` bytes, a drop of `4,822,827` bytes (about `66.7%`).
+- That large drop strongly suggests the old eager diagnostics path was anchoring development-only locale validation code and related locale payloads into the production shared chunk. The runtime evidence stayed clean after the change: the packaged MV3 smoke still passes outside the sandbox, with `options.html` rendering Companion Home and `sidepanel.html#/chat` continuing to boot the chat surface.
+- The default packaged options-home startup path is now:
+  - shared shell: `react-instance-check-*.js` at about `2.41 MB`
+  - base options entry: `options-*.js` at about `2.2 KB`
+  - root resolver: `option-index-*.js` at about `2.6 KB`
+  - actual home surface: Companion Home chunk at about `26.1 KB`
+- The remaining perf priorities after the shared-shell reduction are now:
+  - `apps/packages/ui/src/assets/locale/en/common.json`, which Vite still reports as the last eager locale pin
+  - always-mounted shared shell behavior that is still legitimately production-facing, especially splash/theme/provider state in `apps/packages/ui/src/entries/shared/AppShell.tsx`
+  - route-local heavy features such as repo2txt, document workspace, watchlists, Cytoscape, Mermaid, XLSX, and PDF worker paths, which are now the clearer remaining large-JS problem once users navigate past the home shell
+- The last eager English locale pin is now removed from startup. `apps/packages/ui/src/i18n/index.ts` no longer initializes with `resources: { en }`, `apps/packages/ui/src/i18n/lang/en.ts` no longer statically imports `common.json`, and the extension entry shells now supply explicit `"No data"` defaults for their initial empty state copy. On the packaged `chrome-mv3` build this reduced the shared `react-instance-check-*.js` chunk from `2,405,410` bytes to `2,382,506` bytes, a smaller follow-up drop of `22,904` bytes (about `1.0%`) while keeping the packaged runtime smoke green outside the sandbox.
+- `repo2txt` is no longer front-loading action-only code into its route chunk. `apps/packages/ui/src/components/Option/Repo2Txt/Repo2TxtPage.tsx` now lazy-loads `GitHubProvider`, `LocalProvider`, `fetchFilesWithConcurrency`, and `Formatter` only when the user loads a repo or generates output. On the packaged `chrome-mv3` build this collapsed `option-repo2txt-*.js` from `2,052,689` bytes to `9,611` bytes, with the heavy tokenizer work moving into `Formatter-*.js` at about `2.04 MB` and the provider helpers isolated into small route-local chunks (`GitHubProvider-*.js` about `2.0 KB`, `fetchFilesWithConcurrency-*.js` about `426 B`, `BaseProvider-*.js` about `577 B`).
+- That `repo2txt` split changes the perf interpretation: the large route cost still exists when users actually generate output, but it no longer penalizes navigation into the page itself. At this point the best remaining route-local targets are the other heavyweight option features, especially document workspace, watchlists, and any features that still bundle Cytoscape, Mermaid, XLSX, or PDF workers before the user crosses a real interaction boundary.
+- The packaged MV3 runtime smoke still passes outside the sandbox after both the final i18n startup cut and the `repo2txt` route split. The known harness caveat remains unchanged: the raw Playwright-evaluated runtime ping probes still time out, but the real packaged options and sidepanel surfaces continue to render correctly with seeded config.
+- `apps/packages/ui/src/components/DocumentWorkspace/DocumentWorkspacePage.tsx` and `apps/packages/ui/src/components/DocumentWorkspace/DocumentViewer/index.tsx` now lazy-load the viewer internals plus left/right tab panels instead of importing the entire document workspace surface into the route chunk. On the packaged `chrome-mv3` build this reduced `option-document-workspace-*.js` from `566,865` bytes to `47,011` bytes, with the route-local features moving into smaller deferred chunks such as `DocumentChat-*.js` (`16.5 KB`), `PdfDocument-*.js` (`11.7 KB`), `PdfSearch-*.js` (`7.3 KB`), and `FiguresTab-*.js` (`4.1 KB`).
+- `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx` now lazy-loads tab panes and renders them through route-local `Suspense` boundaries instead of importing every tab surface up front. On the packaged `chrome-mv3` build this reduced `option-watchlists-*.js` from `469,571` bytes to `81,218` bytes, with the templates/editor path moving behind deferred chunks such as `TemplatesTab-*.js` (`57.3 KB`).
+- `apps/packages/ui/src/components/Option/ACPPlayground/index.tsx` now lazy-loads the session panel, tools panel, workspace panel, and permission modal instead of bundling them directly into the ACP route shell. On the packaged `chrome-mv3` build this reduced `option-acp-playground-*.js` from `362,381` bytes to `37,430` bytes, with the moved surfaces emitted as `ACPSessionPanel-*.js` (`28.7 KB`), `ACPToolsPanel-*.js` (`6.2 KB`), `ACPPermissionModal-*.js` (`6.1 KB`), and `ACPWorkspacePanel-*.js` (`287.6 KB`).
+- After the document workspace, watchlists, and ACP route-shell cuts, the remaining largest navigated option chunks are now `option-prompts-*.js` (~`352.7 KB`) and `option-workspace-playground-*.js` (~`310.0 KB`). The shared startup chunk remains stable at about `2,382,506` bytes through these route-local splits, which confirms these improvements are reducing navigation-time payloads rather than changing the shared boot shell.
+- `apps/packages/ui/src/components/Option/Prompt/index.tsx` now lazy-loads the Studio tab container plus the closed prompt surfaces (`PromptDrawer`, `PromptFullPageEditor`, `PromptInspectorPanel`, `ProjectSelector`, and `ConflictResolutionModal`) instead of importing them into the prompt route body. On the packaged `chrome-mv3` build this reduced `option-prompts-*.js` from `352,711` bytes to `167,653` bytes. The deferred prompt surfaces now sit in route-local chunks such as `StudioTabContainer-*.js` (`125.8 KB`), `PromptDrawer-*.js` (`23.4 KB`), `PromptFullPageEditor-*.js` (`14.1 KB`), `ProjectSelector-*.js` (`5.1 KB`), `ConflictResolutionModal-*.js` (`4.8 KB`), and `PromptInspectorPanel-*.js` (`4.4 KB`).
+- `apps/packages/ui/src/components/Option/Prompt/Studio/StudioTabContainer.tsx` now keeps `ProjectsTab` eager but lazy-loads the four non-default sub-tabs (`StudioPromptsTab`, `TestCasesTab`, `EvaluationsTab`, and `OptimizationsTab`) behind sub-tab-specific `Suspense` boundaries. This does not change the outer prompt route shell, so `option-prompts-*.js` stays effectively flat at `167,653` bytes, but it reduces the Studio surface itself from `125,812` bytes to `28,661` bytes. The deferred Studio sub-tabs are now emitted separately as `StudioPromptsTab-*.js` (`24.9 KB`), `TestCasesTab-*.js` (`29.5 KB`), `EvaluationsTab-*.js` (`21.4 KB`), and `OptimizationsTab-*.js` (`32.2 KB`).
+- `apps/packages/ui/src/components/Option/WorkspacePlayground/index.tsx` now lazy-loads the secondary Sources and Studio panes through route-local `Suspense` boundaries instead of bundling them into the workspace route shell. The chat pane stays eager because it is the first-view surface, but the mobile tabs now also use `destroyOnHidden` so inactive lazy panes do not stay mounted after a switch. On the packaged `chrome-mv3` build this reduced `option-workspace-playground-*.js` from `309,973` bytes to `151,325` bytes while keeping the shared `react-instance-check-*.js` chunk flat at `2,382,506` bytes. The deferred workspace chrome now sits in chunks such as `workspace-*.js` (`65.7 KB`), `WorkspaceLinks-*.js` (`2.2 KB`), and `WorkspaceConnectionGate-*.js` (`2.0 KB`).
+- With the prompt and workspace route-body cuts in place, the remaining route-shell hotspots are much smaller. The next meaningful runtime targets are no longer the route shims themselves but the deferred feature bodies they hand off to, especially `StudioTabContainer-*.js` (`125.8 KB`), `workspace-*.js` (`65.7 KB`), and the still-heavy feature-specific deferred bundles such as `ACPWorkspacePanel-*.js` (`287.6 KB`).
+- `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx` now defers the modal-only artifact viewers/editors through `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/ArtifactModalContent.tsx`, keeping mind map view, data table view, flashcard edit, and quiz edit behind a true click-time lazy boundary. The latest packaged `chrome-mv3` build emits `ArtifactModalContent-*.js` at about `11.0 KB`, and the built MV3 runtime smoke still passes outside the sandbox after the change.
+- `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx` also now lazy-loads `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/QuickNotesSection.tsx` behind the closed-default Quick Notes toggle. The latest packaged `chrome-mv3` build emits `QuickNotesSection-*.js` at about `18.5 KB`, and the Stage 1/Stage 2 StudioPane suites stayed green after the split.
+- The important measurement correction from this pass is that the StudioPane surface is not living in the `workspace-*.js` chunk that was previously used as a proxy. The real built chunk carrying the StudioPane labels and controls is a generic `index-*.js` chunk (`index-BY4SrKxN.js` in the latest build) at about `72.7 KB`. The emitted `ArtifactModalContent-*.js` and `QuickNotesSection-*.js` chunks prove the lazy boundaries are real, but this pass did not produce another obvious top-level route chunk drop. In practice that means the recent StudioPane changes are still useful interaction-boundary wins, but the next meaningful perf work should target whichever modules are still anchoring the remaining `~72.7 KB` StudioPane chunk rather than keep watching `workspace-*.js`.
+- `apps/packages/ui/src/components/Option/ACPPlayground/ACPWorkspacePanel.tsx` no longer statically imports `xterm`, `@xterm/addon-fit`, or `xterm/css/xterm.css`. The ACP workspace panel now loads the terminal runtime only after the component reaches the real SSH-backed session path, which means the empty-state ACP workspace surface stays synchronous and lightweight.
+- That cut is materially better than the earlier ACP route-shell split alone: the packaged `chrome-mv3` build now emits `ACPWorkspacePanel-*.js` at `3,965` bytes instead of the earlier `~287.6 KB`, while the actual terminal runtime moved behind true session-time boundaries as `xterm-*.js` (`282,846` bytes) plus `addon-fit-*.js` (`1,601` bytes). In practice this means navigating to ACP no longer front-loads the terminal implementation; users only pay for `xterm` when they actually open a session with a workspace terminal.
+- The packaged MV3 runtime smoke in `apps/extension/tests/e2e/built-extension-runtime.spec.ts` still passes outside the sandbox after the ACP terminal split. The raw Playwright-injected runtime ping probes continue to time out from evaluated worlds, but the real packaged options and sidepanel flows still render correctly with seeded config, so this remains a harness caveat rather than a product regression.
+- `apps/packages/ui/src/routes/sidepanel-persona.tsx` now keeps every non-active persona tab body behind an active-tab-only lazy boundary instead of importing the full garden into the route module. The packaged `chrome-mv3` build now emits `sidepanel-persona-*.js` at `175,583` bytes instead of the earlier `258,291` bytes, with the tab bodies split into route-local chunks such as `CommandsPanel-*.js` (`30.1 KB`), `VoiceExamplesPanel-*.js` (`14.2 KB`), `ConnectionsPanel-*.js` (`14.8 KB`), `TestLabPanel-*.js` (`12.6 KB`), and smaller policy/profile/state chunks. Focused route tests also had to be updated to follow the real active-tab contract instead of relying on hidden-but-mounted DOM.
+- I tested one likely explanation for the still-large deferred options registry: settings navigation metadata used to live inline in `apps/packages/ui/src/routes/route-registry.tsx`. That metadata now lives in `apps/packages/ui/src/components/Layouts/settings-nav-config.ts`, and `apps/packages/ui/src/components/Layouts/settings-nav.ts` no longer imports `optionRoutes` just to recover settings labels and icons. The effect on the packaged registry chunk was negligible (`route-registry-*.js` moved only from `1,010,527` bytes to `1,008,359` bytes), which is useful evidence in itself: the `~1 MB` registry chunk is not being driven primarily by settings-nav icon metadata, so a deeper route-resolution split will be needed if that chunk becomes the next target.
+- `apps/packages/ui/src/routes/sidepanel-chat.tsx` now lazy-loads the closed-by-default sidepanel-only surfaces that do not belong on the base chat route: `SidepanelChatSidebar` and `NoteQuickSaveModal`. The packaged `chrome-mv3` build now emits `sidepanel-chat-*.js` at `182,583` bytes instead of the earlier `209,961` bytes, a reduction of `27,378` bytes (about `13.0%`). The deferred sidepanel-only chunks now show up as `Sidebar-*.js` (`26.2 KB`) and `NoteQuickSaveModal-*.js` (`1.9 KB`).
+- The packaged MV3 runtime smoke still passes outside the sandbox after the latest persona and sidepanel-chat splits. In the latest run, `options.html` rendered the Companion Home surface and `sidepanel.html#/chat` reached the connected chat UI again, while the raw Playwright-evaluated runtime ping probes (`callbackPing`, `promisePing`, and `portPing`) continued to time out. That keeps the current conclusion unchanged: the real packaged app path is healthy, and the raw runtime pings are still a harness-level caveat rather than a confirmed product defect.
+- `apps/packages/ui/src/routes/route-registry.tsx` is now options-only at runtime. The duplicate sidepanel imports and `kind: "sidepanel"` entries were removed from the deferred options registry, and the source-parity guards now read sidepanel ownership from `apps/packages/ui/src/routes/sidepanel-route-registry.tsx` instead. On the packaged `chrome-mv3` build this only moved `route-registry-*.js` from `1,007,038` bytes to `997,210` bytes, so the sidepanel extraction was the correct cleanup but not the main remaining size anchor.
+- `apps/packages/ui/src/routes/deferred-options-route.tsx` now path-shards `/settings` and `/settings/*` through a dedicated `apps/packages/ui/src/routes/option-settings-route-registry.tsx` before falling back to the full options registry. The behavior is pinned in `apps/packages/ui/src/routes/__tests__/deferred-options-route.test.tsx`, which now proves `/settings/chat` resolves through the settings shard instead of the full registry.
+- The packaged build now emits `option-settings-route-registry-*.js` at `4,598` bytes. The shared `react-instance-check-*.js` chunk stayed flat at `2,382,515` bytes, `sidepanel-persona-*.js` stayed flat at `175,583` bytes, and `sidepanel-chat-*.js` stayed effectively flat at `183,022` bytes (`182,583` previously, a negligible hash-level fluctuation). That means this settings split is a route-resolution win for deep links rather than another shell-size win.
+- The packaged MV3 runtime smoke in `apps/extension/tests/e2e/built-extension-runtime.spec.ts` still passes outside the sandbox after both the sidepanel extraction and the settings deep-link shard. The same harness caveat remains: real packaged `options.html` and `sidepanel.html#/chat` flows render correctly with seeded config, while the raw Playwright-injected runtime pings still time out from evaluated worlds.
+- `apps/packages/ui/src/routes/option-route-visibility.ts` now owns the hosted-options visibility list so deferred route shards preserve the old hosted filtering behavior instead of bypassing it. `apps/packages/ui/src/routes/deferred-options-route.tsx` now applies the same hosted visibility predicate as `apps/packages/ui/src/routes/route-registry.tsx`, which fixes the behavior regression introduced when settings deep links first stopped going through the full registry.
+- `apps/packages/ui/src/routes/option-chat-media-route-registry.tsx` now owns the `/chat`, `/review`, `/media`, `/media-trash`, `/media-multi`, and `/content-review` family. `apps/packages/ui/src/routes/deferred-options-route.tsx` loads that shard for those paths before falling back to the generic options registry, and `apps/packages/ui/src/routes/route-registry.tsx` no longer eagerly imports `OptionChat`, `OptionMedia`, or `OptionMediaMulti`.
+- This was a large and useful resolver split on the packaged `chrome-mv3` build:
+  - `route-registry-*.js`: `997,210` -> `13,403`
+  - new `option-chat-media-route-registry-*.js`: `794,431`
+  - `option-settings-route-registry-*.js`: stays tiny at `4,655`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The important tradeoff is that the byte win is almost entirely a hot-path ownership move rather than another shell reduction. The generic options resolver chunk is now effectively gone, which is good for non-chat/non-media deep links, but `/chat` and `/media*` now pay a dedicated `~794 KB` family chunk. That means the next best route-level perf target is no longer `route-registry`; it is splitting chat and media apart from each other so those two families stop sharing one large deferred body.
+- The packaged MV3 runtime smoke in `apps/extension/tests/e2e/built-extension-runtime.spec.ts` still passes outside the sandbox after the chat/media shard. The same caveat remains in the diagnostic output: raw Playwright-evaluated runtime pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` flows render correctly with seeded config.
+- `apps/packages/ui/src/routes/option-chat-media-route-registry.tsx` is now split into dedicated chat and media route-family shards. `apps/packages/ui/src/routes/deferred-options-route.tsx` now resolves `/chat` through `option-chat-route-registry.tsx`, `/media` and `/media-trash` through `option-media-view-route-registry.tsx`, and `/review`, `/media-multi`, and `/content-review` through `option-media-review-route-registry.tsx`. The hosted-route visibility guard remains shared through `apps/packages/ui/src/routes/option-route-visibility.ts`, so the deferred shards still honor hosted-mode filtering instead of bypassing it.
+- That second resolver split produced another real hot-path win on the packaged `chrome-mv3` build:
+  - previous combined `option-chat-media-route-registry-*.js`: `794,431`
+  - new `option-chat-route-registry-*.js`: `402,085`
+  - new `option-media-view-route-registry-*.js`: `290,265` before the follow-up `/media` lazy cut
+  - new `option-media-review-route-registry-*.js`: `90,768`
+  - `route-registry-*.js`: stays tiny at `13,403`
+  - shared `react-instance-check-*.js`: stays flat at `2,382,515`
+- The important effect is no longer just “generic registry is smaller.” `/chat` now avoids paying for media/review code entirely, and `/media-multi` no longer drags the plain `/media` browsing surface with it. That makes the next useful perf work route-body trimming inside those families rather than more resolver shuffling.
+- `apps/packages/ui/src/components/Review/ViewMediaPage.tsx` now keeps several closed-default `/media` surfaces behind real lazy boundaries instead of importing them into the base browsing route: `JumpToNavigator`, `KeyboardShortcutsOverlay`, `MediaIngestJobsPanel`, and `MediaLibraryStatsPanel`. The route still keeps the core browsing surfaces eager (`SearchBar`, `FilterPanel`, `ResultsList`, `ContentViewer`, and the active navigation pane), so this cut is focused on deferred UI, not the main inspection flow.
+- That `/media` route-body trim produced a measurable packaged build reduction:
+  - `option-media-view-route-registry-*.js`: `290,265` -> `273,094`
+  - deferred chunks now emitted separately as `KeyboardShortcutsOverlay-*.js` (`3,279`), `JumpToNavigator-*.js` (`1,398`), `MediaIngestJobsPanel-*.js` (`8,087`), and `MediaLibraryStatsPanel-*.js` (`5,514`)
+  - `option-media-review-route-registry-*.js`: stayed flat at `90,768`
+  - shared `react-instance-check-*.js`: stayed flat at `2,382,515`
+- Verification remains clean for the packaged extension runtime after both media-focused cuts. `apps/extension/tests/e2e/built-extension-runtime.spec.ts` still passes outside the sandbox and continues to show the same harness caveat as before: the raw Playwright-evaluated runtime pings time out, but the real packaged `options.html` and `sidepanel.html#/chat` flows render correctly with seeded config.
+- Focused source and component verification for the latest perf work passed:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `38/38`
+  - `apps/packages/ui/src/routes/__tests__/deferred-options-route.test.tsx`: `4/4`
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.stage12.performance.test.tsx`: `12/12`
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.permalink.test.tsx --testNamePattern='toggles keyboard shortcuts overlay with \\? key'`: `1/1`
+- One broader `ViewMediaPage.permalink` batch still has unrelated pre-existing failures in the trash-undo path (`bgRequest` is undefined inside `apps/packages/ui/src/components/Review/hooks/useMediaSelection.ts`). I did not treat that as a regression from the perf work because the failure is outside the changed lazy-boundary surfaces and reproduces in the unaffected delete/undo tests rather than in the shortcut or route-loading paths.
+- `apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx` now keeps its closed-default chat overlays behind real lazy boundaries instead of importing them into the base `/chat` route body. The moved surfaces are `CurrentChatModelSettings`, `ActorPopout`, `DocumentGeneratorDrawer`, `PlaygroundImageGenModal`, `PlaygroundRawRequestModal`, `PlaygroundStartupTemplateModal`, `PlaygroundContextWindowModal`, `PlaygroundMcpSettingsModal`, and `VoiceModeSelector`. Each now mounts only when its open state is active, with `React.Suspense` wrapping the deferred boundary.
+- That chat-form split produced another real packaged MV3 reduction on the chat route family:
+  - `option-chat-route-registry-*.js`: `402,085` -> `367,340`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+  - deferred chunks now emitted separately as `CurrentChatModelSettings-*.js` (`72,323`), `DocumentGeneratorDrawer-*.js` (`15,832`), `PlaygroundImageGenModal-*.js` (`15,403`), `PlaygroundContextWindowModal-*.js` (`14,953`), `PlaygroundStartupTemplateModal-*.js` (`6,492`), `ActorPopout-*.js` (`5,113`), `PlaygroundMcpSettingsModal-*.js` (`4,150`), `VoiceModeSelector-*.js` (`2,395`), and `PlaygroundRawRequestModal-*.js` (`1,821`)
+- The important perf interpretation is that this is a real route-body win, not another shared-shell win. `/chat` now stops front-loading advanced settings, popouts, and modal-only tooling until the user actually opens them, while the base extension shell stays flat.
+- Verification for the chat-form split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `39/39`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.image-refine.integration.test.tsx`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.compare-settings.guard.test.ts`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts`
+  - combined result for the three focused PlaygroundForm suites: `11/11`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the new chat split, with the same existing harness caveat that raw Playwright-evaluated runtime pings still time out even though the real packaged `options.html` and `sidepanel.html#/chat` flows render correctly
+- `apps/packages/ui/src/components/WorkflowEditor/WorkflowEditor.tsx` now keeps the default `NodePalette` eager but lazy-loads the two non-default workflow-editor side panels, `NodeConfigPanel` and `ExecutionPanel`, behind the active sidebar selection. Both desktop and mobile drawer paths now mount those panels through `React.Suspense`, so the route shell only pays for the palette until the user actually switches to config or run views.
+- The first build after that source change surfaced a real bundler leak: `apps/packages/ui/src/components/WorkflowEditor/index.ts` was still statically re-exporting `NodeConfigPanel` and `ExecutionPanel`, so Vite warned that the lazy imports could not move either module into another chunk. Removing those two barrel exports fixed the leak and is now pinned in `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`.
+- With the barrel leak removed, the packaged `chrome-mv3` build now shows a real workflow-editor route split:
+  - `option-workflow-editor-*.js`: `234,415` -> `206,450`
+  - `NodeConfigPanel-*.js`: `20,571`
+  - `ExecutionPanel-*.js`: `10,970`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- This is a route-body improvement, not a shared-shell improvement. The workflow editor now stops paying for the configuration and execution sidebars until the user actually chooses those tabs, while the common extension startup shell remains flat.
+- Verification for the workflow-editor split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `40/40`
+  - `apps/packages/ui/src/components/WorkflowEditor/__tests__/WorkflowEditor.responsive.test.tsx`: `3/3`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the workflow-editor split, with the same existing harness caveat that raw Playwright-evaluated runtime pings still time out even though the real packaged `options.html` and `sidepanel.html#/chat` flows render correctly
+- `apps/packages/ui/src/components/Quiz/QuizPlayground.tsx` now keeps `TakeQuizTab` eager but lazy-loads `GenerateTab`, `CreateTab`, `ManageTab`, and `ResultsTab` behind first-visit tab-selection boundaries. The route keeps `destroyInactiveTabPane={false}` for state retention, but it now tracks `loadedTabs` so AntD does not mount non-default quiz tabs until the user actually visits them once.
+- That quiz split produced a real packaged MV3 route-body reduction:
+  - `option-quiz-*.js`: `223,023` -> `93,168`
+  - deferred quiz tab chunks now emitted separately as `GenerateTab-*.js` (`24,969`), `CreateTab-*.js` (`22,638`), `ManageTab-*.js` (`46,835`), and `ResultsTab-*.js` (`39,321`)
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The important perf interpretation is that quiz no longer front-loads every tab body just to open the route. The default `/quiz` path now pays mainly for the take-quiz surface, while the authoring, management, generation, and analytics tabs shift behind genuine tab-visit boundaries.
+- Verification for the quiz split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `41/41`
+  - `apps/packages/ui/src/components/Quiz/__tests__/QuizPlayground.navigation.test.tsx`: `13/13`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the quiz split, with the same existing harness caveat that raw Playwright-evaluated runtime pings still time out even though the real packaged `options.html` and `sidepanel.html#/chat` flows render correctly
+- `apps/packages/ui/src/components/Option/Characters/Manager.tsx` no longer embeds the shared create/edit character editor form directly into the default route body. The dialog boundary was already lazy; this pass moves the heavy form renderer into `apps/packages/ui/src/components/Option/Characters/CharacterEditorForm.tsx` and loads it through `import("./CharacterEditorForm")` only when the create/edit dialogs render.
+- That characters split produced a real packaged MV3 route-body reduction:
+  - `option-characters-*.js`: `217,092` -> `198,893`
+  - deferred editor form chunk: `CharacterEditorForm-*.js` at `20,996`
+  - existing deferred dialog chunk: `CharacterDialogs-*.js` at `48,352`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The practical effect is narrower than the quiz win but still useful: the default character manager route now avoids carrying the full create/edit form implementation until the user actually opens those dialogs, while the already-lazy dialog bundle stays behaviorally unchanged.
+- Verification for the characters split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `42/42`
+  - `apps/packages/ui/src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx`: `1/1`
+  - focused `apps/packages/ui/src/components/Option/Characters/__tests__/Manager.first-use.test.tsx` checks:
+    - `supports first-run template -> create -> chat handoff`
+    - `submits edit flow through the shared form component`
+    - `keeps AI field generation affordances wired in create mode`
+    - combined result: `3 passed, 83 skipped`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the characters split, with the same existing harness caveat that raw Playwright-evaluated runtime pings still time out even though the real packaged `options.html` and `sidepanel.html#/chat` flows render correctly
+- `apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx` now lazy-loads the multi-model compare renderer through `import("./PlaygroundCompareCluster")`, and the compare-only pipeline lives in `apps/packages/ui/src/components/Option/Playground/PlaygroundCompareCluster.tsx`. That new deferred component now owns the compare card identity UI, normalized preview and diff preview logic, per-model mini composer, compare continuation controls, and compare-only metric tracking instead of keeping that path embedded in the base `/chat` route body.
+- This chat compare extraction produced another real packaged MV3 route-body reduction:
+  - `option-chat-route-registry-*.js`: `367,340` -> `345,545`
+  - deferred compare chunk: `PlaygroundCompareCluster-*.js` at `28,041`
+  - `Message-*.js`: `117,230`
+  - shared `react-instance-check-*.js`: unchanged for this pass
+- The important perf interpretation is that the default `/chat` route no longer has to pay for the multi-model compare renderer up front. Plain chat, search, and empty-state flows stay in the main chat route chunk, while compare-specific card tooling now moves behind a route-local lazy boundary that is only mounted when a compare cluster actually exists.
+- Verification for the compare extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `43/43`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.model-identity.guard.test.ts`: `1/1`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.normalized-preview.guard.test.ts`: `1/1`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.diff-preview.guard.test.ts`: `1/1`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.compare-contract.guard.test.ts`: `1/1`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.per-model-routing.integration.test.tsx`: `2/2`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the compare split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+- `apps/packages/ui/src/components/Option/KnowledgeQA/layout/KnowledgeQALayout.tsx` now keeps its non-primary Knowledge QA surfaces behind route-local lazy boundaries. The default search/composer/answer path stays eager, while `HistoryPane`, `InlineRecentSessions`, `NoResultsRecovery`, and `EvidenceRail` now load through `React.lazy` only when the layout mode or current state actually needs them. In parallel, `apps/packages/ui/src/components/Option/KnowledgeQA/SourceList.tsx` now lazy-loads `SourceViewerModal`, so the full-source preview no longer rides the base source-list path.
+- That first Knowledge QA split produced a real packaged MV3 route-body reduction:
+  - `option-knowledge-*.js`: `187,637` -> `165,039`
+  - deferred chunks now emitted separately as `HistoryPane-*.js` (`10,349`), `EvidenceRail-*.js` (`9,721`), `SourceViewerModal-*.js` (`3,141`), `NoResultsRecovery-*.js` (`1,760`), and `InlineRecentSessions-*.js` (`1,719`)
+  - shared `react-instance-check-*.js`: unchanged for this pass
+- The important perf interpretation is that the default `/knowledge` route now avoids paying for research-mode chrome, recovery affordances, and full-source preview infrastructure until those states actually occur. The main answer/composer path remains eager, so this is a real route-body cut rather than another shared-shell change.
+- `apps/packages/ui/src/components/Option/KnowledgeQA/evidence/EvidenceRail.tsx` then moved the details-only runtime inspector behind its own lazy boundary. `SearchDetailsPanel` now loads only when the evidence rail is on the `details` tab, while the default `sources` tab remains eager.
+- That evidence-only follow-up did not shrink `option-knowledge-*.js` further, which is the correct outcome because `EvidenceRail` was already its own deferred chunk. It did shrink the deferred evidence chunk itself:
+  - `EvidenceRail-*.js`: `9,721` -> `5,050`
+  - new deferred inspector chunk: `SearchDetailsPanel-*.js` at `5,980`
+  - `option-knowledge-*.js`: stayed at `165,039`
+- Verification for the Knowledge QA perf splits stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `46/46`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/KnowledgeQALayout.behavior.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/SourceList.viewer.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/SearchDetailsPanel.test.tsx`: `2/2`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after both Knowledge QA splits. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+- `apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx` now lazy-loads `ResearchRunStatusStack` instead of importing the linked-research status chrome into the default `/chat` transcript path. The stack only mounts when linked research runs exist, so empty-state, plain-chat, and non-research transcript paths no longer pay for that status surface up front.
+- That linked-research status extraction produced a small but real packaged MV3 chat-route reduction:
+  - `option-chat-route-registry-*.js`: `345,545` -> `343,188`
+  - new deferred status chunk: `ResearchRunStatusStack-*.js` at `2,637`
+  - `PlaygroundCompareCluster-*.js`: `28,081`
+  - `Message-*.js`: `117,594`
+  - shared `react-instance-check-*.js`: unchanged for this pass
+- The practical interpretation is that the easy `/chat` body wins are getting smaller. This cut proves the linked-research status UI was still on the hot path, but it only shaved about `2.3 KB`, which suggests the next meaningful perf wins are more likely to come from larger feature bodies than from more chat-status chrome.
+- Focused verification for the linked-research status extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `47/47`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx`: `17/17`
+- `apps/packages/ui/src/components/Notes/NotesManagerPage.tsx` now keeps its closed-default notes modal cluster behind a single lazy overlay host in `apps/packages/ui/src/components/Notes/NotesManagerOverlays.tsx`. The default `/notes` route still renders the editor and sidebar eagerly, but the keyword-suggestion review modal, keyword picker, keyword manager, rename/merge flows, import modal, graph modal, and keyboard-shortcuts modal now mount only when one of those overlays is actually opened.
+- That notes overlay extraction produced a real packaged MV3 route-body reduction:
+  - `option-notes-*.js`: `199,599` -> `188,884`
+  - new deferred overlay chunk: `NotesManagerOverlays-*.js` at `23,272`
+  - shared `react-instance-check-*.js`: unchanged for this pass
+- The practical perf effect is similar to the earlier quiz and knowledge cuts: the route keeps the primary editing path hot, but secondary management and overlay workflows no longer ride the default `/notes` body. This was a better next target than continuing to chase another tiny `/chat` status-only shave.
+- Focused verification for the notes overlay extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `47/47`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage20.accessibility-shortcuts.test.tsx`: `2/2`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage21.accessibility-modal-focus.test.tsx`: `2/2`
+- `apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx` now lazy-loads `ChatGreetingPicker` instead of importing the character-greeting picker into the base `/chat` transcript path. The picker now mounts through a local `React.lazy` boundary only when the selected-character greeting branch is active.
+- That `/chat` greeting extraction did produce a real deferred chunk, but it did not materially shrink the main route body:
+  - `option-chat-route-registry-*.js`: `343,188` -> `343,352`
+  - new deferred chunk: `ChatGreetingPicker-*.js` at `4,932`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The important interpretation is that `/chat` is now structurally cleaner, but this specific boundary is close to neutral in byte terms. The small increase is consistent with dynamic-import loader overhead outweighing the tiny picker payload, so future `/chat` wins should target larger feature bodies rather than small conditional helpers.
+- Focused verification for the `/chat` greeting extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `49/49`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.server-load-state.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.search.integration.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.per-model-routing.integration.test.tsx`: `2/2`
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` now lazy-loads its closed-default viewer-only surfaces: `AnalysisModal`, `AnalysisEditModal`, `DiffViewModal`, and the dev-only `DeveloperToolsSection`. Those components no longer ride the base `/media` route body when the selected-media view is simply being read.
+- That `/media` viewer-modal extraction produced a real packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `273,095` -> `253,329`
+  - deferred chunks now emitted separately as `AnalysisModal-*.js` (`13,080`), `AnalysisEditModal-*.js` (`5,042`), `DiffViewModal-*.js` (`10,254`), and `DeveloperToolsSection-*.js` (`2,866`)
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The practical perf effect is that the primary `/media` reading path no longer front-loads closed-default analysis/edit/diff UI or dev-only tooling. This is a stronger route-body win than the latest `/chat` cleanup and confirms the remaining medium-sized gains are still on the `/media` viewer side.
+- Focused verification for the `/media` viewer-modal extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `49/49`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.export.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.scheduleRefresh.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.metadataStage2.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage25.keyword-management.test.tsx`: `2/2`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage36.import-workflow.test.tsx`: `2/2`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage10.ai-content-assist.test.tsx`: `4/4`
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` now keeps `VersionHistoryPanel` off the base `/media` route body until the user explicitly opens version history. The default selected-media path renders a lightweight collapsed shell, and the full panel only mounts through `React.lazy` on first open with `defaultExpanded`.
+- That version-history extraction produced another real packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `253,329` -> `241,582`
+  - new deferred chunk: `VersionHistoryPanel-*.js` at `13,398`
+  - previously deferred viewer chunks remained split: `AnalysisModal-*.js` (`13,080`), `AnalysisEditModal-*.js` (`5,042`), `DiffViewModal-*.js` (`10,254`), `DeveloperToolsSection-*.js` (`2,866`)
+  - shared `react-instance-check-*.js`: unchanged for this pass
+- The practical effect is that `/media` now avoids paying for another collapsed-by-default workflow on the initial reading path. This is a better shape than the earlier eager panel because version history is still reachable immediately, but it no longer inflates the default route body before the user asks for it.
+- Focused verification for the version-history extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `50/50`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.version-history-lazy.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.export.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.scheduleRefresh.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.metadataStage2.test.tsx`: `3/3`
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` now keeps the collapsed-by-default document-intelligence surface off the base `/media` route body. The inline intelligence renderer moved into `apps/packages/ui/src/components/Media/ContentViewerDocumentIntelligenceSection.tsx`, and the selected-media view now mounts it through `React.lazy` only when that section is actually expanded.
+- That document-intelligence extraction produced another real packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `241,582` -> `233,386`
+  - new deferred chunk: `ContentViewerDocumentIntelligenceSection-*.js` at `10,923`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The practical effect is that `/media` no longer pays for another collapsed-by-default document workflow on the default reading path. Outline, references, figures, insights, and annotation-management UI still render correctly when requested, but they no longer inflate the base route body before the user opens the intelligence section.
+- Focused verification for the document-intelligence extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `51/51`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.intelligence.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.export.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.scheduleRefresh.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.metadataStage2.test.tsx`: `3/3`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the document-intelligence split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` now keeps the closed-default export and schedule-refresh modals off the base `/media` route body. Their inline JSX moved into `apps/packages/ui/src/components/Media/ContentViewerActionModals.tsx`, and the selected-media view now mounts that host through `React.lazy` only when one of those modals is actually open.
+- That modal-host extraction produced another packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `233,386` -> `229,586`
+  - new deferred chunk: `ContentViewerActionModals-*.js` at `4,222`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The practical effect is that the default `/media` reading path no longer pays for the export and refresh scheduling workflows before the user opens either dialog. Those workflows still render correctly on demand, but they are now a real interaction-time cost instead of a route-entry cost.
+- Focused verification for the modal-host extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `52/52`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.export.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.scheduleRefresh.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.intelligence.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.metadataStage2.test.tsx`: `3/3`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the modal-host split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `python -m bandit -r ... -f json -o /tmp/bandit_media_action_modals_perf_2026_03_24.json`: `0` findings; `8` expected AST parse errors for TS/TSX/Markdown inputs
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` now keeps the lower metadata section body off the base `/media` route body until the user actually expands the collapsed Metadata panel. The section body moved into `apps/packages/ui/src/components/Media/ContentViewerMetadataSectionBody.tsx`, while the toggle/header stays synchronous so the default viewer chrome remains immediate.
+- That metadata-section extraction produced another packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `229,586` -> `228,484`
+  - new deferred chunk: `ContentViewerMetadataSectionBody-*.js` at `1,518`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The practical effect is smaller than the earlier document-intelligence and modal-host cuts, but it is still real: the default `/media` reading path no longer pays for another collapsed-by-default detail panel before the user asks for it.
+- Focused verification for the metadata-section extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `53/53`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.metadataStage2.test.tsx`: `4/4`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.export.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.scheduleRefresh.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.intelligence.test.tsx`: `3/3`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the metadata-section split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `python -m bandit -r ... -f json -o /tmp/bandit_media_metadata_section_perf_2026_03_24.json`: `0` findings; `9` expected AST parse errors for TS/TSX/Markdown inputs
+- `apps/packages/ui/src/components/Review/ViewMediaPage.tsx` now keeps the closed-default bulk toolbar off the base `/media` route body. The toolbar moved into `apps/packages/ui/src/components/Review/MediaBulkToolbar.tsx` and now mounts through `React.lazy` only when bulk-selection mode is actually enabled.
+- That bulk-toolbar extraction produced another packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `228,484` -> `224,056`
+  - new deferred chunk: `MediaBulkToolbar-*.js` at `4,849`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The important tradeoff is that this was both a real route-entry win and a mostly structural move. The default `/media` reading path is smaller by about `4.4 KB`, while the bulk toolbar now becomes a pure interaction-time cost when selection mode opens.
+- The extraction also exposed two real behavior bugs, both fixed during the same pass:
+  - `apps/packages/ui/src/components/Review/hooks/useMediaSelection.ts` was calling `bgRequest(...)` without importing it, which broke bulk delete and bulk keyword actions.
+  - `apps/packages/ui/src/components/Review/ViewMediaPage.tsx` was letting "select visible" operate on raw `search.results` instead of the active filtered `displayResults`, which could let collection-scoped bulk actions target hidden items.
+- Focused verification for the bulk-toolbar extraction and related behavior fixes stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `54/54`
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.stage14.bulk-actions.test.tsx`: `7/7`
+  - combined media-focused Vitest pack (`ViewMediaPage.stage14.bulk-actions`, `ContentViewer.metadataStage2`, `ContentViewer.stage14.export`, `ContentViewer.stage14.scheduleRefresh`, `ContentViewer.stage14.intelligence`): `18/18`
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the bulk-toolbar split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `bun run build:chrome`: passed after the bulk-toolbar split
+  - `python -m bandit -r ... -f json -o /tmp/bandit_media_bulk_toolbar_perf_2026_03_24.json`: `0` findings; `6` expected AST parse errors for TS/TSX/Markdown inputs
+- `apps/packages/ui/src/components/Review/ViewMediaPage.tsx` now keeps the conditional section navigator off the base `/media` route body. `MediaSectionNavigator` is no longer statically imported; it now mounts through `React.lazy` only when navigation is enabled and the section panel is actually being rendered.
+- That navigator extraction produced another packaged MV3 route-body reduction:
+  - `option-media-view-route-registry-*.js`: `224,056` -> `219,823`
+  - new deferred chunk: `MediaSectionNavigator-*.js` at `5,690`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The important effect is that the default `/media` reading path no longer pays for the section-tree UI before the user opens the navigation panel. This is a cleaner route-entry win than another tiny modal split because the navigator is a meaningful secondary surface rather than a one-off dialog.
+- Focused verification for the navigator extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `55/55`
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.stage12.performance.test.tsx`: `12/12`
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.stage14.bulk-actions.test.tsx`: `7/7`
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.search-experience.integration.test.tsx`: `2/2`
+  - `bun run build:chrome`: passed after the navigator split
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the navigator split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `python -m bandit -r ... -f json -o /tmp/bandit_media_section_navigator_perf_2026_03_24.json`: `0` findings; `3` expected AST parse errors for TS/TSX/Markdown inputs
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` no longer mounts `ContentEditModal` just because a media item is selected. The modal was already lazy-imported, but it was still rendered on every selected-media path with `open={false}`, which meant the chunk could load even when the edit dialog never opened. It now mounts only when `editState.contentEditModalOpen` is true.
+- That content-edit fix is best understood as a runtime-path cleanup, not a meaningful route-body shrink:
+  - `option-media-view-route-registry-*.js`: `219,823` -> `219,851`
+  - deferred chunk: `ContentEditModal-*.js` at `4,050`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The important effect is that the closed edit dialog is now genuinely off the default `/media` viewer path. The bundle math stayed effectively flat because this change removed an eager runtime mount rather than a large static import, but it still fixes a real lazy-boundary leak.
+- Focused verification for the content-edit lazy fix stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `56/56`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.metadataStage2.test.tsx`: `4/4`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.export.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.scheduleRefresh.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage14.intelligence.test.tsx`: `3/3`
+  - `bun run build:chrome`: passed after the content-edit lazy fix
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the content-edit lazy fix. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `python -m bandit -r ... -f json -o /tmp/bandit_media_content_edit_modal_perf_2026_03_24.json`: `0` findings; `3` expected AST parse errors for TS/TSX/Markdown inputs
+- `apps/packages/ui/src/components/Media/ContentViewer.tsx` no longer statically imports `MarkdownPreview`. The markdown rendering branch now lazy-loads `apps/packages/ui/src/components/Common/MarkdownPreview.tsx` only when markdown mode is actually active, with a plain-text fallback shown while the chunk resolves.
+- This markdown split is another runtime-path cleanup rather than a meaningful packaged byte win:
+  - `option-media-view-route-registry-*.js`: `219,851` -> `220,062`
+  - deferred chunks: `MarkdownPreview-*.js` at `870`, `Markdown-*.js` at `44,833`
+  - shared `react-instance-check-*.js`: unchanged at `2,382,515`
+- The practical effect is that the default `/media` reader no longer pays to resolve the markdown preview path until markdown mode is selected, but the bundle graph stays essentially flat because the original static boundary was already thin and the heavy markdown renderer was already chunked.
+- Focused verification for the markdown lazy split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `57/57`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage2.test.tsx`: `3/3`
+  - `apps/packages/ui/src/components/Media/__tests__/ContentViewer.stage3.test.tsx`: `3/3`
+  - `bun run build:chrome`: passed after the markdown lazy split
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the markdown lazy split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `python -m bandit -r ... -f json -o /tmp/bandit_media_markdown_lazy_perf_2026_03_24.json`: `0` findings; `4` expected AST parse errors for TS/TSX/Markdown inputs
+- `apps/packages/ui/src/components/Option/Characters/CharacterListContent.tsx` no longer statically imports the gallery-only preview surface. `CharacterGalleryCard` now loads through `React.lazy` only when `viewMode === "gallery"`, and `CharacterPreviewPopup` now loads through `React.lazy` only when `previewCharacter` is present.
+- That characters gallery-path split produced a real packaged MV3 route-body reduction:
+  - `option-characters-*.js`: `198,893` -> `185,648`
+  - deferred chunks:
+    - `CharacterGalleryCard-*.js`: `4,044`
+    - `CharacterPreviewPopup-*.js`: `7,027`
+    - `CharacterPreview-*.js`: `3,132`
+- The practical effect is that the default characters manager path no longer pays for gallery-only chrome before the user switches view or opens a preview. This is a real route-body win of `13,245` bytes, roughly `6.7%`, and it is a better fit than trying to over-split the already-deferred dialogs.
+- Focused verification for the characters gallery-path split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `58/58`
+  - `apps/packages/ui/src/components/Option/Characters/__tests__/Manager.first-use.test.tsx`: gallery density, quick-chat preview, and world-book preview states all passed
+  - `bun run build:chrome`: passed after the characters split
+- `apps/packages/ui/src/components/Option/WritingPlayground/index.tsx` no longer embeds the closed-default writing workspace modals in the base route body. Those secondary surfaces now live in `apps/packages/ui/src/components/Option/WritingPlayground/WritingPlaygroundModalHost.tsx`, which mounts through `React.lazy` only when one of the extra-body/context-preview/template/theme/create/rename dialogs is actually open. The always-mounted session and snapshot import inputs intentionally stay in the base route because their actions are triggered outside the modal cluster.
+- That writing modal-host extraction produced a real packaged MV3 route-body reduction:
+  - `option-writing-playground-*.js`: `171,269` -> `160,421`
+  - new deferred chunk: `WritingPlaygroundModalHost-*.js` at `14,987`
+- The practical effect is that the default writing workspace path no longer pays for the large secondary management/editing dialog cluster before the user opens it. This is a real route-body win of `10,848` bytes, about `6.3%`, and it is a cleaner split than trying to peel off the always-visible editor shell.
+- Focused verification for the writing modal-host extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `59/59`
+  - `apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.phase1-baseline.test.tsx`: `9/9`
+  - `apps/packages/ui/src/components/Option/WritingPlayground/__tests__/WritingPlayground.inspector-tabs.test.tsx`: `5/5`
+  - `bun run build:chrome`: passed after the writing split
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: passed outside the sandbox after the writing split. The same harness caveat remains in the diagnostic output: raw Playwright-evaluated `chrome.runtime` callback/promise/port pings still time out, but the real packaged `options.html` and `sidepanel.html#/chat` surfaces render correctly with seeded config.
+  - `python -m bandit -r ... -f json -o /tmp/bandit_writing_modal_host_perf_2026_03_24.json`: `0` findings; `3` expected AST parse errors for TS/TSX inputs
+- `apps/packages/ui/src/components/Option/Prompt/index.tsx` no longer statically imports gallery-only or empty-state prompt surfaces. `PromptGalleryCard`, `PromptStarterCards`, and `ContextualHint` now mount through `React.lazy` only when gallery mode, the empty starter template state, or the keyboard-shortcuts hint is actually visible. The default table path remains eager.
+- That prompt route split produced a real packaged MV3 route-body reduction:
+  - `option-prompts-*.js`: `167,725` -> `161,038`
+  - new deferred chunks:
+    - `PromptGalleryCard-*.js`: `3,382`
+    - `PromptStarterCards-*.js`: `4,824`
+    - `ContextualHint-*.js`: `723`
+- The practical effect is that the base prompts manager path no longer pays for gallery cards or empty-state helper chrome before the user reaches those states. This is a real route-body win of `6,687` bytes, about `4.0%`, and it keeps the default table/list workspace as the hot path.
+- Focused verification for the prompts gallery and empty-state split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `60/60`
+  - `apps/packages/ui/src/components/Option/Prompt/__tests__/PromptGalleryCard.test.tsx`: `11/11`
+  - `apps/packages/ui/src/components/Option/Prompt/__tests__/PromptStarterCards.structured-prompts.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Option/Prompt/__tests__/PromptBody.search-pagination.test.tsx`: `42/42`
+  - `bun run build:chrome`: passed after the prompt split
+- `apps/packages/ui/src/components/Notes/NotesEditorPane.tsx` no longer statically imports `MarkdownPreview`. The preview and split-preview surfaces now lazy-load `apps/packages/ui/src/components/Common/MarkdownPreview.tsx` only when preview mode is actually active, while the editor path stays synchronous.
+- That notes editor preview split was mostly a runtime-path cleanup rather than a meaningful packaged route-body reduction:
+  - `option-notes-*.js`: `188,898` -> `188,833`
+  - deferred chunks:
+    - `MarkdownPreview-*.js`: `870`
+    - `Markdown-*.js`: `44,833`
+- The practical effect is that the default notes editor path no longer resolves the preview renderer until preview mode is entered. The bundle delta is effectively flat because the original static boundary was already thin and the heavy markdown renderer was already chunked, but it still closes a real lazy-boundary leak.
+- Focused verification for the notes preview split stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: red on the new markdown-preview guard, then green after the split
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage2.editor-modes.test.tsx`: `2/2`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage29.large-preview-guardrails.test.tsx`: `2/2`
+  - `bun run build:chrome`: passed after the markdown-preview split
+- `apps/packages/ui/src/components/Notes/NotesListPanel.tsx` no longer embeds the demo/offline/capability-missing/empty-notes helper surfaces in the base list route body. Those cold-path surfaces now live in `apps/packages/ui/src/components/Notes/NotesListPanelEmptyStates.tsx`, which mounts through `React.lazy` only when the list is offline, unsupported, or empty.
+- That notes empty-state extraction produced a real packaged MV3 route-body reduction:
+  - `option-notes-*.js`: `188,833` -> `184,389`
+  - new deferred chunks:
+    - `NotesListPanelEmptyStates-*.js`: `4,948`
+    - `FeatureEmptyState-*.js`: `1,621`
+- The practical effect is that the hot notes-list path no longer pays for demo-mode, connection-problem, capability-missing, or empty-trash helper chrome before those states are actually needed. This is a real route-body win of `4,444` bytes from the prior notes baseline, about `2.4%`, and it is a better notes-specific win than the markdown-preview cleanup alone.
+- Focused verification for the notes empty-state extraction stayed clean:
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: `62/62`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesListPanel.stage19.quick-save-hint.test.tsx`: `1/1`
+  - `apps/packages/ui/src/components/Notes/__tests__/NotesListPanel.stage17.large-list.test.tsx`: `1/1`
+  - combined notes-focused pack (`NotesManagerPage.stage2.editor-modes`, `NotesManagerPage.stage29.large-preview-guardrails`, `NotesListPanel.stage19.quick-save-hint`, `NotesListPanel.stage17.large-list`): `6/6`
+  - `bun run build:chrome`: passed after the empty-state extraction
+- The character route split itself remained valid, but isolated cold-start Vitest runs exposed a test-harness contract gap: edit-flow tests were waiting for the lazily imported drawer submit button with the default short `waitFor` budget, so the first isolated edit test could fail before `CharacterDialogs` and `CharacterEditorForm` finished resolving.
+- The fix stayed in the test layer rather than adding more production prefetch. `apps/packages/ui/src/components/Option/Characters/__tests__/Manager.first-use.test.tsx` now uses a shared `findEditSubmitButton()` helper with a `15000ms` timeout for edit-flow entry, which matches the real lazy-boundary behavior under cold isolated runs while keeping the perf split intact.
+- Focused verification for the character edit lazy-load contract stayed clean:
+  - isolated edit-flow pack in `apps/packages/ui/src/components/Option/Characters/__tests__/Manager.first-use.test.tsx`: `3/3`
+  - `apps/tldw-frontend/__tests__/extension/entry-shell-performance.test.ts`: targeted character prompt-payload guard passed
+  - `python -m bandit -r ... -f json -o /tmp/bandit_character_edit_lazy_contract.json`: `0` findings; only expected AST parse errors for TS/TSX inputs
+- Follow-up cleanup retired the last misleading extension runtime harness debt instead of carrying it forward as a standing caveat:
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts` no longer runs raw Playwright-evaluated `chrome.runtime` callback/promise/port probes or fake `e2e:test-listener` checks. It now validates seeded config, service worker presence, and the real packaged `options.html` plus `sidepanel.html#/chat` surfaces only.
+  - `apps/extension/tests/e2e/utils/extension.ts` no longer injects a synthetic runtime listener or log timeout noise during unpacked extension launches.
+  - `apps/extension/tests/e2e/context-menu-actions.spec.ts` now verifies real `action.onClicked` and `contextMenus.onClicked` listener registration instead of depending on the synthetic listener.
+- Focused verification for that harness cleanup stayed clean:
+  - `apps/extension/tests/e2e/built-extension-runtime.spec.ts`: `1/1` passed outside the sandbox
+  - `apps/extension/tests/e2e/background-proxy-api.spec.ts`: `2/2` passed outside the sandbox
+  - `apps/extension/tests/e2e/context-menu-actions.spec.ts`: `2/2` passed, `1` intentionally skipped outside the sandbox
+  - `python -m bandit -r ... -f json -o /tmp/bandit_extension_runtime_harness_cleanup.json`: `0` findings
+- This closes the recurring runtime-review caveat from earlier entries: the packaged runtime review no longer emits raw probe timeouts, and the remaining extension coverage is anchored to real packaged or unpacked app paths rather than synthetic runtime ping diagnostics.

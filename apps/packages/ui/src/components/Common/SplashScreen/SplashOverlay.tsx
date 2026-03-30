@@ -61,6 +61,7 @@ const SplashOverlay: React.FC<SplashOverlayProps> = ({ card, message, onDismiss 
         alignItems: "center",
         justifyContent: "center",
         cursor: "pointer",
+        pointerEvents: fading ? "none" : "auto",
         opacity: fading ? 0 : 1,
         transition: "opacity 0.3s ease-out",
       }}

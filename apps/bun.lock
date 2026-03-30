@@ -28,7 +28,7 @@
         "@tailwindcss/typography": "^0.5.19",
         "@tanstack/react-query": "^5.90.19",
         "@tanstack/react-virtual": "^3.13.18",
-        "@tldw/ui": "file:../packages/ui",
+        "@tldw/ui": "workspace:*",
         "@vitejs/plugin-react": "^5.1.2",
         "@xyflow/react": "^12.10.0",
         "antd": "^6.2.0",
@@ -144,7 +144,7 @@
         "cytoscape-dagre": "^2.0.0",
         "dayjs": "^1.0.0",
         "dexie": "^4.0.0",
-        "dexie-react-hooks": "^1.0.0",
+        "dexie-react-hooks": ">=1.0.0 <2.0.0",
         "dompurify": "^3.0.0",
         "epubjs": "^0.3.93",
         "gpt-tokenizer": "^3.4.0",
@@ -154,11 +154,11 @@
         "jszip": "^3.10.1",
         "katex": "^0.16.0",
         "lucide-react": "^0.500.0",
-        "marked": "^15.0.0",
+        "marked": ">=15.0.0 <16.0.0",
         "mermaid": "^10.0.0",
         "pdfjs-dist": "^4.0.0",
         "prism-react-renderer": "^2.0.0",
-        "property-information": "^6.0.0",
+        "property-information": ">=6.0.0 <7.0.0",
         "react": "^18.0.0",
         "react-dom": "^18.0.0",
         "react-i18next": "^16.0.0",
@@ -167,7 +167,7 @@
         "react-markdown": "^10.1.0",
         "react-pdf": "^9.0.0",
         "react-router-dom": "^6.0.0",
-        "react-toastify": "^10.0.0",
+        "react-toastify": ">=10.0.0 <11.0.0",
         "rehype-katex": "^7.0.1",
         "remark-gfm": "^4.0.1",
         "remark-math": "^6.0.0",
@@ -175,7 +175,7 @@
         "wxt": "^0.20.0",
         "xlsx": "^0.18.0",
         "xterm": "^5.3.0",
-        "zustand": "^4.0.0",
+        "zustand": ">=4.0.0 <5.0.0",
       },
     },
     "packages/voice-assistant-sdk": {
@@ -213,7 +213,7 @@
         "@radix-ui/react-dialog": "^1.1.4",
         "@tanstack/react-query": "^5.90.19",
         "@tanstack/react-virtual": "^3.13.18",
-        "@tldw/ui": "file:../packages/ui",
+        "@tldw/ui": "workspace:*",
         "@xterm/addon-fit": "^0.11.0",
         "ajv": "^8.17.1",
         "antd": "^6.2.0",
@@ -243,11 +243,9 @@
         "next": "^16.1.3",
         "pa-tesseract.js": "^5.1.1",
         "pdfjs-dist": "^4.10.38",
-        "playwright": "^1.58.0",
         "prism-react-renderer": "^2.4.1",
         "property-information": "^7.1.0",
         "pubsub-js": "^1.9.5",
-        "puppeteer": "^24.36.0",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
         "react-hook-form": "^7.52.0",
@@ -305,9 +303,11 @@
         "fake-indexeddb": "^6.2.5",
         "globals": "^16.5.0",
         "jsdom": "^27.3.0",
+        "playwright": "^1.58.0",
         "postcss": "^8.5.6",
         "postcss-import": "^16.1.1",
         "prettier": "^3.7.4",
+        "puppeteer": "^24.36.0",
         "typescript": "^5.6.2",
         "vite": "^7.3.1",
         "vitest": "^4.0.16",
@@ -3565,8 +3565,6 @@
 
     "tailwindcss/postcss-import": ["postcss-import@15.1.0", "", { "dependencies": { "postcss-value-parser": "^4.0.0", "read-cache": "^1.0.0", "resolve": "^1.1.7" }, "peerDependencies": { "postcss": "^8.0.0" } }, "sha512-hpr+J05B2FVYUAXHeK1YyI267J/dDDhMU6B6civm8hSY1jYJnBXxzKDKDswzJmtLHryrjhnDjqqp/49t8FALew=="],
 
-    "tldw-assistant/@tldw/ui": ["@tldw/ui@file:packages/ui", { "devDependencies": { "@testing-library/jest-dom": "^6.9.1", "@testing-library/react": "^16.3.1", "@testing-library/user-event": "^14.6.1", "@types/react": "^18.3.3", "@types/react-dom": "^18.3.1", "axe-core": "^4.11.1", "jsdom": "^28.1.0", "vitest": "^4.0.16" }, "peerDependencies": { "@ant-design/cssinjs": "^2.0.3", "@ant-design/icons": "*", "@dnd-kit/collision": "^0.1.21", "@dnd-kit/dom": "^0.1.21", "@dnd-kit/helpers": "^0.1.21", "@dnd-kit/react": "^0.1.21", "@heroicons/react": "^2.2.0", "@monaco-editor/react": "^4.6.0", "@mozilla/readability": "^0.6.0", "@plasmohq/storage": "^1.15.0", "@tanstack/react-query": "^5.0.0", "@tanstack/react-virtual": "^3.0.0", "@xterm/addon-fit": "^0.11.0", "@xyflow/react": "^12.0.0", "antd": "^6.2.0", "axios": "^1.0.0", "cheerio": "^1.0.0", "cytoscape": "^3.0.0", "cytoscape-dagre": "^2.0.0", "dayjs": "^1.0.0", "dexie": "^4.0.0", "dexie-react-hooks": "^1.0.0", "dompurify": "^3.0.0", "epubjs": "^0.3.93", "gpt-tokenizer": "^3.4.0", "html2canvas": "^1.0.0", "i18next": "^25.0.0", "i18next-icu": "^2.4.1", "jszip": "^3.10.1", "katex": "^0.16.0", "lucide-react": "^0.500.0", "marked": "^15.0.0", "mermaid": "^10.0.0", "pdfjs-dist": "^4.0.0", "prism-react-renderer": "^2.0.0", "property-information": "^6.0.0", "react": "^18.0.0", "react-dom": "^18.0.0", "react-i18next": "^16.0.0", "react-icons": "^5.0.0", "react-joyride": "^2.9.0", "react-markdown": "^10.1.0", "react-pdf": "^9.0.0", "react-router-dom": "^6.0.0", "react-toastify": "^10.0.0", "rehype-katex": "^7.0.1", "remark-gfm": "^4.0.1", "remark-math": "^6.0.0", "turndown": "^7.0.0", "wxt": "^0.20.0", "xlsx": "^0.18.0", "xterm": "^5.3.0", "zustand": "^4.0.0" } }],
-
     "tldw-assistant/@types/react": ["@types/react@18.2.48", "", { "dependencies": { "@types/prop-types": "*", "@types/scheduler": "*", "csstype": "^3.0.2" } }, "sha512-qboRCl6Ie70DQQG9hhNREz81jqC1cs9EVNcjQ1AU+jH6NFfSAhVVbrrY/+nSF+Bsk4AOwm9Qa61InvMCyV+H3w=="],
 
     "tldw-assistant/@types/react-dom": ["@types/react-dom@18.2.18", "", { "dependencies": { "@types/react": "*" } }, "sha512-TJxDm6OfAX2KJWJdMEVTwWke5Sc/E/RlnPGvGfS0W7+6ocy2xhDVQVh/KvC2Uf7kACs+gDytdusDSdWfWkaNzw=="],
@@ -3578,8 +3576,6 @@
     "tldw-assistant/react-dom": ["react-dom@18.2.0", "", { "dependencies": { "loose-envify": "^1.1.0", "scheduler": "^0.23.0" }, "peerDependencies": { "react": "^18.2.0" } }, "sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g=="],
 
     "tldw-frontend/@ant-design/icons": ["@ant-design/icons@5.6.1", "", { "dependencies": { "@ant-design/colors": "^7.0.0", "@ant-design/icons-svg": "^4.4.0", "@babel/runtime": "^7.24.8", "classnames": "^2.2.6", "rc-util": "^5.31.1" }, "peerDependencies": { "react": ">=16.0.0", "react-dom": ">=16.0.0" } }, "sha512-0/xS39c91WjPAZOWsvi1//zjx6kAp4kxWwctR6kuU6p133w8RU0D2dSCvZC19uQyharg/sAvYxGYWl01BbZZfg=="],
-
-    "tldw-frontend/@tldw/ui": ["@tldw/ui@file:packages/ui", { "devDependencies": { "@testing-library/jest-dom": "^6.9.1", "@testing-library/react": "^16.3.1", "@testing-library/user-event": "^14.6.1", "@types/react": "^18.3.3", "@types/react-dom": "^18.3.1", "axe-core": "^4.11.1", "jsdom": "^28.1.0", "vitest": "^4.0.16" }, "peerDependencies": { "@ant-design/cssinjs": "^2.0.3", "@ant-design/icons": "*", "@dnd-kit/collision": "^0.1.21", "@dnd-kit/dom": "^0.1.21", "@dnd-kit/helpers": "^0.1.21", "@dnd-kit/react": "^0.1.21", "@heroicons/react": "^2.2.0", "@monaco-editor/react": "^4.6.0", "@mozilla/readability": "^0.6.0", "@plasmohq/storage": "^1.15.0", "@tanstack/react-query": "^5.0.0", "@tanstack/react-virtual": "^3.0.0", "@xterm/addon-fit": "^0.11.0", "@xyflow/react": "^12.0.0", "antd": "^6.2.0", "axios": "^1.0.0", "cheerio": "^1.0.0", "cytoscape": "^3.0.0", "cytoscape-dagre": "^2.0.0", "dayjs": "^1.0.0", "dexie": "^4.0.0", "dexie-react-hooks": "^1.0.0", "dompurify": "^3.0.0", "epubjs": "^0.3.93", "gpt-tokenizer": "^3.4.0", "html2canvas": "^1.0.0", "i18next": "^25.0.0", "i18next-icu": "^2.4.1", "jszip": "^3.10.1", "katex": "^0.16.0", "lucide-react": "^0.500.0", "marked": "^15.0.0", "mermaid": "^10.0.0", "pdfjs-dist": "^4.0.0", "prism-react-renderer": "^2.0.0", "property-information": "^6.0.0", "react": "^18.0.0", "react-dom": "^18.0.0", "react-i18next": "^16.0.0", "react-icons": "^5.0.0", "react-joyride": "^2.9.0", "react-markdown": "^10.1.0", "react-pdf": "^9.0.0", "react-router-dom": "^6.0.0", "react-toastify": "^10.0.0", "rehype-katex": "^7.0.1", "remark-gfm": "^4.0.1", "remark-math": "^6.0.0", "turndown": "^7.0.0", "wxt": "^0.20.0", "xlsx": "^0.18.0", "xterm": "^5.3.0", "zustand": "^4.0.0" } }],
 
     "tldw-frontend/d3-dsv": ["d3-dsv@3.0.1", "", { "dependencies": { "commander": "7", "iconv-lite": "0.6", "rw": "1" }, "bin": { "csv2json": "bin/dsv2json.js", "csv2tsv": "bin/dsv2dsv.js", "dsv2dsv": "bin/dsv2dsv.js", "dsv2json": "bin/dsv2json.js", "json2csv": "bin/json2dsv.js", "json2dsv": "bin/json2dsv.js", "json2tsv": "bin/json2dsv.js", "tsv2csv": "bin/dsv2dsv.js", "tsv2json": "bin/dsv2json.js" } }, "sha512-UG6OvdI5afDIFP9w4G0mNq50dSOsXHJaRE8arAS5o9ApWnIElp8GZw1Dun8vP8OyHOZ/QJUKUJwxiiCCnUwm+Q=="],
 
@@ -3765,27 +3761,9 @@
 
     "tailwindcss/chokidar/readdirp": ["readdirp@3.6.0", "", { "dependencies": { "picomatch": "^2.2.1" } }, "sha512-hOS089on8RduqdbhvQ5Z37A0ESjsqz6qnRcffsMU3495FuTdqSm+7bhJ29JvIOsBDEEnan5DPu9t3To9VRlMzA=="],
 
-    "tldw-assistant/@tldw/ui/@types/react": ["@types/react@18.3.27", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-cisd7gxkzjBKU2GgdYrTdtQx1SORymWyaAFhaxQPK9bYO9ot3Y5OikQRvY0VYQtvwjeQnizCINJAenh/V7MK2w=="],
-
-    "tldw-assistant/@tldw/ui/@types/react-dom": ["@types/react-dom@18.3.7", "", { "peerDependencies": { "@types/react": "^18.0.0" } }, "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ=="],
-
-    "tldw-assistant/@tldw/ui/lucide-react": ["lucide-react@0.562.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-82hOAu7y0dbVuFfmO4bYF1XEwYk/mEbM5E+b1jgci/udUBEE/R7LF5Ip0CCEmXe8AybRM8L+04eP+LGZeDvkiw=="],
-
     "tldw-assistant/@types/react-dom/@types/react": ["@types/react@18.3.27", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-cisd7gxkzjBKU2GgdYrTdtQx1SORymWyaAFhaxQPK9bYO9ot3Y5OikQRvY0VYQtvwjeQnizCINJAenh/V7MK2w=="],
 
     "tldw-frontend/@ant-design/icons/@ant-design/colors": ["@ant-design/colors@7.2.1", "", { "dependencies": { "@ant-design/fast-color": "^2.0.6" } }, "sha512-lCHDcEzieu4GA3n8ELeZ5VQ8pKQAWcGGLRTQ50aQM2iqPpq2evTxER84jfdPvsPAtEcZ7m44NI45edFMo8oOYQ=="],
-
-    "tldw-frontend/@tldw/ui/dexie-react-hooks": ["dexie-react-hooks@1.1.7", "", { "peerDependencies": { "@types/react": ">=16", "dexie": "^3.2 || ^4.0.1-alpha", "react": ">=16" } }, "sha512-Lwv5W0Hk+uOW3kGnsU9GZoR1er1B7WQ5DSdonoNG+focTNeJbHW6vi6nBoX534VKI3/uwHebYzSw1fwY6a7mTw=="],
-
-    "tldw-frontend/@tldw/ui/jsdom": ["jsdom@28.1.0", "", { "dependencies": { "@acemir/cssom": "^0.9.31", "@asamuzakjp/dom-selector": "^6.8.1", "@bramus/specificity": "^2.4.2", "@exodus/bytes": "^1.11.0", "cssstyle": "^6.0.1", "data-urls": "^7.0.0", "decimal.js": "^10.6.0", "html-encoding-sniffer": "^6.0.0", "http-proxy-agent": "^7.0.2", "https-proxy-agent": "^7.0.6", "is-potential-custom-element-name": "^1.0.1", "parse5": "^8.0.0", "saxes": "^6.0.0", "symbol-tree": "^3.2.4", "tough-cookie": "^6.0.0", "undici": "^7.21.0", "w3c-xmlserializer": "^5.0.0", "webidl-conversions": "^8.0.1", "whatwg-mimetype": "^5.0.0", "whatwg-url": "^16.0.0", "xml-name-validator": "^5.0.0" }, "peerDependencies": { "canvas": "^3.0.0" }, "optionalPeers": ["canvas"] }, "sha512-0+MoQNYyr2rBHqO1xilltfDjV9G7ymYGlAUazgcDLQaUf8JDHbuGwsxN6U9qWaElZ4w1B2r7yEGIL3GdeW3Rug=="],
-
-    "tldw-frontend/@tldw/ui/marked": ["marked@15.0.12", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA=="],
-
-    "tldw-frontend/@tldw/ui/property-information": ["property-information@6.5.0", "", {}, "sha512-PgTgs/BlvHxOu8QuEN7wi5A0OmXaBcHpmCSTehcs6Uuu9IkDIEo13Hy7n898RHfrQ49vKCoGeWZSaAK01nwVig=="],
-
-    "tldw-frontend/@tldw/ui/react-toastify": ["react-toastify@10.0.6", "", { "dependencies": { "clsx": "^2.1.0" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, "sha512-yYjp+omCDf9lhZcrZHKbSq7YMuK0zcYkDFTzfRFgTXkTFHZ1ToxwAonzA4JI5CxA91JpjFLmwEsZEgfYfOqI1A=="],
-
-    "tldw-frontend/@tldw/ui/zustand": ["zustand@4.5.7", "", { "dependencies": { "use-sync-external-store": "^1.2.2" }, "peerDependencies": { "@types/react": ">=16.8", "immer": ">=9.0.6", "react": ">=16.8" }, "optionalPeers": ["@types/react", "immer", "react"] }, "sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw=="],
 
     "tldw-frontend/d3-dsv/commander": ["commander@7.2.0", "", {}, "sha512-QrWXB+ZQSVPmIWIhtEO9H+gwHaMGYiF5ChvoJ+K9ZGHG/sVsa6yiesAD1GC/x46sET00Xlwo1u49RVVVzvcSkw=="],
 

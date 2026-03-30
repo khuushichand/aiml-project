@@ -1,6 +1,6 @@
 import React from "react"
 import { PlaygroundForm } from "./PlaygroundForm"
-import { PlaygroundChat, type PlaygroundChatHandle } from "./PlaygroundChat"
+import { PlaygroundChat } from "./PlaygroundChat"
 import { ChatErrorBoundary } from "@/components/Common/Playground/ChatErrorBoundary"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
@@ -15,18 +15,18 @@ import {
 } from "@/db/dexie/helpers"
 import { useStoreChatModelSettings } from "@/store/model"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
-import { ChevronDown, ClipboardList, Keyboard, Search, X } from "lucide-react"
+import { ChevronDown, Keyboard, Search, X } from "lucide-react"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { useTranslation } from "react-i18next"
 import { useStoreMessageOption } from "@/store/option"
 import { useArtifactsStore } from "@/store/artifacts"
-import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
 import { useSetting } from "@/hooks/useSetting"
 import { useStorage } from "@plasmohq/storage/hook"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useLoadLocalConversation } from "@/hooks/useLoadLocalConversation"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { resolvePlaygroundShortcutAction } from "./playground-shortcuts"
 import {
   EDIT_MESSAGE_EVENT,
@@ -37,10 +37,29 @@ import {
 } from "@/utils/timeline-actions"
 import { useCharacterGreeting } from "@/hooks/useCharacterGreeting"
 import {
+  applyChatSettingsPatch,
+  syncChatSettingsForServerChat
+} from "@/services/chat-settings"
+import {
+  buildResearchFollowUpPrompt,
+  clearAttachedResearchContext,
+  deriveAttachedResearchContext,
+  fromPersistedDeepResearchAttachment,
+  pinAttachedResearchContext,
+  resetAttachedResearchContext,
+  restorePinnedResearchContext,
+  setAttachedResearchContextActive,
+  toPersistedDeepResearchAttachment,
+  unpinAttachedResearchContext,
+  type AttachedResearchContext,
+  type ResearchFollowUpTarget
+} from "./research-chat-context"
+import {
   collectThreadSearchMatches,
   getWrappedMatchIndex
 } from "./playground-thread-search"
 import {
+  RESEARCH_RETURN_RUN_ID_PARAM,
   SETTINGS_HISTORY_ID_PARAM,
   SETTINGS_SERVER_CHAT_ID_PARAM
 } from "@/utils/settings-return"
@@ -50,6 +69,24 @@ import { useNavigate } from "react-router-dom"
 const toText = (value: unknown): string =>
   typeof value === "string" ? value : String(value)
 
+const LazyArtifactsPanel = React.lazy(() =>
+  import("@/components/Sidepanel/Chat/ArtifactsPanel").then((module) => ({
+    default: module.ArtifactsPanel
+  }))
+)
+
+const renderArtifactsPanel = () => (
+  <React.Suspense
+    fallback={
+      <div className="flex h-full items-center justify-center text-sm text-text-muted">
+        Loading artifacts...
+      </div>
+    }
+  >
+    <LazyArtifactsPanel />
+  </React.Suspense>
+)
+
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -57,8 +94,19 @@ export const Playground = () => {
   const shortcutsTriggerRef = React.useRef<HTMLButtonElement>(null)
   const shortcutsCloseRef = React.useRef<HTMLButtonElement>(null)
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([])
+  const [attachedResearchContext, setAttachedResearchContext] =
+    React.useState<AttachedResearchContext | null>(null)
+  const [attachedResearchContextBaseline, setAttachedResearchContextBaseline] =
+    React.useState<AttachedResearchContext | null>(null)
+  const [attachedResearchContextPinned, setAttachedResearchContextPinned] =
+    React.useState<AttachedResearchContext | null>(null)
+  const [attachedResearchContextHistory, setAttachedResearchContextHistory] =
+    React.useState<AttachedResearchContext[]>([])
+  const [pendingReturnedResearchRunId, setPendingReturnedResearchRunId] =
+    React.useState<string | null>(null)
+  const [dismissedReturnedResearchRunId, setDismissedReturnedResearchRunId] =
+    React.useState<string | null>(null)
   const { t } = useTranslation(["playground", "common"])
-  const navigate = useNavigate()
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const [stickyChatInput] = useStorage(
     "stickyChatInput",
@@ -88,8 +136,6 @@ export const Playground = () => {
   const { setSystemPrompt } = useStoreChatModelSettings()
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
     useSmartScroll(messages, streaming, 120)
-  const playgroundChatRef = React.useRef<PlaygroundChatHandle>(null)
-
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
   >("idle")
@@ -109,8 +155,14 @@ export const Playground = () => {
     ReturnType<typeof setTimeout> | null
   >(null)
   const initializePlaygroundRef = React.useRef(false)
+  const previousThreadRef = React.useRef<string | null>(null)
+  const stableHistoryId =
+    historyId && historyId !== "temp" ? historyId : null
   const setRouteContext = useChatSurfaceCoordinatorStore(
     (state) => state.setRouteContext
+  )
+  const setSelectedQuickPrompt = useStoreMessageOption(
+    (state) => state.setSelectedQuickPrompt
   )
 
   React.useEffect(() => {
@@ -171,7 +223,9 @@ export const Playground = () => {
       }
 
       const FILE_LIMIT = 5
-      const allFiles = Array.from(e.dataTransfer?.files || [])
+      const allFiles = Array.from(e.dataTransfer?.files || []).filter(
+        (file) => !otherUnsupportedTypes.includes(file.type)
+      )
       const newFiles = allFiles.slice(0, FILE_LIMIT)
       const droppedExtra = allFiles.length - newFiles.length
 
@@ -248,8 +302,335 @@ export const Playground = () => {
       if (timelineActionRetryTimeoutRef.current) {
         clearTimeout(timelineActionRetryTimeoutRef.current)
       }
+      pendingTimelineActionRef.current = null
     }
   }, [])
+
+  React.useEffect(() => {
+    const currentThreadKey = `${serverChatId ?? ""}::${historyId ?? ""}`
+    if (
+      previousThreadRef.current !== null &&
+      previousThreadRef.current !== currentThreadKey
+    ) {
+      setAttachedResearchContext(null)
+      setAttachedResearchContextBaseline(null)
+      setAttachedResearchContextPinned(null)
+      setAttachedResearchContextHistory([])
+    }
+    previousThreadRef.current = currentThreadKey
+  }, [historyId, serverChatId])
+
+  const persistAttachedResearchContext = React.useCallback(
+    async (
+      context: AttachedResearchContext | null,
+      pinned: AttachedResearchContext | null,
+      history: AttachedResearchContext[]
+    ) => {
+      if (!serverChatId || !stableHistoryId) {
+        return
+      }
+      try {
+        await applyChatSettingsPatch({
+          historyId: stableHistoryId,
+          serverChatId,
+          patch: {
+            deepResearchAttachment: context
+              ? toPersistedDeepResearchAttachment(context)
+              : null,
+            deepResearchPinnedAttachment: pinned
+              ? toPersistedDeepResearchAttachment(pinned)
+              : null,
+            deepResearchAttachmentHistory: history.map((entry) =>
+              toPersistedDeepResearchAttachment(entry, entry.attached_at)
+            )
+          }
+        })
+      } catch {
+        // Attachment persistence is best-effort and should never block chat use.
+      }
+    },
+    [serverChatId, stableHistoryId]
+  )
+
+  React.useEffect(() => {
+    if (!playgroundReady || !serverChatId || !stableHistoryId) {
+      return
+    }
+    let cancelled = false
+    const threadKey = `${serverChatId}::${stableHistoryId}`
+
+    const restorePersistedAttachment = async () => {
+      try {
+        const settings = await syncChatSettingsForServerChat({
+          historyId: stableHistoryId,
+          serverChatId
+        })
+        if (cancelled || previousThreadRef.current !== threadKey) {
+          return
+        }
+        const restoredAttachment = settings?.deepResearchAttachment
+          ? fromPersistedDeepResearchAttachment(settings.deepResearchAttachment)
+          : null
+        const restoredPinnedAttachment = settings?.deepResearchPinnedAttachment
+          ? fromPersistedDeepResearchAttachment(
+              settings.deepResearchPinnedAttachment
+            )
+          : null
+        const restoredHistory = Array.isArray(settings?.deepResearchAttachmentHistory)
+          ? settings.deepResearchAttachmentHistory.map(
+              fromPersistedDeepResearchAttachment
+            )
+          : []
+        const restoredActive = restoredAttachment ?? restoredPinnedAttachment
+        setAttachedResearchContext((current) => current ?? restoredActive)
+        setAttachedResearchContextBaseline((current) => current ?? restoredActive)
+        setAttachedResearchContextPinned(
+          (current) => current ?? restoredPinnedAttachment
+        )
+        setAttachedResearchContextHistory((current) =>
+          current.length > 0 ? current : restoredHistory
+        )
+      } catch {
+        // Silent, non-blocking auxiliary restore.
+      }
+    }
+
+    void restorePersistedAttachment()
+
+    return () => {
+      cancelled = true
+    }
+  }, [playgroundReady, serverChatId, stableHistoryId])
+
+  const handleAttachResearchContext = React.useCallback(
+    (context: AttachedResearchContext) => {
+      const nextState = setAttachedResearchContextActive({
+        active: attachedResearchContext,
+        baseline: attachedResearchContextBaseline,
+        pinned: attachedResearchContextPinned,
+        history: attachedResearchContextHistory,
+        nextActive: context
+      })
+      setAttachedResearchContext(nextState.active)
+      setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextPinned(nextState.pinned)
+      setAttachedResearchContextHistory(nextState.history)
+      void persistAttachedResearchContext(
+        nextState.active,
+        nextState.pinned,
+        nextState.history
+      )
+    },
+    [
+      attachedResearchContext,
+      attachedResearchContextBaseline,
+      attachedResearchContextPinned,
+      attachedResearchContextHistory,
+      persistAttachedResearchContext
+    ]
+  )
+
+  const handlePrepareResearchFollowUp = React.useCallback(
+    async (target: ResearchFollowUpTarget) => {
+      if (attachedResearchContext?.run_id !== target.run_id) {
+        try {
+          await tldwClient.initialize().catch(() => null)
+          const bundle = await tldwClient.getResearchBundle(target.run_id)
+          handleAttachResearchContext(
+            deriveAttachedResearchContext(bundle, target.run_id, target.query)
+          )
+        } catch {
+          // Keep prompt preparation available even if bundle reload fails.
+        }
+      }
+
+      setSelectedQuickPrompt(buildResearchFollowUpPrompt(target.query))
+    },
+    [attachedResearchContext?.run_id, handleAttachResearchContext, setSelectedQuickPrompt]
+  )
+
+  const handleApplyAttachedResearchContext = React.useCallback(
+    (context: AttachedResearchContext) => {
+      setAttachedResearchContext(context)
+      void persistAttachedResearchContext(
+        context,
+        attachedResearchContextPinned,
+        attachedResearchContextHistory
+      )
+    },
+    [
+      attachedResearchContextHistory,
+      attachedResearchContextPinned,
+      persistAttachedResearchContext
+    ]
+  )
+
+  const handleResetAttachedResearchContext = React.useCallback(() => {
+    const resetContext = resetAttachedResearchContext(attachedResearchContextBaseline)
+    setAttachedResearchContext(resetContext)
+    void persistAttachedResearchContext(
+      resetContext,
+      attachedResearchContextPinned,
+      attachedResearchContextHistory
+    )
+  }, [
+    attachedResearchContextBaseline,
+    attachedResearchContextHistory,
+    attachedResearchContextPinned,
+    persistAttachedResearchContext
+  ])
+
+  const handleRemoveAttachedResearchContext = React.useCallback(() => {
+    const cleared = clearAttachedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(cleared.active)
+    setAttachedResearchContextBaseline(cleared.baseline)
+    setAttachedResearchContextPinned(cleared.pinned)
+    setAttachedResearchContextHistory(cleared.history)
+    void persistAttachedResearchContext(
+      cleared.active,
+      cleared.pinned,
+      cleared.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
+
+  const handleSelectAttachedResearchContextHistory = React.useCallback(
+    (context: AttachedResearchContext) => {
+      const nextState = setAttachedResearchContextActive({
+        active: attachedResearchContext,
+        baseline: attachedResearchContextBaseline,
+        pinned: attachedResearchContextPinned,
+        history: attachedResearchContextHistory,
+        nextActive: context
+      })
+      setAttachedResearchContext(nextState.active)
+      setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextPinned(nextState.pinned)
+      setAttachedResearchContextHistory(nextState.history)
+      void persistAttachedResearchContext(
+        nextState.active,
+        nextState.pinned,
+        nextState.history
+      )
+    },
+    [
+      attachedResearchContext,
+      attachedResearchContextBaseline,
+      attachedResearchContextPinned,
+      attachedResearchContextHistory,
+      persistAttachedResearchContext
+    ]
+  )
+
+  const handlePinAttachedResearchContext = React.useCallback(() => {
+    const nextState = pinAttachedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(nextState.active)
+    setAttachedResearchContextBaseline(nextState.baseline)
+    setAttachedResearchContextPinned(nextState.pinned)
+    setAttachedResearchContextHistory(nextState.history)
+    void persistAttachedResearchContext(
+      nextState.active,
+      nextState.pinned,
+      nextState.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
+
+  const handlePinAttachedResearchContextHistory = React.useCallback(
+    (context: AttachedResearchContext) => {
+      const nextState = pinAttachedResearchContext({
+        active: attachedResearchContext,
+        baseline: attachedResearchContextBaseline,
+        pinned: attachedResearchContextPinned,
+        history: attachedResearchContextHistory,
+        nextPinned: context
+      })
+      setAttachedResearchContext(nextState.active)
+      setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextPinned(nextState.pinned)
+      setAttachedResearchContextHistory(nextState.history)
+      void persistAttachedResearchContext(
+        nextState.active,
+        nextState.pinned,
+        nextState.history
+      )
+    },
+    [
+      attachedResearchContext,
+      attachedResearchContextBaseline,
+      attachedResearchContextPinned,
+      attachedResearchContextHistory,
+      persistAttachedResearchContext
+    ]
+  )
+
+  const handleUnpinAttachedResearchContext = React.useCallback(() => {
+    const nextState = unpinAttachedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(nextState.active)
+    setAttachedResearchContextBaseline(nextState.baseline)
+    setAttachedResearchContextPinned(nextState.pinned)
+    setAttachedResearchContextHistory(nextState.history)
+    void persistAttachedResearchContext(
+      nextState.active,
+      nextState.pinned,
+      nextState.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
+
+  const handleRestorePinnedResearchContext = React.useCallback(() => {
+    const nextState = restorePinnedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(nextState.active)
+    setAttachedResearchContextBaseline(nextState.baseline)
+    setAttachedResearchContextPinned(nextState.pinned)
+    setAttachedResearchContextHistory(nextState.history)
+    void persistAttachedResearchContext(
+      nextState.active,
+      nextState.pinned,
+      nextState.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
 
   // Session persistence for draft restoration
   const {
@@ -323,7 +704,10 @@ export const Playground = () => {
   ])
 
   React.useEffect(() => {
-    if (!sessionScopeReady || initializePlaygroundRef.current) {
+    if (!sessionScopeReady) {
+      return
+    }
+    if (initializePlaygroundRef.current) {
       return
     }
     initializePlaygroundRef.current = true
@@ -381,21 +765,35 @@ export const Playground = () => {
 
   const settingsReturnContext = React.useMemo(() => {
     if (typeof window === "undefined") {
-      return { historyId: null as string | null, serverChatId: null as string | null }
+      return {
+        historyId: null as string | null,
+        serverChatId: null as string | null,
+        researchReturnRunId: null as string | null
+      }
     }
     const params = new URLSearchParams(window.location.search)
     const historyId = params.get(SETTINGS_HISTORY_ID_PARAM)?.trim() || null
     const serverChatId =
       params.get(SETTINGS_SERVER_CHAT_ID_PARAM)?.trim() || null
-    return { historyId, serverChatId }
+    const researchReturnRunId =
+      params.get(RESEARCH_RETURN_RUN_ID_PARAM)?.trim() || null
+    return { historyId, serverChatId, researchReturnRunId }
   }, [])
 
   const returnHistoryIdFromSettings = settingsReturnContext.historyId
   const returnServerChatIdFromSettings = settingsReturnContext.serverChatId
+  const returnResearchRunIdFromSettings =
+    settingsReturnContext.researchReturnRunId
 
   React.useEffect(() => {
     if (!playgroundReady) return
-    if (!returnHistoryIdFromSettings && !returnServerChatIdFromSettings) return
+    if (
+      !returnHistoryIdFromSettings &&
+      !returnServerChatIdFromSettings &&
+      !returnResearchRunIdFromSettings
+    ) {
+      return
+    }
 
     let cancelled = false
 
@@ -431,10 +829,18 @@ export const Playground = () => {
         setServerChatId(returnServerChatIdFromSettings)
       }
 
+      if (
+        returnResearchRunIdFromSettings &&
+        returnResearchRunIdFromSettings !== dismissedReturnedResearchRunId
+      ) {
+        setPendingReturnedResearchRunId(returnResearchRunIdFromSettings)
+      }
+
       if (typeof window !== "undefined") {
         const url = new URL(window.location.href)
         url.searchParams.delete(SETTINGS_HISTORY_ID_PARAM)
         url.searchParams.delete(SETTINGS_SERVER_CHAT_ID_PARAM)
+        url.searchParams.delete(RESEARCH_RETURN_RUN_ID_PARAM)
         const nextQuery = url.searchParams.toString()
         const nextPath = `${url.pathname}${nextQuery ? `?${nextQuery}` : ""}${url.hash}`
         window.history.replaceState(window.history.state, "", nextPath)
@@ -451,9 +857,11 @@ export const Playground = () => {
     loadLocalConversation,
     playgroundReady,
     returnHistoryIdFromSettings,
+    returnResearchRunIdFromSettings,
     returnServerChatIdFromSettings,
     serverChatId,
-    setServerChatId
+    setServerChatId,
+    dismissedReturnedResearchRunId
   ])
 
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
@@ -499,9 +907,6 @@ export const Playground = () => {
   )
   const scrollToMessageIndex = React.useCallback(
     (index: number) => {
-      // Prefer imperative handle — works with virtualized off-screen messages
-      if (playgroundChatRef.current?.scrollToBlockByMessageIndex(index)) return true
-      // Fallback to DOM query
       const container = containerRef.current
       if (!container) return false
       const target = container.querySelector<HTMLElement>(`[data-index="${index}"]`)
@@ -974,21 +1379,6 @@ export const Playground = () => {
               </span>
               <div className="flex items-center gap-1.5">
                 <button
-                  type="button"
-                  data-testid="playground-chat-workflows-trigger"
-                  onClick={() => navigate("/chat-workflows")}
-                  title={
-                    t(
-                      "playground:shortcuts.openChatWorkflows",
-                      "Open structured chat workflows"
-                    ) as string
-                  }
-                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-2 py-0.5 text-text hover:bg-surface"
-                >
-                  <ClipboardList className="h-3 w-3" aria-hidden="true" />
-                  {t("playground:toolbar.chatWorkflows", "Chat Workflows")}
-                </button>
-                <button
                   ref={shortcutsTriggerRef}
                   type="button"
                   data-testid="playground-shortcuts-help-trigger"
@@ -1214,11 +1604,19 @@ export const Playground = () => {
             <div className="mx-auto w-full max-w-[64rem] pb-6">
               <ChatErrorBoundary>
                 <PlaygroundChat
-                  ref={playgroundChatRef}
                   searchQuery={threadSearchQuery.trim()}
                   matchedMessageIndices={threadSearchMatchSet}
                   activeSearchMessageIndex={threadSearchActiveMessageIndex}
-                  scrollParentRef={containerRef}
+                  onAttachResearchContext={handleAttachResearchContext}
+                  onPrepareResearchFollowUp={handlePrepareResearchFollowUp}
+                  returnedResearchRunId={pendingReturnedResearchRunId}
+                  onDismissReturnedResearchRun={() => {
+                    if (!pendingReturnedResearchRunId) {
+                      return
+                    }
+                    setDismissedReturnedResearchRunId(pendingReturnedResearchRunId)
+                    setPendingReturnedResearchRunId(null)
+                  }}
                 />
               </ChatErrorBoundary>
             </div>
@@ -1246,13 +1644,34 @@ export const Playground = () => {
                 </button>
               </div>
             )}
-            <PlaygroundForm droppedFiles={droppedFiles} />
+            <PlaygroundForm
+              droppedFiles={droppedFiles}
+              attachedResearchContext={attachedResearchContext}
+              attachedResearchContextBaseline={attachedResearchContextBaseline}
+              attachedResearchContextPinned={attachedResearchContextPinned}
+              attachedResearchContextHistory={attachedResearchContextHistory}
+              onApplyAttachedResearchContext={handleApplyAttachedResearchContext}
+              onResetAttachedResearchContext={handleResetAttachedResearchContext}
+              onRemoveAttachedResearchContext={handleRemoveAttachedResearchContext}
+              onPinAttachedResearchContext={handlePinAttachedResearchContext}
+              onPinAttachedResearchContextHistory={
+                handlePinAttachedResearchContextHistory
+              }
+              onUnpinAttachedResearchContext={handleUnpinAttachedResearchContext}
+              onRestorePinnedResearchContext={
+                handleRestorePinnedResearchContext
+              }
+              onPrepareResearchFollowUp={handlePrepareResearchFollowUp}
+              onSelectAttachedResearchContextHistory={
+                handleSelectAttachedResearchContextHistory
+              }
+            />
           </div>
         </div>
         {artifactsOpen && (
           <>
             <div className="hidden h-full w-[36%] min-w-[280px] max-w-[520px] shrink-0 lg:flex">
-              <ArtifactsPanel />
+              {renderArtifactsPanel()}
             </div>
             <div className="lg:hidden">
               <button
@@ -1296,7 +1715,7 @@ export const Playground = () => {
                   </button>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <ArtifactsPanel />
+                  {renderArtifactsPanel()}
                 </div>
               </div>
             </div>

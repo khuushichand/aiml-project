@@ -9,6 +9,8 @@ from typing import Any, Literal
 # 3rd-party Libraries
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .notes_studio import NoteStudioDocumentSummaryResponse
+
 #
 # Local Imports
 #
@@ -163,6 +165,10 @@ class NoteResponse(NoteBase):
     version: int = Field(..., description="Version number for optimistic locking")
     client_id: str = Field(..., description="Client ID that last modified the note")
     deleted: bool = Field(..., description="Whether the note is soft-deleted")
+    studio: NoteStudioDocumentSummaryResponse | None = Field(
+        default=None,
+        description="Optional lightweight Studio summary attached to single-note fetches.",
+    )
     keywords: list[KeywordResponse] | None = Field(default=None, description="Keywords linked to this note")
     folders: list[NoteFolderResponse] | None = Field(default=None, description="Folders linked to this note")
     keyword_sync: NoteKeywordSyncStatus | None = Field(

@@ -63,6 +63,15 @@ const SERVER_CATEGORY: ErrorCategory = {
   suggestion: "This is usually temporary. Try again in a moment.",
 }
 
+const JOB_LIMIT_CATEGORY: ErrorCategory = {
+  classification: "server",
+  retryable: false,
+  badgeLabel: "Queue Full \u00b7 Wait",
+  badgeColor: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+  userMessage: "You already have the maximum number of ingest jobs running.",
+  suggestion: "Wait for active jobs to finish or cancel one, then try again.",
+}
+
 const TIMEOUT_CATEGORY: ErrorCategory = {
   classification: "timeout",
   retryable: true,
@@ -89,6 +98,10 @@ const PATTERN_TABLE: PatternEntry[] = [
   {
     patterns: /timeout|timed\s*out|deadline/i,
     category: TIMEOUT_CATEGORY,
+  },
+  {
+    patterns: /\b429\b|too many requests|concurrent job limit|max(?:imum)? concurrent/i,
+    category: JOB_LIMIT_CATEGORY,
   },
   {
     patterns: /\b40[13]\b|unauthorized|forbidden|auth/i,

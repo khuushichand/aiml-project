@@ -95,7 +95,12 @@ describe("useReviewQuery", () => {
       expect(result.current.data?.uuid).toBe("card-1")
     })
 
-    expect(getNextReviewCard).toHaveBeenCalledWith(7)
+    expect(getNextReviewCard).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({
+        include_workspace_items: false
+      })
+    )
     expect(result.current.data?.next_intervals?.again).toBe("1 min")
   })
 
@@ -113,7 +118,56 @@ describe("useReviewQuery", () => {
       expect(result.current.isSuccess).toBe(true)
     })
 
-    expect(getNextReviewCard).toHaveBeenCalledWith(undefined)
+    expect(getNextReviewCard).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        include_workspace_items: false
+      })
+    )
     expect(result.current.data).toBeNull()
+  })
+
+  it("hides workspace-owned review cards by default", async () => {
+    vi.mocked(getNextReviewCard).mockResolvedValue({
+      card: null,
+      selection_reason: "none"
+    })
+
+    renderHook(() => useReviewQuery(7), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(getNextReviewCard).toHaveBeenCalled()
+    })
+
+    expect(getNextReviewCard).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({
+        include_workspace_items: false
+      })
+    )
+  })
+
+  it("can force-include workspace-owned review cards for direct deck navigation", async () => {
+    vi.mocked(getNextReviewCard).mockResolvedValue({
+      card: baseCard,
+      selection_reason: "learning_due"
+    })
+
+    renderHook(() => useReviewQuery(7, { includeWorkspaceItems: true }), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(getNextReviewCard).toHaveBeenCalled()
+    })
+
+    expect(getNextReviewCard).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({
+        include_workspace_items: true
+      })
+    )
   })
 })

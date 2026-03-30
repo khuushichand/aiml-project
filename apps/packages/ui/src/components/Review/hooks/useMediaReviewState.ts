@@ -176,10 +176,10 @@ export function useMediaReviewState(
       const savedFocusedId = await getSetting(MEDIA_REVIEW_FOCUSED_ID_SETTING)
       if (!cancelled) {
         if (savedSelection && savedSelection.length > 0) {
-          setSelectedIds(savedSelection)
+          setSelectedIds((current) => (current.length > 0 ? current : savedSelection))
         }
         if (savedFocusedId != null) {
-          setFocusedId(savedFocusedId)
+          setFocusedId((current) => (current != null ? current : savedFocusedId))
         }
         setSelectionRestored(true)
       }

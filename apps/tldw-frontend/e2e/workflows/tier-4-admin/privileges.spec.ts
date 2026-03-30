@@ -8,7 +8,6 @@ test.describe("Privileges Page", () => {
 
   test("privileges page loads and shows redirect panel", async ({ authedPage, diagnostics }) => {
     await authedPage.goto("/privileges", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
     // Privileges is a RouteRedirect to /settings — verify redirect panel or destination
     const redirectPanel = authedPage.getByTestId("route-redirect-panel")
@@ -45,10 +44,10 @@ test.describe("Privileges Page", () => {
       // "Open updated page" link should point to /settings
       const openUpdatedLink = authedPage.getByTestId("route-redirect-open-updated-page")
       await expect(openUpdatedLink).toBeVisible()
+      await expect(openUpdatedLink).toHaveAttribute("href", "/settings")
+    } else {
+      await expect(authedPage).toHaveURL(/\/settings/, { timeout: 15_000 })
     }
-
-    // Eventually the redirect should land on /settings
-    await expect(authedPage).toHaveURL(/\/settings/, { timeout: 15_000 })
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -82,7 +81,6 @@ test.describe("Privileges Page", () => {
     diagnostics,
   }) => {
     await authedPage.goto("/privileges", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
     // Verify the page rendered without uncaught errors regardless of redirect state
     const body = authedPage.locator("body")

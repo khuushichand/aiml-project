@@ -1,8 +1,7 @@
-"""
-plan_limits.py
+"""Neutral OSS/self-host limit definitions.
 
-Plan tier definitions and default limits.
-These are used as fallbacks when database plans are not configured.
+The public repository only exposes a free/self-host default tier. Commercial
+plan naming and fallback pricing are intentionally excluded from OSS.
 """
 from __future__ import annotations
 
@@ -12,13 +11,11 @@ from typing import Any
 
 
 class PlanTier(str, Enum):
-    """Available subscription tiers."""
+    """Available OSS tier names."""
     FREE = "free"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
 
 
-VALID_PLAN_NAMES = [tier.value for tier in PlanTier if tier != PlanTier.FREE]
+VALID_PLAN_NAMES = [PlanTier.FREE.value]
 
 
 @dataclass(frozen=True)
@@ -40,7 +37,7 @@ class PlanLimits:
     audit_logs: bool = False
 
 
-# Default limits for each tier
+# Default limits for the OSS/self-host tier.
 DEFAULT_LIMITS: dict[PlanTier, PlanLimits] = {
     PlanTier.FREE: PlanLimits(
         storage_mb=1024,
@@ -57,54 +54,21 @@ DEFAULT_LIMITS: dict[PlanTier, PlanLimits] = {
         sso_enabled=False,
         audit_logs=False,
     ),
-    PlanTier.PRO: PlanLimits(
-        storage_mb=10240,
-        api_calls_day=5_000,
-        llm_tokens_month=15_000_000,
-        team_members=5,
-        transcription_minutes_month=600,
-        rag_queries_day=500,
-        concurrent_jobs=5,
-        advanced_analytics=True,
-        priority_support=False,
-        custom_models=True,
-        api_access=True,
-        sso_enabled=False,
-        audit_logs=True,
-    ),
-    PlanTier.ENTERPRISE: PlanLimits(
-        storage_mb=102400,
-        api_calls_day=50_000,
-        llm_tokens_month=150_000_000,
-        team_members=-1,  # -1 means unlimited
-        transcription_minutes_month=6000,
-        rag_queries_day=5000,
-        concurrent_jobs=20,
-        advanced_analytics=True,
-        priority_support=True,
-        custom_models=True,
-        api_access=True,
-        sso_enabled=True,
-        audit_logs=True,
-    ),
 }
 
 
 def get_plan_limits(plan_name: str) -> dict[str, Any]:
     """
-    Get limits for a plan by name.
+    Get OSS/self-host limits.
 
     Args:
-        plan_name: Plan name (free, pro, enterprise)
+        plan_name: Retained for compatibility. Commercial plan names are ignored.
 
     Returns:
-        Dict of limit values
+        Dict of neutral OSS/self-host limit values.
     """
-    try:
-        tier = PlanTier(plan_name.lower())
-        limits = DEFAULT_LIMITS.get(tier, DEFAULT_LIMITS[PlanTier.FREE])
-    except ValueError:
-        limits = DEFAULT_LIMITS[PlanTier.FREE]
+    _ = plan_name
+    limits = DEFAULT_LIMITS[PlanTier.FREE]
 
     return {
         "storage_mb": limits.storage_mb,

@@ -15,7 +15,6 @@ from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -533,6 +532,14 @@ async def _call_quiz_generation_llm(
     return raw_response
 
 
+_ORIGINAL_CALL_QUIZ_GENERATION_LLM = _call_quiz_generation_llm
+
+
+def _should_use_deterministic_test_mode() -> bool:
+    """Keep deterministic test-mode behavior unless a test explicitly patches the LLM call."""
+    return is_test_mode() and _call_quiz_generation_llm is _ORIGINAL_CALL_QUIZ_GENERATION_LLM
+
+
 def _resolve_primary_media_id(normalized_sources: Sequence[dict[str, str]]) -> int | None:
     for source in normalized_sources:
         if source["source_type"] != "media":
@@ -586,11 +593,13 @@ def _persist_generated_quiz(
     quiz_title: str,
     quiz_description: str,
     primary_media_id: int | None,
+    workspace_id: str | None,
     workspace_tag: str | None,
 ) -> dict[str, Any]:
     quiz_id = db.create_quiz(
         name=f"Quiz: {quiz_title}" if quiz_title else "Quiz: Mixed Sources",
         description=quiz_description,
+        workspace_id=workspace_id,
         workspace_tag=workspace_tag,
         media_id=primary_media_id,
         source_bundle_json=normalized_sources,
@@ -631,6 +640,7 @@ async def generate_quiz_from_sources(
     focus_topics: list[str] | None = None,
     model: str | None = None,
     api_provider: str | None = None,
+    workspace_id: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
     """Generate a quiz from mixed sources (media, notes, flashcard decks/cards)."""
@@ -655,7 +665,7 @@ async def generate_quiz_from_sources(
         primary_media_id=primary_media_id,
     )
 
-    if is_test_mode():
+    if _should_use_deterministic_test_mode():
         questions = _build_test_mode_questions(
             evidence=evidence,
             normalized_sources=normalized_sources,
@@ -671,6 +681,7 @@ async def generate_quiz_from_sources(
             quiz_title=quiz_title,
             quiz_description=quiz_description,
             primary_media_id=primary_media_id,
+            workspace_id=workspace_id,
             workspace_tag=workspace_tag,
         )
 
@@ -715,6 +726,7 @@ async def generate_quiz_from_sources(
         quiz_title=quiz_title,
         quiz_description=quiz_description,
         primary_media_id=primary_media_id,
+        workspace_id=workspace_id,
         workspace_tag=workspace_tag,
     )
 
@@ -730,6 +742,7 @@ async def generate_quiz_from_media(
     focus_topics: list[str] | None = None,
     model: str | None = None,
     api_provider: str | None = None,
+    workspace_id: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
     """Backward-compatible wrapper for legacy media-only generation requests."""
@@ -743,5 +756,6 @@ async def generate_quiz_from_media(
         focus_topics=focus_topics,
         model=model,
         api_provider=api_provider,
+        workspace_id=workspace_id,
         workspace_tag=workspace_tag,
     )

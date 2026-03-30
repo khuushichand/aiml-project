@@ -27,6 +27,14 @@ AUDIO_PACK_FORMAT = "audio_bundle_pack_manifest_v1"
 AUDIO_PACKS_DIRNAME = "audio_packs"
 _AUDIO_PACK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
 
+PACK_ISSUE_UNKNOWN_BUNDLE = "unknown_bundle"
+PACK_ISSUE_MANIFEST_CHECKSUM = "manifest_checksum_mismatch"
+PACK_ISSUE_PLATFORM_MISMATCH = "platform_mismatch"
+PACK_ISSUE_ARCH_MISMATCH = "arch_mismatch"
+PACK_ISSUE_PYTHON_MISMATCH = "python_version_mismatch"
+PACK_ISSUE_INVALID_TTS_CHOICE = "invalid_tts_choice"
+PACK_ISSUE_SELECTION_KEY_MISMATCH = "selection_key_mismatch"
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -101,6 +109,11 @@ def _copy_asset_manifest(installed_assets: list[dict[str, Any]] | None) -> list[
     return [dict(entry) for entry in (installed_assets or []) if isinstance(entry, dict)]
 
 
+def _append_issue(issues: list[str], issue_codes: list[str], code: str, message: str) -> None:
+    issues.append(message)
+    issue_codes.append(code)
+
+
 def _calculate_asset_checksums(assets: list[dict[str, Any]]) -> dict[str, str]:
     checksums: dict[str, str] = {}
     for asset in assets:
@@ -118,6 +131,7 @@ def build_audio_pack_manifest(
     *,
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
     compatibility: dict[str, str] | None = None,
     installed_assets: list[dict[str, Any]] | None = None,
@@ -126,6 +140,10 @@ def build_audio_pack_manifest(
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
     profile = bundle.profile_by_id(resource_profile)
+    try:
+        canonical_tts_choice = profile.canonical_tts_choice(tts_choice)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
     assets = _copy_asset_manifest(installed_assets)
 
     manifest = {
@@ -133,9 +151,15 @@ def build_audio_pack_manifest(
         "bundle_id": bundle.bundle_id,
         "bundle_label": bundle.label,
         "resource_profile": profile.profile_id,
+        "tts_choice": canonical_tts_choice,
         "profile_label": profile.label,
         "catalog_version": catalog_version,
-        "selection_key": build_audio_selection_key(bundle.bundle_id, profile.profile_id, catalog_version),
+        "selection_key": build_audio_selection_key(
+            bundle.bundle_id,
+            profile.profile_id,
+            catalog_version,
+            tts_choice=canonical_tts_choice,
+        ),
         "compatibility": compatibility or _default_compatibility(),
         "assets": assets,
         "created_at": _utc_now(),
@@ -156,6 +180,7 @@ def write_audio_pack_manifest(
     pack_name: str,
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
     compatibility: dict[str, str] | None = None,
     installed_assets: list[dict[str, Any]] | None = None,
@@ -165,6 +190,7 @@ def write_audio_pack_manifest(
     manifest = build_audio_pack_manifest(
         bundle_id=bundle_id,
         resource_profile=resource_profile,
+        tts_choice=tts_choice,
         catalog_version=catalog_version,
         compatibility=compatibility,
         installed_assets=installed_assets,
@@ -190,6 +216,7 @@ def validate_audio_pack_manifest(
 
     raw_manifest = load_audio_pack_manifest(pack_name)
     issues: list[str] = []
+    issue_codes: list[str] = []
     warnings: list[str] = []
 
     if not isinstance(raw_manifest, dict):
@@ -205,25 +232,24 @@ def validate_audio_pack_manifest(
     manifest = dict(raw_manifest)
 
     if manifest.get("format") != AUDIO_PACK_FORMAT:
-        issues.append("Unsupported audio pack format.")
+        _append_issue(issues, issue_codes, "unsupported_format", "Unsupported audio pack format.")
 
     bundle_id = manifest.get("bundle_id")
     resource_profile = manifest.get("resource_profile")
     catalog_version = manifest.get("catalog_version") or AUDIO_BUNDLE_CATALOG_VERSION
-    bundle = None
-    if isinstance(bundle_id, str) and isinstance(resource_profile, str):
-        try:
-            bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
-            bundle.profile_by_id(resource_profile)
-        except KeyError as exc:
-            logger.opt(exception=exc).debug(
-                "Audio pack manifest references unknown bundle/profile {}/{}",
-                bundle_id,
-                resource_profile,
-            )
-            issues.append("Referenced audio bundle or resource profile is not available in this catalog.")
-    else:
-        issues.append("Referenced audio bundle or resource profile is not available in this catalog.")
+    canonical_tts_choice = None
+    try:
+        bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+        profile = bundle.profile_by_id(resource_profile)
+    except KeyError:
+        bundle = None
+        profile = None
+        _append_issue(
+            issues,
+            issue_codes,
+            PACK_ISSUE_UNKNOWN_BUNDLE,
+            "Referenced audio bundle or resource profile is not available in this catalog.",
+        )
 
     checksum_payload = dict(manifest)
     checksum_payload["checksums"] = {}
@@ -236,7 +262,12 @@ def validate_audio_pack_manifest(
         checksums = {}
     actual_manifest_checksum = checksums.get("manifest_sha256")
     if actual_manifest_checksum != expected_manifest_checksum:
-        issues.append("Manifest checksum mismatch.")
+        _append_issue(
+            issues,
+            issue_codes,
+            PACK_ISSUE_MANIFEST_CHECKSUM,
+            "Manifest checksum mismatch.",
+        )
 
     local_profile = machine_profile or _default_compatibility()
     compatibility = manifest.get("compatibility")
@@ -246,16 +277,57 @@ def validate_audio_pack_manifest(
         issues.append("Manifest compatibility entry must be an object.")
         compatibility = {}
     if compatibility.get("platform") and compatibility["platform"] != local_profile.get("platform"):
-        issues.append(
+        _append_issue(
+            issues,
+            issue_codes,
+            PACK_ISSUE_PLATFORM_MISMATCH,
             f"Pack platform {compatibility['platform']} does not match local platform {local_profile.get('platform')}."
         )
     if compatibility.get("arch") and compatibility["arch"] != local_profile.get("arch"):
-        issues.append(f"Pack arch {compatibility['arch']} does not match local arch {local_profile.get('arch')}.")
+        _append_issue(
+            issues,
+            issue_codes,
+            PACK_ISSUE_ARCH_MISMATCH,
+            f"Pack arch {compatibility['arch']} does not match local arch {local_profile.get('arch')}.",
+        )
 
     expected_python = _normalise_python_version(compatibility.get("python_version"))
     local_python = _normalise_python_version(python_version)
     if expected_python and expected_python != local_python:
-        issues.append(f"Pack Python {expected_python} does not match local Python {local_python}.")
+        _append_issue(
+            issues,
+            issue_codes,
+            PACK_ISSUE_PYTHON_MISMATCH,
+            f"Pack Python {expected_python} does not match local Python {local_python}.",
+        )
+
+    if profile is not None:
+        try:
+            expected_tts_choice = profile.canonical_tts_choice(manifest.get("tts_choice"))
+        except KeyError as exc:
+            _append_issue(
+                issues,
+                issue_codes,
+                PACK_ISSUE_INVALID_TTS_CHOICE,
+                str(exc),
+            )
+            expected_tts_choice = None
+        canonical_tts_choice = expected_tts_choice
+
+    canonical_selection_key = build_audio_selection_key(
+        bundle_id,
+        resource_profile,
+        catalog_version,
+        tts_choice=canonical_tts_choice,
+    )
+    manifest_selection_key = manifest.get("selection_key")
+    if manifest_selection_key != canonical_selection_key:
+        _append_issue(
+            issues,
+            issue_codes,
+            PACK_ISSUE_SELECTION_KEY_MISMATCH,
+            "Pack selection key does not match the canonical bundle/profile/TTS choice identity.",
+        )
 
     manifest_assets = manifest.get("assets")
     if manifest_assets is None:
@@ -282,9 +354,11 @@ def validate_audio_pack_manifest(
     return {
         "compatible": not issues,
         "issues": issues,
+        "issue_codes": issue_codes,
         "warnings": warnings,
         "manifest": manifest,
-        "selection_key": selection_key,
+        "tts_choice": canonical_tts_choice,
+        "selection_key": canonical_selection_key,
         "bundle_label": bundle.label if bundle else None,
     }
 
@@ -305,12 +379,29 @@ def register_imported_audio_pack(
     )
     readiness = readiness_store.load()
     manifest = validation["manifest"]
+    blocking_codes = {
+        PACK_ISSUE_INVALID_TTS_CHOICE,
+        PACK_ISSUE_SELECTION_KEY_MISMATCH,
+        PACK_ISSUE_MANIFEST_CHECKSUM,
+        PACK_ISSUE_UNKNOWN_BUNDLE,
+    }
+    blocking_issue = next(
+        (
+            issue
+            for code, issue in zip(validation["issue_codes"], validation["issues"], strict=False)
+            if code in blocking_codes
+        ),
+        None,
+    )
+    if blocking_issue is not None:
+        raise ValueError(blocking_issue)
     imported_packs = list(readiness.get("imported_packs") or [])
     imported_packs.append(
         {
             "pack_path": _display_audio_pack_path(pack_name),
             "bundle_id": manifest.get("bundle_id"),
             "resource_profile": manifest.get("resource_profile"),
+            "tts_choice": validation["tts_choice"],
             "catalog_version": manifest.get("catalog_version"),
             "selection_key": validation["selection_key"],
             "compatible": validation["compatible"],
@@ -326,6 +417,7 @@ def register_imported_audio_pack(
     updated = readiness_store.update(
         selected_bundle_id=manifest.get("bundle_id"),
         selected_resource_profile=manifest.get("resource_profile") or DEFAULT_AUDIO_RESOURCE_PROFILE,
+        tts_choice=validation["tts_choice"],
         catalog_version=manifest.get("catalog_version") or AUDIO_BUNDLE_CATALOG_VERSION,
         selection_key=validation["selection_key"],
         machine_profile=machine_profile or readiness.get("machine_profile"),

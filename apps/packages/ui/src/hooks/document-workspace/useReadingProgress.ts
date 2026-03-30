@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { tldwClient } from "@/services/tldw"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
 import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { ViewMode } from "@/components/DocumentWorkspace/types"
@@ -33,7 +34,10 @@ function syncReadingProgressWithBeacon(
   }
 
   try {
-    const url = `${serverUrl}/api/v1/media/${mediaId}/progress`
+    const url = resolveBrowserRequestTransport({
+      config: { serverUrl },
+      path: `/api/v1/media/${mediaId}/progress`
+    }).url
     const payload = JSON.stringify(progress)
     const blob = new Blob([payload], { type: "application/json" })
 

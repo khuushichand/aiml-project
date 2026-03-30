@@ -400,6 +400,12 @@ describe("PromptBody server search and pagination", () => {
       .getAllByTestId("table-row-name")
       .map((node) => node.textContent?.trim() || "")
 
+  it("renders tab-selected routes without crashing during initial URL sync", () => {
+    renderPromptBody(["/prompts?tab=trash"])
+
+    expect(screen.getByTestId("prompt-location-search")).toHaveTextContent("?tab=trash")
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()

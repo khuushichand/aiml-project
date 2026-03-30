@@ -3,8 +3,9 @@ import { useTranslation } from "react-i18next"
 import { Button, Empty, Input, Popconfirm, Tooltip, Tag } from "antd"
 import { Plus, Folder, Trash2, X, ChevronRight, Bot, Copy, GitFork, RefreshCw } from "lucide-react"
 import { useACPSessionsStore } from "@/store/acp-sessions"
-import { useStorage } from "@plasmohq/storage/hook"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { ACPRestClient } from "@/services/acp/client"
+import { buildACPClientConfig } from "@/services/acp/connection"
 import type { ACPSession, ACPAgentType, ACPSessionState } from "@/services/acp/types"
 import { AGENT_TYPE_INFO } from "@/services/acp/constants"
 import { ACPSessionCreateModal } from "./ACPSessionCreateModal"
@@ -29,25 +30,15 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
   const [searchQuery, setSearchQuery] = useState("")
   const [stateFilter, setStateFilter] = useState<ACPSessionState | "all">("all")
   const [sortKey, setSortKey] = useState<SessionSortKey>("recent")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
   // Server config
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
   const [isRefreshingLocal, setIsRefreshingLocal] = useState(false)
 
   const restClient = React.useMemo(
     () =>
-      new ACPRestClient({
-        serverUrl,
-        getAuthHeaders: async () => getAuthHeaders(authMode, apiKey, accessToken),
-        getAuthParams: async () => ({
-          token: authMode === "multi-user" && accessToken ? accessToken : undefined,
-          api_key: authMode === "single-user" && apiKey ? apiKey : undefined,
-        }),
-      }),
-    [serverUrl, authMode, apiKey, accessToken]
+      connectionConfig ? new ACPRestClient(buildACPClientConfig(connectionConfig)) : null,
+    [connectionConfig]
   )
 
   // Store
@@ -119,7 +110,7 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
 
   const handleCloseSession = async (sessionId: string) => {
     try {
-      await restClient.closeSession(sessionId).catch(() => {
+      await restClient?.closeSession(sessionId).catch(() => {
         // Ignore server close failures - session may already be closed
       })
 
@@ -195,6 +186,15 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
     }
     const isServerBacked = sourceSession.backendStatus !== null
     setGlobalError(null)
+
+    if (!restClient) {
+      if (!isServerBacked) {
+        createLocalFork(sourceSession)
+      } else {
+        setGlobalError("Missing ACP connection configuration")
+      }
+      return
+    }
 
     const fallbackName = `${sourceSession.name || sourceSession.cwd.split("/").filter(Boolean).pop() || "Session"} (fork)`
 
@@ -698,22 +698,6 @@ const SessionItem: React.FC<SessionItemProps> = ({
       )}
     </div>
   )
-}
-
-const getAuthHeaders = (
-  authMode: string,
-  apiKey: string,
-  accessToken: string
-): Record<string, string> => {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  }
-  if (authMode === "single-user" && apiKey) {
-    headers["X-API-KEY"] = apiKey
-  } else if (authMode === "multi-user" && accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`
-  }
-  return headers
 }
 
 const resolveForkMessageIndex = (sourceSession: ACPSession): number => {

@@ -37,7 +37,6 @@ from tldw_Server_API.app.core.Chunking.templates import (
     TemplateProcessor,
     TemplateStage,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/chunking/templates", tags=["chunking-templates"])
@@ -88,12 +87,11 @@ def _emit_db_capability_headers(response: Response, db: Any, required: list[str]
             response.headers["X-Template-DB-Capability"] = "fallback"
             response.headers["X-Template-DB-Missing"] = ",".join(missing)
             response.headers["X-Template-DB-Hint"] = (
-                "Ensure Media_DB_v2.MediaDatabase is used: "
-                "tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase"
+                "Use a native media DB session that implements chunking-template methods."
             )
             logger.warning(
                 f"Chunking Templates DB missing methods {missing} on {response.headers.get('X-Template-DB-Class')} - "
-                "using in-memory fallback; hint: use Media_DB_v2.MediaDatabase"
+                "using in-memory fallback; hint: use a native media DB session"
             )
         else:
             response.headers["X-Template-DB-Capability"] = "native"
@@ -104,7 +102,7 @@ def _emit_db_capability_headers(response: Response, db: Any, required: list[str]
 @router.get("/diagnostics")
 async def diagnostics(
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ):
     """Diagnostics for chunking templates backend capabilities."""
@@ -124,7 +122,7 @@ async def diagnostics(
         "capability": "native" if not missing else "fallback",
         "missing_methods": missing,
         "fallback_enabled": _fallback_allowed(),
-        "hint": "Use tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase for native support.",
+        "hint": "Use a native media DB session that implements chunking-template methods.",
     }
 
 # Observability helpers (no-op fallbacks)
@@ -148,8 +146,8 @@ def _ensure_fallback_policy(db: Any, required: list[str]) -> None:
             "success": False,
             "error": "Templates fallback store is disabled",
             "error_code": "FALLBACK_DISABLED",
-            "details": [{"field": ",".join(missing), "message": "DB capability missing. Use Media_DB_v2.MediaDatabase.", "code": "DB_CAPABILITY"}],
-            "hint": "Enable CHUNKING_TEMPLATES_FALLBACK_ENABLED=1 for dev/test or use proper MediaDatabase in production.",
+            "details": [{"field": ",".join(missing), "message": "DB capability missing. Use a native media DB session.", "code": "DB_CAPABILITY"}],
+            "hint": "Enable CHUNKING_TEMPLATES_FALLBACK_ENABLED=1 for dev/test or use a native media DB session in production.",
         }
         raise HTTPException(status_code=500, detail=detail)
 
@@ -168,7 +166,7 @@ async def list_templates(
     tags: Optional[list[str]] = Query(None, description="Filter by tags"),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ChunkingTemplateListResponse:
     """
@@ -233,7 +231,7 @@ async def list_templates(
 async def get_template(
     template_name: str,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ) -> ChunkingTemplateResponse:
     """
     Get a specific chunking template by name.
@@ -286,7 +284,7 @@ async def get_template(
 async def create_template(
     template_data: ChunkingTemplateCreate,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ChunkingTemplateResponse:
     """
@@ -380,7 +378,7 @@ async def update_template(
     template_name: str,
     template_update: ChunkingTemplateUpdate,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ChunkingTemplateResponse:
     """
@@ -554,7 +552,7 @@ async def delete_template(
     template_name: str,
     hard_delete: bool = Query(False, description="Permanently delete template"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> None:
     """
@@ -661,7 +659,7 @@ async def apply_template(
     request: ApplyTemplateRequest,
     include_metadata: bool = Query(False, description="Return chunk metadata; if false, return only text list"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ApplyTemplateResponse:
     """
@@ -998,7 +996,7 @@ async def match_templates(
     url: Optional[str] = Query(None),
     filename: Optional[str] = Query(None),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     """Return templates ranked by a simple metadata-based score for auto-apply."""
     try:
@@ -1031,7 +1029,7 @@ class LearnTemplateRequest(BaseModel):
 async def learn_template(
     req: LearnTemplateRequest,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     """Learn a basic hierarchical boundary template from an example text and optionally save it."""
     try:

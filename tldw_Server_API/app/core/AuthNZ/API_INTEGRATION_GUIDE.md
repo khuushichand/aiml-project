@@ -1,5 +1,35 @@
 # AuthNZ API Integration Guide
 
+## Enterprise Federation (Phase 1)
+
+Enterprise federation is available only when all of these are true:
+
+- `AUTH_MODE=multi_user`
+- `AUTH_FEDERATION_ENABLED=true`
+- the deployment profile reports `enterprise_federation_supported=true`
+
+Current phase-1 scope is intentionally narrow:
+
+- OIDC only
+- provider scope limited to `global` and `org`
+- every federated login still resolves to a local `users` row
+- enterprise credential refs use the local encrypted backend first (`local_encrypted_v1`)
+- SAML and SCIM-style lifecycle sync are not part of this phase
+
+### Runtime Invariants
+
+- Federated users do not become external-only principals. A successful OIDC login always maps to a local user and the normal AuthNZ token contract.
+- Email is advisory for linking. The provider subject is the durable identity key.
+- Admins can validate provider config and dry-run claim mapping before enabling a provider.
+
+### Federation Endpoints
+
+- `GET /api/v1/auth/federation/{provider_slug}/login`
+- `GET /api/v1/auth/federation/{provider_slug}/callback`
+- `POST /api/v1/admin/identity/providers/test`
+- `POST /api/v1/admin/identity/providers/dry-run`
+- `POST /api/v1/auth/admin/reauth/request`
+
 ## Quick Start
 
 ### 1. Basic Authentication Flow

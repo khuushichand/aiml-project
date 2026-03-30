@@ -69,10 +69,10 @@ test.describe("Data Tables Studio", () => {
       if (!headingVisible) return
 
       await dataTables.switchToTab("create")
-      await authedPage.waitForTimeout(500)
+      await expect(dataTables.createTableTab).toHaveAttribute("aria-selected", "true")
 
       await dataTables.switchToTab("tables")
-      await authedPage.waitForTimeout(500)
+      await expect(dataTables.myTablesTab).toHaveAttribute("aria-selected", "true")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -111,14 +111,14 @@ test.describe("Data Tables Studio", () => {
       const headingVisible = await dataTables.heading.isVisible().catch(() => false)
       if (!headingVisible) return
 
-      // Wait for loading to finish, then either empty state or table rows
-      await authedPage.waitForTimeout(2_000)
-
-      const emptyVisible = await dataTables.emptyState.isVisible().catch(() => false)
-      const tableVisible = await authedPage.locator(".ant-table").isVisible().catch(() => false)
-
-      // One of these should be true (empty state or populated table)
-      expect(emptyVisible || tableVisible).toBe(true)
+      await expect
+        .poll(
+          async () =>
+            (await dataTables.emptyState.isVisible().catch(() => false)) ||
+            (await authedPage.locator(".ant-table").isVisible().catch(() => false)),
+          { timeout: 10_000 }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })

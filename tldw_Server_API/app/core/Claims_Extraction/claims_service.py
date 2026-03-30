@@ -50,10 +50,9 @@ from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 from tldw_Server_API.app.core.Setup import setup_manager
 
@@ -124,6 +123,75 @@ def _normalize_setting_mode(value: Any, *, allowed: frozenset[str]) -> str | Non
     if not normalized or normalized not in allowed:
         return None
     return normalized
+
+
+def _coerce_claims_rebuild_media_ids(rows: list[Any]) -> list[int]:
+    mids: list[int] = []
+    for row in rows:
+        try:
+            mids.append(int(row["id"]))
+            continue
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            mids.append(int(row[0]))
+            continue
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            if isinstance(row, dict):
+                mids.append(int(next(iter(row.values()))))
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            continue
+    return mids
+
+
+def list_claims_rebuild_media_ids(
+    query_db: Any,
+    *,
+    policy: str,
+    limit: int | None = None,
+    stale_days: int | None = None,
+    compare_media_last_modified: bool = True,
+) -> list[int]:
+    """Return media IDs targeted by the requested claims rebuild policy."""
+    normalized_policy = str(policy or "missing").lower()
+    params: list[Any] = []
+
+    if normalized_policy == "all":
+        sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
+    elif normalized_policy == "stale":
+        if compare_media_last_modified:
+            sql = (
+                "SELECT m.id FROM Media m "
+                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
+            )
+        else:
+            sql = (
+                "SELECT m.id FROM Media m "
+                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?)"
+            )
+            params.append(int(stale_days or 7))
+    else:
+        sql = (
+            "SELECT m.id FROM Media m "
+            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
+            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
+            ")"
+        )
+
+    if limit is not None:
+        sql = f"{sql} LIMIT ?"
+        params.append(int(limit))
+
+    cursor = (
+        query_db.execute_query(sql, tuple(params))
+        if params
+        else query_db.execute_query(sql)
+    )
+    return _coerce_claims_rebuild_media_ids(cursor.fetchall())
 
 
 def _coerce_setting_bool(value: Any) -> bool:
@@ -617,37 +685,31 @@ def _record_webhook_event(
     alert_id: int | None = None,
 ) -> None:
     try:
-        db = create_media_database(
+        with managed_media_database(
             client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
             db_path=db_path,
-        )
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        return
-    try:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.initialize_db()
-        payload = {
-            "channel": channel,
-            "status": status,
-            "attempt": int(attempt),
-        }
-        if reason:
-            payload["reason"] = reason
-        if status_code is not None:
-            payload["status_code"] = int(status_code)
-        if alert_id is not None:
-            payload["alert_id"] = int(alert_id)
-        db.insert_claims_monitoring_event(
-            user_id=str(user_id),
-            event_type="webhook_delivery",
-            severity="info" if status == "success" else "warning",
-            payload_json=json.dumps(payload),
-        )
+            suppress_init_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+            suppress_close_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+        ) as db:
+            payload = {
+                "channel": channel,
+                "status": status,
+                "attempt": int(attempt),
+            }
+            if reason:
+                payload["reason"] = reason
+            if status_code is not None:
+                payload["status_code"] = int(status_code)
+            if alert_id is not None:
+                payload["alert_id"] = int(alert_id)
+            db.insert_claims_monitoring_event(
+                user_id=str(user_id),
+                event_type="webhook_delivery",
+                severity="info" if status == "success" else "warning",
+                payload_json=json.dumps(payload),
+            )
     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
-    finally:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.close_connection()
 
 
 def _deliver_claims_alert_webhook(
@@ -668,7 +730,7 @@ def _deliver_claims_alert_webhook(
     for attempt in range(1, max_attempts + 1):
         if attempt > 1:
             base_delay = backoff_schedule[min(attempt - 2, len(backoff_schedule) - 1)]
-            jitter = random.uniform(0.8, 1.2)
+            jitter = random.uniform(0.8, 1.2)  # nosec B311
             time.sleep(max(0.0, base_delay * jitter))
         start_ts = time.time()
         try:
@@ -819,17 +881,13 @@ def _build_rebuild_health_summary_from_service(health: dict[str, Any]) -> dict[s
 def _load_persisted_rebuild_health() -> dict[str, Any]:
     user_id = _claims_monitoring_system_user_id()
     db_path = get_user_media_db_path(user_id)
-    db = create_media_database(
+    with managed_media_database(
         client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
         db_path=db_path,
-    )
-    try:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.initialize_db()
+        suppress_init_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+        suppress_close_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+    ) as db:
         return db.get_claims_monitoring_health(str(user_id))
-    finally:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.close_connection()
 
 
 def _dispatch_claims_alert_notifications(
@@ -1773,6 +1831,17 @@ def _compute_unsupported_ratios(window_sec: int, baseline_sec: int) -> dict[str,
 
     return {"window_ratio": window_ratio, "baseline_ratio": baseline_ratio}
 
+@contextmanager
+def _claims_user_override_db(user_id: int):
+    db_path = get_user_media_db_path(int(user_id))
+    with managed_media_database(
+        client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+        db_path=db_path,
+        initialize=False,
+        suppress_close_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+    ) as override_db:
+        yield override_db, db_path
+
 
 @contextmanager
 def _resolve_media_db(
@@ -1783,29 +1852,17 @@ def _resolve_media_db(
     admin_required: bool,
     owner_filter: bool = False,
 ) -> tuple[MediaDatabase, int | None]:
-    override_db: MediaDatabase | None = None
     owner_user_id: int | None = None
-    try:
-        if user_id is not None:
-            if not _legacy_user_has_platform_admin_claims(current_user) and admin_required:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
-            if db.backend_type == BackendType.POSTGRESQL:
-                owner_user_id = int(user_id) if owner_filter else None
-                target_db = db
-            else:
-                db_path = get_user_media_db_path(int(user_id))
-                override_db = MediaDatabase(
-                    db_path=db_path,
-                    client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-                )
-                target_db = override_db
+    if user_id is not None:
+        if not _legacy_user_has_platform_admin_claims(current_user) and admin_required:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+        if db.backend_type == BackendType.POSTGRESQL:
+            owner_user_id = int(user_id) if owner_filter else None
         else:
-            target_db = db
-        yield target_db, owner_user_id
-    finally:
-        if override_db is not None:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+            with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
+                yield override_db, owner_user_id
+            return
+    yield db, owner_user_id
 
 
 def list_all_claims(
@@ -3514,23 +3571,22 @@ def rebuild_claim_clusters(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid clustering method")
 
     if user_id is not None and db.backend_type != BackendType.POSTGRESQL:
-        db_path = get_user_media_db_path(int(user_id))
-        override_db = MediaDatabase(
-            db_path=db_path,
-            client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-        )
-        try:
+        with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
             if cluster_method == "exact":
-                return override_db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
-            return rebuild_claim_clusters_embeddings(
-                db=override_db,
-                user_id=target_user_id,
-                min_size=min_size,
-                similarity_threshold=similarity_threshold,
-            )
-        finally:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+                result = override_db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
+            else:
+                result = rebuild_claim_clusters_embeddings(
+                    db=override_db,
+                    user_id=target_user_id,
+                    min_size=min_size,
+                    similarity_threshold=similarity_threshold,
+                )
+            try:
+                watchlist_result = _evaluate_watchlist_cluster_notifications(override_db, target_user_id)
+                result["watchlist_notifications"] = watchlist_result
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+                pass
+            return result
 
     if cluster_method == "exact":
         result = db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
@@ -3962,60 +4018,28 @@ def rebuild_all_media(
     db: MediaDatabase,
     rebuild_service: Any = None,
 ) -> dict[str, Any]:
-    override_db: MediaDatabase | None = None
     svc = rebuild_service or get_claims_rebuild_service()
-    try:
-        if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
-            db_path = get_user_media_db_path(int(user_id))
-            override_db = MediaDatabase(
-                db_path=db_path,
-                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-            )
-            query_db = override_db
-        else:
-            db_path = db.db_path_str
-            query_db = db
+    normalized_policy = str(policy or "missing").lower()
 
-        policy = str(policy or "missing").lower()
-        if policy == "all":
-            sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
-            rows = query_db.execute_query(sql).fetchall()
-        elif policy == "stale":
-            sql = (
-                "SELECT m.id FROM Media m "
-                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
-            )
-            rows = query_db.execute_query(sql).fetchall()
-        else:
-            sql = (
-                "SELECT m.id FROM Media m "
-                "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-                "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-                ")"
-            )
-            rows = query_db.execute_query(sql).fetchall()
-        mids: list[int] = []
-        for r in rows:
-            try:
-                mids.append(int(r["id"]))
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                try:
-                    mids.append(int(r[0]))
-                except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                    try:
-                        if isinstance(r, dict):
-                            first_val = next(iter(r.values()))
-                            mids.append(int(first_val))
-                    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                        continue
+    def _enqueue_for_db(query_db: Any, *, db_path: str) -> dict[str, Any]:
+        mids = list_claims_rebuild_media_ids(
+            query_db,
+            policy=normalized_policy,
+            compare_media_last_modified=True,
+        )
         for mid in mids:
             svc.submit(media_id=mid, db_path=db_path)
-        return {"status": "accepted", "enqueued": len(mids), "policy": policy}
-    finally:
-        if override_db is not None:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+        return {
+            "status": "accepted",
+            "enqueued": len(mids),
+            "policy": normalized_policy,
+        }
+
+    if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
+        with _claims_user_override_db(int(user_id)) as (query_db, db_path):
+            return _enqueue_for_db(query_db, db_path=db_path)
+
+    return _enqueue_for_db(db, db_path=db.db_path_str)
 
 
 def rebuild_claims_fts(
@@ -4024,21 +4048,11 @@ def rebuild_claims_fts(
     current_user: User,
     db: MediaDatabase,
 ) -> dict[str, Any]:
-    override_db: MediaDatabase | None = None
-    try:
-        if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
-            db_path = get_user_media_db_path(int(user_id))
-            override_db = MediaDatabase(
-                db_path=db_path,
-                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-            )
+    if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
+        with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
             count = override_db.rebuild_claims_fts()
-        else:
-            count = db.rebuild_claims_fts()
-    finally:
-        if override_db is not None:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+    else:
+        count = db.rebuild_claims_fts()
     return {"status": "ok", "indexed": count}
 
 

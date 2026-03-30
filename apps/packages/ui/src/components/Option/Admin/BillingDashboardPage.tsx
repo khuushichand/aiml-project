@@ -20,7 +20,10 @@ import {
   deriveAdminGuardFromError,
   sanitizeAdminErrorMessage
 } from "./admin-error-utils"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+
+const BILLING_OVERVIEW_PATH = "/api/v1/admin/billing/overview"
 
 // ── Overview Tab ──
 
@@ -165,7 +168,9 @@ const SubscriptionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGu
       loadSubscriptions()
     } catch (err: any) {
       if (err?.errorFields) return
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to override the user plan")
+      )
     } finally {
       setOverriding(false)
     }
@@ -186,7 +191,9 @@ const SubscriptionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGu
       loadSubscriptions()
     } catch (err: any) {
       if (err?.errorFields) return
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to grant credits")
+      )
     } finally {
       setGranting(false)
     }
@@ -398,8 +405,10 @@ const BillingEventsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGu
 // ── Main Page ──
 
 const BillingDashboardPage: React.FC = () => {
+  const { config: connectionConfig, loading: connectionConfigLoading } = useCanonicalConnectionConfig()
   const [adminGuard, setAdminGuard] = useState<"forbidden" | "notFound" | null>(null)
   const initialLoadRef = useRef(false)
+  const [capabilityCheckResolved, setCapabilityCheckResolved] = useState(false)
 
   const markAdminGuardFromError = useCallback((err: any) => {
     const guardState = deriveAdminGuardFromError(err)
@@ -407,15 +416,60 @@ const BillingDashboardPage: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    if (initialLoadRef.current) return
+    if (initialLoadRef.current || connectionConfigLoading) return
     initialLoadRef.current = true
-  }, [])
+    let cancelled = false
+
+    const checkBillingSupport = async () => {
+      const serverUrl = connectionConfig?.serverUrl?.trim()
+      if (!serverUrl) {
+        if (!cancelled) {
+          setCapabilityCheckResolved(true)
+        }
+        return
+      }
+
+      try {
+        const response = await fetch(`${serverUrl}/openapi.json`)
+        if (response.ok) {
+          const spec = await response.json()
+          const paths =
+            spec && typeof spec === "object" && spec.paths && typeof spec.paths === "object"
+              ? (spec.paths as Record<string, unknown>)
+              : null
+          if (!cancelled && (!paths || !(BILLING_OVERVIEW_PATH in paths))) {
+            setAdminGuard("notFound")
+          }
+        }
+      } catch {
+        // Ignore capability probe failures and let the page try runtime endpoints.
+      } finally {
+        if (!cancelled) {
+          setCapabilityCheckResolved(true)
+        }
+      }
+    }
+
+    void checkBillingSupport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [connectionConfig?.serverUrl, connectionConfigLoading])
+
+  if (!capabilityCheckResolved) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Card loading />
+      </div>
+    )
+  }
 
   if (adminGuard === "forbidden") {
     return (
       <Alert
         type="error"
-        message="Access Denied"
+        title="Access Denied"
         description="You do not have permission to view the billing dashboard."
         showIcon
         style={{ margin: 24 }}
@@ -427,7 +481,7 @@ const BillingDashboardPage: React.FC = () => {
     return (
       <Alert
         type="warning"
-        message="Not Available"
+        title="Not Available"
         description="Billing endpoints are not available on this server."
         showIcon
         style={{ margin: 24 }}

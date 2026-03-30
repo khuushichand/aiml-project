@@ -28,14 +28,15 @@ test.describe("Chunking Playground", () => {
     await authedPage.goto("/chunking-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    // Should have the chunk button and text input area
-    const buttons = await authedPage.getByRole("button").count()
-    const inputs = await authedPage
-      .locator("input, select, textarea")
-      .count()
-    expect(buttons + inputs).toBeGreaterThan(0)
+    await expect(
+      authedPage.getByRole("heading", { name: /chunking playground/i })
+    ).toBeVisible({ timeout: 15_000 })
+    const interactiveElements = authedPage.locator(
+      "button, input, select, textarea"
+    )
+    await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+    expect(await interactiveElements.count()).toBeGreaterThan(0)
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -66,7 +67,9 @@ test.describe("Chunking Playground", () => {
     await authedPage.goto("/chunking-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
+    await expect(
+      authedPage.getByRole("heading", { name: /chunking playground/i })
+    ).toBeVisible({ timeout: 15_000 })
 
     // Fill in the text area with sample content
     const textarea = authedPage.locator("textarea").first()

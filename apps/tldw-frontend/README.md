@@ -46,7 +46,7 @@ Key variables:
 - `NEXT_PUBLIC_API_BEARER`: Optional. Bearer token for chat module when server sets `API_BEARER`.
 - `NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD`: Optional. Runs row-count threshold for preferring server-side CSV export (default: `2000`).
 
-3) Run the development server (use port 8080 to match server CORS defaults):
+3) Run the development server (use port 8080 to match the server's built-in local browser defaults):
 
 ```bash
 bun run dev -- -p 8080
@@ -56,6 +56,14 @@ bun run dev -- -p 8080
 ```
 
 Open [http://localhost:8080](http://localhost:8080) with your browser.
+
+### Quickstart networking (default Docker WebUI path)
+
+When you use the repository quickstart Docker + WebUI flow, the default browser path stays on same-origin browser API requests through the WebUI proxy. That is the default quickstart networking story and does not depend on browser CORS setup or a custom browser-visible API host.
+
+### Advanced/custom-host networking
+
+Set `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` together with `NEXT_PUBLIC_API_URL` only when you intentionally need an advanced/custom-host networking path, such as LAN/mobile access, a reverse proxy, or a custom domain where the browser should call a non-default API host directly.
 
 ### repo2txt Route
 

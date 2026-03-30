@@ -4,8 +4,12 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { PolicyDocumentEditor } from "../PolicyDocumentEditor"
+import type {
+  McpHubToolRegistryEntry,
+  McpHubToolRegistryModule
+} from "@/services/tldw/mcp-hub"
 
-const REGISTRY_ENTRIES = [
+const REGISTRY_ENTRIES: McpHubToolRegistryEntry[] = [
   {
     tool_name: "files.read",
     display_name: "files.read",
@@ -24,9 +28,9 @@ const REGISTRY_ENTRIES = [
     metadata_source: "explicit",
     metadata_warnings: []
   }
-] as const
+]
 
-const REGISTRY_MODULES = [
+const REGISTRY_MODULES: McpHubToolRegistryModule[] = [
   {
     module: "files",
     display_name: "files",
@@ -34,7 +38,7 @@ const REGISTRY_MODULES = [
     risk_summary: { low: 1, medium: 0, high: 0, unclassified: 0 },
     metadata_warnings: []
   }
-] as const
+]
 
 describe("PolicyDocumentEditor", () => {
   it("shows workspace path allowlist controls when path scope is enabled", () => {

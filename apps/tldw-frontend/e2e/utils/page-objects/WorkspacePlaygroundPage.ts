@@ -21,7 +21,6 @@ export class WorkspacePlaygroundPage {
   readonly studioPanel: Locator
   readonly globalSearchModal: Locator
   readonly globalSearchInput: Locator
-  readonly commandPalette: Locator
   readonly addSourceModal: Locator
 
   constructor(page: Page) {
@@ -31,11 +30,13 @@ export class WorkspacePlaygroundPage {
     this.sourcesPanel = page.locator("#workspace-sources-panel")
     this.chatPanel = page.locator("#workspace-main-content")
     this.studioPanel = page.locator("#workspace-studio-panel")
-    this.globalSearchModal = page.getByRole("dialog", { name: /search workspace/i }).first()
+    this.globalSearchModal = page
+      .getByRole("dialog")
+      .filter({ hasText: /search workspace/i })
+      .first()
     this.globalSearchInput = this.globalSearchModal.getByPlaceholder(
       /search sources, chat, and notes/i
     )
-    this.commandPalette = page.getByRole("dialog", { name: /command palette/i }).first()
     this.addSourceModal = page
       .getByRole("dialog")
       .filter({ hasText: /add sources/i })
@@ -54,35 +55,18 @@ export class WorkspacePlaygroundPage {
   private async waitForModalBackdropsToClear(): Promise<void> {
     await expect(
       this.page.locator(
-        "div.fixed.inset-0.z-50.bg-black\\/50:visible, div.fixed.inset-0.z-50.backdrop-blur-sm:visible, .ant-modal-mask:visible"
+        "div.fixed.inset-0.z-50.bg-black\\/50, div.fixed.inset-0.z-50.backdrop-blur-sm, .ant-modal-mask"
       )
     ).toHaveCount(0, { timeout: 10_000 })
-  }
-
-  private async closeCommandPaletteIfOpen(): Promise<void> {
-    if (!(await this.commandPalette.isVisible().catch(() => false))) {
-      return
-    }
-
-    const input = this.commandPalette.getByPlaceholder(/type a command or search/i)
-    if (await input.isVisible().catch(() => false)) {
-      await input.click()
-      await input.press("Escape")
-    } else {
-      await this.page.keyboard.press("Escape")
-    }
-    await expect(this.commandPalette).toBeHidden({ timeout: 10_000 })
   }
 
   private async clickWhenActionable(locator: Locator): Promise<void> {
     await expect(locator).toBeVisible({ timeout: 10_000 })
     await this.disableNextJsPortalPointerInterception()
-    await this.waitForModalBackdropsToClear()
     try {
       await locator.click({ trial: true, timeout: 3_000 })
     } catch {
       await this.disableNextJsPortalPointerInterception()
-      await this.waitForModalBackdropsToClear()
       await locator.click({ trial: true, timeout: 3_000 })
     }
     await locator.click()
@@ -96,10 +80,102 @@ export class WorkspacePlaygroundPage {
     await this.disableNextJsPortalPointerInterception()
   }
 
+  async setStudyMaterialsPolicy(policy: "general" | "workspace"): Promise<void> {
+    await this.page.evaluate((nextPolicy) => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            setState?: (state: { studyMaterialsPolicy: "general" | "workspace" }) => void
+          }
+        | undefined
+
+      if (!store?.setState) {
+        throw new Error("Workspace store is unavailable on window")
+      }
+
+      store.setState({ studyMaterialsPolicy: nextPolicy })
+    }, policy)
+  }
+
+  async getWorkspaceId(): Promise<string | null> {
+    return await this.page.evaluate(() => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            getState?: () => { workspaceId?: string | null }
+          }
+        | undefined
+
+      return store?.getState?.().workspaceId ?? null
+    })
+  }
+
+  async getGeneratedArtifactRecord(
+    artifactType: "quiz" | "flashcards",
+  ): Promise<{
+    id: string
+    title: string
+    status: string
+    serverId: number | string | null
+    data: Record<string, unknown> | null
+  } | null> {
+    return await this.page.evaluate((nextType) => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            getState?: () => {
+              generatedArtifacts?: Array<{
+                id: string
+                title: string
+                status: string
+                serverId?: number | string | null
+                data?: Record<string, unknown> | null
+                type?: string
+              }>
+            }
+          }
+        | undefined
+
+      const artifact = store?.getState?.().generatedArtifacts?.find(
+        (entry) => entry.type === nextType
+      )
+      if (!artifact) {
+        return null
+      }
+
+      return {
+        id: artifact.id,
+        title: artifact.title,
+        status: artifact.status,
+        serverId: artifact.serverId ?? null,
+        data: artifact.data ?? null,
+      }
+    }, artifactType)
+  }
+
   async waitForReady(): Promise<void> {
     await expect(this.workspacesButton).toBeVisible({ timeout: 30_000 })
     await expect(this.chatPanel).toBeVisible({ timeout: 30_000 })
     await this.disableNextJsPortalPointerInterception()
+  }
+
+  async resetWorkspace(name = "Workspace E2E"): Promise<void> {
+    await this.page.evaluate((workspaceName) => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            getState?: () => {
+              initializeWorkspace?: (name?: string) => void
+            }
+          }
+        | undefined
+
+      if (!store?.getState) {
+        throw new Error("Workspace store is unavailable on window")
+      }
+
+      store.getState().initializeWorkspace?.(workspaceName)
+    }, name)
   }
 
   async openGlobalSearchWithShortcut(): Promise<void> {
@@ -113,19 +189,21 @@ export class WorkspacePlaygroundPage {
     }
     await expect(this.globalSearchModal).toBeVisible({ timeout: 10_000 })
     await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
-    await this.closeCommandPaletteIfOpen()
   }
 
   async closeGlobalSearchWithEscape(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    if (await this.globalSearchInput.isVisible().catch(() => false)) {
-      await this.globalSearchInput.click()
-      await expect(this.globalSearchInput).toBeFocused({ timeout: 10_000 })
-      await this.globalSearchInput.press("Escape")
-    }
+    await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
+    await this.globalSearchInput.click()
+    await expect(this.globalSearchInput).toBeFocused({ timeout: 10_000 })
+    await this.globalSearchInput.press("Escape")
     await expect(this.globalSearchModal).toBeHidden({ timeout: 10_000 })
-    await this.closeCommandPaletteIfOpen()
     await this.waitForModalBackdropsToClear()
+  }
+
+  async searchWorkspace(query: string): Promise<void> {
+    await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
+    await this.globalSearchInput.fill(query)
   }
 
   async hideSourcesPane(): Promise<void> {
@@ -171,14 +249,9 @@ export class WorkspacePlaygroundPage {
 
   async closeAddSourcesModal(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    const closeButton = this.addSourceModal
-      .locator("button.ant-modal-close")
-      .first()
-    if (await closeButton.isVisible().catch(() => false)) {
-      await closeButton.click({ force: true })
-    } else {
-      await this.page.keyboard.press("Escape")
-    }
+    await this.clickWhenActionable(
+      this.addSourceModal.locator("button.ant-modal-close").first()
+    )
     await expect(this.addSourceModal).toBeHidden({ timeout: 10_000 })
     await this.waitForModalBackdropsToClear()
   }
@@ -238,6 +311,10 @@ export class WorkspacePlaygroundPage {
       )
   }
 
+  getSourceRowByTitle(title: string): Locator {
+    return this.page.locator("[data-source-id]").filter({ hasText: title }).first()
+  }
+
   async selectSourceById(sourceId: string): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
     const checkbox = this.page.locator(
@@ -276,6 +353,49 @@ export class WorkspacePlaygroundPage {
     await expect(
       this.page.locator(`[data-source-id="${sourceId}"] input[type="checkbox"]`)
     ).toBeChecked()
+  }
+
+  async selectSourceByTitle(title: string): Promise<void> {
+    const row = this.getSourceRowByTitle(title)
+    await expect(row).toBeVisible({ timeout: 10_000 })
+    const sourceId = await row.getAttribute("data-source-id")
+    if (!sourceId) {
+      throw new Error(`Unable to resolve workspace source id for "${title}"`)
+    }
+    await this.selectSourceById(sourceId)
+  }
+
+  async expectSourceSelectedByTitle(title: string): Promise<void> {
+    const row = this.getSourceRowByTitle(title)
+    await expect(row).toBeVisible({ timeout: 10_000 })
+    await expect(row.locator('input[type="checkbox"]')).toBeChecked()
+  }
+
+  getSelectedSourceTag(title: string): Locator {
+    return this.chatPanel.locator(".ant-tag").filter({ hasText: title }).first()
+  }
+
+  getChatInput(): Locator {
+    return this.chatPanel.locator("textarea").first()
+  }
+
+  async sendChatMessage(message: string): Promise<void> {
+    const input = this.getChatInput()
+    await expect(input).toBeVisible({ timeout: 10_000 })
+    await input.fill(message)
+    await this.chatPanel.getByRole("button", { name: /send/i }).click()
+  }
+
+  getGlobalSearchResult(text: string): Locator {
+    return this.globalSearchModal.getByRole("button").filter({ hasText: text }).first()
+  }
+
+  getStudioOutputButton(label: string): Locator {
+    return this.studioPanel.getByRole("button", { name: label, exact: true })
+  }
+
+  getStudioArtifactCards(): Locator {
+    return this.studioPanel.locator("[data-testid^='studio-artifact-card-']")
   }
 }
 

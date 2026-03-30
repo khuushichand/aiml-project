@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 
 import { RouteShell } from "../app-route"
+import type { RouteDefinition } from "../route-registry"
 
 type RuntimeListener = (
   message: {
@@ -18,6 +19,15 @@ const runtimeListeners = new Set<RuntimeListener>()
 
 vi.mock("~/hooks/useDarkmode", () => ({
   useDarkMode: () => ({ mode: "light" })
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    i18n: {
+      language: "en",
+      resolvedLanguage: "en"
+    }
+  })
 }))
 
 vi.mock("@/components/Common/PageAssistLoader", () => ({
@@ -72,24 +82,36 @@ vi.mock("~/components/Layouts/Layout", () => ({
   )
 }))
 
-vi.mock("@/routes/route-registry", () => ({
-  optionRoutes: [
-    { path: "/", element: <div data-testid="home-route">Home</div> }
-  ],
-  sidepanelRoutes: [
-    { path: "/chat", element: <div data-testid="sidepanel-chat">Chat</div> },
+const ROUTES: Record<"options" | "sidepanel", RouteDefinition[]> = {
+  options: [
     {
+      kind: "options",
+      path: "/",
+      element: <div data-testid="home-route">Home</div>
+    }
+  ],
+  sidepanel: [
+    {
+      kind: "sidepanel",
+      path: "/chat",
+      element: <div data-testid="sidepanel-chat">Chat</div>
+    },
+    {
+      kind: "sidepanel",
       path: "/companion",
-      element: <div data-testid="sidepanel-companion-route">Companion</div>
+      element: <div data-testid="companion-home-shell">Companion Home</div>
     }
   ]
-}))
+}
 
 const renderRouteShell = (kind: "options" | "sidepanel", path: string) =>
   render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="*" element={<RouteShell kind={kind} />} />
+        <Route
+          path="*"
+          element={<RouteShell kind={kind} routes={ROUTES[kind]} />}
+        />
       </Routes>
     </MemoryRouter>
   )
@@ -123,7 +145,9 @@ describe("RouteShell companion capture routing", () => {
   it("stores pending companion capture and navigates to the companion route", async () => {
     renderRouteShell("sidepanel", "/chat")
 
-    expect(screen.getByTestId("sidepanel-chat")).toBeVisible()
+    await waitFor(() => {
+      expect(screen.getByTestId("sidepanel-chat")).toBeVisible()
+    })
     expect(runtimeListeners.size).toBeGreaterThan(0)
 
     act(() => {
@@ -144,7 +168,7 @@ describe("RouteShell companion capture routing", () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByTestId("sidepanel-companion-route")).toBeVisible()
+      expect(screen.getByTestId("companion-home-shell")).toBeVisible()
     })
 
     const stored = window.sessionStorage.getItem("tldw:companion:pendingCapture")

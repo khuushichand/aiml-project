@@ -98,9 +98,16 @@ export abstract class BasePage {
           case "state_change": {
             const before = await el.expectation.stateCheck(this.page)
             await el.locator.click()
-            await this.page.waitForTimeout(500)
-            const after = await el.expectation.stateCheck(this.page)
-            if (JSON.stringify(before) === JSON.stringify(after)) {
+            const beforeSerialized = JSON.stringify(before)
+            try {
+              await expect
+                .poll(
+                  async () =>
+                    JSON.stringify(await el.expectation.stateCheck(this.page)),
+                  { timeout: 5_000 }
+                )
+                .not.toBe(beforeSerialized)
+            } catch {
               throw new Error(
                 `Button "${el.name}" expected state change but state is identical before and after click.`
               )

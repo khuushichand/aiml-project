@@ -26,6 +26,7 @@ from .tts_exceptions import (
     TTSVoiceNotFoundError,
 )
 from .utils import parse_bool, resolve_qwen3_runtime_name
+from .voice_manager import PROVIDER_REQUIREMENTS
 
 #
 #######################################################################################################################
@@ -120,6 +121,20 @@ class ProviderLimits:
             "valid_formats": {"mp3", "wav", "opus", "flac", "pcm", "aac"},
             "min_speed": 0.25,
             "max_speed": 4.0
+        },
+        "pocket_tts_cpp": {
+            "max_text_length": 5000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav", "opus", "flac", "pcm", "aac"},
+            "min_speed": 0.25,
+            "max_speed": 4.0
+        },
+        "kitten_tts": {
+            "max_text_length": 5000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav", "pcm"},
+            "min_speed": 0.25,
+            "max_speed": 4.0,
         },
         "lux_tts": {
             "max_text_length": 5000,
@@ -232,6 +247,8 @@ class TTSInputValidator:
         "supertonic": 15000,
         "supertonic2": 15000,
         "pocket_tts": 5000,
+        "pocket_tts_cpp": 5000,
+        "kitten_tts": 5000,
         "echo_tts": 768,
         "lux_tts": 5000,
         "qwen3_tts": 5000,
@@ -264,6 +281,8 @@ class TTSInputValidator:
         "supertonic": {"en"},
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
         "pocket_tts": {"en"},
+        "pocket_tts_cpp": {"en"},
+        "kitten_tts": {"en"},
         "echo_tts": {"en"},
         "lux_tts": {"en"},
         "qwen3_tts": {"auto", "zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"},
@@ -284,6 +303,8 @@ class TTSInputValidator:
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
         "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
+        "pocket_tts_cpp": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
+        "kitten_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.PCM},
         "echo_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
         "lux_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
         "qwen3_tts": {AudioFormat.MP3, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.WAV, AudioFormat.PCM},
@@ -547,10 +568,13 @@ class TTSInputValidator:
                 self._validate_voice(request.voice, provider)
 
             min_duration = None
+            max_duration = None
             if isinstance(request.extra_params, dict):
                 min_duration = self._coerce_float(request.extra_params.get("reference_duration_min"))
 
             # Provider-specific validations for Qwen3-TTS
+            skip_voice_reference_validation = False
+
             if provider == "qwen3_tts":
                 model_name = (getattr(request, "model", None) or "").strip().lower()
                 extras = request.extra_params or {}
@@ -614,6 +638,22 @@ class TTSInputValidator:
                         )
                     if min_duration is None:
                         min_duration = 3.0
+            elif provider == "pocket_tts_cpp":
+                voice = (request.voice or "").strip()
+                if not request.voice_reference and not voice.startswith("custom:"):
+                    raise TTSInvalidVoiceReferenceError(
+                        "PocketTTS.cpp requires a direct voice_reference or a stored custom: voice",
+                        provider=provider,
+                    )
+                duration_limits = PROVIDER_REQUIREMENTS.get("pocket_tts_cpp", {}).get("duration", {})
+                if min_duration is None:
+                    min_duration = self._coerce_float(duration_limits.get("min"))
+                max_duration = self._coerce_float(duration_limits.get("max"))
+                skip_voice_reference_validation = bool(
+                    voice.startswith("custom:")
+                    and isinstance(extras, dict)
+                    and extras.get("pocket_tts_cpp_voice_path")
+                )
 
             # Validate parameters (provider-aware)
             self._validate_parameters(request, provider)
@@ -626,8 +666,12 @@ class TTSInputValidator:
                 )
 
             # Validate voice reference if provided
-            if request.voice_reference:
-                self._validate_voice_reference(request.voice_reference, min_duration=min_duration)
+            if request.voice_reference and not skip_voice_reference_validation:
+                self._validate_voice_reference(
+                    request.voice_reference,
+                    min_duration=min_duration,
+                    max_duration=max_duration,
+                )
 
             return True, None
 
@@ -843,7 +887,12 @@ class TTSInputValidator:
             if voice_clone_prompt is not None:
                 self._validate_voice_clone_prompt(voice_clone_prompt, provider)
 
-    def _validate_voice_reference(self, voice_ref_data: bytes, min_duration: Optional[float] = None):
+    def _validate_voice_reference(
+        self,
+        voice_ref_data: bytes,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+    ):
         """Validate voice reference audio for cloning"""
         if len(voice_ref_data) == 0:
             raise TTSInvalidVoiceReferenceError("Voice reference data is empty")
@@ -860,7 +909,7 @@ class TTSInputValidator:
                 "Voice reference file is not a valid audio format"
             )
 
-        if min_duration is not None and min_duration > 0:
+        if (min_duration is not None and min_duration > 0) or (max_duration is not None and max_duration > 0):
             try:
                 import io
 
@@ -878,10 +927,15 @@ class TTSInputValidator:
                     "Unable to read voice reference audio for duration validation",
                     details={"error": str(exc)},
                 ) from exc
-            if duration < min_duration:
+            if min_duration is not None and duration < min_duration:
                 raise TTSInvalidVoiceReferenceError(
                     f"Voice reference audio too short: {duration:.2f}s (min {min_duration}s)",
                     details={"duration_seconds": duration, "min_seconds": min_duration},
+                )
+            if max_duration is not None and duration > max_duration:
+                raise TTSInvalidVoiceReferenceError(
+                    f"Voice reference audio too long: {duration:.2f}s (max {max_duration}s)",
+                    details={"duration_seconds": duration, "max_seconds": max_duration},
                 )
 
     def _sanitize_html(self, text: str) -> str:
@@ -910,7 +964,7 @@ class TTSInputValidator:
         elif provider == "elevenlabs":
             # ElevenLabs specific rules
             return text
-        elif provider in ["kokoro", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "lux_tts"]:
+        elif provider in ["kokoro", "kitten_tts", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "pocket_tts_cpp", "lux_tts"]:
             # Local model specific rules - more conservative
             # Remove URLs and email addresses
             text = re.sub(r'https?://\S+', '[URL]', text)

@@ -13,13 +13,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
 import type { Organization, PlanTier, Subscription } from '@/types';
 import { api } from '@/lib/api-client';
@@ -52,6 +56,7 @@ type OrganizationFormData = z.infer<typeof organizationSchema>;
 
 function OrganizationsPageContent() {
   const confirm = useConfirm();
+  const privilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -65,6 +70,7 @@ function OrganizationsPageContent() {
   const [editError, setEditError] = useState('');
   const [updatingOrganization, setUpdatingOrganization] = useState(false);
   const [deletingOrganizationId, setDeletingOrganizationId] = useState<number | null>(null);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<Set<number>>(new Set());
   const [totalItems, setTotalItems] = useState(0);
   const [orgPlans, setOrgPlans] = useState<OrganizationPlanMap>({});
   const [slugTouched, setSlugTouched] = useState(false);
@@ -172,6 +178,14 @@ function OrganizationsPageContent() {
   useEffect(() => {
     loadOrganizations();
   }, [loadOrganizations]);
+
+  useEffect(() => {
+    const visibleIds = new Set(organizations.map((org) => org.id));
+    setSelectedOrgIds((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [organizations]);
 
   useEffect(() => {
     if (!showCreateForm) {
@@ -330,14 +344,13 @@ function OrganizationsPageContent() {
     try {
       const members = await api.getOrgMembers(String(organization.id));
       const memberCount = Array.isArray(members) ? members.length : 0;
-      const confirmed = await confirm({
+      const result = await privilegedAction({
         title: 'Delete organization',
         message: `Delete "${organization.name}"? This organization has ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
         confirmText: 'Delete',
-        variant: 'danger',
-        icon: 'delete',
+        requirePassword: true,
       });
-      if (!confirmed) return;
+      if (!result) return;
 
       setDeletingOrganizationId(organization.id);
       await api.deleteOrganization(String(organization.id));
@@ -363,10 +376,22 @@ function OrganizationsPageContent() {
                 <h1 className="text-3xl font-bold">Organizations</h1>
                 <p className="text-muted-foreground">Manage organizations and their members</p>
               </div>
-              <Button onClick={() => setShowCreateForm(!showCreateForm)}>
-                <Plus className="mr-2 h-4 w-4" />
-                New Organization
-              </Button>
+              <div className="flex items-center gap-2">
+                <ExportMenu
+                  onExport={(format: ExportFormat) => {
+                    exportData({
+                      data: organizations as unknown as Record<string, unknown>[],
+                      filename: 'organizations',
+                      format,
+                    });
+                  }}
+                  disabled={organizations.length === 0}
+                />
+                <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Organization
+                </Button>
+              </div>
             </div>
 
             {showCreateForm && (
@@ -563,9 +588,53 @@ function OrganizationsPageContent() {
                   />
                 ) : (
                   <>
+                    {selectedOrgIds.size > 0 && (
+                      <div className="mb-3 flex items-center gap-2 rounded-md border p-2">
+                        <Badge variant="secondary">{selectedOrgIds.size} selected</Badge>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={async () => {
+                            const result = await privilegedAction({
+                              title: 'Bulk Delete Organizations',
+                              message: `Delete ${selectedOrgIds.size} organization(s)? This cannot be undone.`,
+                              confirmText: 'Delete All',
+                              requirePassword: true,
+                            });
+                            if (!result) return;
+                            const ids = [...selectedOrgIds];
+                            const results = await Promise.allSettled(ids.map(id => api.deleteOrganization(String(id))));
+                            const okCount = results.filter(r => r.status === 'fulfilled').length;
+                            const failCount = results.length - okCount;
+                            setSelectedOrgIds(new Set());
+                            await loadOrganizations();
+                            if (okCount > 0) success('Bulk Delete', `${okCount} organization(s) deleted.`);
+                            if (failCount > 0) showError('Partial Failure', `${failCount} organization(s) failed to delete.`);
+                          }}
+                        >
+                          Delete Selected
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedOrgIds(new Set())}>
+                          Clear
+                        </Button>
+                      </div>
+                    )}
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="w-10">
+                            <Checkbox
+                              checked={selectedOrgIds.size > 0 && selectedOrgIds.size === organizations.length}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedOrgIds(new Set(organizations.map(o => o.id)));
+                                } else {
+                                  setSelectedOrgIds(new Set());
+                                }
+                              }}
+                              aria-label="Select all organizations"
+                            />
+                          </TableHead>
                           <TableHead>ID</TableHead>
                           <TableHead>Name</TableHead>
                           <TableHead>Slug</TableHead>
@@ -578,6 +647,19 @@ function OrganizationsPageContent() {
                       <TableBody>
                         {paginatedOrganizations.map((org) => (
                           <TableRow key={org.id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedOrgIds.has(org.id)}
+                                onCheckedChange={(checked) => {
+                                  setSelectedOrgIds(prev => {
+                                    const next = new Set(prev);
+                                    if (checked) next.add(org.id); else next.delete(org.id);
+                                    return next;
+                                  });
+                                }}
+                                aria-label={`Select ${org.name}`}
+                              />
+                            </TableCell>
                             <TableCell className="font-mono text-sm">{org.id}</TableCell>
                             <TableCell className="font-medium">{org.name}</TableCell>
                             <TableCell>

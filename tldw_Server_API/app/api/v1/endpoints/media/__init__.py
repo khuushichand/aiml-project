@@ -59,8 +59,7 @@ TemplateClassifier = _optional_import_attr(
     "tldw_Server_API.app.core.Chunking.templates",
     "TemplateClassifier",
 )  # type: ignore[assignment]
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,  # pragma: no cover
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
@@ -271,7 +270,6 @@ __all__ = [
     "get_request_user",
     "get_media_db_for_user",
     "get_usage_event_logger",
-    "MediaDatabase",
     "get_document_version",
     "file_validator_instance",
     "books",

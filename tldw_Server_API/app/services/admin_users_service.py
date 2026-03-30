@@ -15,6 +15,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     AdminPasswordResetRequest,
     AdminUserCreateRequest,
     UserUpdateRequest,
+    unwrap_optional_secret,
 )
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateUserError,
@@ -252,7 +253,8 @@ async def update_user(
                 db,
                 password_service,
                 reason=request.reason,
-                admin_password=request.admin_password,
+                admin_password=unwrap_optional_secret(request.admin_password),
+                admin_reauth_token=unwrap_optional_secret(request.admin_reauth_token),
             )
 
         is_pg = await is_pg_fn()
@@ -385,7 +387,8 @@ async def reset_user_password(
             db,
             password_service,
             reason=request.reason,
-            admin_password=request.admin_password,
+            admin_password=unwrap_optional_secret(request.admin_password),
+            admin_reauth_token=unwrap_optional_secret(request.admin_reauth_token),
         )
 
         temporary_password = request.temporary_password
@@ -505,7 +508,8 @@ async def set_user_mfa_requirement(
             db,
             password_service,
             reason=request.reason,
-            admin_password=request.admin_password,
+            admin_password=unwrap_optional_secret(request.admin_password),
+            admin_reauth_token=unwrap_optional_secret(request.admin_reauth_token),
         )
 
         require_mfa = bool(request.require_mfa)
@@ -617,7 +621,8 @@ async def delete_user(
             db,
             password_service,
             reason=getattr(request, "reason", None),
-            admin_password=getattr(request, "admin_password", None),
+            admin_password=unwrap_optional_secret(getattr(request, "admin_password", None)),
+            admin_reauth_token=unwrap_optional_secret(getattr(request, "admin_reauth_token", None)),
         )
 
         is_pg = await is_pg_fn()

@@ -13,7 +13,7 @@ import {
 import { Search } from "lucide-react"
 import { cn } from "@/libs/utils"
 import {
-  HEADER_SHORTCUT_GROUPS,
+  getHeaderShortcutGroups,
   type HeaderShortcutItem
 } from "./header-shortcut-items"
 
@@ -118,7 +118,7 @@ export function HeaderShortcuts({
   )
 
   const resolvedGroups = useMemo(() => {
-    return HEADER_SHORTCUT_GROUPS.map((group) => ({
+    return getHeaderShortcutGroups().map((group) => ({
       ...group,
       title: t(group.titleKey, group.titleDefault),
       items: group.items

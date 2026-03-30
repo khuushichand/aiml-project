@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import DocumentationPage from "../DocumentationPage"
+import DocumentationPage, {
+  type DocumentationDocsBySource
+} from "../DocumentationPage"
 import { vi } from "vitest"
 
 vi.mock("react-i18next", () => ({
@@ -60,5 +62,54 @@ describe("DocumentationPage template fallback", () => {
     expect(text).not.toContain("{{path}}")
     expect(text).not.toContain("{{extensionPath}}")
     expect(text).not.toContain("{{serverPath}}")
+  })
+
+  it("prefers discovered server docs over the extension fallback tab", async () => {
+    const loadDocContent = vi.fn().mockResolvedValue(`# AuthNZ API Guide
+
+The AuthNZ module provides authentication and authorization for the tldw_server API.`)
+
+    const docsBySource: Partial<DocumentationDocsBySource> = {
+      server: [
+        {
+          id: "server:Docs/Published/API-related/AuthNZ-API-Guide.md",
+          title: "AuthNZ API Guide",
+          source: "server",
+          relativePath: "API-related/AuthNZ-API-Guide.md",
+          fullPath: "Docs/Published/API-related/AuthNZ-API-Guide.md",
+        }
+      ]
+    }
+
+    render(
+      <DocumentationPage
+        docsBySource={docsBySource}
+        loadDocContent={loadDocContent}
+      />
+    )
+
+    const serverTab = screen.getByRole("tab", { name: /tldw_server \(1\)/i })
+    expect(serverTab).toHaveAttribute("aria-selected", "true")
+
+    await waitFor(() => {
+      expect(loadDocContent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "server",
+          relativePath: "API-related/AuthNZ-API-Guide.md"
+        })
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /The AuthNZ module provides authentication and authorization/
+        )
+      ).toBeInTheDocument()
+    })
+
+    expect(
+      screen.queryByText(/Documentation files were not auto-discovered/i)
+    ).not.toBeInTheDocument()
   })
 })

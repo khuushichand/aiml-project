@@ -1,11 +1,19 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class KnowledgeSaveRequest(BaseModel):
     conversation_id: str = Field(..., description="Conversation to backlink")
     message_id: Optional[str] = Field(None, description="Optional message ID to backlink")
+    scope_type: Literal["global", "workspace"] = Field(
+        "global",
+        description="Conversation scope type",
+    )
+    workspace_id: Optional[str] = Field(
+        None,
+        description="Workspace ID when scope_type='workspace'",
+    )
     snippet: str = Field(..., min_length=1, description="Snippet content to save")
     tags: Optional[list[str]] = Field(None, description="Optional tags to attach as keywords")
     make_flashcard: bool = Field(False, description="If true, also create a flashcard from the snippet")
@@ -33,6 +41,14 @@ class KnowledgeSaveRequest(BaseModel):
             seen.add(key)
             cleaned.append(s)
         return cleaned or None
+
+    @model_validator(mode="after")
+    def _validate_scope(self) -> "KnowledgeSaveRequest":
+        if self.scope_type == "workspace" and not self.workspace_id:
+            raise ValueError("workspace_id is required when scope_type='workspace'")
+        if self.scope_type == "global":
+            self.workspace_id = None
+        return self
 
 
 class KnowledgeSaveResponse(BaseModel):

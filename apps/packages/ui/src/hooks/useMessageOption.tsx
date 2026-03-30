@@ -31,9 +31,15 @@ import {
 import type { MessageSteeringPromptTemplates } from "@/types/message-steering";
 import { useChatLoopState } from "@/services/chat-loop/hooks";
 import { subscribeChatLoopEvents } from "@/services/chat-loop/bridge";
+import type { ChatScope } from "@/types/chat-scope";
+
+const buildAssistantKey = (
+  kind: string | null | undefined,
+  id: string | number | null | undefined,
+) => (kind && id != null ? `${kind}:${String(id)}` : null);
 
 export const useMessageOption = (
-  opts: { forceCompareEnabled?: boolean } = {},
+  opts: { forceCompareEnabled?: boolean; scope?: ChatScope } = {},
 ) => {
   const e2eDebugEnabled =
     typeof window !== "undefined" && (window as any).__tldw_e2e_debug;
@@ -245,20 +251,35 @@ export const useMessageOption = (
     t,
   });
 
-  useServerChatLoader({ ensureServerChatHistoryId, notification, t });
+  useServerChatLoader({
+    ensureServerChatHistoryId,
+    notification,
+    t,
+    scope: opts.scope,
+  });
 
   const lastAssistantKeyRef = React.useRef<string | null>(
-    selectedAssistant?.kind && selectedAssistant?.id
-      ? `${selectedAssistant.kind}:${selectedAssistant.id}`
-      : null,
+    buildAssistantKey(selectedAssistant?.kind, selectedAssistant?.id),
   );
 
   React.useEffect(() => {
-    const nextAssistantKey =
-      selectedAssistant?.kind && selectedAssistant?.id
-        ? `${selectedAssistant.kind}:${selectedAssistant.id}`
-        : null;
+    const nextAssistantKey = buildAssistantKey(
+      selectedAssistant?.kind,
+      selectedAssistant?.id,
+    );
     if (lastAssistantKeyRef.current === nextAssistantKey) {
+      return;
+    }
+    const activeServerAssistantKey = buildAssistantKey(
+      serverChatAssistantKind,
+      serverChatAssistantId ?? serverChatCharacterId,
+    );
+    if (
+      serverChatId &&
+      nextAssistantKey &&
+      nextAssistantKey === activeServerAssistantKey
+    ) {
+      lastAssistantKeyRef.current = nextAssistantKey;
       return;
     }
     lastAssistantKeyRef.current = nextAssistantKey;
@@ -269,6 +290,10 @@ export const useMessageOption = (
   }, [
     selectedAssistant?.id,
     selectedAssistant?.kind,
+    serverChatAssistantId,
+    serverChatAssistantKind,
+    serverChatCharacterId,
+    serverChatId,
     setHistory,
     setHistoryId,
     setMessages,
@@ -408,6 +433,7 @@ export const useMessageOption = (
     invalidateServerChatHistory,
     selectedCharacter,
     selectedAssistant,
+    scope: opts.scope,
   });
   const onSubmit = React.useCallback(
     async (...args: Parameters<typeof submitChat>) => {

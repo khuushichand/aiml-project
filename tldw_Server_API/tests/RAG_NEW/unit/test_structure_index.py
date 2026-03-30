@@ -1,7 +1,7 @@
 import os
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MediaDBRetriever, RetrievalConfig
 
 
@@ -104,6 +104,35 @@ def test_structure_index_write_and_lookup(monkeypatch):
     # Lookup section by offset for first paragraph
     sec = db.lookup_section_for_offset(mid, p1[0])
     assert sec and isinstance(sec, dict) and "title" in sec and sec["title"].lower().startswith("intro")
+
+
+def test_structure_index_lookup_by_heading(monkeypatch):
+    monkeypatch.setenv("RAG_ENABLE_STRUCTURE_INDEX", "1")
+    db = MediaDatabase(db_path=":memory:", client_id="test")
+
+    content, chunks, _p1, _p2 = build_content_and_chunks()
+    mid, _muuid, _msg = db.add_media_with_keywords(
+        url="local://test-structure-heading",
+        title="Struct Doc Heading",
+        media_type="web_document",
+        content=content,
+        keywords=["test"],
+        prompt=None,
+        analysis_content=None,
+        safe_metadata=None,
+        transcription_model=None,
+        author="unit",
+        ingestion_date=None,
+        overwrite=False,
+        chunk_options=None,
+        chunks=chunks,
+    )
+    assert mid is not None
+
+    section = db.lookup_section_by_heading(mid, "methods")
+    assert section is not None
+    assert section[0] < section[1]
+    assert section[2] == "Methods"
 
 
 def test_structure_index_persists_parent_section_hierarchy(monkeypatch):

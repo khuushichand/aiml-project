@@ -171,7 +171,7 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
-  const [mfaByUserId, setMfaByUserId] = useState<Record<number, boolean>>({});
+  const [mfaByUserId, setMfaByUserId] = useState<Record<number, boolean | null>>({});
   const [mfaLoading, setMfaLoading] = useState(false);
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(true);
@@ -341,21 +341,34 @@ function UsersPageContent() {
     const loadMfaStatus = async () => {
       try {
         setMfaLoading(true);
-        const results = await Promise.allSettled(
-          missingIds.map(async (id) => {
-            const status = await api.getUserMfaStatus(String(id)) as { enabled?: boolean };
-            return { id, enabled: Boolean(status?.enabled) };
-          })
-        );
+        // Use bulk endpoint instead of N+1 individual calls
+        const bulkResult = await api.getUserMfaStatusBulk(missingIds);
         if (cancelled) return;
         setMfaByUserId((prev) => {
+          const responseEntries = Object.entries(bulkResult.mfa_status ?? {});
+          const returnedIds = new Set<number>();
+          const failedIds = new Set((bulkResult.failed_user_ids ?? []).map((id) => Number(id)));
+          let changed = false;
           const next = { ...prev };
-          results.forEach((result) => {
-            if (result.status === 'fulfilled') {
-              next[result.value.id] = result.value.enabled;
+          for (const [uid, enabled] of responseEntries) {
+            const userId = Number(uid);
+            if (!Number.isFinite(userId)) continue;
+            returnedIds.add(userId);
+            if (next[userId] === enabled) continue;
+            next[userId] = enabled;
+            changed = true;
+          }
+          for (const userId of missingIds) {
+            if (returnedIds.has(userId)) continue;
+            if (!failedIds.has(userId) && bulkResult.failed_user_ids && bulkResult.failed_user_ids.length > 0) {
+              continue;
             }
-          });
-          return next;
+            if (next[userId] !== null) {
+              next[userId] = null;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
         });
       } catch (err) {
         console.error('Failed to load MFA status for users:', err);
@@ -393,9 +406,9 @@ function UsersPageContent() {
 
     if (mfaFilter !== 'all') {
       const hasMfa = mfaByUserId[user.id];
-      if (hasMfa === undefined) return false;
-      if (mfaFilter === 'enabled' && !hasMfa) return false;
-      if (mfaFilter === 'disabled' && hasMfa) return false;
+      if (hasMfa === undefined || hasMfa === null) return false;
+      if (mfaFilter === 'enabled' && hasMfa !== true) return false;
+      if (mfaFilter === 'disabled' && hasMfa !== false) return false;
     }
 
     return true;
@@ -1242,6 +1255,7 @@ function UsersPageContent() {
                           <TableHead>Role</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Storage</TableHead>
+                          <TableHead>Created</TableHead>
                           <TableHead>Last Login</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -1308,9 +1322,25 @@ function UsersPageContent() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-muted-foreground text-sm">
-                                {user.last_login
-                                  ? new Date(user.last_login).toLocaleDateString()
-                                  : 'Never'}
+                                {user.created_at
+                                  ? new Date(user.created_at).toLocaleDateString()
+                                  : '—'}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground text-sm">
+                                <div className="flex items-center gap-1">
+                                  {user.last_login
+                                    ? new Date(user.last_login).toLocaleDateString()
+                                    : 'Never'}
+                                  {(() => {
+                                    if (!user.last_login) return null;
+                                    const DORMANT_THRESHOLD_DAYS = 90;
+                                    const lastLogin = new Date(user.last_login);
+                                    const daysSinceLogin = Math.floor((Date.now() - lastLogin.getTime()) / (1000 * 60 * 60 * 24));
+                                    return Number.isFinite(daysSinceLogin) && daysSinceLogin > DORMANT_THRESHOLD_DAYS ? (
+                                      <Badge variant="destructive" className="text-[10px] px-1 py-0">Dormant</Badge>
+                                    ) : null;
+                                  })()}
+                                </div>
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-1">

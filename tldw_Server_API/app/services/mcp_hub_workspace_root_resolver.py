@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 
 
@@ -134,6 +136,12 @@ class McpHubWorkspaceRootResolver:
             }
         )
         if not normalized_roots:
+            # Fallback: try ACP workspace registry if workspace_key is numeric
+            acp_root = self._resolve_acp_workspace(user_key, workspace_key)
+            if acp_root:
+                result["workspace_root"] = _normalize_workspace_root(acp_root)
+                result["source"] = "acp_workspace"
+                return result
             result["reason"] = "workspace_root_unavailable"
             return result
         if len(normalized_roots) > 1:
@@ -144,3 +152,23 @@ class McpHubWorkspaceRootResolver:
         result["workspace_root"] = normalized_roots[0]
         result["source"] = "sandbox_workspace_lookup"
         return result
+
+    @staticmethod
+    def _resolve_acp_workspace(user_key: str, workspace_key: str) -> str | None:
+        """Try to resolve a workspace root from the ACP orchestration DB."""
+        try:
+            uid = int(user_key)
+            wid = int(workspace_key)
+        except (ValueError, TypeError):
+            return None
+        try:
+            from tldw_Server_API.app.core.Agent_Orchestration.orchestration_service import (
+                get_orchestration_db,
+            )
+            db = get_orchestration_db(uid)
+            ws = db.get_workspace(wid)
+            if ws and ws.root_path:
+                return ws.root_path
+        except Exception as exc:
+            logger.debug("ACP workspace fallback resolution failed for user={} ws={}: {}", user_key, workspace_key, exc)
+        return None

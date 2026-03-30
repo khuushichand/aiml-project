@@ -3,9 +3,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const safeStringify = (value: unknown): string => {
   try {
-    return JSON.stringify(value)
+    const result = JSON.stringify(value)
+    return result ?? ""
   } catch {
-    return String(value)
+    // Circular reference or other serialization failure — avoid "[object Object]"
+    return ""
   }
 }
 

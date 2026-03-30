@@ -21,6 +21,7 @@ import { chromium, Browser, Page, BrowserContext } from "playwright"
 import * as fs from "fs"
 import * as path from "path"
 import * as readline from "readline"
+import { waitForAppShell } from "./utils/helpers"
 import {
   PAGE_MAPPINGS,
   WEBUI_ONLY_PAGES,
@@ -437,9 +438,7 @@ async function reviewPage(
         }
       )
       webuiStatusCode = response?.status() ?? null
-      await webuiPage
-        .waitForLoadState("networkidle", { timeout: 15000 })
-        .catch(() => {})
+      await waitForAppShell(webuiPage, 15000)
       console.log("[WebUI] Page loaded")
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -488,9 +487,7 @@ async function reviewPage(
             targetWindow.__tldwNavigate?.(path)
           }, extTarget.navigatePath)
         }
-        await extensionPage
-          .waitForLoadState("networkidle", { timeout: 15000 })
-          .catch(() => {})
+        await waitForAppShell(extensionPage, 15000)
         console.log("[Extension] Page loaded")
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e)

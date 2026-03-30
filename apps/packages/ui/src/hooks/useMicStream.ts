@@ -1,4 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  createAudioCaptureSessionCoordinator,
+  type AudioCaptureSessionCoordinator,
+} from "@/audio"
+
+export type MicCaptureOptions = {
+  deviceId?: string | null
+}
+
+const AUDIO_CAPTURE_COORDINATOR_KEY = Symbol.for(
+  "tldw.audioCaptureSessionCoordinator"
+)
+
+const getAudioCaptureSessionCoordinator = (): AudioCaptureSessionCoordinator => {
+  const globalState = globalThis as typeof globalThis & {
+    [AUDIO_CAPTURE_COORDINATOR_KEY]?: AudioCaptureSessionCoordinator
+  }
+  if (!globalState[AUDIO_CAPTURE_COORDINATOR_KEY]) {
+    globalState[AUDIO_CAPTURE_COORDINATOR_KEY] =
+      createAudioCaptureSessionCoordinator()
+  }
+  return globalState[AUDIO_CAPTURE_COORDINATOR_KEY]
+}
+
+function buildAudioConstraints(
+  deviceId?: string | null
+): MediaStreamConstraints["audio"] {
+  return deviceId ? { deviceId: { exact: deviceId } } : true
+}
+
+function createCaptureBusyError(activeOwner: string): Error {
+  return new Error(`Audio capture is already active for ${activeOwner}`)
+}
 
 function floatTo16BitPCM(float32Array: Float32Array) {
   const buffer = new ArrayBuffer(float32Array.length * 2)
@@ -15,6 +48,7 @@ export function useMicStream(onChunk: (pcmChunk: ArrayBuffer) => void) {
   const [active, setActive] = useState(false)
   const activeRef = useRef(false)
   const startingRef = useRef(false)
+  const captureOwnerRef = useRef(false)
   const onChunkRef = useRef(onChunk)
   const startIdRef = useRef(0)
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -25,6 +59,23 @@ export function useMicStream(onChunk: (pcmChunk: ArrayBuffer) => void) {
   useEffect(() => {
     onChunkRef.current = onChunk
   }, [onChunk])
+
+  const releaseCaptureOwner = useCallback(() => {
+    if (!captureOwnerRef.current) return
+    captureOwnerRef.current = false
+    getAudioCaptureSessionCoordinator().release("live_voice")
+  }, [])
+
+  const reserveCaptureOwner = useCallback(() => {
+    if (captureOwnerRef.current) return
+    const coordinator = getAudioCaptureSessionCoordinator()
+    const activeOwner = coordinator.getActiveOwner()
+    if (activeOwner !== null) {
+      throw createCaptureBusyError(activeOwner)
+    }
+    coordinator.claim("live_voice")
+    captureOwnerRef.current = true
+  }, [])
 
   const stop = useCallback(() => {
     startIdRef.current += 1
@@ -41,15 +92,19 @@ export function useMicStream(onChunk: (pcmChunk: ArrayBuffer) => void) {
       activeRef.current = false
       setActive(false)
     }
-  }, [])
+    releaseCaptureOwner()
+  }, [releaseCaptureOwner])
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (options: MicCaptureOptions = {}) => {
     if (activeRef.current || startingRef.current) return
+    reserveCaptureOwner()
     startingRef.current = true
     const startId = startIdRef.current + 1
     startIdRef.current = startId
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: buildAudioConstraints(options.deviceId)
+      })
       if (startIdRef.current !== startId) {
         stream.getTracks().forEach((t) => t.stop())
         return
@@ -80,7 +135,7 @@ export function useMicStream(onChunk: (pcmChunk: ArrayBuffer) => void) {
     } finally {
       startingRef.current = false
     }
-  }, [stop])
+  }, [reserveCaptureOwner, stop])
 
   useEffect(() => {
     activeRef.current = active

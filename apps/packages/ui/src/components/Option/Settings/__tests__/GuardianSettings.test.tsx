@@ -10,6 +10,7 @@ const {
   useMutationMock,
   useQueryClientMock,
   invalidateQueriesMock,
+  useCanonicalConnectionConfigMock,
   serverCapabilitiesState,
   connectionState
 } = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const {
   useMutationMock: vi.fn(),
   useQueryClientMock: vi.fn(),
   invalidateQueriesMock: vi.fn(),
+  useCanonicalConnectionConfigMock: vi.fn(),
   serverCapabilitiesState: {
     capabilities: {
       hasGuardian: true,
@@ -71,6 +73,11 @@ vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => serverCapabilitiesState
 }))
 
+vi.mock("@/hooks/useCanonicalConnectionConfig", () => ({
+  useCanonicalConnectionConfig: (...args: unknown[]) =>
+    useCanonicalConnectionConfigMock(...args)
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -87,6 +94,9 @@ vi.mock("react-i18next", () => ({
     }
   })
 }))
+
+const fetchMock = vi.fn()
+vi.stubGlobal("fetch", fetchMock)
 
 describe("GuardianSettings", () => {
   const originalMatchMedia = window.matchMedia
@@ -204,6 +214,7 @@ describe("GuardianSettings", () => {
   })
 
   beforeEach(() => {
+    fetchMock.mockReset()
     serverCapabilitiesState.loading = false
     serverCapabilitiesState.capabilities = {
       hasGuardian: true,
@@ -211,6 +222,26 @@ describe("GuardianSettings", () => {
     }
     connectionState.uxState = "connected_ok"
     connectionState.navigate.mockReset()
+    useCanonicalConnectionConfigMock.mockReset()
+    useCanonicalConnectionConfigMock.mockReturnValue({
+      config: {
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "test-key"
+      },
+      loading: false
+    })
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        paths: {
+          "/api/v1/self-monitoring/rules": {},
+          "/api/v1/self-monitoring/alerts": {},
+          "/api/v1/self-monitoring/alerts/unread-count": {},
+          "/api/v1/self-monitoring/governance-policies": {}
+        }
+      })
+    })
 
     invalidateQueriesMock.mockReset()
     useQueryClientMock.mockReset()
@@ -273,7 +304,7 @@ describe("GuardianSettings", () => {
     expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
   })
 
-  it("shows self-monitoring fallback guidance when endpoints are missing", () => {
+  it("shows self-monitoring fallback guidance when endpoints are missing", async () => {
     const notFoundError = Object.assign(new Error("Request failed: 404"), {
       status: 404
     })
@@ -292,14 +323,42 @@ describe("GuardianSettings", () => {
     render(<GuardianSettings />)
 
     expect(
-      screen.getByText("Self-Monitoring endpoints unavailable")
+      await screen.findByText("Self-Monitoring endpoints unavailable")
     ).toBeInTheDocument()
+  })
+
+  it("shows self-monitoring fallback guidance without probing missing endpoints when OpenAPI lacks them", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        paths: {}
+      })
+    })
+
+    render(<GuardianSettings />)
+
+    expect(
+      await screen.findByText("Self-Monitoring endpoints unavailable")
+    ).toBeInTheDocument()
+
+    const rulesQueryCall = vi
+      .mocked(useQuery)
+      .mock.calls.find(
+        ([options]) =>
+          Array.isArray((options as any)?.queryKey) &&
+          (options as any).queryKey[0] === "guardian" &&
+          (options as any).queryKey[1] === "rules"
+      )
+
+    expect((rulesQueryCall?.[0] as any)?.enabled).toBe(false)
   })
 
   it("does not offer warn as a self-monitoring rule action", async () => {
     render(<GuardianSettings />)
 
-    fireEvent.click(screen.getByRole("button", { name: /Create Rule/i }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Create Rule/i })
+    )
 
     const dialog = await screen.findByRole("dialog")
     const actionLabel = within(dialog).getByText("Action")
@@ -395,8 +454,8 @@ describe("GuardianSettings", () => {
   it("renders governance policies and updates when query data changes", async () => {
     const view = render(<GuardianSettings />)
 
-    expect(screen.getByText("Governance Policies")).toBeInTheDocument()
-    expect(screen.getByText("Baseline Policy")).toBeInTheDocument()
+    expect(await screen.findByText("Governance Policies")).toBeInTheDocument()
+    expect(await screen.findByText("Baseline Policy")).toBeInTheDocument()
 
     governancePolicies = [
       ...governancePolicies,

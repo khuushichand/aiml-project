@@ -2,7 +2,8 @@ import {
   tldwClient,
   ChatMessage,
   ChatCompletionRequest,
-  type ChatCompletionContentPart
+  type ChatCompletionContentPart,
+  type ChatResearchContext
 } from "./TldwApiClient"
 import { extractTokenFromChunk } from "@/utils/extract-token-from-chunk"
 import {
@@ -57,6 +58,44 @@ const normalizeSystemPrompt = (value?: string): string | undefined => {
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : undefined
 }
+
+const coercePositiveTimeout = (
+  value: unknown,
+  fallback: number
+): number => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value)
+  }
+  return fallback
+}
+
+const hasReasoningProgress = (chunk: unknown): boolean => {
+  if (!chunk || typeof chunk !== "object") return false
+  const record = chunk as Record<string, unknown>
+  const reasoningDelta =
+    (record.choices as Array<Record<string, unknown>> | undefined)?.[0]?.delta &&
+    typeof (record.choices as Array<Record<string, unknown>>)[0]?.delta === "object"
+      ? (
+          (record.choices as Array<Record<string, unknown>>)[0]
+            ?.delta as Record<string, unknown>
+        )?.reasoning_content
+      : undefined
+  if (typeof reasoningDelta === "string" && reasoningDelta.length > 0) {
+    return true
+  }
+  const additionalKwargs =
+    typeof record.additional_kwargs === "object" &&
+    record.additional_kwargs !== null
+      ? (record.additional_kwargs as Record<string, unknown>)
+      : null
+  return Boolean(
+    typeof additionalKwargs?.reasoning_content === "string" &&
+      additionalKwargs.reasoning_content.length > 0
+  )
+}
+
+const hasVisibleAssistantProgress = (chunk: unknown): boolean =>
+  extractTokenFromChunk(chunk).length > 0 || hasReasoningProgress(chunk)
 
 const sanitizeUserContent = (
   content: string | ChatCompletionContentPart[]
@@ -125,8 +164,12 @@ const sanitizeMessages = (messages: ChatMessage[]): ChatMessage[] => {
         return null
       }
 
-      const toolCallId = message.tool_call_id.trim()
-      const content = message.content.trim()
+      const rawToolCallId = (message as any).tool_call_id
+      const toolCallId =
+        typeof rawToolCallId === "string" ? rawToolCallId.trim() : ""
+      const rawContent = message.content
+      const content =
+        typeof rawContent === "string" ? rawContent.trim() : ""
       if (!toolCallId || !content) return null
       return { ...message, tool_call_id: toolCallId, content }
     })
@@ -139,10 +182,23 @@ const buildRequestMessages = (
 ): ChatMessage[] => {
   const sanitizedMessages = sanitizeMessages(messages)
   const systemPrompt = normalizeSystemPrompt(options.systemPrompt)
-  const withSystemPrompt =
-    systemPrompt && sanitizedMessages[0]?.role !== "system"
-      ? [{ role: "system", content: systemPrompt } as ChatMessage, ...sanitizedMessages]
-      : sanitizedMessages
+  let withSystemPrompt: ChatMessage[]
+  if (systemPrompt) {
+    if (sanitizedMessages[0]?.role === "system") {
+      // Replace existing system message with the user-configured one
+      withSystemPrompt = [
+        { role: "system", content: systemPrompt } as ChatMessage,
+        ...sanitizedMessages.slice(1)
+      ]
+    } else {
+      withSystemPrompt = [
+        { role: "system", content: systemPrompt } as ChatMessage,
+        ...sanitizedMessages
+      ]
+    }
+  } else {
+    withSystemPrompt = sanitizedMessages
+  }
 
   return normalizeMessagesForProvider(
     withSystemPrompt,
@@ -232,6 +288,7 @@ const normalizeChatTools = (
 
 export interface TldwChatOptions {
   model: string
+  routing?: ChatCompletionRequest["routing"]
   temperature?: number
   logprobs?: boolean
   topLogprobs?: number
@@ -258,6 +315,7 @@ export interface TldwChatOptions {
   grammarInline?: string
   grammarOverride?: string
   jsonMode?: boolean
+  researchContext?: ChatResearchContext
 }
 export { getLastChatCompletionDebugSnapshot }
 export type { ChatCompletionDebugSnapshot }
@@ -324,6 +382,7 @@ export class TldwChatService {
       const request: ChatCompletionRequest = {
         messages: requestMessages,
         model: options.model,
+        routing: options.routing,
         stream: false,
         temperature: options.temperature,
         logprobs: options.logprobs,
@@ -351,7 +410,8 @@ export class TldwChatService {
         grammar_id: options.grammarId,
         grammar_inline: options.grammarInline,
         grammar_override: options.grammarOverride,
-        response_format: options.jsonMode ? { type: "json_object" } : undefined
+        response_format: options.jsonMode ? { type: "json_object" } : undefined,
+        research_context: options.researchContext
       }
       captureChatRequestDebugSnapshot({
         endpoint: "/api/v1/chat/completions",
@@ -400,10 +460,18 @@ export class TldwChatService {
 
       // Create new abort controller
       this.currentController = new AbortController()
+      const cfg = (await tldwClient.getConfig().catch(() => null)) as
+        | {
+            chatRequestTimeoutMs?: number
+            chatStartupTimeoutMs?: number
+            chatStreamIdleTimeoutMs?: number
+          }
+        | null
 
       const request: ChatCompletionRequest = {
         messages: requestMessages,
         model: options.model,
+        routing: options.routing,
         stream: true,
         temperature: options.temperature,
         logprobs: options.logprobs,
@@ -431,7 +499,8 @@ export class TldwChatService {
         grammar_id: options.grammarId,
         grammar_inline: options.grammarInline,
         grammar_override: options.grammarOverride,
-        response_format: options.jsonMode ? { type: "json_object" } : undefined
+        response_format: options.jsonMode ? { type: "json_object" } : undefined,
+        research_context: options.researchContext
       }
       captureChatRequestDebugSnapshot({
         endpoint: "/api/v1/chat/completions",
@@ -440,23 +509,91 @@ export class TldwChatService {
         body: request
       })
 
-      const stream = tldwClient.streamChatCompletion(request, { signal: this.currentController.signal })
+      const startupTimeoutMs = coercePositiveTimeout(
+        cfg?.chatStartupTimeoutMs,
+        10_000
+      )
+      const streamIdleTimeoutMs = coercePositiveTimeout(
+        cfg?.chatStreamIdleTimeoutMs,
+        30_000
+      )
+      const stream = tldwClient.streamChatCompletion(request, {
+        signal: this.currentController.signal,
+        streamIdleTimeoutMs
+      })
 
-      for await (const chunk of stream) {
-        // Check if stream was cancelled
-        if (this.currentController?.signal.aborted) {
-          break
-        }
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      let startupTimer: ReturnType<typeof setTimeout> | null = null
+      const controller = this.currentController
+      let sawVisibleProgress = false
+      let timeoutReason: "startup" | "idle" | null = null
 
-        // Call the onChunk callback if provided
-        if (onChunk) {
-          onChunk(chunk)
+      const clearIdleTimer = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer)
+          idleTimer = null
         }
+      }
 
-        const token = extractTokenFromChunk(chunk)
-        if (token) {
-          yield token
+      const clearStartupTimer = () => {
+        if (startupTimer) {
+          clearTimeout(startupTimer)
+          startupTimer = null
         }
+      }
+
+      const abortForTimeout = (reason: "startup" | "idle") => {
+        timeoutReason = reason
+        controller?.abort()
+      }
+
+      const armStartupTimer = () => {
+        clearStartupTimer()
+        startupTimer = setTimeout(() => {
+          abortForTimeout("startup")
+        }, startupTimeoutMs)
+      }
+
+      const resetIdleTimer = () => {
+        clearIdleTimer()
+        idleTimer = setTimeout(() => {
+          abortForTimeout("idle")
+        }, streamIdleTimeoutMs)
+      }
+
+      try {
+        armStartupTimer()
+        for await (const chunk of stream) {
+          if (hasVisibleAssistantProgress(chunk)) {
+            sawVisibleProgress = true
+            clearStartupTimer()
+            resetIdleTimer()
+          }
+
+          // Check if stream was cancelled
+          if (controller?.signal.aborted) {
+            break
+          }
+
+          // Call the onChunk callback if provided
+          if (onChunk) {
+            onChunk(chunk)
+          }
+
+          const token = extractTokenFromChunk(chunk)
+          if (token) {
+            yield token
+          }
+        }
+        if (timeoutReason === "startup" && !sawVisibleProgress) {
+          throw new Error("Chat response timed out before any visible output arrived.")
+        }
+        if (timeoutReason === "idle") {
+          throw new Error("Chat response stalled after visible output began.")
+        }
+      } finally {
+        clearIdleTimer()
+        clearStartupTimer()
       }
     } catch (error) {
       console.error('Stream completion failed:', error)
@@ -531,17 +668,20 @@ export class TldwChatService {
       if (typeof content === "string") {
         totalChars += content.length
       } else if (Array.isArray(content)) {
-        // Roughly approximate by concatenating any text fields
-        const text = content
-          .map((part: any) => {
-            if (typeof part === "string") return part
-            if (part?.type === "text" && typeof part.text === "string") {
-              return part.text
-            }
-            return ""
-          })
-          .join(" ")
-        totalChars += text.length
+        let partTokens = 0
+        for (const part of content as any[]) {
+          if (typeof part === "string") {
+            partTokens += part.length
+          } else if (part?.type === "text" && typeof part.text === "string") {
+            partTokens += part.text.length
+          } else if (part?.type === "image_url") {
+            // Rough image token estimate: 85 tokens for low detail, 765 for high
+            const detail = part.image_url?.detail
+            const imageTokens = detail === "low" ? 85 : 765
+            partTokens += imageTokens * 4 // convert to char-equivalents
+          }
+        }
+        totalChars += partTokens
       } else if (content != null) {
         try {
           totalChars += JSON.stringify(content).length

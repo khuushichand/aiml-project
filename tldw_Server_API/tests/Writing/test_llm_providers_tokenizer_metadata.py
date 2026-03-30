@@ -303,6 +303,44 @@ def test_llm_providers_skips_tokenizer_probe_for_non_text_models(monkeypatch):
     assert "skipped" in str(image_tok.get("error") or "").lower()
 
 
+def test_llm_providers_skips_runtime_tokenizer_probe_for_inprocess_test_mode(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+
+    probe_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("E2E_INPROCESS", "1")
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_openai_only_config)
+    monkeypatch.setattr(llm_endpoints, "list_provider_models", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(llm_endpoints, "apply_llm_provider_overrides_to_listing", lambda result: result)
+    monkeypatch.setattr(llm_endpoints, "get_api_keys", lambda: {})
+    monkeypatch.setattr(llm_endpoints, "list_image_models_for_catalog", lambda: [])
+    monkeypatch.setattr(llm_endpoints, "_llm_registry_capability_envelopes", lambda: {})
+
+    def _fake_tokenizer_metadata(provider: str, model: str, **_kwargs):
+        probe_calls.append((provider, model))
+        return {
+            "available": True,
+            "tokenizer": "fake:runtime",
+            "kind": "provider-native",
+            "source": "fake.runtime",
+            "detokenize": True,
+            "count_accuracy": "exact",
+            "strict_mode_effective": False,
+        }
+
+    monkeypatch.setattr(llm_endpoints, "resolve_tokenizer_metadata", _fake_tokenizer_metadata)
+
+    payload = llm_endpoints.get_configured_providers(include_deprecated=False)
+    providers = {p["name"]: p for p in payload["providers"]}
+    openai_model = providers["openai"]["models"][0]
+    openai_tokenizer = providers["openai"]["tokenizers"][openai_model]
+
+    assert probe_calls == []
+    assert openai_tokenizer["available"] is False
+    assert "in-process test mode" in str(openai_tokenizer["error"]).lower()
+
+
 def test_llm_providers_probes_only_configured_commercial_models(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
 

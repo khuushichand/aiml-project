@@ -157,8 +157,81 @@ export const PAGES: PageEntry[] = [
   { path: "/for/journalists", name: "For Journalists", category: "other" },
   { path: "/for/osint", name: "For OSINT", category: "other" },
   { path: "/for/researchers", name: "For Researchers", category: "other" },
-  { path: "/__debug__/authz.spec", name: "Debug Authz Redirect", category: "other" },
-  { path: "/__debug__/sidepanel-error-boundary", name: "Debug Error Boundary", category: "other" }
+  { path: "/__debug__/sidepanel-error-boundary", name: "Debug Error Boundary", category: "other" },
+  { path: "/__debug__/sidepanel-chat", name: "Debug Sidepanel Chat", category: "other" },
+  { path: "/404", name: "Not Found", category: "other" },
+  { path: "/account", name: "Account", category: "other" },
+  { path: "/notifications", name: "Notifications", category: "other" },
+  { path: "/signup", name: "Sign Up", category: "other" },
+  { path: "/shared", name: "Shared", category: "other" },
+  { path: "/skills", name: "Skills", category: "other" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Workspace / Tools (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/acp-playground", name: "ACP Playground", category: "workspace" },
+  { path: "/audiobook-studio", name: "Audiobook Studio", category: "workspace" },
+  { path: "/chatbooks-playground", name: "Chatbooks Playground", category: "workspace" },
+  { path: "/document-workspace", name: "Document Workspace", category: "workspace" },
+  { path: "/model-playground", name: "Model Playground", category: "workspace" },
+  { path: "/presentation-studio", name: "Presentation Studio", category: "workspace" },
+  { path: "/repo2txt", name: "Repo2Txt", category: "workspace" },
+  { path: "/workflow-editor", name: "Workflow Editor", category: "workspace" },
+  { path: "/workspace-playground", name: "Workspace Playground", category: "workspace" },
+  { path: "/writing-playground", name: "Writing Playground", category: "workspace" },
+  { path: "/sources", name: "Sources", category: "workspace" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Chat / Agent (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/agent-tasks", name: "Agent Tasks", category: "chat" },
+  { path: "/agents", name: "Agents", category: "chat" },
+  { path: "/chat-workflows", name: "Chat Workflows", category: "chat" },
+  { path: "/companion", name: "Companion", category: "chat" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Knowledge (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/mcp-hub", name: "MCP Hub", category: "knowledge" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Admin (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/admin/api-keys", name: "API Keys Admin", category: "admin" },
+  { path: "/admin/billing", name: "Billing Admin", category: "admin" },
+  { path: "/admin/monitoring", name: "Monitoring Admin", category: "admin" },
+  { path: "/admin/rate-limiting", name: "Rate Limiting Admin", category: "admin" },
+  { path: "/admin/rbac", name: "RBAC Admin", category: "admin" },
+  { path: "/admin/sources", name: "Sources Admin", category: "admin" },
+  { path: "/admin/usage", name: "Usage Admin", category: "admin" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Settings (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/settings/image-gen", name: "Image Gen Settings", category: "settings" },
+  { path: "/settings/image-generation", name: "Image Generation Settings", category: "settings" },
+  { path: "/settings/mcp-hub", name: "MCP Hub Settings", category: "settings" },
+  { path: "/settings/splash", name: "Splash Settings", category: "settings" },
+  { path: "/settings/ui", name: "UI Settings", category: "settings" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Auth (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/auth/magic-link", name: "Magic Link", category: "other" },
+  { path: "/auth/reset-password", name: "Reset Password", category: "other" },
+  { path: "/auth/verify-email", name: "Verify Email", category: "other" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Billing (missing)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/billing", name: "Billing", category: "other" },
+  { path: "/billing/success", name: "Billing Success", category: "other" },
+  { path: "/billing/cancel", name: "Billing Cancel", category: "other" },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Settings Chat (page-level — distinct from settings/chat)
+  // ═══════════════════════════════════════════════════════════════════════════
+  { path: "/chat/settings", name: "Chat Settings Page", category: "chat", skip: "Covered in Stage 5 release gate" }
 ]
 
 /**

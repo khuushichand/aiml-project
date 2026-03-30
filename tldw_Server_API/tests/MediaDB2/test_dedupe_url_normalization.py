@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_media_by_url,
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
     media_dedupe_url_candidates,
     normalize_media_dedupe_url,
 )
@@ -66,7 +65,7 @@ def test_get_media_by_url_matches_variant_forms(memory_db_factory) -> None:
         keywords=None,
     )
 
-    fetched = get_media_by_url(db, "https://EXAMPLE.com/path/?utm_source=x&b=2&a=1#frag")
+    fetched = db.get_media_by_url("https://EXAMPLE.com/path/?utm_source=x&b=2&a=1#frag")
     assert fetched is not None
     assert fetched["id"] == media_id
 

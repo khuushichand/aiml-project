@@ -103,6 +103,104 @@ class TestSchemaCreation:
         finally:
             conn.close()
 
+    def test_legacy_family_wizard_tables_migrate_before_optional_indexes(self, tmp_path):
+        path = tmp_path / "legacy_family_wizard_guardian.db"
+        conn = sqlite3.connect(path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE guardian_household_drafts (
+                    id TEXT PRIMARY KEY,
+                    owner_user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'family',
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE guardian_household_member_drafts (
+                    id TEXT PRIMARY KEY,
+                    household_draft_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    user_id TEXT,
+                    email TEXT,
+                    invite_required INTEGER NOT NULL DEFAULT 1,
+                    invite_status TEXT NOT NULL DEFAULT 'pending',
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE guardian_relationship_drafts (
+                    id TEXT PRIMARY KEY,
+                    household_draft_id TEXT NOT NULL,
+                    guardian_member_draft_id TEXT NOT NULL,
+                    dependent_member_draft_id TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL DEFAULT 'parent',
+                    dependent_visible INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    relationship_id TEXT,
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (guardian_member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (dependent_member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE,
+                    UNIQUE(household_draft_id, guardian_member_draft_id, dependent_member_draft_id)
+                );
+
+                CREATE TABLE guardian_guardrail_plan_drafts (
+                    id TEXT PRIMARY KEY,
+                    household_draft_id TEXT NOT NULL,
+                    dependent_user_id TEXT NOT NULL,
+                    relationship_draft_id TEXT NOT NULL,
+                    template_id TEXT NOT NULL,
+                    overrides TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    materialized_policy_id TEXT,
+                    failure_reason TEXT,
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (relationship_draft_id) REFERENCES guardian_relationship_drafts(id) ON DELETE CASCADE
+                );
+                """
+            )
+        finally:
+            conn.close()
+
+        GuardianDB(str(path))
+
+        conn = sqlite3.connect(path)
+        try:
+            member_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(guardian_household_member_drafts)").fetchall()
+            }
+            assert "account_mode" in member_columns
+            assert "provisioning_status" in member_columns
+
+            plan_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(guardian_guardrail_plan_drafts)").fetchall()
+            }
+            assert "dependent_member_draft_id" in plan_columns
+
+            member_indexes = {
+                row[1] for row in conn.execute("PRAGMA index_list(guardian_household_member_drafts)").fetchall()
+            }
+            assert "idx_ghmd_account_mode" in member_indexes
+
+            plan_indexes = {
+                row[1] for row in conn.execute("PRAGMA index_list(guardian_guardrail_plan_drafts)").fetchall()
+            }
+            assert "idx_ggpd_member" in plan_indexes
+        finally:
+            conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Guardian Relationships

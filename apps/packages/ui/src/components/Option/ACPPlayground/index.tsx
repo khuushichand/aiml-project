@@ -1,19 +1,30 @@
-import React, { useEffect } from "react"
+import React, { Suspense, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Drawer, Tabs } from "antd"
 import { Bot, MessageSquare, Wrench, Terminal } from "lucide-react"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useACPSession } from "@/hooks/useACPSession"
 import { ACPRestClient } from "@/services/acp/client"
+import { buildACPClientConfig } from "@/services/acp/connection"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import type { ACPPermissionTier } from "@/services/acp/types"
 import { ACPPlaygroundHeader } from "./ACPPlaygroundHeader"
-import { ACPSessionPanel } from "./ACPSessionPanel"
 import { ACPChatPanel } from "./ACPChatPanel"
-import { ACPToolsPanel } from "./ACPToolsPanel"
-import { ACPPermissionModal } from "./ACPPermissionModal"
-import { ACPWorkspacePanel } from "./ACPWorkspacePanel"
+
+const ACPSessionPanel = React.lazy(() =>
+  import("./ACPSessionPanel").then((module) => ({ default: module.ACPSessionPanel }))
+)
+const ACPToolsPanel = React.lazy(() =>
+  import("./ACPToolsPanel").then((module) => ({ default: module.ACPToolsPanel }))
+)
+const ACPWorkspacePanel = React.lazy(() =>
+  import("./ACPWorkspacePanel").then((module) => ({ default: module.ACPWorkspacePanel }))
+)
+const ACPPermissionModal = React.lazy(() =>
+  import("./ACPPermissionModal").then((module) => ({ default: module.ACPPermissionModal }))
+)
 
 const ACP_LEFT_PANE_KEY = "acp-playground-left-pane"
 const ACP_RIGHT_PANE_KEY = "acp-playground-right-pane"
@@ -35,10 +46,7 @@ export const ACPPlayground: React.FC = () => {
   // Pane state with persistence
   const [leftPaneOpen, setLeftPaneOpen] = useStorage(ACP_LEFT_PANE_KEY, true)
   const [rightPaneOpen, setRightPaneOpen] = useStorage(ACP_RIGHT_PANE_KEY, true)
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
   // Mobile drawer state
   const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
@@ -79,26 +87,14 @@ export const ACPPlayground: React.FC = () => {
 
   const restClient = React.useMemo(
     () =>
-      new ACPRestClient({
-        serverUrl,
-        getAuthHeaders: async () => {
-          const headers: Record<string, string> = {}
-          if (authMode === "single-user" && apiKey) {
-            headers["X-API-KEY"] = apiKey
-          } else if (authMode === "multi-user" && accessToken) {
-            headers.Authorization = `Bearer ${accessToken}`
-          }
-          return headers
-        },
-        getAuthParams: async () => ({
-          token: authMode === "multi-user" && accessToken ? accessToken : undefined,
-          api_key: authMode === "single-user" && apiKey ? apiKey : undefined,
-        }),
-      }),
-    [serverUrl, authMode, apiKey, accessToken]
+      connectionConfig ? new ACPRestClient(buildACPClientConfig(connectionConfig)) : null,
+    [connectionConfig]
   )
 
   const refreshSessionsFromServer = React.useCallback(async () => {
+    if (!restClient) {
+      return
+    }
     setIsHydratingSessions(true)
     try {
       const response = await restClient.listSessions({ limit: 200, offset: 0 })
@@ -122,7 +118,7 @@ export const ACPPlayground: React.FC = () => {
     denyPermission,
   } = useACPSession({
     sessionId: activeSessionId ?? undefined,
-    autoConnect: !!activeSessionId,
+    autoConnect: Boolean(activeSessionId && connectionConfig),
     onConnected: (message) => {
       updateSessionState(message.session_id, "connected")
       setGlobalError(null)
@@ -171,8 +167,11 @@ export const ACPPlayground: React.FC = () => {
 
   // Hydrate persisted ACP sessions from backend when the page loads.
   useEffect(() => {
+    if (!restClient) {
+      return
+    }
     void refreshSessionsFromServer()
-  }, [refreshSessionsFromServer])
+  }, [refreshSessionsFromServer, restClient])
 
   // Keep the active session state in sync with the shared ACP hook.
   useEffect(() => {
@@ -201,7 +200,7 @@ export const ACPPlayground: React.FC = () => {
 
   // When switching sessions, refresh detail + usage if the session exists server-side.
   useEffect(() => {
-    if (!activeSessionId) return
+    if (!activeSessionId || !restClient) return
 
     let cancelled = false
     const loadSessionMetadata = async () => {
@@ -249,6 +248,7 @@ export const ACPPlayground: React.FC = () => {
 
   const pendingPermissions = activeSession?.pendingPermissions ?? []
   const hasPendingPermissions = pendingPermissions.length > 0
+  const panelFallback = <div className="py-6" data-testid="acp-panel-loading" />
 
   const handleApprovePermission = React.useCallback((requestId: string, batchApproveTier?: ACPPermissionTier) => {
     try {
@@ -272,6 +272,46 @@ export const ACPPlayground: React.FC = () => {
     }
   }, [denyPermission, activeSessionId, removePendingPermission, setGlobalError])
 
+  const renderAcpSessionPanel = React.useCallback(
+    (props: React.ComponentProps<typeof ACPSessionPanel>) => (
+      <Suspense fallback={panelFallback}>
+        <ACPSessionPanel {...props} />
+      </Suspense>
+    ),
+    []
+  )
+
+  const renderAcpToolsPanel = React.useCallback(
+    (props?: React.ComponentProps<typeof ACPToolsPanel>) => (
+      <Suspense fallback={panelFallback}>
+        <ACPToolsPanel {...props} />
+      </Suspense>
+    ),
+    []
+  )
+
+  const renderAcpWorkspacePanel = React.useCallback(
+    () => (
+      <Suspense fallback={panelFallback}>
+        <ACPWorkspacePanel />
+      </Suspense>
+    ),
+    []
+  )
+
+  const renderAcpPermissionModal = React.useCallback(
+    () => (
+      <Suspense fallback={null}>
+        <ACPPermissionModal
+          pendingPermissions={pendingPermissions}
+          approvePermission={handleApprovePermission}
+          denyPermission={handleDenyPermission}
+        />
+      </Suspense>
+    ),
+    [handleApprovePermission, handleDenyPermission, pendingPermissions]
+  )
+
   // Mobile tab items
   const mobileTabItems = [
     {
@@ -287,12 +327,10 @@ export const ACPPlayground: React.FC = () => {
           )}
         </span>
       ),
-      children: (
-        <ACPSessionPanel
-          onRefreshSessions={refreshSessionsFromServer}
-          isRefreshing={isHydratingSessions}
-        />
-      ),
+      children: renderAcpSessionPanel({
+        onRefreshSessions: refreshSessionsFromServer,
+        isRefreshing: isHydratingSessions,
+      }),
     },
     {
       key: "chat",
@@ -322,7 +360,7 @@ export const ACPPlayground: React.FC = () => {
           <span>{t("playground:acp.tools", "Tools")}</span>
         </span>
       ),
-      children: <ACPToolsPanel />,
+      children: renderAcpToolsPanel(),
     },
     {
       key: "workspace",
@@ -332,7 +370,7 @@ export const ACPPlayground: React.FC = () => {
           <span>{workspaceTabLabel}</span>
         </span>
       ),
-      children: <ACPWorkspacePanel />,
+      children: renderAcpWorkspacePanel(),
     },
   ]
 
@@ -353,17 +391,12 @@ export const ACPPlayground: React.FC = () => {
           onChange={(key) => setActiveTab(key as typeof activeTab)}
           items={mobileTabItems}
           centered
+          destroyOnHidden
           className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
           tabBarStyle={{ marginBottom: 0, borderBottom: "1px solid var(--border)" }}
         />
 
-        {hasPendingPermissions && (
-          <ACPPermissionModal
-            pendingPermissions={pendingPermissions}
-            approvePermission={handleApprovePermission}
-            denyPermission={handleDenyPermission}
-          />
-        )}
+        {hasPendingPermissions && renderAcpPermissionModal()}
       </div>
     )
   }
@@ -382,11 +415,11 @@ export const ACPPlayground: React.FC = () => {
         {/* Left pane - Sessions (desktop) */}
         {leftPaneOpen && (
           <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
-            <ACPSessionPanel
-              onHide={() => setLeftPaneOpen(false)}
-              onRefreshSessions={refreshSessionsFromServer}
-              isRefreshing={isHydratingSessions}
-            />
+            {renderAcpSessionPanel({
+              onHide: () => setLeftPaneOpen(false),
+              onRefreshSessions: refreshSessionsFromServer,
+              isRefreshing: isHydratingSessions,
+            })}
           </aside>
         )}
 
@@ -405,10 +438,10 @@ export const ACPPlayground: React.FC = () => {
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
-          <ACPSessionPanel
-            onRefreshSessions={refreshSessionsFromServer}
-            isRefreshing={isHydratingSessions}
-          />
+          {renderAcpSessionPanel({
+            onRefreshSessions: refreshSessionsFromServer,
+            isRefreshing: isHydratingSessions,
+          })}
         </Drawer>
 
         {/* Center pane - Chat */}
@@ -434,14 +467,17 @@ export const ACPPlayground: React.FC = () => {
                 {
                   key: "tools",
                   label: t("playground:acp.tools", "Tools"),
-                  children: <ACPToolsPanel onHide={() => setRightPaneOpen(false)} />,
+                  children: renderAcpToolsPanel({
+                    onHide: () => setRightPaneOpen(false),
+                  }),
                 },
                 {
                   key: "workspace",
                   label: workspaceTabLabel,
-                  children: <ACPWorkspacePanel />,
+                  children: renderAcpWorkspacePanel(),
                 },
               ]}
+              destroyOnHidden
               className="h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
             />
           </aside>
@@ -469,34 +505,27 @@ export const ACPPlayground: React.FC = () => {
               {
                 key: "tools",
                 label: t("playground:acp.tools", "Tools"),
-                children: (
-                  <ACPToolsPanel
-                    onHide={() => {
-                      setRightPaneOpen(false)
-                      setRightDrawerOpen(false)
-                    }}
-                  />
-                ),
+                children: renderAcpToolsPanel({
+                  onHide: () => {
+                    setRightPaneOpen(false)
+                    setRightDrawerOpen(false)
+                  },
+                }),
               },
               {
                 key: "workspace",
                 label: workspaceTabLabel,
-                children: <ACPWorkspacePanel />,
+                children: renderAcpWorkspacePanel(),
               },
             ]}
+            destroyOnHidden
             className="h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
           />
         </Drawer>
       </div>
 
       {/* Permission modal */}
-      {hasPendingPermissions && (
-        <ACPPermissionModal
-          pendingPermissions={pendingPermissions}
-          approvePermission={handleApprovePermission}
-          denyPermission={handleDenyPermission}
-        />
-      )}
+      {hasPendingPermissions && renderAcpPermissionModal()}
     </div>
   )
 }

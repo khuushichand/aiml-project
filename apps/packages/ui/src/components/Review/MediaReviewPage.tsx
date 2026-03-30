@@ -298,7 +298,7 @@ export const MediaReviewPage: React.FC = () => {
         open={selectedItemsDrawerOpen}
         onClose={() => setSelectedItemsDrawerOpen(false)}
         placement="right"
-        width={360}
+        size="default"
       >
         {selectedIds.length === 0 ? (
           <Empty description={t('mediaPage.selectedItemsEmpty', 'No selected items yet.')} />

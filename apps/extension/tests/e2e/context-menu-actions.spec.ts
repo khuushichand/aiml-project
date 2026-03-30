@@ -22,7 +22,7 @@ const EXT_PATH = path.resolve("build/chrome-mv3")
  * - Verifying the context menu item text in the native menu
  */
 
-test.describe("Context menu actions (message-passing verification)", () => {
+test.describe("Context menu actions (background listener verification)", () => {
   test("background script registers context menu items on install", async () => {
     test.setTimeout(60_000)
 
@@ -59,7 +59,7 @@ test.describe("Context menu actions (message-passing verification)", () => {
     }
   })
 
-  test("message handler for context menu action responds in service worker", async () => {
+  test("background registers action and context-menu click listeners", async () => {
     test.setTimeout(60_000)
 
     const { context, page } = await launchWithExtensionOrSkip(test, EXT_PATH, {
@@ -81,43 +81,20 @@ test.describe("Context menu actions (message-passing verification)", () => {
         return
       }
 
-      // Verify the service worker can handle general runtime messages
-      // (context menu click handlers use the same message-passing infrastructure)
-      const result = await sw.evaluate(async () => {
-        return new Promise<any>((resolve) => {
-          const timeout = setTimeout(
-            () => resolve({ ok: false, error: "timeout" }),
-            3_000
+      const listenerState = await sw.evaluate(() => {
+        const actionApi = chrome?.action || chrome?.browserAction
+        return {
+          hasContextMenuClickListener: Boolean(
+            chrome?.contextMenus?.onClicked?.hasListeners?.()
+          ),
+          hasActionClickListener: Boolean(
+            actionApi?.onClicked?.hasListeners?.()
           )
-
-          try {
-            // Send a ping-style message to verify message passing works
-            chrome.runtime.sendMessage(
-              { type: "e2e:test-listener", data: "context-menu-test" },
-              (response) => {
-                clearTimeout(timeout)
-                if (chrome.runtime.lastError) {
-                  resolve({
-                    ok: false,
-                    error: chrome.runtime.lastError.message
-                  })
-                } else {
-                  resolve(response || { ok: false, error: "no response" })
-                }
-              }
-            )
-          } catch (err: any) {
-            clearTimeout(timeout)
-            resolve({ ok: false, error: err?.message })
-          }
-        })
+        }
       })
 
-      // The test listener added in launchWithExtension should respond
-      expect(result).toBeTruthy()
-      if (result?.ok) {
-        expect(result.source).toBe("test-listener")
-      }
+      expect(listenerState.hasContextMenuClickListener).toBe(true)
+      expect(listenerState.hasActionClickListener).toBe(true)
 
       await context.close()
     } catch (error) {

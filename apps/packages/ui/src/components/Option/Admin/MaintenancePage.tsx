@@ -21,7 +21,6 @@ import {
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 
 const { TextArea } = Input
-const { Panel } = Collapse
 
 const MaintenancePage: React.FC = () => {
   // Admin guard state
@@ -346,10 +345,10 @@ const MaintenancePage: React.FC = () => {
   // ── Render ──
 
   if (adminGuard === "forbidden") {
-    return <Alert type="error" message="Access Denied" description="You don't have permission to access the maintenance console." showIcon />
+    return <Alert type="error" title="Access Denied" description="You don't have permission to access the maintenance console." showIcon />
   }
   if (adminGuard === "notFound") {
-    return <Alert type="warning" message="Not Available" description="The maintenance console is not available on this server." showIcon />
+    return <Alert type="warning" title="Not Available" description="The maintenance console is not available on this server." showIcon />
   }
 
   return (
@@ -358,7 +357,7 @@ const MaintenancePage: React.FC = () => {
 
       {/* Maintenance Mode Card */}
       <Card title="Maintenance Mode" loading={maintLoading} style={{ marginBottom: 16 }}>
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+        <Space orientation="vertical" style={{ width: "100%" }} size="middle">
           <Space>
             <span>Maintenance Mode:</span>
             <Switch
@@ -457,30 +456,38 @@ const MaintenancePage: React.FC = () => {
       </Card>
 
       {/* Rotation Runs (Collapsible) */}
-      <Collapse>
-        <Panel header="Rotation Runs" key="rotation-runs">
-          <Space style={{ marginBottom: 12 }}>
-            <Button
-              type="primary"
-              onClick={handleStartRotation}
-              loading={startingRotation}
-            >
-              Start Run
-            </Button>
-            <Button onClick={() => loadRotationRuns()} size="small">
-              Refresh
-            </Button>
-          </Space>
-          <Table
-            dataSource={rotationRuns}
-            columns={rotationColumns}
-            rowKey="id"
-            loading={rotationLoading}
-            pagination={false}
-            size="small"
-          />
-        </Panel>
-      </Collapse>
+      <Collapse
+        items={[
+          {
+            key: "rotation-runs",
+            label: "Rotation Runs",
+            children: (
+              <>
+                <Space style={{ marginBottom: 12 }}>
+                  <Button
+                    type="primary"
+                    onClick={handleStartRotation}
+                    loading={startingRotation}
+                  >
+                    Start Run
+                  </Button>
+                  <Button onClick={() => loadRotationRuns()} size="small">
+                    Refresh
+                  </Button>
+                </Space>
+                <Table
+                  dataSource={rotationRuns}
+                  columns={rotationColumns}
+                  rowKey="id"
+                  loading={rotationLoading}
+                  pagination={false}
+                  size="small"
+                />
+              </>
+            )
+          }
+        ]}
+      />
     </div>
   )
 }

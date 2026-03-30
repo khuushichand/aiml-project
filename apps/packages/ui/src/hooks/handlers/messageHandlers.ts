@@ -12,6 +12,7 @@ import { getPromptById, getSessionFiles, UploadedFile } from "@/db"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import type { NotificationInstance } from "antd/es/notification/interface"
+import type { ChatScope } from "@/types/chat-scope"
 
 export const createRegenerateLastMessage = ({
   validateBeforeSubmitFn,
@@ -207,6 +208,7 @@ export const createBranchMessage = ({
   setSelectedSystemPrompt,
   setSystemPrompt,
   serverChatId,
+  scope,
   setServerChatId,
   setServerChatState,
   setServerChatVersion,
@@ -237,6 +239,7 @@ export const createBranchMessage = ({
   setSystemPrompt?: (prompt: string) => void
   setContext?: (context: UploadedFile[]) => void
   serverChatId?: string | null
+  scope?: ChatScope
   setServerChatId?: (id: string | null) => void
   setServerChatState?: (state: ConversationState | null) => void
   setServerChatVersion?: (version: number | null) => void
@@ -290,7 +293,6 @@ export const createBranchMessage = ({
       }
       return newBranch.history.id
     } catch (e) {
-      console.log("[branch] local branch failed", e)
       return null
     }
   }
@@ -354,7 +356,6 @@ export const createBranchMessage = ({
       }
       return newHistory.id
     } catch (e) {
-      console.log("[branch] local snapshot branch failed", e)
       return null
     }
   }
@@ -372,7 +373,10 @@ export const createBranchMessage = ({
           serverChatState || "in-progress"
         )
         try {
-          const chat = await tldwClient.getChat(serverChatId)
+          const chat = await tldwClient.getChat(
+            serverChatId,
+            scope ? { scope } : undefined
+          )
           if (!resolvedTitle) {
             resolvedTitle = (chat?.title || "").trim()
           }
@@ -387,7 +391,7 @@ export const createBranchMessage = ({
               resolvedState
           )
         } catch (e) {
-          console.log("[branch] server metadata fetch failed", e)
+          // server metadata fetch failed; continue with resolved defaults
         }
 
         const originalTitle =
@@ -416,7 +420,10 @@ export const createBranchMessage = ({
           payload.character_id = resolvedCharacterId
         }
 
-        const created = await tldwClient.createChat(payload)
+        const created = await tldwClient.createChat(
+          payload,
+          scope ? { scope } : undefined
+        )
         const rawId =
           (created as any)?.id ?? (created as any)?.chat_id ?? created
         const newChatId = rawId != null ? String(rawId) : ""
@@ -440,10 +447,14 @@ export const createBranchMessage = ({
             msg.role === "user"
               ? msg.role
               : "user"
-          await tldwClient.addChatMessage(newChatId, {
-            role,
-            content
-          })
+          await tldwClient.addChatMessage(
+            newChatId,
+            {
+              role,
+              content
+            },
+            scope ? { scope } : undefined
+          )
         }
 
         if (setServerChatId) {
@@ -495,7 +506,7 @@ export const createBranchMessage = ({
 
         return newChatId
       } catch (e) {
-        console.log("[branch] server branch failed", e)
+        // server branch failed; attempt local fallback
         if (serverOnly) {
           notification.error({
             message: "Branch failed",

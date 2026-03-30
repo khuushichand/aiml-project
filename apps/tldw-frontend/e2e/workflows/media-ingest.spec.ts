@@ -13,10 +13,20 @@ import { MediaPage } from "../utils/page-objects"
 import {
   seedAuth,
   generateTestId,
-  waitForConnection,
-  TEST_CONFIG
+  waitForConnection
 } from "../utils/helpers"
 import { expectApiCall } from "../utils/api-assertions"
+import {
+  ingestAndWaitForReady,
+  dismissQuickIngest,
+  reopenQuickIngest,
+  queueUrlAndStartProcessing,
+  assertQuickIngestCompletedResults,
+  openQuickIngestDialog,
+  queueFileForQuickIngest,
+  advanceQuickIngestToConfigureStep,
+  reachQuickIngestOptionInConstrainedViewport
+} from "../utils/journey-helpers"
 import * as path from "path"
 import * as fs from "fs"
 
@@ -34,11 +44,8 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.goto()
       await mediaPage.waitForReady()
 
-      // Verify page loaded
-      const mediaContainer = authedPage.locator(
-        "[data-testid='media-container'], .media-page, .media-list"
-      )
-      await expect(mediaContainer.first()).toBeVisible({ timeout: 20000 })
+      await expect(mediaPage.heading).toBeVisible({ timeout: 20_000 })
+      await expect(mediaPage.searchInput).toBeVisible({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -51,16 +58,13 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.goto()
       await mediaPage.waitForReady()
 
-      // Either empty state or media items should be visible
       const emptyState = authedPage.locator(
         "[data-testid='empty-state'], .empty-state, .no-media"
-      )
-      const mediaList = authedPage.locator(
-        "[data-testid='media-list'], .media-list, .ant-table"
-      )
+      ).first()
+      const mediaList = mediaPage.mediaList
 
-      const hasEmpty = (await emptyState.count()) > 0 && (await emptyState.isVisible())
-      const hasList = (await mediaList.count()) > 0 && (await mediaList.isVisible())
+      const hasEmpty = await emptyState.isVisible().catch(() => false)
+      const hasList = await mediaList.isVisible().catch(() => false)
 
       expect(hasEmpty || hasList).toBeTruthy()
 
@@ -159,14 +163,17 @@ test.describe("Media Ingestion Workflow", () => {
         if ((await fileInput.count()) > 0) {
           await fileInput.setInputFiles(testFilePath)
 
-          // Wait for potential error message
-          await authedPage.waitForTimeout(2000)
-
           // Check for error indication
-          const _errorMessage = authedPage.locator(
+          const errorMessage = authedPage.locator(
             ".ant-message-error, .error-message, [data-testid='upload-error']"
           )
-          // Error handling behavior depends on implementation
+          await expect
+            .poll(async () => await errorMessage.first().isVisible().catch(() => false), {
+              timeout: 2_000,
+              message: "Timed out waiting for invalid upload feedback",
+            })
+            .toBe(true)
+            .catch(() => {})
         }
       } finally {
         if (fs.existsSync(testFilePath)) {
@@ -225,8 +232,21 @@ test.describe("Media Ingestion Workflow", () => {
             ".ant-form-item-explain-error, .error-message, [data-testid='url-error']"
           )
 
-          // Wait briefly for validation feedback
-          await authedPage.waitForTimeout(1000)
+          await expect
+            .poll(
+              async () =>
+                await authedPage
+                  .locator(".ant-form-item-explain-error, .error-message, [data-testid='url-error']")
+                  .first()
+                  .isVisible()
+                  .catch(() => false),
+              {
+                timeout: 3_000,
+                message: "Timed out waiting for invalid URL feedback",
+              }
+            )
+            .toBe(true)
+            .catch(() => {})
         }
       }
 
@@ -306,8 +326,20 @@ test.describe("Media Ingestion Workflow", () => {
 
         await firstItem.click()
 
-        // Should navigate to detail or open modal
-        await authedPage.waitForTimeout(1000)
+        await expect
+          .poll(
+            async () => {
+              const urlChanged = /\/media(\/|%2F)\d+/i.test(authedPage.url()) || /\/media\/\d+/i.test(authedPage.url())
+              const dialogVisible = await authedPage.getByRole("dialog").first().isVisible().catch(() => false)
+              const editVisible = await authedPage.getByRole("button", { name: /edit/i }).first().isVisible().catch(() => false)
+              return urlChanged || dialogVisible || editVisible
+            },
+            {
+              timeout: 5_000,
+              message: "Timed out waiting for the media detail surface to appear",
+            }
+          )
+          .toBe(true)
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -335,7 +367,20 @@ test.describe("Media Ingestion Workflow", () => {
             "form, [data-testid='edit-form'], .edit-modal"
           )
 
-          await authedPage.waitForTimeout(1000)
+          await expect
+            .poll(
+              async () =>
+                await authedPage
+                  .locator("form, [data-testid='edit-form'], .edit-modal")
+                  .first()
+                  .isVisible()
+                  .catch(() => false),
+              {
+                timeout: 5_000,
+                message: "Timed out waiting for the media metadata edit form",
+              }
+            )
+            .toBe(true)
         }
       }
 
@@ -372,424 +417,326 @@ test.describe("Media Ingestion Workflow", () => {
   })
 
   test.describe("Quick Ingest", () => {
-    test("should open quick ingest modal", async ({
+    const quickIngestFixtureFile = path.resolve(
+      process.cwd(),
+      "e2e/fixtures/media/quick-ingest-sample.mkv"
+    )
+    const quickIngestFixtureName = path.basename(quickIngestFixtureFile)
+
+    const buildQuickIngestFixtureUrl = (baseURL: string): string =>
+      new URL("/e2e/quick-ingest-source.html", baseURL).toString()
+
+    const holdFirstQuickIngestStatusInProcessing = async (
+      page: Parameters<typeof waitForConnection>[0]
+    ) => {
+      let remainingSyntheticProcessingResponses = 1
+      await page.route("**/api/v1/media/ingest/jobs/*", async (route, request) => {
+        if (request.method().toUpperCase() !== "GET") {
+          await route.continue()
+          return
+        }
+        if (remainingSyntheticProcessingResponses <= 0) {
+          await route.continue()
+          return
+        }
+
+        remainingSyntheticProcessingResponses -= 1
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            status: "processing"
+          })
+        })
+      })
+    }
+
+    test("quick ingest opens from the visible media page triggers without helper fallback", async ({
       authedPage,
       diagnostics
     }) => {
-      const mediaPage = new MediaPage(authedPage)
-      await mediaPage.goto()
-      await mediaPage.waitForReady()
+      await authedPage.goto("/media", { waitUntil: "domcontentloaded" })
+      await waitForConnection(authedPage)
 
-      // Try to open quick ingest
-      try {
-        const modal = await mediaPage.openQuickIngest()
-        await expect(modal).toBeVisible()
+      const dialog = authedPage.getByRole("dialog", { name: /quick ingest/i }).first()
+      await expect(dialog).toBeHidden()
 
-        // Close the modal
-        const closeBtn = authedPage.locator(".ant-modal-close").first()
-        if ((await closeBtn.count()) > 0) {
-          await closeBtn.click()
-        }
-      } catch {
-        // Quick ingest may not be available on this page
+      const sidebarTrigger = authedPage.getByRole("button", { name: /^quick ingest$/i }).first()
+      if (await sidebarTrigger.isVisible().catch(() => false)) {
+        await sidebarTrigger.click()
+        await expect(dialog).toBeVisible({ timeout: 15_000 })
+        await dismissQuickIngest(authedPage)
       }
+
+      const emptyStateTrigger = authedPage
+        .getByRole("button", { name: /open quick ingest/i })
+        .first()
+      await expect(emptyStateTrigger).toBeVisible({ timeout: 15_000 })
+      await emptyStateTrigger.click()
+      await expect(dialog).toBeVisible({ timeout: 15_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should run quick ingest in web ui and show completion summary", async ({
+    test("quick ingest accepts a real .mkv upload through completion and reopen", async ({
       authedPage,
       serverInfo,
       diagnostics
     }) => {
-      test.setTimeout(180000)
+      test.setTimeout(180_000)
       skipIfServerUnavailable(serverInfo)
 
-      await authedPage.context().addInitScript((cfg) => {
-        try {
-          localStorage.setItem(
-            "tldwConfig",
-            JSON.stringify({
-              serverUrl: cfg.serverUrl,
-              // lgtm[js/clear-text-storage-of-sensitive-data] synthetic CI key only
-              apiKey: cfg.apiKey,
-              authMode: "single-user"
-            })
-          )
-          localStorage.setItem("__tldw_first_run_complete", "true")
-          localStorage.setItem("__tldw_allow_offline", "true")
-        } catch {
-          // Ignore localStorage failures in hardened browser contexts.
-        }
-        try {
-          const originalFetch = window.fetch.bind(window)
-          let statusPollCount = 0
-          const mockedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url =
-              typeof input === "string"
-                ? input
-                : input instanceof Request
-                  ? input.url
-                  : String(input)
-            const method = String(
-              init?.method || (input instanceof Request ? input.method : "GET")
-            ).toUpperCase()
-
-            if (
-              method === "POST" &&
-              /\/api\/v1\/media\/ingest\/jobs\/?(?:\?|$)/i.test(url)
-            ) {
-              return new Response(
-                JSON.stringify({
-                  batch_id: "qi-web-mock-batch-id",
-                  jobs: [{ id: 9101, status: "queued" }]
-                }),
-                {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                }
-              )
-            }
-            if (/\/api\/v1\/media\/ingest\/jobs\/9101(?:\?|$)/i.test(url)) {
-              statusPollCount += 1
-              return new Response(
-                JSON.stringify({
-                  id: 9101,
-                  status: statusPollCount > 1 ? "completed" : "processing",
-                  result: {
-                    media_id: "qi-web-mock-media-id",
-                    title: "Quick ingest web E2E"
-                  }
-                }),
-                {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                }
-              )
-            }
-            if (/\/api\/v1\/media\/process-web-scraping\/?(?:\?|$)/i.test(url)) {
-              return new Response(
-                JSON.stringify({
-                  media_id: "qi-web-mock-media-id",
-                  title: "Quick ingest web E2E"
-                }),
-                {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                }
-              )
-            }
-            return originalFetch(input, init)
-          }
-          window.fetch = mockedFetch
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ;(globalThis as any).fetch = mockedFetch
-        } catch {
-          // Ignore fetch monkeypatch failures in constrained browser contexts.
-        }
-      }, {
-        serverUrl: TEST_CONFIG.serverUrl,
-        apiKey: TEST_CONFIG.apiKey
+      const mediaId = await ingestAndWaitForReady(authedPage, {
+        file: quickIngestFixtureFile
       })
 
-      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
-      await waitForConnection(authedPage)
-      await authedPage
-        .getByTestId("onboarding-connect")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
-        timeout: 30000
+      await dismissQuickIngest(authedPage)
+      const dialog = await reopenQuickIngest(authedPage)
+      await assertQuickIngestCompletedResults(dialog, {
+        mediaId,
+        fileName: quickIngestFixtureName
       })
-      await authedPage
-        .getByTestId("onboarding-success-ingest")
-        .evaluate((el: HTMLElement) => el.click())
-
-      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
-        timeout: 30000
-      })
-
-      const modal = authedPage
-        .getByRole("dialog", { name: /quick ingest/i })
-        .first()
-      await expect(modal).toBeVisible({ timeout: 30000 })
-
-      const urlsInput = modal.locator("#quick-ingest-url-input")
-      await expect(urlsInput).toBeVisible({ timeout: 20000 })
-
-      const ingestUrl = `http://127.0.0.1:1/qi-web-e2e-${generateTestId("quick-ingest-web")}`
-      await urlsInput.fill(ingestUrl)
-
-      const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
-      if (await inspectorDialog.isVisible().catch(() => false)) {
-        const dismissInspector = inspectorDialog
-          .getByRole("button", { name: /got it|close/i })
-          .first()
-        if (await dismissInspector.isVisible().catch(() => false)) {
-          await dismissInspector.evaluate((el: HTMLElement) => el.click())
-          await expect(inspectorDialog).toBeHidden({ timeout: 10000 })
-        }
-      }
-
-      const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
-      await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
-      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
-
-      await expect
-        .poll(async () => {
-          const sourceValues = await modal
-            .getByRole("textbox", { name: /source url/i })
-            .evaluateAll((elements) =>
-              elements.map((el) =>
-                (el as HTMLInputElement)?.value?.trim() || ""
-              )
-            )
-          return sourceValues.includes(ingestUrl)
-        }, { timeout: 15000 })
-        .toBeTruthy()
-
-      const runButton = modal.locator('[data-testid="quick-ingest-run"]')
-      await expect(runButton).toBeVisible({ timeout: 20000 })
-      await expect(runButton).toBeEnabled({ timeout: 30000 })
-      await runButton.evaluate((el: HTMLElement) => el.click())
-
-      const resultsTab = modal.locator("#quick-ingest-tab-results")
-      await expect(resultsTab).toBeVisible({ timeout: 60000 })
-      await resultsTab.evaluate((el: HTMLElement) => el.click())
-
-      const completionCard = modal.locator('[data-testid="quick-ingest-complete"]')
-      await expect(completionCard).toBeVisible({ timeout: 120000 })
-      await expect(completionCard).toContainText(/quick ingest completed/i)
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should cancel quick ingest mid-process with confirmation", async ({
+    test("quick ingest ingests deterministic local URL through completion and reopen", async ({
+      authedPage,
+      baseURL,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180_000)
+      skipIfServerUnavailable(serverInfo)
+
+      const ingestUrl = buildQuickIngestFixtureUrl(baseURL ?? "http://localhost:3000")
+      const mediaId = await ingestAndWaitForReady(authedPage, { url: ingestUrl })
+
+      await dismissQuickIngest(authedPage)
+      const dialog = await reopenQuickIngest(authedPage)
+      await assertQuickIngestCompletedResults(dialog, { mediaId, sourceUrl: ingestUrl })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest falls back to /api/v1/media/add when queue endpoint returns recognized 429", async ({
+      authedPage,
+      baseURL,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180_000)
+      skipIfServerUnavailable(serverInfo)
+
+      await authedPage.route("**/api/v1/media/ingest/jobs", async (route, request) => {
+        const url = new URL(request.url())
+        const isQueueSubmit =
+          request.method().toUpperCase() === "POST" &&
+          url.pathname.replace(/\/+$/, "") === "/api/v1/media/ingest/jobs"
+        if (!isQueueSubmit) {
+          await route.continue()
+          return
+        }
+
+        await route.fulfill({
+          status: 429,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: "Concurrent job limit reached: queue is full."
+          })
+        })
+      })
+
+      const fallbackAddRequest = authedPage.waitForRequest((request) => {
+        if (request.method().toUpperCase() !== "POST") return false
+        const url = new URL(request.url())
+        return url.pathname.replace(/\/+$/, "") === "/api/v1/media/add"
+      })
+
+      const ingestUrl = buildQuickIngestFixtureUrl(baseURL ?? "http://localhost:3000")
+      const dialog = await queueUrlAndStartProcessing(authedPage, ingestUrl)
+      await fallbackAddRequest
+      await assertQuickIngestCompletedResults(dialog, { sourceUrl: ingestUrl })
+      await expect(dialog).not.toContainText(/queue is full|concurrent job limit/i)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest configure options stay reachable in constrained viewport without forced preset selection", async ({
+      authedPage,
+      baseURL,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(120_000)
+      skipIfServerUnavailable(serverInfo)
+
+      await authedPage.setViewportSize({ width: 390, height: 720 })
+      const ingestUrl = buildQuickIngestFixtureUrl(baseURL ?? "http://localhost:3000")
+      const dialog = await openQuickIngestDialog(authedPage)
+      await advanceQuickIngestToConfigureStep(dialog, ingestUrl)
+
+      await expect(dialog).toContainText(
+        "Presets are starting points. Adjust any settings below or in Advanced options to fit this run."
+      )
+
+      const overwriteToggle = await reachQuickIngestOptionInConstrainedViewport(
+        dialog,
+        /overwrite existing/i
+      )
+      await expect(overwriteToggle).toBeEnabled()
+      const initialChecked = await overwriteToggle.getAttribute("aria-checked")
+      await overwriteToggle.click()
+      await expect(overwriteToggle).toHaveAttribute(
+        "aria-checked",
+        initialChecked === "true" ? "false" : "true"
+      )
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest can be dismissed during processing and resumed from the normal trigger", async ({
+      authedPage,
+      baseURL,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180_000)
+      skipIfServerUnavailable(serverInfo)
+
+      await holdFirstQuickIngestStatusInProcessing(authedPage)
+      const ingestUrl = buildQuickIngestFixtureUrl(baseURL ?? "http://localhost:3000")
+      const dialog = await queueUrlAndStartProcessing(authedPage, ingestUrl, {
+        waitForState: "processing"
+      })
+
+      await dismissQuickIngest(authedPage, { duringProcessing: true })
+      await expect(dialog).toBeHidden()
+
+      const reopened = await reopenQuickIngest(authedPage)
+      await expect(reopened).toContainText(/processing|completed/i)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest restores URL sessions across refresh for queued, processing, and completed states", async ({
+      authedPage,
+      baseURL,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(240_000)
+      skipIfServerUnavailable(serverInfo)
+
+      const ingestUrl = buildQuickIngestFixtureUrl(baseURL ?? "http://localhost:3000")
+
+      let dialog = await openQuickIngestDialog(authedPage)
+      await advanceQuickIngestToConfigureStep(dialog, ingestUrl, { proceedToConfigure: false })
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      dialog = await reopenQuickIngest(authedPage)
+      await expect(dialog).toContainText(ingestUrl)
+
+      await holdFirstQuickIngestStatusInProcessing(authedPage)
+      dialog = await queueUrlAndStartProcessing(authedPage, ingestUrl, {
+        waitForState: "processing"
+      })
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      dialog = await reopenQuickIngest(authedPage)
+      await expect(dialog).toContainText(/processing|completed/i)
+      await assertQuickIngestCompletedResults(dialog, { sourceUrl: ingestUrl })
+
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      dialog = await reopenQuickIngest(authedPage)
+      await assertQuickIngestCompletedResults(dialog, { sourceUrl: ingestUrl })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest file refresh restores reattach-required state", async ({
       authedPage,
       serverInfo,
       diagnostics
     }) => {
-      test.setTimeout(180000)
+      test.setTimeout(120_000)
       skipIfServerUnavailable(serverInfo)
 
-      await authedPage.context().addInitScript((cfg) => {
-        try {
-          localStorage.setItem(
-            "tldwConfig",
-            JSON.stringify({
-              serverUrl: cfg.serverUrl,
-              // lgtm[js/clear-text-storage-of-sensitive-data] synthetic CI key only
-              apiKey: cfg.apiKey,
-              authMode: "single-user"
-            })
-          )
-          localStorage.setItem("__tldw_first_run_complete", "true")
-          localStorage.setItem("__tldw_allow_offline", "true")
-        } catch {
-          // Ignore localStorage failures in hardened browser contexts.
-        }
-        try {
-          const originalFetch = window.fetch.bind(window)
-          let cancelRequested = false
-          const mockedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url =
-              typeof input === "string"
-                ? input
-                : input instanceof Request
-                  ? input.url
-                  : String(input)
-            const method = String(
-              init?.method || (input instanceof Request ? input.method : "GET")
-            ).toUpperCase()
+      const dialog = await openQuickIngestDialog(authedPage)
+      await queueFileForQuickIngest(dialog, quickIngestFixtureFile)
 
-            if (
-              method === "POST" &&
-              /\/api\/v1\/media\/ingest\/jobs\/?(?:\?|$)/i.test(url)
-            ) {
-              await new Promise((resolve) => setTimeout(resolve, 1400))
-              return new Response(
-                JSON.stringify({
-                  batch_id: "qi-web-cancel-mock-batch-id",
-                  jobs: [{ id: 9201, status: "queued" }]
-                }),
-                {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                }
-              )
-            }
-            if (/\/api\/v1\/media\/ingest\/jobs\/9201(?:\?|$)/i.test(url)) {
-              return new Response(
-                JSON.stringify({
-                  id: 9201,
-                  status: cancelRequested ? "cancelled" : "processing",
-                  cancellation_reason: cancelRequested ? "user_cancelled" : null
-                }),
-                {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                }
-              )
-            }
-            if (
-              method === "POST" &&
-              /\/api\/v1\/media\/ingest\/jobs\/cancel\/?(?:\?|$)/i.test(url)
-            ) {
-              cancelRequested = true
-              return new Response(
-                JSON.stringify({
-                  success: true,
-                  batch_id: "qi-web-cancel-mock-batch-id",
-                  requested: 1,
-                  cancelled: 1,
-                  already_terminal: 0,
-                  failed: 0
-                }),
-                {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                }
-              )
-            }
-            return originalFetch(input, init)
-          }
-          window.fetch = mockedFetch
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ;(globalThis as any).fetch = mockedFetch
-        } catch {
-          // Ignore fetch monkeypatch failures in constrained browser contexts.
-        }
-      }, {
-        serverUrl: TEST_CONFIG.serverUrl,
-        apiKey: TEST_CONFIG.apiKey
-      })
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      const reopened = await reopenQuickIngest(authedPage)
+      await expect(reopened).toContainText(/reattach this file after refresh/i)
+      await expect(reopened.getByRole("button", { name: /use defaults & process/i })).toBeDisabled()
+      await expect(reopened.getByRole("button", { name: /configure 0 items/i })).toBeDisabled()
 
-      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest draft sessions reopen from the normal trigger and do not expose the queued CTA during processing", async ({
+      authedPage,
+      baseURL,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180_000)
+      skipIfServerUnavailable(serverInfo)
+
+      const processQueuedCta = authedPage.getByTestId("process-queued-ingest-header")
+      await authedPage.goto("/media", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
-      await authedPage
-        .getByTestId("onboarding-connect")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
-        timeout: 30000
+      await expect(processQueuedCta).toHaveCount(0)
+
+      const ingestUrl = buildQuickIngestFixtureUrl(baseURL ?? "http://localhost:3000")
+      let dialog = await openQuickIngestDialog(authedPage)
+      await advanceQuickIngestToConfigureStep(dialog, ingestUrl, { proceedToConfigure: false })
+      await dismissQuickIngest(authedPage)
+
+      dialog = await reopenQuickIngest(authedPage)
+      await expect(dialog).toContainText(ingestUrl)
+      await dismissQuickIngest(authedPage)
+
+      await holdFirstQuickIngestStatusInProcessing(authedPage)
+      dialog = await queueUrlAndStartProcessing(authedPage, ingestUrl, {
+        waitForState: "processing"
       })
-      await authedPage
-        .getByTestId("onboarding-success-ingest")
-        .evaluate((el: HTMLElement) => el.click())
-
-      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
-        timeout: 30000
-      })
-
-      const modal = authedPage
-        .getByRole("dialog", { name: /quick ingest/i })
-        .first()
-      await expect(modal).toBeVisible({ timeout: 30000 })
-
-      const urlsInput = modal.locator("#quick-ingest-url-input")
-      await expect(urlsInput).toBeVisible({ timeout: 20000 })
-
-      const ingestUrl = `https://example.com/qi-web-cancel-${generateTestId("quick-ingest-web-cancel")}`
-      await urlsInput.fill(ingestUrl)
-
-      const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
-      if (await inspectorDialog.isVisible().catch(() => false)) {
-        const dismissInspector = inspectorDialog
-          .getByRole("button", { name: /got it|close/i })
-          .first()
-        if (await dismissInspector.isVisible().catch(() => false)) {
-          await dismissInspector.evaluate((el: HTMLElement) => el.click())
-          await expect(inspectorDialog).toBeHidden({ timeout: 10000 })
-        }
-      }
-
-      const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
-      await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
-      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
-
-      await expect
-        .poll(async () => {
-          const sourceValues = await modal
-            .getByRole("textbox", { name: /source url/i })
-            .evaluateAll((elements) =>
-              elements.map((el) =>
-                (el as HTMLInputElement)?.value?.trim() || ""
-              )
-            )
-          return sourceValues.includes(ingestUrl)
-        }, { timeout: 15000 })
-        .toBeTruthy()
-
-      const runButton = modal.getByTestId("quick-ingest-run")
-      await expect(runButton).toBeVisible({ timeout: 20000 })
-      await expect(runButton).toBeEnabled({ timeout: 30000 })
-      await runButton.evaluate((el: HTMLElement) => el.click())
-
-      const cancelButton = modal.getByTestId("quick-ingest-cancel")
-      await expect(cancelButton).toBeVisible({ timeout: 15000 })
-
-      await cancelButton.click()
-      const keepRunningButton = authedPage.getByRole("button", { name: /keep running/i })
-      await expect(keepRunningButton).toBeVisible({ timeout: 10000 })
-      await keepRunningButton.click()
-      await expect(cancelButton).toBeVisible()
-
-      await cancelButton.click()
-      const confirmCancelButton = authedPage.getByRole("button", { name: /cancel run/i })
-      await expect(confirmCancelButton).toBeVisible({ timeout: 10000 })
-      await confirmCancelButton.click()
-
-      const completionCard = modal.getByTestId("quick-ingest-complete")
-      await expect(completionCard).toBeVisible({ timeout: 30000 })
-      await expect(completionCard).toContainText(/cancelled/i)
-
-      await authedPage.waitForTimeout(1800)
-      await expect(completionCard).toContainText(/cancelled/i)
+      await expect(dialog).toContainText(/processing/i)
+      await expect(processQueuedCta).toHaveCount(0)
 
       await assertNoCriticalErrors(diagnostics)
     })
   })
 
   test.describe("Content Review Flow", () => {
-    test("should navigate to review page", async ({
+    test("should show moved-route guidance for the legacy review page", async ({
       authedPage,
       diagnostics
     }) => {
       const mediaPage = new MediaPage(authedPage)
       await mediaPage.gotoReview()
 
-      // Verify review page loaded
-      const _reviewContainer = authedPage.locator(
-        "[data-testid='review-container'], .review-page, .content-review"
-      )
-
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await expect(
+        authedPage.getByRole("heading", { name: /this route has moved/i })
+      ).toBeVisible({ timeout: 20_000 })
+      await expect(authedPage.getByRole("link", { name: /open updated page/i })).toBeVisible({
+        timeout: 20_000
+      })
+      await expect(authedPage).toHaveURL(/\/review(?:[/?#].*)?$/, {
+        timeout: 20_000
+      })
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should display draft items for review", async ({
+    test("should navigate from the legacy review route to media-multi", async ({
       authedPage,
       diagnostics
     }) => {
       const mediaPage = new MediaPage(authedPage)
       await mediaPage.gotoReview()
-
-      // Get draft items
-      const _drafts = await mediaPage.getDraftItems()
-
-      // Page should load whether or not there are drafts
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await authedPage.getByRole("link", { name: /open updated page/i }).click()
+      await expect(authedPage).toHaveURL(/\/media-multi(?:[/?#].*)?$/, {
+        timeout: 20_000
+      })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -814,8 +761,11 @@ test.describe("Media Ingestion Workflow", () => {
         await searchInput.fill("test query")
         await searchInput.press("Enter")
 
-        // Wait for search results
-        await authedPage.waitForTimeout(2000)
+        await authedPage
+          .locator(".ant-spin-spinning, [aria-busy='true']")
+          .first()
+          .waitFor({ state: "hidden", timeout: 5_000 })
+          .catch(() => {})
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -854,8 +804,19 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.goto("/media-multi", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await expect
+        .poll(
+          async () =>
+            await authedPage
+              .getByTestId("media-review-status-bar")
+              .isVisible()
+              .catch(() => false),
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for the media review surface to settle",
+          }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -869,13 +830,17 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.goto("/media-trash", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
-
-      // Look for trash content
-      const _trashContainer = authedPage.locator(
-        "[data-testid='trash-container'], .trash-page, .deleted-items"
-      )
+      await expect
+        .poll(
+          async () =>
+            (await authedPage.getByTestId("trash-retention-policy").isVisible().catch(() => false)) ||
+            (await authedPage.getByRole("heading", { name: /^trash$/i }).isVisible().catch(() => false)),
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for the media trash surface to settle",
+          }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })

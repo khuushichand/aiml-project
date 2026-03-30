@@ -345,6 +345,8 @@ async def get_active_org_id(
     # Fall back to first org
     user_orgs = await get_user_orgs(principal)
     if user_orgs:
-        return user_orgs[0].get("org_id")
+        active_org_id = user_orgs[0].get("org_id") or user_orgs[0].get("id")
+        if active_org_id is not None:
+            return int(active_org_id)
 
     return None

@@ -14,7 +14,7 @@ import {
   classifySmokeIssues,
   type DiagnosticsData,
 } from "../smoke/smoke.setup"
-import { dismissModals } from "../utils/helpers"
+import { dismissModals, waitForVisualSettle } from "../utils/helpers"
 
 // ─── Extra routes not in the page-inventory ────────────────────────────────
 const EXTRA_ROUTES: PageEntry[] = [
@@ -54,6 +54,33 @@ function slugify(routePath: string): string {
     .replace(/^\//, "")
     .replace(/\//g, "-")
     .replace(/[^a-zA-Z0-9_-]/g, "_") || "root"
+}
+
+async function waitForAuditRenderableSurface(
+  page: import("@playwright/test").Page,
+  timeoutMs = 10_000
+) {
+  await page
+    .waitForFunction(() => {
+      const redirectPanel = document.querySelector('[data-testid="route-redirect-panel"]')
+      const placeholderPanel = document.querySelector('[data-testid="route-placeholder-panel"]')
+      const mainLandmark = document.querySelector("main, [role='main']")
+      const heading = document.querySelector("h1, h2, h3, h4, h5, h6")
+      const focusableCount = document.querySelectorAll(
+        "a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])"
+      ).length
+      const visibleText = (document.body?.innerText || "").trim().length
+
+      return Boolean(
+        redirectPanel ||
+          placeholderPanel ||
+          heading ||
+          mainLandmark ||
+          focusableCount > 0 ||
+          visibleText > 32
+      )
+    }, { timeout: timeoutMs })
+    .catch(() => {})
 }
 
 // ─── Test suite ─────────────────────────────────────────────────────────────
@@ -106,15 +133,14 @@ test.describe("UX Audit v3 - Data Collection", () => {
         routeData.navigationError = err instanceof Error ? err.message : String(err)
       }
 
-      // 4. Wait for network idle (15s timeout, catch and continue)
+      // 4. Wait for the route to paint enough UI for stable diagnostics/screenshots.
       if (navigationOk) {
-        try {
-          await page.waitForLoadState("networkidle", { timeout: 15_000 })
-        } catch {
-          // Expected for routes with infinite re-renders or long polling
-        }
-        // Extra settle time
-        await page.waitForTimeout(1000)
+        await waitForVisualSettle(page, 15_000)
+        await waitForAuditRenderableSurface(page, 10_000)
+        routeData.finalUrl = page.url()
+        routeData.redirected = page.url() !== (page.context().pages()[0]
+          ? new URL(route.path, page.url()).href
+          : route.path)
       }
 
       // 5. Dismiss modals
@@ -214,7 +240,7 @@ test.describe("UX Audit v3 - Data Collection", () => {
           document.documentElement.classList.remove("dark")
           document.documentElement.classList.add("light")
         })
-        await page.waitForTimeout(500)
+        await waitForVisualSettle(page, 5_000)
         const desktopLightPath = path.join(SCREENSHOTS_DIR, `${slug}_desktop_light.png`)
         await page.screenshot({ path: desktopLightPath, fullPage: true })
         screenshotPaths.desktop_light = `${slug}_desktop_light.png`
@@ -228,7 +254,7 @@ test.describe("UX Audit v3 - Data Collection", () => {
           document.documentElement.classList.remove("light")
           document.documentElement.classList.add("dark")
         })
-        await page.waitForTimeout(500)
+        await waitForVisualSettle(page, 5_000)
         const desktopDarkPath = path.join(SCREENSHOTS_DIR, `${slug}_desktop_dark.png`)
         await page.screenshot({ path: desktopDarkPath, fullPage: true })
         screenshotPaths.desktop_dark = `${slug}_desktop_dark.png`
@@ -239,7 +265,7 @@ test.describe("UX Audit v3 - Data Collection", () => {
       // Mobile Dark (375x812)
       try {
         await page.setViewportSize({ width: 375, height: 812 })
-        await page.waitForTimeout(500)
+        await waitForVisualSettle(page, 5_000)
         const mobileDarkPath = path.join(SCREENSHOTS_DIR, `${slug}_mobile_dark.png`)
         await page.screenshot({ path: mobileDarkPath, fullPage: true })
         screenshotPaths.mobile_dark = `${slug}_mobile_dark.png`
@@ -253,7 +279,7 @@ test.describe("UX Audit v3 - Data Collection", () => {
           document.documentElement.classList.remove("dark")
           document.documentElement.classList.add("light")
         })
-        await page.waitForTimeout(500)
+        await waitForVisualSettle(page, 5_000)
         const mobileLightPath = path.join(SCREENSHOTS_DIR, `${slug}_mobile_light.png`)
         await page.screenshot({ path: mobileLightPath, fullPage: true })
         screenshotPaths.mobile_light = `${slug}_mobile_light.png`

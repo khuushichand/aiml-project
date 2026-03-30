@@ -4,7 +4,8 @@ import pytest
 
 from tldw_Server_API.app.api.v1.schemas.quizzes import QuizGenerateSource, QuizSourceType
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
+from tldw_Server_API.app.services import quiz_source_resolver as resolver_mod
 from tldw_Server_API.app.services.quiz_source_resolver import resolve_quiz_sources
 
 
@@ -162,3 +163,35 @@ def test_resolve_quiz_attempt_question_source_includes_user_answer_and_citations
     assert "User answer: 2" in evidence[0]["text"]
     assert "Correct answer: 1" in evidence[0]["text"]
     assert "Source citations:" in evidence[0]["text"]
+
+
+def test_resolves_media_source_from_latest_transcription_fallback(
+    monkeypatch,
+    quizzes_db: CharactersRAGDB,
+    media_db: MediaDatabase,
+):
+    monkeypatch.setattr(
+        media_db,
+        "get_media_by_id",
+        lambda media_id, include_deleted=False, include_trash=False: {
+            "id": media_id,
+            "title": "Renal Lecture",
+            "content": "",
+        },
+    )
+    monkeypatch.setattr(
+        resolver_mod,
+        "get_latest_transcription",
+        lambda db, media_id: "Filtered transcript fallback.",
+    )
+
+    evidence = resolve_quiz_sources(
+        [{"source_type": "media", "source_id": "7"}],
+        db=quizzes_db,
+        media_db=media_db,
+    )
+
+    assert evidence[0]["source_type"] == "media"
+    assert evidence[0]["source_id"] == "7"
+    assert evidence[0]["label"] == "Renal Lecture"
+    assert evidence[0]["text"] == "Filtered transcript fallback."

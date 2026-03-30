@@ -3,9 +3,38 @@ from types import SimpleNamespace
 
 import pytest
 
+from tldw_Server_API.app.core.TTS import tts_jobs_worker
 from tldw_Server_API.app.core.TTS.tts_jobs_worker import _handle_tts_job
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.config import settings
+
+
+@pytest.mark.unit
+def test_open_media_db_for_history_uses_media_db_api_factory(tmp_path, monkeypatch):
+    captured = {}
+    sentinel = object()
+    db_path = tmp_path / "tts-history.sqlite3"
+
+    monkeypatch.setattr(
+        tts_jobs_worker.DatabasePaths,
+        "get_media_db_path",
+        lambda user_id: db_path,
+    )
+
+    def _fake_create_media_database(client_id, **kwargs):
+        captured["client_id"] = client_id
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(tts_jobs_worker, "create_media_database", _fake_create_media_database)
+
+    result = tts_jobs_worker._open_media_db_for_history("17")
+
+    assert result is sentinel
+    assert captured == {
+        "client_id": "tts_jobs_worker",
+        "db_path": str(db_path),
+    }
 
 
 @pytest.mark.unit

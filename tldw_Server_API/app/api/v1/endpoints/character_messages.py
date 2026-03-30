@@ -5,15 +5,19 @@ Provides CRUD operations for messages in conversations.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from loguru import logger
+from pydantic import ValidationError
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
 # Schemas
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ConversationScopeParams,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     MessageCreate,
     MessageListResponse,
@@ -128,7 +132,8 @@ def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse
 def _verify_conversation_access(
     db: CharactersRAGDB,
     conversation_id: str,
-    user_id: int
+    user_id: int,
+    scope: ConversationScopeParams | None = None,
 ) -> dict[str, Any]:
     """
     Verify user has access to a conversation.
@@ -159,13 +164,30 @@ def _verify_conversation_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this chat session"
         )
+    expected_scope = scope or ConversationScopeParams()
+    conversation_scope = conversation.get("scope_type") or "global"
+    conversation_workspace_id = conversation.get("workspace_id")
+    if conversation_scope != expected_scope.scope_type:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {conversation_id} not found",
+        )
+    if (
+        expected_scope.scope_type == "workspace"
+        and conversation_workspace_id != expected_scope.workspace_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {conversation_id} not found",
+        )
 
     return conversation
 
 def _verify_message_access(
     db: CharactersRAGDB,
     message_id: str,
-    user_id: int
+    user_id: int,
+    scope: ConversationScopeParams | None = None,
 ) -> dict[str, Any]:
     """
     Verify user has access to a message using DB abstractions.
@@ -176,21 +198,31 @@ def _verify_message_access(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Message {message_id} not found"
         )
-    conv = db.get_conversation_by_id(message.get('conversation_id'))
-    if not conv:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat session {message.get('conversation_id')} not found"
-        )
-    stored_client_id = str(conv.get('client_id', '')).strip()
-    request_user_id = str(user_id).strip()
-    if stored_client_id != request_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this message"
-        )
+    conv = _verify_conversation_access(
+        db,
+        str(message.get('conversation_id')),
+        user_id,
+        scope,
+    )
     message['client_id'] = conv.get('client_id')
     return message
+
+
+def _resolve_message_scope(
+    scope_type: Literal["global", "workspace"] | None,
+    workspace_id: str | None,
+) -> ConversationScopeParams:
+    try:
+        return ConversationScopeParams(
+            scope_type=scope_type or "global",
+            workspace_id=workspace_id,
+        )
+    except ValidationError as exc:
+        detail = exc.errors()[0].get("msg") if exc.errors() else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        ) from exc
 
 # ========================================================================
 # Message Endpoints
@@ -202,6 +234,8 @@ def _verify_message_access(
 async def send_message(
     message_data: MessageCreate,
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -221,12 +255,13 @@ async def send_message(
         HTTPException: 404 if chat not found, 403 if unauthorized, 429 if rate limited
     """
     try:
+        scope = _resolve_message_scope(scope_type, workspace_id)
         # Check rate limits (per-minute + per-chat message count)
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_message_send_rate(current_user.id)
 
         # Verify conversation access
-        conversation = _verify_conversation_access(db, chat_id, current_user.id)
+        conversation = _verify_conversation_access(db, chat_id, current_user.id, scope)
         # Enforce per-chat message cap (using efficient count instead of loading all messages)
         try:
             msg_count = db.count_messages_for_conversation(chat_id)
@@ -248,7 +283,7 @@ async def send_message(
 
         # Validate parent message if provided
         if message_data.parent_message_id:
-            parent_msg = _verify_message_access(db, message_data.parent_message_id, current_user.id)
+            parent_msg = _verify_message_access(db, message_data.parent_message_id, current_user.id, scope)
             if parent_msg.get('conversation_id') != chat_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -391,6 +426,8 @@ async def get_chat_messages(
         False,
         description="Include message_id fields when formatting for completions (no effect on standard format)",
     ),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -415,8 +452,9 @@ async def get_chat_messages(
         HTTPException: 404 if chat not found, 403 if unauthorized
     """
     try:
+        scope = _resolve_message_scope(scope_type, workspace_id)
         # Verify conversation access
-        conversation = _verify_conversation_access(db, chat_id, current_user.id)
+        conversation = _verify_conversation_access(db, chat_id, current_user.id, scope)
 
         # Get messages (honor include_deleted and DB pagination)
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset, include_deleted=include_deleted)
@@ -704,6 +742,8 @@ async def get_message(
     message_id: str = Path(..., description="Message ID"),
     include_tool_calls: bool = Query(False, description="Include tool_calls metadata when available"),
     include_metadata: bool = Query(False, description="Include stored message metadata.extra JSON where available"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -722,7 +762,8 @@ async def get_message(
         HTTPException: 404 if not found, 403 if unauthorized
     """
     try:
-        message = _verify_message_access(db, message_id, current_user.id)
+        scope = _resolve_message_scope(scope_type, workspace_id)
+        message = _verify_message_access(db, message_id, current_user.id, scope)
         resp = _convert_db_message_to_response(message)
         if include_tool_calls or include_metadata:
             try:
@@ -755,6 +796,8 @@ async def edit_message(
     update_data: MessageUpdate,
     message_id: str = Path(..., description="Message ID"),
     expected_version: int = Query(..., description="Expected version for optimistic locking"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -775,12 +818,13 @@ async def edit_message(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        scope = _resolve_message_scope(scope_type, workspace_id)
         # Check rate limits for message edits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "message_edit")
 
         # Verify message access
-        message = _verify_message_access(db, message_id, current_user.id)
+        message = _verify_message_access(db, message_id, current_user.id, scope)
 
         # Check version
         if message.get('version', 1) != expected_version:
@@ -888,6 +932,8 @@ async def edit_message(
 async def delete_message(
     message_id: str = Path(..., description="Message ID"),
     expected_version: int = Query(..., description="Expected version for optimistic locking"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ) -> Response:
@@ -904,12 +950,13 @@ async def delete_message(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        scope = _resolve_message_scope(scope_type, workspace_id)
         # Check rate limits for message deletions
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "message_delete")
 
         # Verify message access
-        message = _verify_message_access(db, message_id, current_user.id)
+        message = _verify_message_access(db, message_id, current_user.id, scope)
 
         # Check version
         if message.get('version', 1) != expected_version:
@@ -969,6 +1016,8 @@ async def search_messages(
     chat_id: str = Path(..., description="Chat session ID"),
     query: str = Query(..., description="Search query", min_length=1, max_length=MAX_SEARCH_QUERY_LENGTH),
     limit: int = Query(50, ge=1, le=200, description="Maximum results"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -989,12 +1038,13 @@ async def search_messages(
         HTTPException: 404 if chat not found, 403 if unauthorized
     """
     try:
+        scope = _resolve_message_scope(scope_type, workspace_id)
         # Check rate limits for message search
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "message_search")
 
         # Verify conversation access
-        conversation = _verify_conversation_access(db, chat_id, current_user.id)
+        conversation = _verify_conversation_access(db, chat_id, current_user.id, scope)
 
         # Resolve character/user names for placeholder-aware search
         character_id = conversation.get('character_id')

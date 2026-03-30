@@ -8,7 +8,8 @@ import {
 import {
   tldwChat,
   ChatMessage,
-  type ChatCompletionContentPart
+  type ChatCompletionContentPart,
+  type ChatResearchContext
 } from "@/services/tldw"
 import type { ToolCall } from "@/types/tool-calls"
 import { publishChatLoopEvent } from "@/services/chat-loop/bridge"
@@ -16,6 +17,13 @@ import { extractChatLoopEvent } from "@/services/chat-loop/stream"
 
 export interface ChatTldwOptions {
   model: string
+  routing?: {
+    strategy?: "llm_router" | "rules_router"
+    objective?: "highest_quality" | "lowest_cost" | "lowest_latency" | "balanced"
+    mode?: "per_turn" | "sticky_session"
+    cross_provider?: boolean
+    failure_mode?: "fallback_then_error" | "error"
+  }
   temperature?: number
   maxTokens?: number
   topP?: number
@@ -35,10 +43,12 @@ export interface ChatTldwOptions {
   apiProvider?: string
   extraHeaders?: Record<string, unknown>
   extraBody?: Record<string, unknown>
+  researchContext?: ChatResearchContext
 }
 
 export class ChatTldw {
   model: string
+  routing?: ChatTldwOptions["routing"]
   temperature?: number
   maxTokens?: number
   topP?: number
@@ -58,10 +68,12 @@ export class ChatTldw {
   apiProvider?: string
   extraHeaders?: Record<string, unknown>
   extraBody?: Record<string, unknown>
+  researchContext?: ChatResearchContext
 
   constructor(options: ChatTldwOptions) {
     // Normalize model id: drop internal prefix like "tldw:" so server receives provider/model
     this.model = String(options.model || '').replace(/^tldw:/, '')
+    this.routing = options.routing
     this.temperature = options.temperature ?? 0.7
     this.maxTokens = options.maxTokens
     this.topP = options.topP ?? 1
@@ -81,6 +93,7 @@ export class ChatTldw {
     this.apiProvider = options.apiProvider
     this.extraHeaders = options.extraHeaders
     this.extraBody = options.extraBody
+    this.researchContext = options.researchContext
   }
 
   /**
@@ -160,6 +173,7 @@ export class ChatTldw {
         systemPrompt: this.systemPrompt,
         stream: true,
         reasoningEffort: this.reasoningEffort,
+        routing: this.routing,
         toolChoice: this.toolChoice,
         tools: this.tools,
         saveToDb: this.saveToDb,
@@ -169,7 +183,8 @@ export class ChatTldw {
         slashCommandInjectionMode: this.slashCommandInjectionMode,
         apiProvider: this.apiProvider,
         extraHeaders: this.extraHeaders,
-        extraBody: this.extraBody
+        extraBody: this.extraBody,
+        researchContext: this.researchContext
       },
       handleChunk
     )
@@ -227,6 +242,7 @@ export class ChatTldw {
       systemPrompt: this.systemPrompt,
       stream: false,
       reasoningEffort: this.reasoningEffort,
+      routing: this.routing,
       toolChoice: this.toolChoice,
       tools: this.tools,
       saveToDb: this.saveToDb,
@@ -236,7 +252,8 @@ export class ChatTldw {
       slashCommandInjectionMode: this.slashCommandInjectionMode,
       apiProvider: this.apiProvider,
       extraHeaders: this.extraHeaders,
-      extraBody: this.extraBody
+      extraBody: this.extraBody,
+      researchContext: this.researchContext
     })
 
     return {

@@ -12,7 +12,7 @@ import asyncio
 import copy
 import fnmatch
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -202,6 +202,7 @@ class AgentConfig:
     enabled: bool = True
     created_at: str = ""
     updated_at: str | None = None
+    max_token_budget: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         import os
@@ -224,6 +225,7 @@ class AgentConfig:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "is_configured": is_configured,
+            "max_token_budget": self.max_token_budget,
         }
 
 
@@ -548,6 +550,11 @@ class ACPSessionStore:
         records = [self._dict_to_record(d) for d in rows]
         return records, total
 
+    async def get_agent_usage_stats(self, *, range_days: int = 7) -> list[dict[str, Any]]:
+        """Return per-agent aggregated token usage for the last *range_days* days."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=range_days)).isoformat()
+        return await asyncio.to_thread(self._db.get_agent_usage_stats, since_iso=cutoff)
+
     async def fork_session(
         self,
         source_session_id: str,
@@ -593,6 +600,7 @@ class ACPSessionStore:
                 org_id=data.get("org_id"),
                 team_id=data.get("team_id"),
                 enabled=data.get("enabled", True),
+                max_token_budget=data.get("max_token_budget"),
                 created_at=now,
             )
             self._agent_configs[config.id] = config
@@ -605,7 +613,7 @@ class ACPSessionStore:
                 return None
             for key in ("name", "description", "system_prompt", "allowed_tools",
                         "denied_tools", "parameters", "requires_api_key",
-                        "org_id", "team_id", "enabled", "type"):
+                        "org_id", "team_id", "enabled", "type", "max_token_budget"):
                 if key in data:
                     setattr(config, key, data[key])
             config.updated_at = datetime.now(timezone.utc).isoformat()

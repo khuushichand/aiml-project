@@ -1,16 +1,33 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { KnowledgeContextBar } from "../context/KnowledgeContextBar"
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
+    initialize: vi.fn().mockResolvedValue(undefined),
+    getProviders: vi.fn().mockResolvedValue({
+      default_provider: "openai",
+      providers: [
+        { name: "openai", display_name: "OpenAI", models: ["gpt-4o-mini"] },
+      ],
+    }),
     listMedia: vi.fn().mockResolvedValue({ items: [] }),
     listNotes: vi.fn().mockResolvedValue({ items: [] }),
   },
 }))
 
 describe("KnowledgeContextBar", () => {
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void
+    let reject!: (reason?: unknown) => void
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
   it("shows inline preset descriptions for active mode", () => {
     const { rerender } = render(
       <KnowledgeContextBar
@@ -24,6 +41,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -47,6 +68,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -73,6 +98,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -103,6 +132,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -114,5 +147,124 @@ describe("KnowledgeContextBar", () => {
     fireEvent.click(screen.getByText("Quarterly Planning Doc"))
 
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([42])
+  })
+
+  it("adds Docs & Media to source scope when selecting a granular media filter", async () => {
+    vi.mocked(tldwClient.listMedia).mockResolvedValueOnce({
+      items: [{ id: 42, title: "Quarterly Planning Doc", type: "pdf" }],
+    })
+    vi.mocked(tldwClient.listNotes).mockResolvedValueOnce({ items: [] })
+
+    const onSourcesChange = vi.fn()
+    const onIncludeMediaIdsChange = vi.fn()
+    render(
+      <KnowledgeContextBar
+        preset="balanced"
+        onPresetChange={vi.fn()}
+        sources={[]}
+        onSourcesChange={onSourcesChange}
+        includeMediaIds={[]}
+        onIncludeMediaIdsChange={onIncludeMediaIdsChange}
+        includeNoteIds={[]}
+        onIncludeNoteIdsChange={vi.fn()}
+        webEnabled={true}
+        onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
+        contextChangedSinceLastRun={false}
+        onOpenSettings={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Specific:/i }))
+    expect(await screen.findByText("Quarterly Planning Doc")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("Quarterly Planning Doc"))
+
+    expect(onSourcesChange).toHaveBeenCalledWith(["media_db"])
+    expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([42])
+  })
+
+  it("clears granular media filters when Docs & Media is removed from source scope", () => {
+    const onSourcesChange = vi.fn()
+    const onIncludeMediaIdsChange = vi.fn()
+
+    render(
+      <KnowledgeContextBar
+        preset="balanced"
+        onPresetChange={vi.fn()}
+        sources={["media_db"]}
+        onSourcesChange={onSourcesChange}
+        includeMediaIds={[42]}
+        onIncludeMediaIdsChange={onIncludeMediaIdsChange}
+        includeNoteIds={[]}
+        onIncludeNoteIdsChange={vi.fn()}
+        webEnabled={true}
+        onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
+        contextChangedSinceLastRun={false}
+        onOpenSettings={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Sources:/i }))
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Docs & Media" }))
+
+    expect(onSourcesChange).toHaveBeenCalledWith([])
+    expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([])
+  })
+
+  it("ignores stale granular load failures after a newer reload succeeds", async () => {
+    const firstMediaLoad = createDeferred<{ items: never[] }>()
+    const firstNotesLoad = createDeferred<{ items: never[] }>()
+
+    vi.mocked(tldwClient.listMedia)
+      .mockReturnValueOnce(firstMediaLoad.promise)
+      .mockResolvedValueOnce({
+        items: [{ id: 42, title: "Recovered Planning Doc", type: "pdf" }],
+      })
+    vi.mocked(tldwClient.listNotes)
+      .mockReturnValueOnce(firstNotesLoad.promise)
+      .mockResolvedValueOnce({ items: [] })
+
+    render(
+      <KnowledgeContextBar
+        preset="balanced"
+        onPresetChange={vi.fn()}
+        sources={["media_db"]}
+        onSourcesChange={vi.fn()}
+        includeMediaIds={[]}
+        onIncludeMediaIdsChange={vi.fn()}
+        includeNoteIds={[]}
+        onIncludeNoteIdsChange={vi.fn()}
+        webEnabled={true}
+        onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
+        contextChangedSinceLastRun={false}
+        onOpenSettings={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Specific:/i }))
+    expect(screen.getByText("Loading available sources...")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }))
+    expect(await screen.findByText("Recovered Planning Doc")).toBeInTheDocument()
+
+    await act(async () => {
+      firstMediaLoad.reject(new Error("First load failed"))
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText("First load failed")).not.toBeInTheDocument()
+    expect(screen.getByText("Recovered Planning Doc")).toBeInTheDocument()
   })
 })

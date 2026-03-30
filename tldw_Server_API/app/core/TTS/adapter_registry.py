@@ -26,7 +26,7 @@ from .tts_exceptions import (
     TTSError,
     TTSProviderNotConfiguredError,
 )
-from .tts_resource_manager import get_resource_manager
+from .tts_resource_manager import get_existing_resource_manager, get_resource_manager
 from .utils import parse_bool
 
 #
@@ -69,9 +69,11 @@ class TTSProvider(Enum):
     SUPERTONIC = "supertonic"
     SUPERTONIC2 = "supertonic2"
     POCKET_TTS = "pocket_tts"
+    POCKET_TTS_CPP = "pocket_tts_cpp"
     ECHO_TTS = "echo_tts"
     QWEN3_TTS = "qwen3_tts"
     LUX_TTS = "lux_tts"
+    KITTEN_TTS = "kitten_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -106,6 +108,7 @@ def _build_tts_provider_aliases() -> dict[str, TTSProvider]:
         "elevenlabs-tts": TTSProvider.ELEVENLABS,
         "qwen3tts": TTSProvider.QWEN3_TTS,
         "echotts": TTSProvider.ECHO_TTS,
+        "kittentts": TTSProvider.KITTEN_TTS,
         "vibevoice-asr": TTSProvider.VIBEVOICE,
     }
     for alias, provider in explicit_aliases.items():
@@ -116,6 +119,130 @@ def _build_tts_provider_aliases() -> dict[str, TTSProvider]:
 
 
 _TTS_PROVIDER_ALIASES: dict[str, TTSProvider] = _build_tts_provider_aliases()
+
+
+def _apply_provider_aliases(provider_key: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Duplicate generic provider config keys into legacy adapter-prefixed aliases."""
+    normalized_provider = str(provider_key or "").strip().lower()
+    normalized_cfg = dict(cfg or {})
+
+    def alias(src: str, dst: str) -> None:
+        if src in normalized_cfg and dst not in normalized_cfg and normalized_cfg[src] is not None:
+            normalized_cfg[dst] = normalized_cfg[src]
+
+    if normalized_provider == "openai":
+        alias("api_key", "openai_api_key")
+        alias("base_url", "openai_base_url")
+        alias("model", "openai_model")
+    elif normalized_provider == "kokoro":
+        alias("use_onnx", "kokoro_use_onnx")
+        alias("model_path", "kokoro_model_path")
+        alias("voices_json", "kokoro_voices_json")
+        alias("voice_dir", "kokoro_voice_dir")
+        alias("device", "kokoro_device")
+        alias("target_latency_ms", "kokoro_target_latency_ms")
+    elif normalized_provider == "higgs":
+        alias("model_path", "higgs_model_path")
+        alias("tokenizer_path", "higgs_tokenizer_path")
+        alias("device", "higgs_device")
+        alias("use_fp16", "higgs_use_fp16")
+        alias("batch_size", "higgs_batch_size")
+        alias("target_latency_ms", "higgs_target_latency_ms")
+    elif normalized_provider == "dia":
+        alias("model_path", "dia_model_path")
+        alias("device", "dia_device")
+        alias("use_safetensors", "dia_use_safetensors")
+        alias("use_bf16", "dia_use_bf16")
+        alias("sample_rate", "dia_sample_rate")
+        alias("auto_detect_speakers", "dia_auto_detect_speakers")
+        alias("max_speakers", "dia_max_speakers")
+        alias("target_latency_ms", "dia_target_latency_ms")
+    elif normalized_provider == "chatterbox":
+        alias("device", "chatterbox_device")
+        alias("use_multilingual", "chatterbox_use_multilingual")
+        alias("disable_watermark", "chatterbox_disable_watermark")
+        alias("target_latency_ms", "chatterbox_target_latency_ms")
+    elif normalized_provider == "elevenlabs":
+        alias("api_key", "elevenlabs_api_key")
+        alias("base_url", "elevenlabs_base_url")
+        alias("model", "elevenlabs_model")
+        alias("stability", "elevenlabs_stability")
+        alias("similarity_boost", "elevenlabs_similarity_boost")
+        alias("style", "elevenlabs_style")
+        alias("speaker_boost", "elevenlabs_speaker_boost")
+    elif normalized_provider == "vibevoice":
+        alias("device", "vibevoice_device")
+        alias("sample_rate", "vibevoice_sample_rate")
+        alias("variant", "vibevoice_variant")
+        alias("model_path", "vibevoice_model_path")
+        alias("model_dir", "vibevoice_model_dir")
+        alias("cache_dir", "vibevoice_cache_dir")
+        alias("voices_dir", "vibevoice_voices_dir")
+        alias("background_music", "vibevoice_background_music")
+        alias("enable_singing", "vibevoice_enable_singing")
+        alias("use_quantization", "vibevoice_use_quantization")
+        alias("auto_cleanup", "vibevoice_auto_cleanup")
+        alias("auto_download", "vibevoice_auto_download")
+        alias("enable_sage", "vibevoice_enable_sage")
+        alias("attention_type", "vibevoice_attention_type")
+        alias("cfg_scale", "vibevoice_cfg_scale")
+        alias("diffusion_steps", "vibevoice_diffusion_steps")
+        alias("temperature", "vibevoice_temperature")
+        alias("top_p", "vibevoice_top_p")
+        alias("top_k", "vibevoice_top_k")
+        alias("stream_chunk_size", "vibevoice_stream_chunk_size")
+        alias("stream_buffer_size", "vibevoice_stream_buffer_size")
+    elif normalized_provider == "neutts":
+        alias("device", "backbone_device")
+        alias("backbone_repo", "backbone_repo")
+        alias("codec_repo", "codec_repo")
+        alias("sample_rate", "sample_rate")
+    elif normalized_provider == "index_tts":
+        alias("model_dir", "index_tts_model_dir")
+        alias("cfg_path", "index_tts_cfg_path")
+        alias("device", "index_tts_device")
+        alias("use_fp16", "index_tts_use_fp16")
+        alias("use_cuda_kernel", "index_tts_use_cuda_kernel")
+        alias("use_deepspeed", "index_tts_use_deepspeed")
+        alias("interval_silence", "index_tts_interval_silence")
+        alias("quick_streaming_tokens", "index_tts_quick_streaming_tokens")
+        alias("max_text_tokens_per_segment", "index_tts_max_text_tokens_per_segment")
+        alias("more_segment_before", "index_tts_more_segment_before")
+        alias("verbose", "index_tts_verbose")
+        alias("sample_rate", "sample_rate")
+    elif normalized_provider == "pocket_tts":
+        alias("model_path", "pocket_tts_model_path")
+        alias("tokenizer_path", "pocket_tts_tokenizer_path")
+        alias("precision", "pocket_tts_precision")
+        alias("device", "pocket_tts_device")
+        alias("temperature", "pocket_tts_temperature")
+        alias("lsd_steps", "pocket_tts_lsd_steps")
+        alias("max_frames", "pocket_tts_max_frames")
+        alias("stream_first_chunk_frames", "pocket_tts_stream_first_chunk_frames")
+        alias("stream_target_buffer_sec", "pocket_tts_stream_target_buffer_sec")
+        alias("stream_max_chunk_frames", "pocket_tts_stream_max_chunk_frames")
+    elif normalized_provider == "pocket_tts_cpp":
+        alias("binary_path", "pocket_tts_cpp_binary_path")
+        alias("tokenizer_path", "pocket_tts_cpp_tokenizer_path")
+        alias("device", "pocket_tts_cpp_device")
+        alias("sample_rate", "pocket_tts_cpp_sample_rate")
+        alias("enable_voice_cache", "pocket_tts_cpp_enable_voice_cache")
+        alias("cache_ttl_hours", "pocket_tts_cpp_cache_ttl_hours")
+        alias("cache_max_bytes_per_user", "pocket_tts_cpp_cache_max_bytes_per_user")
+        alias("persist_direct_voice_references", "pocket_tts_cpp_persist_direct_voice_references")
+    elif normalized_provider == "echo_tts":
+        alias("model", "echo_tts_model")
+        alias("model_path", "echo_tts_model_path")
+        alias("device", "echo_tts_device")
+        alias("module_path", "echo_tts_module_path")
+        alias("sample_rate", "echo_tts_sample_rate")
+        alias("cache_size", "echo_tts_cache_size")
+        alias("cache_ttl_sec", "echo_tts_cache_ttl_sec")
+        alias("cache_on_device", "echo_tts_cache_on_device")
+        alias("fish_ae_repo", "echo_tts_fish_ae_repo")
+        alias("pca_state_file", "echo_tts_pca_state_file")
+
+    return normalized_cfg
 
 
 class TTSAdapterRegistry:
@@ -139,9 +266,11 @@ class TTSAdapterRegistry:
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
         TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
         TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
+        TTSProvider.POCKET_TTS_CPP: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_adapter.PocketTTSCppAdapter",
         TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
         TTSProvider.QWEN3_TTS: "tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter.Qwen3TTSAdapter",
         TTSProvider.LUX_TTS: "tldw_Server_API.app.core.TTS.adapters.luxtts_adapter.LuxTTSAdapter",
+        TTSProvider.KITTEN_TTS: "tldw_Server_API.app.core.TTS.adapters.kitten_tts_adapter.KittenTTSAdapter",
     }
 
     @classmethod
@@ -557,124 +686,7 @@ class TTSAdapterRegistry:
             if provider_cfg:
                 # Convert to dict for adapter consumption
                 cfg = model_dump_compat(provider_cfg)
-
-                # Duplicate generic keys into provider-prefixed aliases expected by adapters
-                p = provider.value
-                def alias(src: str, dst: str):
-                    if src in cfg and dst not in cfg and cfg[src] is not None:
-                        cfg[dst] = cfg[src]
-
-                if p == 'openai':
-                    alias('api_key', 'openai_api_key')
-                    alias('base_url', 'openai_base_url')
-                    alias('model', 'openai_model')
-                elif p == 'kokoro':
-                    alias('use_onnx', 'kokoro_use_onnx')
-                    alias('model_path', 'kokoro_model_path')
-                    alias('voices_json', 'kokoro_voices_json')
-                    alias('voice_dir', 'kokoro_voice_dir')
-                    alias('device', 'kokoro_device')
-                elif p == 'higgs':
-                    alias('model_path', 'higgs_model_path')
-                    alias('tokenizer_path', 'higgs_tokenizer_path')
-                    alias('device', 'higgs_device')
-                    alias('use_fp16', 'higgs_use_fp16')
-                    alias('batch_size', 'higgs_batch_size')
-                elif p == 'dia':
-                    alias('model_path', 'dia_model_path')
-                    alias('device', 'dia_device')
-                    alias('use_safetensors', 'dia_use_safetensors')
-                    alias('use_bf16', 'dia_use_bf16')
-                    alias('sample_rate', 'dia_sample_rate')
-                    alias('auto_detect_speakers', 'dia_auto_detect_speakers')
-                    alias('max_speakers', 'dia_max_speakers')
-                elif p == 'chatterbox':
-                    alias('device', 'chatterbox_device')
-                    alias('use_multilingual', 'chatterbox_use_multilingual')
-                    alias('disable_watermark', 'chatterbox_disable_watermark')
-                    # model_path currently unused upstream; keep generic
-                elif p == 'elevenlabs':
-                    alias('api_key', 'elevenlabs_api_key')
-                    alias('base_url', 'elevenlabs_base_url')
-                    alias('model', 'elevenlabs_model')
-                    alias('stability', 'elevenlabs_stability')
-                    alias('similarity_boost', 'elevenlabs_similarity_boost')
-                    alias('style', 'elevenlabs_style')
-                    alias('speaker_boost', 'elevenlabs_speaker_boost')
-                elif p == 'vibevoice':
-                    alias('device', 'vibevoice_device')
-                    alias('sample_rate', 'vibevoice_sample_rate')
-                    alias('variant', 'vibevoice_variant')
-                    alias('model_path', 'vibevoice_model_path')
-                    alias('model_dir', 'vibevoice_model_dir')
-                    alias('cache_dir', 'vibevoice_cache_dir')
-                    alias('voices_dir', 'vibevoice_voices_dir')
-                    alias('background_music', 'vibevoice_background_music')
-                    alias('enable_singing', 'vibevoice_enable_singing')
-                    alias('use_quantization', 'vibevoice_use_quantization')
-                    alias('auto_cleanup', 'vibevoice_auto_cleanup')
-                    alias('auto_download', 'vibevoice_auto_download')
-                    alias('enable_sage', 'vibevoice_enable_sage')
-                    alias('attention_type', 'vibevoice_attention_type')
-                    alias('cfg_scale', 'vibevoice_cfg_scale')
-                    alias('diffusion_steps', 'vibevoice_diffusion_steps')
-                    alias('temperature', 'vibevoice_temperature')
-                    alias('top_p', 'vibevoice_top_p')
-                    alias('top_k', 'vibevoice_top_k')
-                    alias('stream_chunk_size', 'vibevoice_stream_chunk_size')
-                    alias('stream_buffer_size', 'vibevoice_stream_buffer_size')
-                elif p == 'neutts':
-                    alias('device', 'backbone_device')
-                    alias('backbone_repo', 'backbone_repo')
-                    alias('codec_repo', 'codec_repo')
-                    alias('sample_rate', 'sample_rate')
-                elif p == 'index_tts':
-                    alias('model_dir', 'index_tts_model_dir')
-                    alias('cfg_path', 'index_tts_cfg_path')
-                    alias('device', 'index_tts_device')
-                    alias('use_fp16', 'index_tts_use_fp16')
-                    alias('use_cuda_kernel', 'index_tts_use_cuda_kernel')
-                    alias('use_deepspeed', 'index_tts_use_deepspeed')
-                    alias('interval_silence', 'index_tts_interval_silence')
-                    alias('quick_streaming_tokens', 'index_tts_quick_streaming_tokens')
-                    alias('max_text_tokens_per_segment', 'index_tts_max_text_tokens_per_segment')
-                    alias('more_segment_before', 'index_tts_more_segment_before')
-                    alias('verbose', 'index_tts_verbose')
-                    alias('sample_rate', 'sample_rate')
-                elif p == 'pocket_tts':
-                    alias('model_path', 'pocket_tts_model_path')
-                    alias('tokenizer_path', 'pocket_tts_tokenizer_path')
-                    alias('precision', 'pocket_tts_precision')
-                    alias('device', 'pocket_tts_device')
-                    alias('temperature', 'pocket_tts_temperature')
-                    alias('lsd_steps', 'pocket_tts_lsd_steps')
-                    alias('max_frames', 'pocket_tts_max_frames')
-                    alias('stream_first_chunk_frames', 'pocket_tts_stream_first_chunk_frames')
-                    alias('stream_target_buffer_sec', 'pocket_tts_stream_target_buffer_sec')
-                    alias('stream_max_chunk_frames', 'pocket_tts_stream_max_chunk_frames')
-                elif p == 'echo_tts':
-                    alias('model', 'echo_tts_model')
-                    alias('model_path', 'echo_tts_model_path')
-                    alias('device', 'echo_tts_device')
-                    alias('module_path', 'echo_tts_module_path')
-                    alias('sample_rate', 'echo_tts_sample_rate')
-                    alias('cache_size', 'echo_tts_cache_size')
-                    alias('cache_ttl_sec', 'echo_tts_cache_ttl_sec')
-                    alias('cache_on_device', 'echo_tts_cache_on_device')
-                    alias('fish_ae_repo', 'echo_tts_fish_ae_repo')
-                    alias('pca_state_file', 'echo_tts_pca_state_file')
-
-                # Generic target latency for local providers
-                if p == 'chatterbox':
-                    alias('target_latency_ms', 'chatterbox_target_latency_ms')
-                elif p == 'kokoro':
-                    alias('target_latency_ms', 'kokoro_target_latency_ms')
-                elif p == 'dia':
-                    alias('target_latency_ms', 'dia_target_latency_ms')
-                elif p == 'higgs':
-                    alias('target_latency_ms', 'higgs_target_latency_ms')
-
-                return cfg
+                return _apply_provider_aliases(provider.value, cfg)
 
         # Fallback to legacy config
         provider_config = self.config.copy()
@@ -684,7 +696,7 @@ class TTSAdapterRegistry:
         if provider_key in self.config:
             provider_config.update(self.config[provider_key])
 
-        return provider_config
+        return _apply_provider_aliases(provider.value, provider_config)
 
     async def get_all_capabilities(self) -> dict[TTSProvider, TTSCapabilities]:
         """
@@ -713,20 +725,32 @@ class TTSAdapterRegistry:
             if enabled_flag is False:
                 continue
 
-            # Skip providers currently marked as failed by registry backoff.
-            status = self._base.get_status(provider.value)
-            if status == RegistryProviderStatus.FAILED:
-                continue
-
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
-            if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
+            if provider in [TTSProvider.KOKORO, TTSProvider.KITTEN_TTS, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.VIBEVOICE_REALTIME,
                            TTSProvider.SUPERTONIC, TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS,
+                           TTSProvider.POCKET_TTS_CPP,
                            TTSProvider.QWEN3_TTS] and enabled_flag is not True:
                 continue
 
             try:
+                adapter_spec = self._adapter_specs.get(provider)
+                if adapter_spec is not None:
+                    adapter_class = self._resolve_adapter_class(adapter_spec)
+                    if getattr(adapter_class, "STATIC_CAPABILITY_DISCOVERY", False):
+                        static_adapter = adapter_class(config=self._get_provider_config(provider))
+                        caps = await static_adapter.get_capabilities()
+                        if caps:
+                            capabilities[provider] = caps
+                            continue
+
+                # Skip providers currently marked as failed by registry backoff
+                # only when static capability discovery is unavailable.
+                status = self._base.get_status(provider.value)
+                if status == RegistryProviderStatus.FAILED:
+                    continue
+
                 # Try to get adapter with a timeout to avoid hanging
                 adapter = await asyncio.wait_for(self.get_adapter(provider), timeout=5.0)
                 if adapter:
@@ -881,12 +905,8 @@ class TTSAdapterRegistry:
         """Close all initialized adapters and clean up resources"""
         logger.info("Closing all TTS adapters...")
 
-        # Get resource manager for cleanup
-        try:
-            resource_manager = await get_resource_manager()
-        except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"Could not get resource manager for cleanup: {e}")
-            resource_manager = None
+        # Teardown should only clean up an already-initialized manager.
+        resource_manager = get_existing_resource_manager()
 
         tasks = []
         for provider, adapter in self._adapters.items():
@@ -1059,6 +1079,10 @@ class TTSAdapterFactory:
         "pockettts-onnx": TTSProvider.POCKET_TTS,
         "kevinahm/pocket-tts-onnx": TTSProvider.POCKET_TTS,
 
+        # PocketTTS.cpp models
+        "pocket_tts_cpp": TTSProvider.POCKET_TTS_CPP,
+        "pocket-tts-cpp": TTSProvider.POCKET_TTS_CPP,
+
         # Echo-TTS models
         "echo-tts": TTSProvider.ECHO_TTS,
         "echo_tts": TTSProvider.ECHO_TTS,
@@ -1072,6 +1096,16 @@ class TTSAdapterFactory:
         "qwen/qwen3-tts-12hz-1.7b-voicedesign": TTSProvider.QWEN3_TTS,
         "qwen/qwen3-tts-12hz-1.7b-base": TTSProvider.QWEN3_TTS,
         "qwen/qwen3-tts-12hz-0.6b-base": TTSProvider.QWEN3_TTS,
+
+        # KittenTTS models
+        "kitten_tts": TTSProvider.KITTEN_TTS,
+        "kitten-tts": TTSProvider.KITTEN_TTS,
+        "kittentts": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-mini-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-micro-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8-fp32": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8-int8": TTSProvider.KITTEN_TTS,
     }
 
     def __init__(self, config: Optional[dict[str, Any]] = None):

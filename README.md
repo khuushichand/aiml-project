@@ -15,7 +15,7 @@
   </p>
 
   <p>Process media with 16+ LLM providers and OpenAI-compatible APIs for Chat, Embeddings, and Evals.</p>
-  <p>Hosted SaaS and browser extension coming soon.</p>
+  <p>Browser extension support is included in-repo; hosted deployment tooling is still evolving.</p>
   <p><strong>Your local open-source platform for media analysis, knowledge work, and LLM-backed creation.</strong></p>
 </div>
 
@@ -27,17 +27,17 @@
 
 - [Overview](#overview)
 - [Current Status](#current-status)
-- [What's New (compared to Gradio)](#whats-new-compared-to-gradio)
+- [What's New (in the last few releases)](#whats-new-in-the-last-few-releases)
 - [Privacy & Security](#privacy--security)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
   - [Preflight Check (Recommended)](#preflight-check-recommended)
   - [At-a-Glance Commands](#at-a-glance-commands)
-  - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [No-Docker Path (Makefile, Development)](#no-docker-path-makefile-development)
   - [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly)
   - [Manual Setup](#manual-setup)
-  - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
+  - [Local Profile: Add the WebUI](#local-profile-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
   - [Docker Compose](#docker-compose)
   - [Supporting Services via Docker](#supporting-services-via-docker)
@@ -71,7 +71,7 @@
 ## Overview
 **tldw_server** is an open-source, API-first platform for ingesting media, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
 It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, a unified RAG pipeline, and integrations with local or hosted LLM providers.
-The primary client is the Next.js WebUI (WIP) plus an Admin UI.
+The primary clients are the Next.js WebUI and Admin UI, with browser-extension support in the repo as well.
 Long-term vision: a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
 
 Good fit for:
@@ -79,11 +79,16 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details.
+**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details. If your first goal is local speech, follow the hardware-specific audio guides after your base profile is healthy: [CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) or [GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md).
 
 ## Start Here (Self-Hosting Profiles)
 
-Choose one base onboarding path:
+Choose one base onboarding path.
+
+Recommended default:
+- Run `make quickstart` for the Docker single-user + WebUI setup most users want. The default browser path uses same-origin browser API requests through the WebUI proxy.
+- Use [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) if you are deploying for a team or exposing the app publicly.
+- Keep local setup in [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md) and the local profile docs.
 
 1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
 2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
@@ -91,14 +96,16 @@ Choose one base onboarding path:
 
 Optional add-on:
 
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) for accelerated speech-to-text after your base path is working.
+- [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) for NVIDIA GPUs and Apple Silicon
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) now redirects to the accelerated guide
 
 
 ## Current Status
 
-Latest release: 
-- 0.1.26 (2026-03-15) Beta status -  Expect rough edges; 
-  * please report issues. 
+Latest release:
+- 0.1.28 (2026-03-15) Beta status - expect rough edges;
+  * please report issues.
 - See `CHANGELOG.md` for release history.
 
 <details>
@@ -122,7 +129,7 @@ Latest release:
 - Database migration:
     - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
     - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
-    - Optional: `--db-path /path/to/Media_DB_v2.db` if not using defaults
+    - Optional: `--db-path /path/to/media.db` if not using defaults
     - If migrating content to Postgres later, use the tools under `tldw_Server_API/app/core/DB_Management/` (e.g., migration_tools.py)
 - API changes:
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
@@ -167,7 +174,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; OCR for PDFs/images; metadata extraction; configurable chunking.
 - Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
-- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
+- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS (Python/ONNX), PocketTTS.cpp (native binary), LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
 - Audiobooks: parse + chapter detection, per-chapter voice settings, optional TTS provider overrides (alignment/subtitles Kokoro-only), and M4B packaging (API-only).
 - Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings, vector stores API, and media embeddings ingestion. 50+ optional parameters available for tuning.
 - Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists, moderation endpoint.
@@ -220,14 +227,20 @@ Choose one install path:
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 
-# API only (local Python): installs deps, initializes auth, starts API
-make quickstart-install
+# Recommended default: Docker single-user + WebUI
+make quickstart
+
+# API-only Docker path:
+# make quickstart-docker
+
+# Explicit full-stack Docker path:
+# make quickstart-docker-webui
+
+# Local development path (API only):
+# make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 
-# Docker paths:
-# make quickstart-docker
-# make quickstart-docker-webui
 # Force a full image rebuild when needed:
 # make quickstart-docker DOCKER_BUILD=true
 # make quickstart-docker-webui DOCKER_BUILD=true
@@ -235,7 +248,25 @@ make quickstart-install
 
 If `make` is unavailable, use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
-### No-Docker Path (Makefile)
+### Default Docker Path (Makefile)
+
+```bash
+# from repo root
+make quickstart
+```
+
+This target:
+- Starts the Docker single-user + WebUI setup.
+- Uses the existing `quickstart-docker-webui` flow under the hood.
+- Brings up the API at `http://localhost:8000` and WebUI at `http://localhost:8080`.
+- Keeps the default browser path on same-origin browser API requests through the WebUI proxy.
+
+Want a more advanced deployment?
+- Team/public deployment: [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+- API-only Docker deployment: `make quickstart-docker`
+- Use the advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access only when you need browsers to call a non-default host.
+
+### No-Docker Path (Makefile, Development)
 
 ```bash
 # from repo root
@@ -248,14 +279,14 @@ This target:
 - Creates `.venv` if missing and installs dependencies.
 - Creates `tldw_Server_API/Config_Files/.env` from `.env.example` if missing.
 - Initializes AuthNZ (non-interactive).
-- Starts the API server at `http://127.0.0.1:8000`.
+- Starts the local API server at `http://127.0.0.1:8000`.
 
 Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
-Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart-local` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 ### No-Make Path (Windows-Friendly)
 
@@ -277,6 +308,7 @@ API + WebUI (Docker):
 # from repo root
 if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.example" "tldw_Server_API/Config_Files/.env" }
 # Optional for non-localhost deployments:
+# $env:NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE="advanced"
 # $env:NEXT_PUBLIC_API_URL="http://YOUR_HOST_OR_DOMAIN:8000"
 docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
 ```
@@ -395,6 +427,7 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 | I want to... | Guide |
 |--------------|-------|
 | Choose the right onboarding path | [Getting Started Index](Docs/Getting_Started/README.md) |
+| Start the default Docker + WebUI setup | `make quickstart` |
 | Start from local single-user, then launch the WebUI | [Local Profile: Add the WebUI](#local-profile-add-the-webui) |
 | Build apps against the API locally | [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) |
 | Run on my home server with Docker | [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) |
@@ -472,12 +505,14 @@ Quickest full-stack path (containerized API + WebUI):
 make quickstart-docker-webui
 # API:   http://localhost:8000
 # WebUI: http://localhost:8080
-# Optional (non-localhost deployments):
-# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+# Optional advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access:
+# make quickstart-docker-webui NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 # Optional (force image rebuild instead of cached layers):
 # make quickstart-docker-webui DOCKER_BUILD=true
 ```
 No-`make` equivalent: use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
+
+Default quickstart behavior keeps same-origin browser API requests through the WebUI proxy. When you intentionally move the browser onto an advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access, set both `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` and `NEXT_PUBLIC_API_URL`.
 
 Local WebUI development (API should already be running, for example via `make quickstart`):
 
@@ -506,7 +541,7 @@ NEXT_PUBLIC_API_VERSION=v1
 # Optional for single-user mode:
 # NEXT_PUBLIC_X_API_KEY=your_api_key
 ```
-3) Install and run the dev server (use port 8080 to match default CORS):
+3) Install and run the dev server (use port 8080 to match the server's built-in local browser defaults):
 ```bash
 bun install
 bun run dev -- -p 8080
@@ -526,6 +561,7 @@ Access from another device on your network (for example, phone/tablet):
 python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 
 # tldw_Server_API/Config_Files/.env
+# Only needed when the browser connects from a non-localhost origin:
 # ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
 
 # apps/tldw-frontend/.env.local
@@ -592,7 +628,7 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- For `Dockerfiles/docker-compose.webui.yml`, `NEXT_PUBLIC_API_URL` is injected at WebUI build time and must be externally reachable by browsers (Docker host IP/name, reverse-proxy URL, or public domain), not an internal `localhost` default.
+- For `Dockerfiles/docker-compose.webui.yml`, the default quickstart leaves `NEXT_PUBLIC_API_URL` empty so browsers stay on same-origin browser API requests through the WebUI proxy. Set `NEXT_PUBLIC_API_URL` only for the advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access.
 - `NEXT_PUBLIC_API_VERSION` and `NEXT_PUBLIC_X_API_KEY` are also build-time public values in the client bundle; set them explicitly for your target deployment/auth mode.
 - If you need per-environment API URLs without rebuilding the WebUI image, switch to a runtime env-substitution strategy instead of compile-time `NEXT_PUBLIC_*` build args.
 - The primary UI is the Next.js WebUI in `apps/tldw-frontend/`.
@@ -1041,7 +1077,9 @@ Run locally
 - [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) - local API development path
 - [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) - self-host with Docker
 - [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) - team deployment baseline
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - optional acceleration and speech-to-text setup
+- [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) - local-first STT and TTS for CPU boxes
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) - NVIDIA and Apple Silicon speech setup
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - legacy pointer to the accelerated guide
 
 **Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links

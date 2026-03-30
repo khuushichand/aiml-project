@@ -45,6 +45,22 @@ class ACPAgentRegisterRequest(BaseModel):
     requires_api_key: str | None = Field(default=None, description="Required API key env var")
     install_instructions: list[str] = Field(default_factory=list, description="Installation steps")
     docs_url: str | None = Field(default=None, description="Documentation URL")
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] = Field(
+        default="agent_driven",
+        description="MCP orchestration mode when protocol='mcp'",
+    )
+    mcp_entry_tool: str = Field(default="execute", description="Entry tool for agent-driven MCP agents")
+    mcp_structured_response: bool = Field(
+        default=False,
+        description="Whether the entry tool returns structured JSON steps",
+    )
+    mcp_llm_provider: str | None = Field(default=None, description="Provider for llm_driven MCP orchestration")
+    mcp_llm_model: str | None = Field(default=None, description="Model for llm_driven MCP orchestration")
+    mcp_max_iterations: int = Field(default=20, description="Maximum llm_driven MCP iterations")
+    mcp_refresh_tools: bool = Field(
+        default=False,
+        description="Refresh MCP tool inventory before each prompt",
+    )
 
 
 class ACPAgentUpdateRequest(BaseModel):
@@ -57,6 +73,13 @@ class ACPAgentUpdateRequest(BaseModel):
     requires_api_key: str | None = None
     install_instructions: list[str] | None = None
     docs_url: str | None = None
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] | None = None
+    mcp_entry_tool: str | None = None
+    mcp_structured_response: bool | None = None
+    mcp_llm_provider: str | None = None
+    mcp_llm_model: str | None = None
+    mcp_max_iterations: int | None = None
+    mcp_refresh_tools: bool | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -453,6 +476,24 @@ class ACPSessionUsageResponse(BaseModel):
     last_activity_at: str | None = None
 
 
+class ACPAgentUsageItem(BaseModel):
+    """Aggregated usage statistics for a single agent type."""
+    agent_type: str
+    invocation_count: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    error_count: int = 0
+    estimated_cost_usd: float = 0.0
+    avg_tokens_per_session: float = 0.0
+
+
+class ACPAgentUsageResponse(BaseModel):
+    """Response for aggregated per-agent token usage."""
+    agents: list[ACPAgentUsageItem]
+    range_days: int
+
+
 # -----------------------------------------------------------------------------
 # Agent Configuration (Admin-managed)
 # -----------------------------------------------------------------------------
@@ -474,6 +515,7 @@ class ACPAgentConfigCreate(BaseModel):
     org_id: int | None = Field(default=None, description="Restrict to specific organization")
     team_id: int | None = Field(default=None, description="Restrict to specific team")
     enabled: bool = Field(default=True, description="Whether the agent is enabled")
+    max_token_budget: int | None = Field(default=None, description="Maximum total tokens per session (null = unlimited)")
 
 
 class ACPAgentConfigResponse(ACPAgentConfigCreate):

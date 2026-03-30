@@ -1,0 +1,5542 @@
+{
+  "acp.agents.health": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get health status for all monitored agents.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_agents_health",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_agents_health",
+      "path": "/api/v1/acp/agents/health",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.agents.list": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List available ACP agents and their configuration status.\n\nReturns information about which agents are available and properly configured.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_list_agents",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_list_agents",
+      "path": "/api/v1/acp/agents",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.agents.manage": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Remove a dynamically registered agent (admin only).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_deregister_agent",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "acp_deregister_agent",
+      "path": "/api/v1/acp/agents/{agent_type}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Update a dynamically registered agent (admin only).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_update_agent",
+      "methods": [
+        "PUT"
+      ],
+      "name": "acp_update_agent",
+      "path": "/api/v1/acp/agents/{agent_type}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.agents.register": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Register a new agent type dynamically (admin only).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_register_agent",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_register_agent",
+      "path": "/api/v1/acp/agents/register",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.health": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "ACP dependency chain health check.\n\nValidates the full stack: runner binary \u2192 downstream agent availability \u2192 API keys.\nReturns structured diagnostics for debugging ACP setup issues.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_health",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_health",
+      "path": "/api/v1/acp/health",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.sessions.manage": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_cancel",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_cancel",
+      "path": "/api/v1/acp/sessions/cancel",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_close",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_close",
+      "path": "/api/v1/acp/sessions/close",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new ACP session.\n\nOptionally specify a session name, agent type, tags, and MCP server configs.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_new",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_new",
+      "path": "/api/v1/acp/sessions/new",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_prompt",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_prompt",
+      "path": "/api/v1/acp/sessions/prompt",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Fork an ACP session from a specific message index.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_fork",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_fork",
+      "path": "/api/v1/acp/sessions/{session_id}/fork",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_reconcile",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_reconcile",
+      "path": "/api/v1/acp/sessions/{session_id}/reconcile",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_teardown",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_teardown",
+      "path": "/api/v1/acp/sessions/{session_id}/teardown",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.sessions.read": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List ACP sessions for the authenticated user.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_list_sessions",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_list_sessions",
+      "path": "/api/v1/acp/sessions",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Query artifacts emitted in ACP session messages.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_artifacts",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_artifacts",
+      "path": "/api/v1/acp/sessions/{session_id}/artifacts",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Return ACP audit trail for a session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_audit",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_audit",
+      "path": "/api/v1/acp/sessions/{session_id}/audit",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get detailed information about an ACP session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_detail",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_detail",
+      "path": "/api/v1/acp/sessions/{session_id}/detail",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Return normalized, non-sensitive diagnostics for an ACP session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_diagnostics",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_diagnostics",
+      "path": "/api/v1/acp/sessions/{session_id}/diagnostics",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Query persisted ACP session events/messages.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_events",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_events",
+      "path": "/api/v1/acp/sessions/{session_id}/events",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_reconciliation",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_reconciliation",
+      "path": "/api/v1/acp/sessions/{session_id}/reconciliation",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_updates",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_updates",
+      "path": "/api/v1/acp/sessions/{session_id}/updates",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get token usage for an ACP session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_usage",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_usage",
+      "path": "/api/v1/acp/sessions/{session_id}/usage",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "acp.setup_guide": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Return agent-specific setup instructions.\n\nChecks current system state and returns actionable steps to get ACP working.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_setup_guide",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_setup_guide",
+      "path": "/api/v1/acp/setup-guide",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    }
+  ],
+  "agent_orchestration.projects.manage": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new agent project.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_project",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_project",
+      "path": "/api/v1/agent-orchestration/projects",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Delete a project and all associated tasks/runs.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.delete_project",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_project",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    }
+  ],
+  "agent_orchestration.projects.read": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List projects for the current user, optionally filtered by workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_projects",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_projects",
+      "path": "/api/v1/agent-orchestration/projects",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get a project by ID.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.get_project",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_project",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    }
+  ],
+  "agent_orchestration.tasks.manage": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new task in a project.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_task",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_task",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}/tasks",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Submit a review result for a task.\n\nApproved -> complete. Rejected -> back to in_progress or triage (after max attempts).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.submit_review",
+      "methods": [
+        "POST"
+      ],
+      "name": "submit_review",
+      "path": "/api/v1/agent-orchestration/tasks/{task_id}/review",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Dispatch a task run to an ACP agent.\n\nCWD resolution: explicit cwd > workspace root_path > \".\"\nWorkspace MCP servers and env_vars are merged into the session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.dispatch_run",
+      "methods": [
+        "POST"
+      ],
+      "name": "dispatch_run",
+      "path": "/api/v1/agent-orchestration/tasks/{task_id}/run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    }
+  ],
+  "agent_orchestration.tasks.read": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List tasks in a project with optional status filter.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_tasks",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_tasks",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}/tasks",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get task detail including run history.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.get_task",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_task",
+      "path": "/api/v1/agent-orchestration/tasks/{task_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    }
+  ],
+  "agent_orchestration.workspaces.manage": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new ACP workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_workspace",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Scan a directory tree to discover candidate workspaces.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.discover_workspaces",
+      "methods": [
+        "POST"
+      ],
+      "name": "discover_workspaces",
+      "path": "/api/v1/agent-orchestration/workspaces/discover",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Refresh health status for all workspaces of the current user.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.refresh_all_workspace_health",
+      "methods": [
+        "POST"
+      ],
+      "name": "refresh_all_workspace_health",
+      "path": "/api/v1/agent-orchestration/workspaces/health/refresh-all",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Delete a workspace. Projects are unbound (SET NULL), not deleted.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.delete_workspace",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Update a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.update_workspace",
+      "methods": [
+        "PUT"
+      ],
+      "name": "update_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Add an MCP server configuration to a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_workspace_mcp_server",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_workspace_mcp_server",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/mcp-servers",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Remove an MCP server from a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.delete_workspace_mcp_server",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_workspace_mcp_server",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/mcp-servers/{server_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    }
+  ],
+  "agent_orchestration.workspaces.read": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List all workspaces for the current user.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_workspaces",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_workspaces",
+      "path": "/api/v1/agent-orchestration/workspaces",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get a workspace with children and MCP servers.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.get_workspace",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "On-demand health check for a single workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.check_workspace_health",
+      "methods": [
+        "GET"
+      ],
+      "name": "check_workspace_health",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/health",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List MCP servers configured for a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_workspace_mcp_servers",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_workspace_mcp_servers",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/mcp-servers",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    }
+  ],
+  "any": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List available ACP agents and their configuration status.\n\nReturns information about which agents are available and properly configured.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_list_agents",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_list_agents",
+      "path": "/api/v1/acp/agents",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get health status for all monitored agents.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_agents_health",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_agents_health",
+      "path": "/api/v1/acp/agents/health",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Register a new agent type dynamically (admin only).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_register_agent",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_register_agent",
+      "path": "/api/v1/acp/agents/register",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Remove a dynamically registered agent (admin only).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_deregister_agent",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "acp_deregister_agent",
+      "path": "/api/v1/acp/agents/{agent_type}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Update a dynamically registered agent (admin only).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_update_agent",
+      "methods": [
+        "PUT"
+      ],
+      "name": "acp_update_agent",
+      "path": "/api/v1/acp/agents/{agent_type}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "ACP dependency chain health check.\n\nValidates the full stack: runner binary \u2192 downstream agent availability \u2192 API keys.\nReturns structured diagnostics for debugging ACP setup issues.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_health",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_health",
+      "path": "/api/v1/acp/health",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List ACP sessions for the authenticated user.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_list_sessions",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_list_sessions",
+      "path": "/api/v1/acp/sessions",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_cancel",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_cancel",
+      "path": "/api/v1/acp/sessions/cancel",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_close",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_close",
+      "path": "/api/v1/acp/sessions/close",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new ACP session.\n\nOptionally specify a session name, agent type, tags, and MCP server configs.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_new",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_new",
+      "path": "/api/v1/acp/sessions/new",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_prompt",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_prompt",
+      "path": "/api/v1/acp/sessions/prompt",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Query artifacts emitted in ACP session messages.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_artifacts",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_artifacts",
+      "path": "/api/v1/acp/sessions/{session_id}/artifacts",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Return ACP audit trail for a session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_audit",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_audit",
+      "path": "/api/v1/acp/sessions/{session_id}/audit",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get detailed information about an ACP session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_detail",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_detail",
+      "path": "/api/v1/acp/sessions/{session_id}/detail",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Return normalized, non-sensitive diagnostics for an ACP session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_diagnostics",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_diagnostics",
+      "path": "/api/v1/acp/sessions/{session_id}/diagnostics",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Query persisted ACP session events/messages.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_events",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_events",
+      "path": "/api/v1/acp/sessions/{session_id}/events",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Fork an ACP session from a specific message index.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_fork",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_fork",
+      "path": "/api/v1/acp/sessions/{session_id}/fork",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_reconcile",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_reconcile",
+      "path": "/api/v1/acp/sessions/{session_id}/reconcile",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_reconciliation",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_reconciliation",
+      "path": "/api/v1/acp/sessions/{session_id}/reconciliation",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_teardown",
+      "methods": [
+        "POST"
+      ],
+      "name": "acp_session_teardown",
+      "path": "/api/v1/acp/sessions/{session_id}/teardown",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_updates",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_updates",
+      "path": "/api/v1/acp/sessions/{session_id}/updates",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get token usage for an ACP session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_session_usage",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_session_usage",
+      "path": "/api/v1/acp/sessions/{session_id}/usage",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Return agent-specific setup instructions.\n\nChecks current system state and returns actionable steps to get ACP working.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_client_protocol.acp_setup_guide",
+      "methods": [
+        "GET"
+      ],
+      "name": "acp_setup_guide",
+      "path": "/api/v1/acp/setup-guide",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "acp",
+        "acp"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List projects for the current user, optionally filtered by workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_projects",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_projects",
+      "path": "/api/v1/agent-orchestration/projects",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new agent project.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_project",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_project",
+      "path": "/api/v1/agent-orchestration/projects",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Delete a project and all associated tasks/runs.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.delete_project",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_project",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get a project by ID.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.get_project",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_project",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List tasks in a project with optional status filter.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_tasks",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_tasks",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}/tasks",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new task in a project.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_task",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_task",
+      "path": "/api/v1/agent-orchestration/projects/{project_id}/tasks",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get task detail including run history.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.get_task",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_task",
+      "path": "/api/v1/agent-orchestration/tasks/{task_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Submit a review result for a task.\n\nApproved -> complete. Rejected -> back to in_progress or triage (after max attempts).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.submit_review",
+      "methods": [
+        "POST"
+      ],
+      "name": "submit_review",
+      "path": "/api/v1/agent-orchestration/tasks/{task_id}/review",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Dispatch a task run to an ACP agent.\n\nCWD resolution: explicit cwd > workspace root_path > \".\"\nWorkspace MCP servers and env_vars are merged into the session.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.dispatch_run",
+      "methods": [
+        "POST"
+      ],
+      "name": "dispatch_run",
+      "path": "/api/v1/agent-orchestration/tasks/{task_id}/run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List all workspaces for the current user.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_workspaces",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_workspaces",
+      "path": "/api/v1/agent-orchestration/workspaces",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Create a new ACP workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_workspace",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Scan a directory tree to discover candidate workspaces.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.discover_workspaces",
+      "methods": [
+        "POST"
+      ],
+      "name": "discover_workspaces",
+      "path": "/api/v1/agent-orchestration/workspaces/discover",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Refresh health status for all workspaces of the current user.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.refresh_all_workspace_health",
+      "methods": [
+        "POST"
+      ],
+      "name": "refresh_all_workspace_health",
+      "path": "/api/v1/agent-orchestration/workspaces/health/refresh-all",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Delete a workspace. Projects are unbound (SET NULL), not deleted.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.delete_workspace",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Get a workspace with children and MCP servers.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.get_workspace",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Update a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.update_workspace",
+      "methods": [
+        "PUT"
+      ],
+      "name": "update_workspace",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "On-demand health check for a single workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.check_workspace_health",
+      "methods": [
+        "GET"
+      ],
+      "name": "check_workspace_health",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/health",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "List MCP servers configured for a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.list_workspace_mcp_servers",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_workspace_mcp_servers",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/mcp-servers",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Add an MCP server configuration to a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.create_workspace_mcp_server",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_workspace_mcp_server",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/mcp-servers",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Remove an MCP server from a workspace.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.agent_orchestration.delete_workspace_mcp_server",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_workspace_mcp_server",
+      "path": "/api/v1/agent-orchestration/workspaces/{workspace_id}/mcp-servers/{server_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "agent-orchestration",
+        "agent-orchestration"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_analytics",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_analytics",
+      "path": "/api/v1/chat/analytics",
+      "rate_limit_resources": [
+        "chat.analytics"
+      ],
+      "summary": "Conversation analytics histogram",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Returns available chat slash commands with their descriptions. When permission enforcement is enabled, commands requiring a permission are filtered by the current user's privileges in multi-user mode.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_commands",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_chat_commands",
+      "path": "/api/v1/chat/commands",
+      "rate_limit_resources": [
+        "chat.commands.list"
+      ],
+      "summary": "List available slash commands",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "Audit_DB_Deps.get_audit_service_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.get_auth_principal",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "llm_budget_guard.enforce_llm_budget",
+          "module": "tldw_Server_API.app.core.AuthNZ.llm_budget_guard",
+          "type": "dependency"
+        },
+        {
+          "id": "llm_routing_deps.get_request_routing_decision_store",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "personalization_deps.get_usage_event_logger",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.personalization_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Generates an assistant response using the configured LLM provider. Supports OpenAI-compatible request schema, optional SSE streaming via `stream=true`, character/world book context, and chat dictionaries. Non-stream responses include `tldw_conversation_id` for client state. Authentication headers are validated via dependencies (AuthNZ); the declared header parameters are included for OpenAPI documentation clarity.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.create_chat_completion",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_chat_completion",
+      "path": "/api/v1/chat/completions",
+      "rate_limit_resources": [
+        "chat.create"
+      ],
+      "summary": "Create chat completion (OpenAI-compatible)",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_conversations",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_chat_conversations",
+      "path": "/api/v1/chat/conversations",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "List/search conversations with filters and ranking",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chat/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.update_chat_conversation",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "update_chat_conversation",
+      "path": "/api/v1/chat/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.update"
+      ],
+      "summary": "Update conversation metadata",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Retrieve all unique citations from a conversation's messages.\n\n    This aggregates all retrieved documents from RAG context across\n    all messages, useful for generating a citation bibliography\n    or export.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_conversation_citations",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_conversation_citations",
+      "path": "/api/v1/chat/conversations/{conversation_id}/citations",
+      "rate_limit_resources": [
+        "chat.conversations.citations"
+      ],
+      "summary": "Get all citations from a conversation",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Retrieve messages from a conversation with their RAG context attached.\n\n    This is optimized for the Knowledge QA page to load conversation history\n    with full citation data for each message.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_messages_with_rag_context",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_messages_with_rag_context",
+      "path": "/api/v1/chat/conversations/{conversation_id}/messages-with-context",
+      "rate_limit_resources": [
+        "chat.conversations.messages"
+      ],
+      "summary": "Get conversation messages with RAG context",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_conversation_share_links",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_conversation_share_links",
+      "path": "/api/v1/chat/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "List tokenized share links for a conversation",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.create_conversation_share_link",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_conversation_share_link",
+      "path": "/api/v1/chat/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Create a tokenized share link for a conversation",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.revoke_conversation_share_link",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "revoke_conversation_share_link",
+      "path": "/api/v1/chat/conversations/{conversation_id}/share-links/{share_id}",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Revoke a tokenized share link",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_conversation_tree",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_conversation_tree",
+      "path": "/api/v1/chat/conversations/{conversation_id}/tree",
+      "rate_limit_resources": [
+        "chat.conversations.tree"
+      ],
+      "summary": "Get conversation message tree",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Validates a chat dictionary JSON payload and returns a structured report including errors, warnings, and basic entry statistics.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.validate_chat_dictionary",
+      "methods": [
+        "POST"
+      ],
+      "name": "validate_chat_dictionary",
+      "path": "/api/v1/chat/dictionaries/validate",
+      "rate_limit_resources": [
+        "chat.dictionaries.validate"
+      ],
+      "summary": "Validate a chat dictionary payload",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Persist a snippet from a conversation into Notes (and optional Flashcard).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.save_chat_knowledge",
+      "methods": [
+        "POST"
+      ],
+      "name": "save_chat_knowledge",
+      "path": "/api/v1/chat/knowledge/save",
+      "rate_limit_resources": [
+        "chat.knowledge.save"
+      ],
+      "summary": "Save a chat snippet to Notes/Flashcards with backlinks",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Retrieve the RAG context stored with a message, including citations and search settings.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_rag_context",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_rag_context",
+      "path": "/api/v1/chat/messages/{message_id}/rag-context",
+      "rate_limit_resources": [
+        "chat.messages.rag_context"
+      ],
+      "summary": "Get RAG context for a message",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Store RAG search results, citations, and settings with a message.\n\n    This endpoint allows the frontend to persist RAG context after a search\n    is performed, enabling citation persistence for Knowledge QA conversations.\n\n    The RAG context includes:\n    - Search query and mode used\n    - Retrieved documents with scores and excerpts\n    - Generated answer (if any)\n    - Citation metadata\n    - Settings snapshot for reproducibility",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.persist_rag_context",
+      "methods": [
+        "POST"
+      ],
+      "name": "persist_rag_context",
+      "path": "/api/v1/chat/messages/{message_id}/rag-context",
+      "rate_limit_resources": [
+        "chat.messages.rag_context"
+      ],
+      "summary": "Persist RAG context with a message",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_conversations",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_chat_conversations",
+      "path": "/api/v1/chats/conversations",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "List/search conversations with filters and ranking [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chats/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.update_chat_conversation",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "update_chat_conversation",
+      "path": "/api/v1/chats/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.update"
+      ],
+      "summary": "Update conversation metadata [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_conversation_share_links",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_conversation_share_links",
+      "path": "/api/v1/chats/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "List tokenized share links for a conversation [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.create_conversation_share_link",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_conversation_share_link",
+      "path": "/api/v1/chats/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Create a tokenized share link for a conversation [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.revoke_conversation_share_link",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "revoke_conversation_share_link",
+      "path": "/api/v1/chats/conversations/{conversation_id}/share-links/{share_id}",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Revoke a tokenized share link [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_conversation_tree",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_conversation_tree",
+      "path": "/api/v1/chats/conversations/{conversation_id}/tree",
+      "rate_limit_resources": [
+        "chat.conversations.tree"
+      ],
+      "summary": "Get conversation message tree [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "backpressure.guard_backpressure_and_quota",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.backpressure",
+          "type": "dependency"
+        },
+        {
+          "id": "personalization_deps.get_usage_event_logger",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.personalization_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Ingest and process web content from various scraping strategies.\n\nSupports:\n  - individual: each URL scraped independently\n  - sitemap:   treat the first URL as a sitemap and scrape it\n  - url_level: scrape pages up to a path depth from the base URL\n  - recursive: crawl links up to max_depth / max_pages",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.media.ingest_web_content.ingest_web_content",
+      "methods": [
+        "POST"
+      ],
+      "name": "ingest_web_content",
+      "path": "/api/v1/media/ingest-web-content",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.check_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "billing_deps._check_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.billing_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "The unified RAG search endpoint with ALL features accessible via parameters.\n\n    **Key Features:**\n    - No configuration files needed\n    - Every feature is a direct parameter\n    - Mix and match any features\n    - Transparent execution\n\n    **Available Features:**\n    - Query expansion (acronym, synonym, domain, entity)\n    - Semantic caching with adaptive thresholds\n    - Multi-database search (media, notes, characters, chats)\n    - Security filtering and PII detection\n    - Citation generation (APA, MLA, Chicago, Harvard)\n    - Answer generation from context\n    - Document reranking (FlashRank, Cross-Encoder, Hybrid)\n    - Table processing and extraction\n    - Enhanced chunking with parent context\n    - User feedback collection\n    - Performance monitoring and observability\n    - Batch processing support\n    - Resilience features (retries, circuit breakers)\n\n    Simply set any feature parameter to enable it. All parameters are optional\n    except the query itself.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.rag_unified.unified_search_endpoint",
+      "methods": [
+        "POST"
+      ],
+      "name": "unified_search_endpoint",
+      "path": "/api/v1/rag/search",
+      "rate_limit_resources": [
+        "rag.search"
+      ],
+      "summary": "Unified RAG Search",
+      "tags": [
+        "rag-unified",
+        "rag-unified"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.check_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "billing_deps._check_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.billing_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Execute a read-only SQL query through Text2SQL policy guardrails.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.text2sql.query_text2sql",
+      "methods": [
+        "POST"
+      ],
+      "name": "query_text2sql",
+      "path": "/api/v1/text2sql/query",
+      "rate_limit_resources": [
+        "text2sql.query"
+      ],
+      "summary": null,
+      "tags": [
+        "text2sql",
+        "text2sql"
+      ]
+    }
+  ],
+  "chat.analytics": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_analytics",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_analytics",
+      "path": "/api/v1/chat/analytics",
+      "rate_limit_resources": [
+        "chat.analytics"
+      ],
+      "summary": "Conversation analytics histogram",
+      "tags": [
+        "chat"
+      ]
+    }
+  ],
+  "chat.commands.list": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Returns available chat slash commands with their descriptions. When permission enforcement is enabled, commands requiring a permission are filtered by the current user's privileges in multi-user mode.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_commands",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_chat_commands",
+      "path": "/api/v1/chat/commands",
+      "rate_limit_resources": [
+        "chat.commands.list"
+      ],
+      "summary": "List available slash commands",
+      "tags": [
+        "chat"
+      ]
+    }
+  ],
+  "chat.completions": [
+    {
+      "dependencies": [
+        {
+          "id": "Audit_DB_Deps.get_audit_service_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.get_auth_principal",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "llm_budget_guard.enforce_llm_budget",
+          "module": "tldw_Server_API.app.core.AuthNZ.llm_budget_guard",
+          "type": "dependency"
+        },
+        {
+          "id": "llm_routing_deps.get_request_routing_decision_store",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "personalization_deps.get_usage_event_logger",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.personalization_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Generates an assistant response using the configured LLM provider. Supports OpenAI-compatible request schema, optional SSE streaming via `stream=true`, character/world book context, and chat dictionaries. Non-stream responses include `tldw_conversation_id` for client state. Authentication headers are validated via dependencies (AuthNZ); the declared header parameters are included for OpenAPI documentation clarity.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.create_chat_completion",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_chat_completion",
+      "path": "/api/v1/chat/completions",
+      "rate_limit_resources": [
+        "chat.create"
+      ],
+      "summary": "Create chat completion (OpenAI-compatible)",
+      "tags": [
+        "chat"
+      ]
+    }
+  ],
+  "chat.conversations.citations": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Retrieve all unique citations from a conversation's messages.\n\n    This aggregates all retrieved documents from RAG context across\n    all messages, useful for generating a citation bibliography\n    or export.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_conversation_citations",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_conversation_citations",
+      "path": "/api/v1/chat/conversations/{conversation_id}/citations",
+      "rate_limit_resources": [
+        "chat.conversations.citations"
+      ],
+      "summary": "Get all citations from a conversation",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    }
+  ],
+  "chat.conversations.list": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_conversations",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_chat_conversations",
+      "path": "/api/v1/chat/conversations",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "List/search conversations with filters and ranking",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chat/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_chat_conversations",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_chat_conversations",
+      "path": "/api/v1/chats/conversations",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "List/search conversations with filters and ranking [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_chat_conversation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_chat_conversation",
+      "path": "/api/v1/chats/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.list"
+      ],
+      "summary": "Get conversation metadata [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    }
+  ],
+  "chat.conversations.messages": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Retrieve messages from a conversation with their RAG context attached.\n\n    This is optimized for the Knowledge QA page to load conversation history\n    with full citation data for each message.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_messages_with_rag_context",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_messages_with_rag_context",
+      "path": "/api/v1/chat/conversations/{conversation_id}/messages-with-context",
+      "rate_limit_resources": [
+        "chat.conversations.messages"
+      ],
+      "summary": "Get conversation messages with RAG context",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    }
+  ],
+  "chat.conversations.share_links": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_conversation_share_links",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_conversation_share_links",
+      "path": "/api/v1/chat/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "List tokenized share links for a conversation",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.create_conversation_share_link",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_conversation_share_link",
+      "path": "/api/v1/chat/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Create a tokenized share link for a conversation",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.revoke_conversation_share_link",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "revoke_conversation_share_link",
+      "path": "/api/v1/chat/conversations/{conversation_id}/share-links/{share_id}",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Revoke a tokenized share link",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.list_conversation_share_links",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_conversation_share_links",
+      "path": "/api/v1/chats/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "List tokenized share links for a conversation [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.create_conversation_share_link",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_conversation_share_link",
+      "path": "/api/v1/chats/conversations/{conversation_id}/share-links",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Create a tokenized share link for a conversation [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.revoke_conversation_share_link",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "revoke_conversation_share_link",
+      "path": "/api/v1/chats/conversations/{conversation_id}/share-links/{share_id}",
+      "rate_limit_resources": [
+        "chat.conversations.share_links"
+      ],
+      "summary": "Revoke a tokenized share link [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    }
+  ],
+  "chat.conversations.tree": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_conversation_tree",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_conversation_tree",
+      "path": "/api/v1/chat/conversations/{conversation_id}/tree",
+      "rate_limit_resources": [
+        "chat.conversations.tree"
+      ],
+      "summary": "Get conversation message tree",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_conversation_tree",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_conversation_tree",
+      "path": "/api/v1/chats/conversations/{conversation_id}/tree",
+      "rate_limit_resources": [
+        "chat.conversations.tree"
+      ],
+      "summary": "Get conversation message tree [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    }
+  ],
+  "chat.conversations.update": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.update_chat_conversation",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "update_chat_conversation",
+      "path": "/api/v1/chat/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.update"
+      ],
+      "summary": "Update conversation metadata",
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.update_chat_conversation",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "update_chat_conversation",
+      "path": "/api/v1/chats/conversations/{conversation_id}",
+      "rate_limit_resources": [
+        "chat.conversations.update"
+      ],
+      "summary": "Update conversation metadata [alias]",
+      "tags": [
+        "chat",
+        "chat"
+      ]
+    }
+  ],
+  "chat.dictionaries.validate": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Validates a chat dictionary JSON payload and returns a structured report including errors, warnings, and basic entry statistics.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.validate_chat_dictionary",
+      "methods": [
+        "POST"
+      ],
+      "name": "validate_chat_dictionary",
+      "path": "/api/v1/chat/dictionaries/validate",
+      "rate_limit_resources": [
+        "chat.dictionaries.validate"
+      ],
+      "summary": "Validate a chat dictionary payload",
+      "tags": [
+        "chat"
+      ]
+    }
+  ],
+  "chat.knowledge.save": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Persist a snippet from a conversation into Notes (and optional Flashcard).",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.save_chat_knowledge",
+      "methods": [
+        "POST"
+      ],
+      "name": "save_chat_knowledge",
+      "path": "/api/v1/chat/knowledge/save",
+      "rate_limit_resources": [
+        "chat.knowledge.save"
+      ],
+      "summary": "Save a chat snippet to Notes/Flashcards with backlinks",
+      "tags": [
+        "chat"
+      ]
+    }
+  ],
+  "chat.messages.rag_context": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Retrieve the RAG context stored with a message, including citations and search settings.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.get_rag_context",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_rag_context",
+      "path": "/api/v1/chat/messages/{message_id}/rag-context",
+      "rate_limit_resources": [
+        "chat.messages.rag_context"
+      ],
+      "summary": "Get RAG context for a message",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Store RAG search results, citations, and settings with a message.\n\n    This endpoint allows the frontend to persist RAG context after a search\n    is performed, enabling citation persistence for Knowledge QA conversations.\n\n    The RAG context includes:\n    - Search query and mode used\n    - Retrieved documents with scores and excerpts\n    - Generated answer (if any)\n    - Citation metadata\n    - Settings snapshot for reproducibility",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.chat.persist_rag_context",
+      "methods": [
+        "POST"
+      ],
+      "name": "persist_rag_context",
+      "path": "/api/v1/chat/messages/{message_id}/rag-context",
+      "rate_limit_resources": [
+        "chat.messages.rag_context"
+      ],
+      "summary": "Persist RAG context with a message",
+      "tags": [
+        "chat",
+        "rag"
+      ]
+    }
+  ],
+  "evals.create_run": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth._checker",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.check_evaluation_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.verify_api_key",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_crud.create_run",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_run",
+      "path": "/api/v1/evaluations/{eval_id}/runs",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.embeddings_abtest.create": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.check_evaluation_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.verify_api_key",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest.create_embeddings_abtest",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_embeddings_abtest",
+      "path": "/api/v1/evaluations/embeddings/abtest",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.embeddings_abtest.run": [
+    {
+      "dependencies": [
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.get_auth_principal",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.check_evaluation_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.verify_api_key",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest.run_embeddings_abtest",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_embeddings_abtest",
+      "path": "/api/v1/evaluations/embeddings/abtest/{test_id}/run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.rag_pipeline.cleanup": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "Delete expired ephemeral collections according to TTL registry.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.cleanup_ephemeral_collections",
+      "methods": [
+        "POST"
+      ],
+      "name": "cleanup_ephemeral_collections",
+      "path": "/api/v1/evaluations/rag/pipeline/cleanup",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.rag_pipeline.preset.create": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.create_or_update_pipeline_preset",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_or_update_pipeline_preset",
+      "path": "/api/v1/evaluations/rag/pipeline/presets",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.rag_pipeline.preset.delete": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.delete_pipeline_preset",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_pipeline_preset",
+      "path": "/api/v1/evaluations/rag/pipeline/presets/{name}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.rag_pipeline.preset.get": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.get_pipeline_preset",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_pipeline_preset",
+      "path": "/api/v1/evaluations/rag/pipeline/presets/{name}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "evals.rag_pipeline.preset.list": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.list_pipeline_presets",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_pipeline_presets",
+      "path": "/api/v1/evaluations/rag/pipeline/presets",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    }
+  ],
+  "media.ingest": [
+    {
+      "dependencies": [
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "backpressure.guard_backpressure_and_quota",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.backpressure",
+          "type": "dependency"
+        },
+        {
+          "id": "personalization_deps.get_usage_event_logger",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.personalization_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Ingest and process web content from various scraping strategies.\n\nSupports:\n  - individual: each URL scraped independently\n  - sitemap:   treat the first URL as a sitemap and scrape it\n  - url_level: scrape pages up to a path depth from the base URL\n  - recursive: crawl links up to max_depth / max_pages",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.media.ingest_web_content.ingest_web_content",
+      "methods": [
+        "POST"
+      ],
+      "name": "ingest_web_content",
+      "path": "/api/v1/media/ingest-web-content",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "media"
+      ]
+    }
+  ],
+  "rag.search": [
+    {
+      "dependencies": [
+        {
+          "id": "ChaCha_Notes_DB_Deps.get_chacha_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.check_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "billing_deps._check_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.billing_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "The unified RAG search endpoint with ALL features accessible via parameters.\n\n    **Key Features:**\n    - No configuration files needed\n    - Every feature is a direct parameter\n    - Mix and match any features\n    - Transparent execution\n\n    **Available Features:**\n    - Query expansion (acronym, synonym, domain, entity)\n    - Semantic caching with adaptive thresholds\n    - Multi-database search (media, notes, characters, chats)\n    - Security filtering and PII detection\n    - Citation generation (APA, MLA, Chicago, Harvard)\n    - Answer generation from context\n    - Document reranking (FlashRank, Cross-Encoder, Hybrid)\n    - Table processing and extraction\n    - Enhanced chunking with parent context\n    - User feedback collection\n    - Performance monitoring and observability\n    - Batch processing support\n    - Resilience features (retries, circuit breakers)\n\n    Simply set any feature parameter to enable it. All parameters are optional\n    except the query itself.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.rag_unified.unified_search_endpoint",
+      "methods": [
+        "POST"
+      ],
+      "name": "unified_search_endpoint",
+      "path": "/api/v1/rag/search",
+      "rate_limit_resources": [
+        "rag.search"
+      ],
+      "summary": "Unified RAG Search",
+      "tags": [
+        "rag-unified",
+        "rag-unified"
+      ]
+    }
+  ],
+  "scheduler.workflows.admin_rescan": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.get_auth_principal",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Force a one-shot rescan of all users' schedules.\n\nRequires the ``workflows.admin`` permission (via\n:data:`tldw_Server_API.app.core.AuthNZ.permissions.WORKFLOWS_ADMIN`) or an\nadmin principal. Returns the number of registered APScheduler jobs after\nrescan.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.admin_rescan",
+      "methods": [
+        "POST"
+      ],
+      "name": "admin_rescan",
+      "path": "/api/v1/scheduler/workflows/admin/rescan",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.create": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.create_schedule",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_schedule",
+      "path": "/api/v1/scheduler/workflows",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.delete": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.delete_schedule",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_schedule",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.dry_run": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Validate cron/timezone and return next run time and echo inputs.\n\nNotes:\n- Timezone must be an IANA tz name (e.g., 'UTC', 'America/New_York').\n  See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n- Does not persist a schedule or submit a run.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.dry_run_schedule",
+      "methods": [
+        "POST"
+      ],
+      "name": "dry_run_schedule",
+      "path": "/api/v1/scheduler/workflows/dry-run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.get": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.get_schedule",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_schedule",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.list": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.list_schedules",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_schedules",
+      "path": "/api/v1/scheduler/workflows",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.run_now": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.run_now",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_now",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}/run-now",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "scheduler.workflows.update": [
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.update_schedule",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "update_schedule",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    }
+  ],
+  "text2sql.query": [
+    {
+      "dependencies": [
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._dep",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.check_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "billing_deps._check_limit",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.billing_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Execute a read-only SQL query through Text2SQL policy guardrails.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.text2sql.query_text2sql",
+      "methods": [
+        "POST"
+      ],
+      "name": "query_text2sql",
+      "path": "/api/v1/text2sql/query",
+      "rate_limit_resources": [
+        "text2sql.query"
+      ],
+      "summary": null,
+      "tags": [
+        "text2sql",
+        "text2sql"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.check_evaluation_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.verify_api_key",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest.create_embeddings_abtest",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_embeddings_abtest",
+      "path": "/api/v1/evaluations/embeddings/abtest",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "DB_Deps.get_media_db_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.get_auth_principal",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.check_evaluation_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.verify_api_key",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest.run_embeddings_abtest",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_embeddings_abtest",
+      "path": "/api/v1/evaluations/embeddings/abtest/{test_id}/run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "Delete expired ephemeral collections according to TTL registry.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.cleanup_ephemeral_collections",
+      "methods": [
+        "POST"
+      ],
+      "name": "cleanup_ephemeral_collections",
+      "path": "/api/v1/evaluations/rag/pipeline/cleanup",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.list_pipeline_presets",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_pipeline_presets",
+      "path": "/api/v1/evaluations/rag/pipeline/presets",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.create_or_update_pipeline_preset",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_or_update_pipeline_preset",
+      "path": "/api/v1/evaluations/rag/pipeline/presets",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.delete_pipeline_preset",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_pipeline_preset",
+      "path": "/api/v1/evaluations/rag/pipeline/presets/{name}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_rag_pipeline.get_pipeline_preset",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_pipeline_preset",
+      "path": "/api/v1/evaluations/rag/pipeline/presets/{name}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth._checker",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.check_evaluation_rate_limit",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.get_eval_request_user",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        },
+        {
+          "id": "evaluations_auth.verify_api_key",
+          "module": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_crud.create_run",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_run",
+      "path": "/api/v1/evaluations/{eval_id}/runs",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "evaluations",
+        "evaluations"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.list_schedules",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_schedules",
+      "path": "/api/v1/scheduler/workflows",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.create_schedule",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_schedule",
+      "path": "/api/v1/scheduler/workflows",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps.get_auth_principal",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Force a one-shot rescan of all users' schedules.\n\nRequires the ``workflows.admin`` permission (via\n:data:`tldw_Server_API.app.core.AuthNZ.permissions.WORKFLOWS_ADMIN`) or an\nadmin principal. Returns the number of registered APScheduler jobs after\nrescan.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.admin_rescan",
+      "methods": [
+        "POST"
+      ],
+      "name": "admin_rescan",
+      "path": "/api/v1/scheduler/workflows/admin/rescan",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "Validate cron/timezone and return next run time and echo inputs.\n\nNotes:\n- Timezone must be an IANA tz name (e.g., 'UTC', 'America/New_York').\n  See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n- Does not persist a schedule or submit a run.",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.dry_run_schedule",
+      "methods": [
+        "POST"
+      ],
+      "name": "dry_run_schedule",
+      "path": "/api/v1/scheduler/workflows/dry-run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.delete_schedule",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_schedule",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.get_schedule",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_schedule",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.update_schedule",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "update_schedule",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.scheduler_workflows.run_now",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_now",
+      "path": "/api/v1/scheduler/workflows/{schedule_id}/run-now",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "scheduler",
+        "scheduler",
+        "workflows"
+      ]
+    },
+    {
+      "dependencies": [
+        {
+          "id": "Audit_DB_Deps.get_audit_service_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "workflows._get_db",
+          "module": "tldw_Server_API.app.api.v1.endpoints.workflows",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.workflows.run_saved",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_saved",
+      "path": "/api/v1/workflows/{workflow_id}/run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "workflows",
+        "workflows"
+      ]
+    }
+  ],
+  "workflows.run_saved": [
+    {
+      "dependencies": [
+        {
+          "id": "Audit_DB_Deps.get_audit_service_for_user",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps",
+          "type": "dependency"
+        },
+        {
+          "id": "User_DB_Handling.get_request_user",
+          "module": "tldw_Server_API.app.core.AuthNZ.User_DB_Handling",
+          "type": "dependency"
+        },
+        {
+          "id": "auth_deps._checker",
+          "module": "tldw_Server_API.app.api.v1.API_Deps.auth_deps",
+          "type": "dependency"
+        },
+        {
+          "id": "workflows._get_db",
+          "module": "tldw_Server_API.app.api.v1.endpoints.workflows",
+          "type": "dependency"
+        }
+      ],
+      "description": "",
+      "endpoint": "tldw_Server_API.app.api.v1.endpoints.workflows.run_saved",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_saved",
+      "path": "/api/v1/workflows/{workflow_id}/run",
+      "rate_limit_resources": [],
+      "summary": null,
+      "tags": [
+        "workflows",
+        "workflows"
+      ]
+    }
+  ]
+}

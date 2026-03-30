@@ -66,7 +66,11 @@ from tldw_Server_API.app.api.v1.schemas.research_schemas import (
     SemanticScholarSearchRequestForm,
     SemanticScholarSearchResponse,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    MediaDbSession,
+    MediaWriterLike,
+    get_media_repository,
+)
 from tldw_Server_API.app.core.http_client import (
     RetryPolicy as _RetryPolicy,
 )
@@ -139,6 +143,33 @@ def _raise_http_error_from_exception(
     if force_status is not None:
         raise HTTPException(status_code=force_status, detail=_PROVIDER_ERROR_DETAIL) from exc
     raise HTTPException(status_code=status_code, detail=_PROVIDER_ERROR_DETAIL) from exc
+
+
+def _ingest_paper_search_media(
+    *,
+    media_db: MediaDbSession | MediaWriterLike,
+    url: str,
+    title: str,
+    media_type: str,
+    content: str,
+    keywords: list[str],
+    overwrite: bool = False,
+    **kwargs: Any,
+) -> tuple[Any, Any, Any]:
+    """Route paper-search ingest through the repository API for real DB sessions."""
+    try:
+        media_writer = get_media_repository(media_db)
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
+        media_writer = media_db
+    return media_writer.add_media_with_keywords(
+        url=url,
+        title=title,
+        media_type=media_type,
+        content=content,
+        keywords=keywords,
+        overwrite=overwrite,
+        **kwargs,
+    )
 
 
 async def _download_pdf_bytes(
@@ -767,7 +798,7 @@ async def pmc_oa_ingest_pdf(
     perform_analysis: bool = Query(True, description="Run analysis/summarization"),
     summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
     enrich_metadata: bool = Query(True, description="Enrich with PMC OAI-PMH oai_dc metadata"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Convenience endpoint: fetch PMC PDF and ingest into user's Media DB."""
     loop = asyncio.get_running_loop()
@@ -908,7 +939,8 @@ async def pmc_oa_ingest_pdf(
 
                 db_id, media_uuid, db_msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"pmcid:{pmcid}",
                         title=metadata_for_db.get('title') or title or (filename or pmcid),
                         media_type="pdf",
@@ -985,7 +1017,7 @@ async def arxiv_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -1091,7 +1123,8 @@ async def arxiv_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"arxiv:{arxiv_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -1146,7 +1179,7 @@ async def eartharxiv_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Download an EarthArXiv PDF by OSF ID, process, and persist to the Media DB."""
     loop = asyncio.get_running_loop()
@@ -1238,7 +1271,8 @@ async def eartharxiv_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"eartharxiv:{osf_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -1292,7 +1326,7 @@ async def pubmed_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -1396,7 +1430,8 @@ async def pubmed_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"pmid:{pmid}",
                 title=title_for_db,
                 media_type="pdf",
@@ -1445,7 +1480,7 @@ async def s2_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -1510,7 +1545,8 @@ async def s2_ingest(
         author_for_db = sm.get('authors')
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"s2:{paper_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -2779,7 +2815,7 @@ async def ingest_by_doi(
     chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
     perform_analysis: bool = Query(True, description="Run analysis/summarization"),
     summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Best-effort OA ingestion using Unpaywall DOI resolution.
 
@@ -2881,7 +2917,8 @@ async def ingest_by_doi(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"doi:{doi}",
                 title=title_for_db,
                 media_type="pdf",
@@ -2918,7 +2955,7 @@ async def ingest_by_doi(
 )
 async def ingest_batch(
     payload: IngestBatchRequest,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     results: list[IngestBatchResultItem] = []
@@ -3005,7 +3042,8 @@ async def ingest_batch(
                 smj = _json.dumps({"provider": "batch", "doi": doi, "pdf_url": pdf_url, "pmcid": pmcid, "arxiv_id": arxiv_id}, ensure_ascii=False)
                 media_id, media_uuid, msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"{('doi:'+doi) if doi else ('arxiv:'+arxiv_id) if arxiv_id else ('pmcid:'+pmcid) if pmcid else (pdf_url or 'unknown')}",
                         title=title_for_db,
                         media_type="pdf",
@@ -3109,7 +3147,8 @@ async def ingest_batch(
                 smj = _json.dumps({"provider": "batch", "pmcid": pmcid_norm}, ensure_ascii=False)
                 media_id, media_uuid, msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"pmcid:{pmcid_norm}",
                         title=title_for_db,
                         media_type="pdf",
@@ -3218,7 +3257,8 @@ async def ingest_batch(
                 smj = _json.dumps({"provider": "batch", "arxiv_id": arxiv_id, "pdf_url": pdf_guess}, ensure_ascii=False)
                 media_id, media_uuid, msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"arxiv:{arxiv_id}",
                         title=title_for_db,
                         media_type="pdf",
@@ -3301,7 +3341,8 @@ async def ingest_batch(
             author_for_db = author or None
             media_id, media_uuid, msg = await loop.run_in_executor(
                 None,
-                lambda: db.add_media_with_keywords(
+                lambda: _ingest_paper_search_media(
+                    media_db=db,
                     url=f"doi:{doi}" if doi else pdf_url,
                     title=title_for_db,
                     media_type="pdf",
@@ -3746,7 +3787,7 @@ async def osf_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -3847,7 +3888,8 @@ async def osf_ingest(
         # Persist
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"osf:{osf_id}",
                 title=title or osf_id,
                 media_type="pdf",
@@ -4064,7 +4106,7 @@ async def zenodo_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Download a PDF from a Zenodo record (if available), process, and persist.
 
@@ -4175,7 +4217,8 @@ async def zenodo_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"zenodo:{record_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4344,7 +4387,7 @@ async def figshare_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -4443,7 +4486,8 @@ async def figshare_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"figshare:{article_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4493,7 +4537,7 @@ async def figshare_ingest_by_doi(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Convenience endpoint: resolves DOI to Figshare article, downloads its PDF, and ingests it."""
     loop = asyncio.get_running_loop()
@@ -4598,7 +4642,8 @@ async def figshare_ingest_by_doi(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"figshare:{article_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4746,7 +4791,7 @@ async def hal_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -4842,7 +4887,8 @@ async def hal_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"hal:{docid}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4909,7 +4955,7 @@ async def vixra_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -4999,7 +5045,8 @@ async def vixra_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"vixra:{vid}",
                 title=title_for_db,
                 media_type="pdf",

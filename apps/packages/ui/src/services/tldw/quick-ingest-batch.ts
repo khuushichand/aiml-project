@@ -6,11 +6,13 @@ import {
   inferUploadMediaTypeFromFile,
   normalizeMediaType
 } from "@/services/tldw/media-routing"
+import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import {
   createIngestJobsTracker,
   extractIngestJobIds,
   pollSingleIngestJob
 } from "@/services/tldw/ingest-jobs-orchestrator"
+import type { PersistedQuickIngestTracking } from "@/components/Common/QuickIngest/types"
 
 type TypeDefaults = {
   audio?: { language?: string; diarize?: boolean }
@@ -52,6 +54,7 @@ type QuickIngestBatchInput = {
   chunkingTemplateName?: string
   autoApplyTemplate?: boolean
   __quickIngestSessionId?: string
+  onTrackingMetadata?: (tracking: PersistedQuickIngestTracking) => void
 }
 
 type QuickIngestBatchResult = {
@@ -79,6 +82,8 @@ export type QuickIngestStartAck = {
 export type QuickIngestCancelInput = {
   sessionId: string
   reason?: string
+  batchIds?: string[]
+  tracking?: PersistedQuickIngestTracking
 }
 
 export type QuickIngestCancelResponse = {
@@ -86,7 +91,14 @@ export type QuickIngestCancelResponse = {
   error?: string
 }
 
+type UploadError = Error & {
+  status?: number
+  details?: unknown
+}
+
 const EXTENSION_TIMEOUT_MS = 10_000
+const QUICK_INGEST_RUNTIME_PING_TIMEOUT_MS = 400
+const QUICK_INGEST_RUNTIME_HEALTH_TTL_MS = 30_000
 const DIRECT_INGEST_TIMEOUT_MS = 5 * 60 * 1000
 const DIRECT_REMOTE_POLL_INTERVAL_MS = 1_200
 type DirectQuickIngestTracker = ReturnType<
@@ -95,6 +107,8 @@ type DirectQuickIngestTracker = ReturnType<
 
 const directQuickIngestSessionTrackers = new Map<string, DirectQuickIngestTracker>()
 const directQuickIngestCancelledSessions = new Set<string>()
+let lastQuickIngestRuntimeHealthCheckAt = 0
+let quickIngestRuntimeMessagingUsable: boolean | null = null
 
 const buildDirectSessionSuffix = (): string => {
   try {
@@ -111,6 +125,23 @@ const buildDirectSessionSuffix = (): string => {
   }
   return Date.now().toString(36).slice(-8)
 }
+
+const normalizeBatchIds = (batchIds?: string[]): string[] =>
+  Array.from(
+    new Set(
+      Array.isArray(batchIds)
+        ? batchIds
+            .map((batchId) => String(batchId || "").trim())
+            .filter(Boolean)
+        : []
+    )
+  )
+
+const buildJobIdToItemId = (
+  jobIds: number[],
+  sourceItemId: string
+): Record<string, string> =>
+  Object.fromEntries(jobIds.map((jobId) => [String(jobId), sourceItemId]))
 
 const ensureDirectSessionTracker = (
   sessionId: string | undefined
@@ -163,6 +194,38 @@ const cancelDirectSessionBatches = async (
 const hasExtensionMessagingRuntime = (): boolean =>
   Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
 
+const invalidateQuickIngestRuntimeHealth = (): void => {
+  quickIngestRuntimeMessagingUsable = false
+  lastQuickIngestRuntimeHealthCheckAt = Date.now()
+}
+
+const canUseExtensionMessagingRuntime = async (): Promise<boolean> => {
+  if (!hasExtensionMessagingRuntime()) return false
+
+  const now = Date.now()
+  if (
+    quickIngestRuntimeMessagingUsable !== null &&
+    now - lastQuickIngestRuntimeHealthCheckAt < QUICK_INGEST_RUNTIME_HEALTH_TTL_MS
+  ) {
+    return quickIngestRuntimeMessagingUsable
+  }
+
+  try {
+    const pingResult = await Promise.race([
+      browser.runtime.sendMessage({ type: "tldw:ping" }),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), QUICK_INGEST_RUNTIME_PING_TIMEOUT_MS)
+      )
+    ])
+    quickIngestRuntimeMessagingUsable =
+      Boolean(pingResult) && Boolean((pingResult as { ok?: unknown }).ok)
+  } catch {
+    quickIngestRuntimeMessagingUsable = false
+  }
+  lastQuickIngestRuntimeHealthCheckAt = now
+  return Boolean(quickIngestRuntimeMessagingUsable)
+}
+
 const sendExtensionMessageWithTimeout = async <T>(
   message: Record<string, unknown>,
   timeoutMs: number = EXTENSION_TIMEOUT_MS
@@ -173,9 +236,15 @@ const sendExtensionMessageWithTimeout = async <T>(
   })
   const result = await Promise.race([extensionPromise, timeoutPromise])
   if (result === null) {
+    invalidateQuickIngestRuntimeHealth()
     throw new Error("Extension messaging timed out. Please try again or reload the page.")
   }
-  return result as T
+  try {
+    return result as T
+  } catch (error) {
+    invalidateQuickIngestRuntimeHealth()
+    throw error
+  }
 }
 
 const assignPath = (obj: Record<string, any>, path: string[], val: any) => {
@@ -231,6 +300,81 @@ const serializeUploadFields = (
   return serialized
 }
 
+const extractUploadErrorText = (error: unknown): string => {
+  const parts: string[] = []
+
+  if (error instanceof Error && error.message) {
+    parts.push(error.message)
+  } else if (typeof error === "string" && error.trim()) {
+    parts.push(error)
+  }
+
+  if (error && typeof error === "object") {
+    const details = (error as UploadError).details
+    if (typeof details === "string" && details.trim()) {
+      parts.push(details)
+    } else if (details && typeof details === "object" && !Array.isArray(details)) {
+      for (const key of ["detail", "message", "error"]) {
+        const value = (details as Record<string, unknown>)[key]
+        if (typeof value === "string" && value.trim()) {
+          parts.push(value)
+        }
+      }
+    }
+  }
+
+  return parts.join(" ").trim()
+}
+
+const shouldFallbackToPersistentAdd = (error: unknown): boolean => {
+  const status = (error as UploadError | null)?.status
+  if (status !== 429) return false
+  const normalized = extractUploadErrorText(error).toLowerCase()
+  return /concurrent job limit|max(?:imum)? concurrent|queue is full|queue full/.test(
+    normalized
+  )
+}
+
+const normalizePersistentAddResponse = <T>(data: T): T => {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data
+  const results = (data as { results?: unknown }).results
+  if (!Array.isArray(results)) return data
+  return {
+    ...(data as Record<string, unknown>),
+    results: results.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item
+      const record = item as Record<string, unknown>
+      if (record.media_id != null || record.db_id == null) return item
+      return {
+        ...record,
+        media_id: record.db_id
+      }
+    })
+  } as T
+}
+
+const submitPersistentAdd = async ({
+  fields,
+  file
+}: {
+  fields: Record<string, any>
+  file?: {
+    name: string
+    type: string
+    data: number[] | Uint8Array | ArrayBuffer
+  }
+}): Promise<any> =>
+  normalizePersistentAddResponse(
+    await bgUpload<any>({
+      path: "/api/v1/media/add",
+      method: "POST",
+      fields: serializeUploadFields(fields),
+      file,
+      fileFieldName: file ? "files" : undefined,
+      timeoutMs: DIRECT_INGEST_TIMEOUT_MS
+    })
+  )
+
 const buildFields = ({
   rawType,
   entry,
@@ -252,7 +396,7 @@ const buildFields = ({
   const fields: Record<string, any> = {
     media_type: mediaType,
     perform_analysis: Boolean(common?.perform_analysis),
-    perform_chunking: Boolean(common?.perform_chunking),
+    perform_chunking: resolvePerformChunking(common?.perform_chunking),
     overwrite_existing: Boolean(common?.overwrite_existing)
   }
 
@@ -417,6 +561,9 @@ const runDirectQuickIngestBatch = async (
     }
 
     for (const entry of entries) {
+      if (isDirectSessionCancelled(directSessionId)) {
+        break
+      }
       const url = String(entry?.url || "").trim()
       if (!url) continue
 
@@ -441,28 +588,46 @@ const runDirectQuickIngestBatch = async (
             autoApplyTemplate: input.autoApplyTemplate
           })
           fields.urls = [url]
-          const submitData = await bgUpload<any>({
-            path: "/api/v1/media/ingest/jobs",
-            method: "POST",
-            fields: serializeUploadFields(fields),
-            timeoutMs: DIRECT_INGEST_TIMEOUT_MS
-          })
-          const batchId = String(submitData?.batch_id || "").trim()
-          const jobIds = extractIngestJobIds(submitData)
-          if (!batchId || jobIds.length === 0) {
-            throw new Error("Ingest job submission returned no job IDs.")
+          try {
+            const submitData = await bgUpload<any>({
+              path: "/api/v1/media/ingest/jobs",
+              method: "POST",
+              fields: serializeUploadFields(fields),
+              timeoutMs: DIRECT_INGEST_TIMEOUT_MS
+            })
+            const batchId = String(submitData?.batch_id || "").trim()
+            const jobIds = extractIngestJobIds(submitData)
+            if (!batchId || jobIds.length === 0) {
+              throw new Error("Ingest job submission returned no job IDs.")
+            }
+            const directTracker = ensureDirectSessionTracker(directSessionId)
+            directTracker?.trackJobs(batchId, jobIds, { sourceId: entry.id })
+            input.onTrackingMetadata?.({
+              mode: "webui-direct",
+              sessionId: directSessionId,
+              batchId,
+              batchIds: [batchId],
+              jobIds,
+              submittedItemIds: [entry.id],
+              itemIds: [entry.id],
+              jobIdToItemId: buildJobIdToItemId(jobIds, entry.id),
+              startedAt: Date.now()
+            })
+            const firstJobId = jobIds[0]
+            const pollResult = await pollIngestJobStatus(
+              firstJobId,
+              DIRECT_INGEST_TIMEOUT_MS
+            )
+            if (!pollResult.ok) {
+              throw new Error(String(pollResult.error || "Ingest failed"))
+            }
+            data = pollResult.data
+          } catch (error) {
+            if (!shouldFallbackToPersistentAdd(error)) {
+              throw error
+            }
+            data = await submitPersistentAdd({ fields })
           }
-          const directTracker = ensureDirectSessionTracker(directSessionId)
-          directTracker?.trackJobs(batchId, jobIds, { sourceId: entry.id })
-          const firstJobId = jobIds[0]
-          const pollResult = await pollIngestJobStatus(
-            firstJobId,
-            DIRECT_INGEST_TIMEOUT_MS
-          )
-          if (!pollResult.ok) {
-            throw new Error(String(pollResult.error || "Ingest failed"))
-          }
-          data = pollResult.data
         } else if (resolvedType === "html") {
           data = await processWebScrape({
             url,
@@ -511,6 +676,9 @@ const runDirectQuickIngestBatch = async (
     }
 
     for (const file of files) {
+      if (isDirectSessionCancelled(directSessionId)) {
+        break
+      }
       const id = String(file?.id || crypto.randomUUID())
       const fileName = String(file?.name || "upload")
       const mediaType = inferUploadMediaTypeFromFile(fileName, file?.type)
@@ -527,42 +695,71 @@ const runDirectQuickIngestBatch = async (
           chunkingTemplateName: input.chunkingTemplateName,
           autoApplyTemplate: input.autoApplyTemplate
         })
+        const uploadFile = {
+          name: fileName,
+          type: file?.type || "application/octet-stream",
+          data:
+            (file?.data as number[] | Uint8Array | ArrayBuffer | undefined) || []
+        }
         if (shouldStoreRemote) {
-          const submitData = await bgUpload<any>({
-            path: "/api/v1/media/ingest/jobs",
-            method: "POST",
-            fields: serializeUploadFields(fields),
-            file: {
-              name: fileName,
-              type: file?.type || "application/octet-stream",
-              data:
-                (file?.data as number[] | Uint8Array | ArrayBuffer | undefined) || []
-            },
-            fileFieldName: "files",
-            timeoutMs: DIRECT_INGEST_TIMEOUT_MS
-          })
-          const batchId = String(submitData?.batch_id || "").trim()
-          const jobIds = extractIngestJobIds(submitData)
-          if (!batchId || jobIds.length === 0) {
-            throw new Error("Ingest job submission returned no job IDs.")
+          try {
+            const submitData = await bgUpload<any>({
+              path: "/api/v1/media/ingest/jobs",
+              method: "POST",
+              fields: serializeUploadFields(fields),
+              file: uploadFile,
+              fileFieldName: "files",
+              timeoutMs: DIRECT_INGEST_TIMEOUT_MS
+            })
+            const batchId = String(submitData?.batch_id || "").trim()
+            const jobIds = extractIngestJobIds(submitData)
+            if (!batchId || jobIds.length === 0) {
+              throw new Error("Ingest job submission returned no job IDs.")
+            }
+            const directTracker = ensureDirectSessionTracker(directSessionId)
+            directTracker?.trackJobs(batchId, jobIds, { sourceId: id })
+            input.onTrackingMetadata?.({
+              mode: "webui-direct",
+              sessionId: directSessionId,
+              batchId,
+              batchIds: [batchId],
+              jobIds,
+              submittedItemIds: [id],
+              itemIds: [id],
+              jobIdToItemId: buildJobIdToItemId(jobIds, id),
+              startedAt: Date.now()
+            })
+            const firstJobId = jobIds[0]
+            const pollResult = await pollIngestJobStatus(
+              firstJobId,
+              DIRECT_INGEST_TIMEOUT_MS
+            )
+            if (!pollResult.ok) {
+              throw new Error(String(pollResult.error || "Upload failed"))
+            }
+            out.push({
+              id,
+              status: "ok",
+              fileName,
+              type: mediaType,
+              data: pollResult.data
+            })
+          } catch (error) {
+            if (!shouldFallbackToPersistentAdd(error)) {
+              throw error
+            }
+            const data = await submitPersistentAdd({
+              fields,
+              file: uploadFile
+            })
+            out.push({
+              id,
+              status: "ok",
+              fileName,
+              type: mediaType,
+              data
+            })
           }
-          const directTracker = ensureDirectSessionTracker(directSessionId)
-          directTracker?.trackJobs(batchId, jobIds, { sourceId: id })
-          const firstJobId = jobIds[0]
-          const pollResult = await pollIngestJobStatus(
-            firstJobId,
-            DIRECT_INGEST_TIMEOUT_MS
-          )
-          if (!pollResult.ok) {
-            throw new Error(String(pollResult.error || "Upload failed"))
-          }
-          out.push({
-            id,
-            status: "ok",
-            fileName,
-            type: mediaType,
-            data: pollResult.data
-          })
           continue
         }
 
@@ -570,12 +767,7 @@ const runDirectQuickIngestBatch = async (
           path: getProcessPathForType(mediaType),
           method: "POST",
           fields: serializeUploadFields(fields),
-          file: {
-            name: fileName,
-            type: file?.type || "application/octet-stream",
-            data:
-              (file?.data as number[] | Uint8Array | ArrayBuffer | undefined) || []
-          },
+          file: uploadFile,
           timeoutMs: DIRECT_INGEST_TIMEOUT_MS
         })
 
@@ -606,12 +798,17 @@ const runDirectQuickIngestBatch = async (
 export const submitQuickIngestBatch = async (
   input: QuickIngestBatchInput
 ): Promise<QuickIngestBatchResponse> => {
-  if (hasExtensionMessagingRuntime()) {
-    const result = await sendExtensionMessageWithTimeout<QuickIngestBatchResponse>({
-      type: "tldw:quick-ingest-batch",
-      payload: input
-    })
-    return result
+  if (await canUseExtensionMessagingRuntime()) {
+    try {
+      const result = await sendExtensionMessageWithTimeout<QuickIngestBatchResponse>({
+        type: "tldw:quick-ingest-batch",
+        payload: input
+      })
+      return result
+    } catch {
+      // Fall through to the direct path when runtime messaging is unavailable
+      // even though the extension context still exists.
+    }
   }
 
   return await runDirectQuickIngestBatch(input)
@@ -620,11 +817,16 @@ export const submitQuickIngestBatch = async (
 export const startQuickIngestSession = async (
   input: QuickIngestBatchInput
 ): Promise<QuickIngestStartAck> => {
-  if (hasExtensionMessagingRuntime()) {
-    return await sendExtensionMessageWithTimeout<QuickIngestStartAck>({
-      type: "tldw:quick-ingest/start",
-      payload: input
-    })
+  if (await canUseExtensionMessagingRuntime()) {
+    try {
+      return await sendExtensionMessageWithTimeout<QuickIngestStartAck>({
+        type: "tldw:quick-ingest/start",
+        payload: input
+      })
+    } catch {
+      // Fall through to the direct session ack when the runtime exists
+      // but message delivery is unhealthy.
+    }
   }
 
   // Direct runtimes currently run ingest synchronously. Return a local ack
@@ -639,21 +841,50 @@ export const cancelQuickIngestSession = async (
   input: QuickIngestCancelInput
 ): Promise<QuickIngestCancelResponse> => {
   const sessionId = String(input?.sessionId || "").trim()
+  const tracking = input?.tracking
   if (!sessionId) {
     return { ok: false, error: "Missing session id." }
   }
 
-  if (hasExtensionMessagingRuntime()) {
-    return await sendExtensionMessageWithTimeout<QuickIngestCancelResponse>({
-      type: "tldw:quick-ingest/cancel",
-      payload: {
-        sessionId,
-        reason: input?.reason
-      }
-    })
+  if (await canUseExtensionMessagingRuntime()) {
+    try {
+      return await sendExtensionMessageWithTimeout<QuickIngestCancelResponse>({
+        type: "tldw:quick-ingest/cancel",
+        payload: {
+          sessionId,
+          reason: input?.reason
+        }
+      })
+    } catch {
+      // Fall through to the direct cancellation path when runtime messaging
+      // stops responding in packaged extension contexts.
+    }
   }
 
   directQuickIngestCancelledSessions.add(sessionId)
   await cancelDirectSessionBatches(sessionId, input?.reason || "user_cancelled")
+  for (const batchId of normalizeBatchIds([
+    ...(input?.batchIds || []),
+    tracking?.batchId || "",
+    ...(tracking?.batchIds || []),
+  ])) {
+    try {
+      await bgRequest<any>({
+        path: `/api/v1/media/ingest/jobs/cancel?batch_id=${encodeURIComponent(
+          batchId
+        )}&reason=${encodeURIComponent(input?.reason || "user_cancelled")}`,
+        method: "POST",
+        timeoutMs: 10_000,
+        returnResponse: true
+      })
+    } catch {
+      // best effort cancellation for resumed sessions without in-memory trackers
+    }
+  }
   return { ok: true }
+}
+
+export const __resetQuickIngestRuntimeHealthForTests = (): void => {
+  quickIngestRuntimeMessagingUsable = null
+  lastQuickIngestRuntimeHealthCheckAt = 0
 }

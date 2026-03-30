@@ -38,6 +38,7 @@ import {
 } from "@/hooks/useConnectionState"
 import { useConnectionStore } from "@/store/connection"
 import { useDemoMode } from "@/context/demo-mode"
+import { requestQuickIngestIntro } from "@/utils/quick-ingest-open"
 import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 import { useQuickIngestStore } from "@/store/quick-ingest"
@@ -765,7 +766,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               document.querySelector('[data-testid="open-quick-ingest"]')
             )
             if (triggerReady || attempts >= QUICK_INGEST_OPEN_MAX_ATTEMPTS) {
-              window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest-intro"))
+              requestQuickIngestIntro()
               return
             }
             attempts += 1
@@ -779,7 +780,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   )
 
   const handleOpenIngestFlow = useCallback(async () => {
-    await finishAndNavigate("/", { openQuickIngestIntro: true })
+    await finishAndNavigate("/media", { openQuickIngestIntro: true })
   }, [finishAndNavigate])
 
   const handleOpenMediaFlow = useCallback(async () => {

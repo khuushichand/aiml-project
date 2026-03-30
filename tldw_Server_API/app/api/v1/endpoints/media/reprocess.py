@@ -19,11 +19,10 @@ from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
-    MediaDatabase,
 )
 from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
@@ -147,7 +146,7 @@ async def _generate_embeddings(
     media_payload: dict[str, Any],
     request: ReprocessMediaRequest,
     user_id: str,
-    db: MediaDatabase,
+    db: Any,
     cache_namespaces: list[str] | None = None,
 ) -> None:
     try:
@@ -209,7 +208,7 @@ async def reprocess_media_item(
     payload: ReprocessMediaRequest,
     background_tasks: BackgroundTasks,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> ReprocessMediaResponse:
     """

@@ -186,7 +186,7 @@ Let me explain:"""
         return templates.get(name, cls.DEFAULT)
 
 
-def _extract_openai_content(response: Any) -> str:
+def _extract_openai_text_content(response: Any) -> Optional[str]:
     if isinstance(response, str):
         return response
     if isinstance(response, dict):
@@ -218,12 +218,20 @@ def _extract_openai_content(response: Any) -> str:
         content = response.get("content") or response.get("text")
         if isinstance(content, str):
             return content
+        return None
+    return None
+
+
+def _extract_openai_content(response: Any) -> str:
+    text = _extract_openai_text_content(response)
+    if text is not None:
+        return text
     return str(response)
 
 
 def _extract_stream_text(chunk: Any) -> Optional[str]:
     if isinstance(chunk, dict):
-        return _extract_openai_content(chunk)
+        return _extract_openai_text_content(chunk)
     if isinstance(chunk, (bytes, bytearray)):
         try:
             chunk = chunk.decode("utf-8", errors="ignore")
@@ -241,7 +249,11 @@ def _extract_stream_text(chunk: Any) -> Optional[str]:
                 payload = json.loads(data)
             except json.JSONDecodeError:
                 return data or None
-            return _extract_openai_content(payload) or None
+            if isinstance(payload, dict):
+                return _extract_openai_text_content(payload)
+            if isinstance(payload, str):
+                return payload or None
+            return None
         return stripped
     try:
         return str(chunk)
@@ -530,6 +542,16 @@ def create_generator(config: Union[GenerationConfig, dict[str, Any]]) -> Generat
         return LLMGenerator(config)
 
 
+def _sanitize_generation_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Drop non-GenerationConfig keys before instantiating a generator."""
+    allowed_fields = set(GenerationConfig.__dataclass_fields__.keys())
+    return {
+        key: value
+        for key, value in config.items()
+        if key in allowed_fields
+    }
+
+
 # Pipeline integration functions
 
 async def generate_response(context: Any, **kwargs) -> Any:
@@ -544,7 +566,7 @@ async def generate_response(context: Any, **kwargs) -> Any:
         await PromptTemplates.warm_template_async(prompt_name)
 
     # Create generator
-    generator = create_generator(config_dict)
+    generator = create_generator(_sanitize_generation_config(config_dict))
 
     # Generate response
     result = await generator.generate(context, context.query)
@@ -628,7 +650,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
         await PromptTemplates.warm_template_async(prompt_name)
 
     # Create generator
-    generator = create_generator(config_dict)
+    generator = create_generator(_sanitize_generation_config(config_dict))
 
     # Store generator in context for streaming
     base_stream = generator.generate_stream(context, context.query)

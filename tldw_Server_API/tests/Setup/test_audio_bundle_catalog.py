@@ -1,3 +1,6 @@
+import pytest
+
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import AudioResourceProfile
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
 
 
@@ -27,3 +30,95 @@ def test_cpu_local_bundle_exposes_named_resource_profiles():
     bundle = get_audio_bundle_catalog().bundle_by_id("cpu_local")
 
     assert {"light", "balanced", "performance"} <= set(bundle.resource_profiles.keys())
+
+
+def test_cpu_local_light_profile_exposes_curated_tts_choices():
+    profile = get_audio_bundle_catalog().bundle_by_id("cpu_local").profile_by_id("light")
+
+    assert [choice.choice_id for choice in profile.tts_choices] == ["kokoro", "kitten_tts"]
+    assert profile.default_tts_choice == "kokoro"
+    assert profile.tts_choices[0].tts_plan == [{"engine": "kokoro", "variants": []}]
+    assert profile.tts_choices[1].tts_plan == [{"engine": "kitten_tts", "variants": []}]
+
+
+def test_cpu_local_balanced_profile_exposes_curated_tts_choices():
+    profile = get_audio_bundle_catalog().bundle_by_id("cpu_local").profile_by_id("balanced")
+
+    assert [choice.choice_id for choice in profile.tts_choices] == ["kokoro", "kitten_tts"]
+    assert profile.default_tts_choice == "kokoro"
+    assert profile.tts_choices[0].tts_plan == [{"engine": "kokoro", "variants": []}]
+    assert profile.tts_choices[1].tts_plan == [{"engine": "kitten_tts", "variants": []}]
+
+
+def test_cpu_local_profiles_do_not_share_curated_tts_choice_instances():
+    bundle = get_audio_bundle_catalog().bundle_by_id("cpu_local")
+    light_profile = bundle.profile_by_id("light")
+    balanced_profile = bundle.profile_by_id("balanced")
+
+    assert light_profile.tts_choices[0] is not balanced_profile.tts_choices[0]
+    assert light_profile.tts_choices[0].tts_plan[0] is not balanced_profile.tts_choices[0].tts_plan[0]
+
+
+def test_profile_default_tts_plan_is_not_aliased_to_curated_choice_plan():
+    profile = get_audio_bundle_catalog().bundle_by_id("cpu_local").profile_by_id("light")
+
+    assert profile.tts_plan == [{"engine": "kokoro", "variants": []}]
+    assert profile.tts_plan is not profile.tts_choices[0].tts_plan
+    assert profile.tts_plan[0] is not profile.tts_choices[0].tts_plan[0]
+
+
+def test_profile_rejects_duplicate_curated_tts_choice_ids():
+    with pytest.raises(ValueError, match="Duplicate curated TTS choice IDs"):
+        AudioResourceProfile(
+            profile_id="light",
+            label="Light",
+            tts_choices=[
+                AudioResourceProfile.CuratedTTSChoice(
+                    choice_id="kokoro",
+                    label="Kokoro",
+                    tts_plan=[{"engine": "kokoro", "variants": []}],
+                ),
+                AudioResourceProfile.CuratedTTSChoice(
+                    choice_id="kokoro",
+                    label="Duplicate Kokoro",
+                    tts_plan=[{"engine": "kokoro", "variants": ["alt"]}],
+                ),
+            ],
+            default_tts_choice="kokoro",
+        )
+
+
+def test_apple_silicon_balanced_profile_prefers_parakeet_mlx():
+    catalog = get_audio_bundle_catalog()
+    profile = catalog.bundle_by_id("apple_silicon_local").profile_by_id("balanced")
+
+    assert profile.stt_plan[0]["engine"] == "nemo_parakeet_mlx"
+    assert profile.stt_plan[0]["models"] == []
+    assert profile.tts_plan[0]["engine"] == "kokoro"
+    assert profile.tts_plan[0]["variants"] == []
+
+
+def test_apple_silicon_performance_profile_prefers_parakeet_mlx():
+    catalog = get_audio_bundle_catalog()
+    profile = catalog.bundle_by_id("apple_silicon_local").profile_by_id("performance")
+
+    assert profile.stt_plan[0]["engine"] == "nemo_parakeet_mlx"
+    assert profile.stt_plan[0]["models"] == []
+    assert profile.tts_plan[0]["engine"] == "kokoro"
+    assert profile.tts_plan[0]["variants"] == []
+
+
+def test_nvidia_balanced_profile_uses_parakeet_path():
+    catalog = get_audio_bundle_catalog()
+    profile = catalog.bundle_by_id("nvidia_local").profile_by_id("balanced")
+
+    assert profile.stt_plan[0]["engine"] in {"nemo_parakeet_standard", "nemo_parakeet_onnx"}
+    assert profile.tts_plan == [{"engine": "kokoro", "variants": []}]
+
+
+def test_nvidia_performance_profile_uses_parakeet_and_local_tts():
+    catalog = get_audio_bundle_catalog()
+    profile = catalog.bundle_by_id("nvidia_local").profile_by_id("performance")
+
+    assert profile.stt_plan[0]["engine"] == "nemo_parakeet_standard"
+    assert profile.tts_plan[0]["engine"] in {"dia", "higgs"}

@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection,
 )
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_agent ON sessions(created_at, agent_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_forked ON sessions(forked_from);
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -77,6 +78,13 @@ CREATE TABLE IF NOT EXISTS agent_registry (
     is_default INTEGER NOT NULL DEFAULT 0,
     install_instructions TEXT NOT NULL DEFAULT '[]',
     docs_url TEXT,
+    mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven',
+    mcp_entry_tool TEXT NOT NULL DEFAULT 'execute',
+    mcp_structured_response INTEGER NOT NULL DEFAULT 0,
+    mcp_llm_provider TEXT,
+    mcp_llm_model TEXT,
+    mcp_max_iterations INTEGER NOT NULL DEFAULT 20,
+    mcp_refresh_tools INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'api',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -95,7 +103,12 @@ CREATE INDEX IF NOT EXISTS idx_health_agent_time
 """
 
 # Columns that are stored as INTEGER 0/1 but should be returned as bool
-_BOOL_FIELDS = frozenset({"bootstrap_ready", "needs_bootstrap"})
+_BOOL_FIELDS = frozenset({
+    "bootstrap_ready",
+    "needs_bootstrap",
+    "mcp_structured_response",
+    "mcp_refresh_tools",
+})
 
 # Columns that are stored as JSON TEXT but should be returned as parsed objects
 _JSON_LIST_FIELDS = frozenset({"tags", "mcp_servers"})
@@ -108,7 +121,16 @@ _ALLOWED_MIGRATION_COLUMNS = {
         "policy_summary": "policy_summary TEXT",
         "policy_provenance_summary": "policy_provenance_summary TEXT",
         "policy_refresh_error": "policy_refresh_error TEXT",
-    }
+    },
+    "agent_registry": {
+        "mcp_orchestration": "mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven'",
+        "mcp_entry_tool": "mcp_entry_tool TEXT NOT NULL DEFAULT 'execute'",
+        "mcp_structured_response": "mcp_structured_response INTEGER NOT NULL DEFAULT 0",
+        "mcp_llm_provider": "mcp_llm_provider TEXT",
+        "mcp_llm_model": "mcp_llm_model TEXT",
+        "mcp_max_iterations": "mcp_max_iterations INTEGER NOT NULL DEFAULT 20",
+        "mcp_refresh_tools": "mcp_refresh_tools INTEGER NOT NULL DEFAULT 0",
+    },
 }
 
 
@@ -190,6 +212,13 @@ class ACPSessionsDB:
                         is_default INTEGER NOT NULL DEFAULT 0,
                         install_instructions TEXT NOT NULL DEFAULT '[]',
                         docs_url TEXT,
+                        mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven',
+                        mcp_entry_tool TEXT NOT NULL DEFAULT 'execute',
+                        mcp_structured_response INTEGER NOT NULL DEFAULT 0,
+                        mcp_llm_provider TEXT,
+                        mcp_llm_model TEXT,
+                        mcp_max_iterations INTEGER NOT NULL DEFAULT 20,
+                        mcp_refresh_tools INTEGER NOT NULL DEFAULT 0,
                         source TEXT NOT NULL DEFAULT 'api',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -244,6 +273,49 @@ class ACPSessionsDB:
                     "sessions",
                     "policy_refresh_error",
                     "policy_refresh_error TEXT",
+                )
+            if current_version < 5:
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_orchestration",
+                    "mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven'",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_entry_tool",
+                    "mcp_entry_tool TEXT NOT NULL DEFAULT 'execute'",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_structured_response",
+                    "mcp_structured_response INTEGER NOT NULL DEFAULT 0",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_llm_provider",
+                    "mcp_llm_provider TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_llm_model",
+                    "mcp_llm_model TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_max_iterations",
+                    "mcp_max_iterations INTEGER NOT NULL DEFAULT 20",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_refresh_tools",
+                    "mcp_refresh_tools INTEGER NOT NULL DEFAULT 0",
                 )
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
@@ -515,6 +587,29 @@ class ACPSessionsDB:
         ).fetchall()
 
         return [self._row_to_dict(r) for r in rows], total
+
+    def get_agent_usage_stats(self, *, since_iso: str) -> list[dict[str, Any]]:
+        """Aggregate per-agent token usage for sessions created on or after *since_iso*."""
+        conn = self._get_conn()
+        query = (
+            "SELECT "
+            "  agent_type, "
+            "  COUNT(*) AS invocation_count, "
+            "  COALESCE(SUM(total_tokens), 0) AS total_tokens, "
+            "  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+            "  COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+            "  SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count, "
+            "  CASE WHEN COUNT(*) > 0 "
+            "    THEN CAST(COALESCE(SUM(total_tokens), 0) AS REAL) / COUNT(*) "
+            "    ELSE 0 "
+            "  END AS avg_tokens_per_session "
+            "FROM sessions "
+            "WHERE created_at >= ? "
+            "GROUP BY agent_type "
+            "ORDER BY total_tokens DESC"
+        )
+        rows = conn.execute(query, [since_iso]).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Text normalization (local helper — no external imports)
@@ -966,6 +1061,13 @@ class ACPSessionsDB:
         is_default = int(entry_dict.get("is_default", 0))
         install_instructions = entry_dict.get("install_instructions", "[]")
         docs_url = entry_dict.get("docs_url")
+        mcp_orchestration = entry_dict.get("mcp_orchestration", "agent_driven")
+        mcp_entry_tool = entry_dict.get("mcp_entry_tool", "execute")
+        mcp_structured_response = int(bool(entry_dict.get("mcp_structured_response", 0)))
+        mcp_llm_provider = entry_dict.get("mcp_llm_provider")
+        mcp_llm_model = entry_dict.get("mcp_llm_model")
+        mcp_max_iterations = int(entry_dict.get("mcp_max_iterations", 20))
+        mcp_refresh_tools = int(bool(entry_dict.get("mcp_refresh_tools", 0)))
         source = entry_dict.get("source", "api")
 
         conn.execute(
@@ -973,8 +1075,10 @@ class ACPSessionsDB:
             INSERT INTO agent_registry (
                 agent_type, name, description, command, args, env,
                 requires_api_key, is_default, install_instructions, docs_url,
+                mcp_orchestration, mcp_entry_tool, mcp_structured_response,
+                mcp_llm_provider, mcp_llm_model, mcp_max_iterations, mcp_refresh_tools,
                 source, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(agent_type) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -985,12 +1089,21 @@ class ACPSessionsDB:
                 is_default = excluded.is_default,
                 install_instructions = excluded.install_instructions,
                 docs_url = excluded.docs_url,
+                mcp_orchestration = excluded.mcp_orchestration,
+                mcp_entry_tool = excluded.mcp_entry_tool,
+                mcp_structured_response = excluded.mcp_structured_response,
+                mcp_llm_provider = excluded.mcp_llm_provider,
+                mcp_llm_model = excluded.mcp_llm_model,
+                mcp_max_iterations = excluded.mcp_max_iterations,
+                mcp_refresh_tools = excluded.mcp_refresh_tools,
                 source = excluded.source,
                 updated_at = excluded.updated_at
             """,
             (
                 agent_type, name, description, command, args, env,
                 requires_api_key, is_default, install_instructions, docs_url,
+                mcp_orchestration, mcp_entry_tool, mcp_structured_response,
+                mcp_llm_provider, mcp_llm_model, mcp_max_iterations, mcp_refresh_tools,
                 source, now, now,
             ),
         )

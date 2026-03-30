@@ -1,5 +1,6 @@
 import { test, expect, seedAuth, SMOKE_LOAD_TIMEOUT } from "./smoke.setup"
 import type { Locator, Route } from "@playwright/test"
+import { waitForAppShell } from "../utils/helpers"
 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
 
@@ -158,6 +159,7 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
     await page.waitForURL((url) => url.pathname === "/knowledge", {
       timeout: LOAD_TIMEOUT
     })
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const knowledgeSearchInput = page.getByLabel("Search your knowledge base")
     await expect(knowledgeSearchInput).toBeVisible({ timeout: LOAD_TIMEOUT })
@@ -166,10 +168,21 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
     await knowledgeSearchInput.fill(query)
     await expect(knowledgeSearchInput).toHaveValue(query)
     await knowledgeSearchInput.press("Enter")
-    await page.waitForTimeout(250)
+    const askButton = page.getByRole("button", { name: /^Ask$/i })
+
+    await expect
+      .poll(
+        async () =>
+          ragSearchCalls > 0 || (await askButton.isVisible().catch(() => false)),
+        {
+          timeout: LOAD_TIMEOUT,
+          message:
+            "Expected pressing Enter to start search or leave the Ask button available as a fallback"
+        }
+      )
+      .toBe(true)
 
     if (ragSearchCalls === 0) {
-      const askButton = page.getByRole("button", { name: /^Ask$/i })
       if (await askButton.isVisible().catch(() => false)) {
         await askButton.click()
       }
@@ -201,7 +214,7 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const palette = page.getByRole("dialog", { name: /command palette/i })
 
@@ -218,9 +231,22 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
     await expect(paletteInput).toBeFocused()
 
     await paletteInput.fill("go to settings")
-    await expect(palette.getByRole("option").first()).toBeVisible({ timeout: LOAD_TIMEOUT })
+    const settingsOption = palette.getByRole("option", { name: /go to settings/i })
+    await expect(settingsOption).toBeVisible({ timeout: LOAD_TIMEOUT })
 
-    await page.keyboard.press("Enter")
+    for (let index = 0; index < 8; index += 1) {
+      const isSelected = await settingsOption.getAttribute("aria-selected")
+      if (isSelected === "true") {
+        break
+      }
+      await paletteInput.press("ArrowDown")
+    }
+
+    await expect(settingsOption).toHaveAttribute("aria-selected", "true", {
+      timeout: LOAD_TIMEOUT
+    })
+
+    await paletteInput.press("Enter")
     await page.waitForURL((url) => url.pathname.startsWith("/settings"), {
       timeout: LOAD_TIMEOUT
     })
@@ -266,7 +292,7 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const composerInput = page
       .locator("#textarea-message, [data-testid='chat-input']")
@@ -295,7 +321,7 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     await expect(page.getByTestId("settings-navigation")).toBeVisible({
       timeout: LOAD_TIMEOUT

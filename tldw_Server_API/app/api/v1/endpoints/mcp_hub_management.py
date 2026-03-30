@@ -43,14 +43,25 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     GovernancePackDryRunResponse,
     GovernancePackImportRequest,
     GovernancePackImportResponse,
+    GovernancePackSourceDryRunRequest,
+    GovernancePackSourceImportRequest,
+    GovernancePackSourcePrepareRequest,
+    GovernancePackSourcePrepareResponse,
+    GovernancePackSourceUpdateCheckResponse,
+    GovernancePackSourceUpgradeDryRunRequest,
+    GovernancePackSourceUpgradeExecuteRequest,
+    GovernancePackSourceUpgradePrepareResponse,
     GovernancePackUpgradeDryRunRequest,
     GovernancePackUpgradeDryRunResponse,
     GovernancePackUpgradeExecuteRequest,
     GovernancePackUpgradeExecutionResponse,
     GovernancePackUpgradeHistoryEntryResponse,
     GovernancePackSummaryResponse,
+    GovernancePackTrustPolicyRequest,
+    GovernancePackTrustPolicyResponse,
     GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
+    McpCredentialSlotStatusResponse,
     PathScopeObjectCreateRequest,
     PathScopeObjectResponse,
     PathScopeObjectUpdateRequest,
@@ -64,6 +75,7 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     PolicyAssignmentUpdateRequest,
     PolicyOverrideResponse,
     PolicyOverrideUpsertRequest,
+    ProfileCredentialBindingUpsertRequest,
     SharedWorkspaceCreateRequest,
     SharedWorkspaceResponse,
     SharedWorkspaceUpdateRequest,
@@ -93,6 +105,16 @@ from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
     GovernancePackUpgradeConflictError,
     GovernancePackUpgradeStaleError,
     McpHubGovernancePackService,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+    McpHubGovernancePackTrustService,
+    GovernancePackTrustPolicyStaleError,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+    McpHubGovernancePackDistributionService,
+)
+from tldw_Server_API.app.services.mcp_credential_broker_service import (
+    McpCredentialBrokerService,
 )
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
@@ -152,6 +174,23 @@ async def get_mcp_hub_governance_pack_service() -> McpHubGovernancePackService:
     return McpHubGovernancePackService(repo=repo)
 
 
+async def get_mcp_hub_governance_pack_trust_service() -> McpHubGovernancePackTrustService:
+    """Resolve governance-pack trust service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubGovernancePackTrustService(repo=repo)
+
+
+async def get_mcp_hub_governance_pack_distribution_service() -> McpHubGovernancePackDistributionService:
+    """Resolve governance-pack distribution service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    trust_service = McpHubGovernancePackTrustService(repo=repo)
+    return McpHubGovernancePackDistributionService(trust_service=trust_service, repo=repo)
+
+
 async def get_mcp_hub_capability_adapter_service() -> McpHubCapabilityAdapterService:
     """Resolve capability-adapter service with storage bootstrap checks."""
     pool = await get_db_pool()
@@ -171,6 +210,14 @@ async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
 async def get_mcp_hub_tool_registry_dep() -> McpHubToolRegistryService:
     """Resolve the derived MCP Hub tool registry service."""
     return McpHubToolRegistryService()
+
+
+async def get_mcp_credential_broker_service() -> McpCredentialBrokerService:
+    """Resolve the MCP credential broker service backed by the current MCP Hub repo."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpCredentialBrokerService(repo=repo)
 
 
 def _load_json_object(raw: Any) -> dict[str, Any]:
@@ -1255,6 +1302,11 @@ def _binding_row_to_response(row: dict[str, Any]) -> CredentialBindingResponse:
             else None
         ),
         credential_ref=str(row.get("credential_ref") or "server"),
+        managed_secret_ref_id=(
+            int(row.get("managed_secret_ref_id"))
+            if row.get("managed_secret_ref_id") is not None
+            else None
+        ),
         binding_mode=str(row.get("binding_mode") or "grant"),
         usage_rules=_load_json_object(row.get("usage_rules")),
         created_by=row.get("created_by"),
@@ -1478,6 +1530,129 @@ async def dry_run_governance_pack(
     return GovernancePackDryRunResponse.model_validate({"report": report_payload})
 
 
+@router.post("/governance-packs/source/prepare", response_model=GovernancePackSourcePrepareResponse, status_code=201)
+async def prepare_governance_pack_source(
+    payload: GovernancePackSourcePrepareRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+) -> GovernancePackSourcePrepareResponse:
+    """Resolve a trusted governance-pack source into a pinned prepared candidate."""
+    _require_mutation_permission(principal)
+    try:
+        prepared = await svc.prepare_source_candidate(
+            source=payload.source.model_dump(),
+            actor_id=principal.user_id,
+        )
+    except ValueError as exc:
+        logger.warning("Governance pack source prepare rejected for actor {}: {}", principal.user_id, exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackSourcePrepareResponse.model_validate(prepared)
+
+
+@router.post("/governance-packs/source/dry-run", response_model=GovernancePackDryRunResponse)
+async def dry_run_governance_pack_source_candidate(
+    payload: GovernancePackSourceDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackDryRunResponse:
+    """Dry-run a previously prepared governance-pack source candidate in the target scope."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.load_prepared_candidate(
+            payload.candidate_id,
+            actor_id=principal.user_id,
+            revalidate_trust=True,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source dry-run rejected for candidate {} in scope {}:{}: {}",
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        report = await governance_svc.dry_run_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source dry-run rejected for candidate {} pack {}@{} in scope {}:{}: {}",
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
+    return GovernancePackDryRunResponse.model_validate({"report": report_payload})
+
+
+@router.post(
+    "/governance-packs/{governance_pack_id}/check-updates",
+    response_model=GovernancePackSourceUpdateCheckResponse,
+)
+async def check_governance_pack_updates(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+) -> GovernancePackSourceUpdateCheckResponse:
+    """Check whether a Git-backed governance-pack install has a newer trusted source candidate."""
+    _require_mutation_permission(principal)
+    try:
+        result = await svc.check_for_updates(governance_pack_id)
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack update check rejected for pack {} and actor {}: {}",
+            governance_pack_id,
+            principal.user_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackSourceUpdateCheckResponse.model_validate(result)
+
+
+@router.post(
+    "/governance-packs/{governance_pack_id}/prepare-upgrade-candidate",
+    response_model=GovernancePackSourceUpgradePrepareResponse,
+    status_code=201,
+)
+async def prepare_governance_pack_upgrade_candidate(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+) -> GovernancePackSourceUpgradePrepareResponse:
+    """Prepare a pinned source candidate for a newer Git-backed governance-pack update."""
+    _require_mutation_permission(principal)
+    try:
+        result = await svc.prepare_upgrade_candidate(
+            governance_pack_id=governance_pack_id,
+            actor_id=principal.user_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack upgrade candidate prepare rejected for pack {} and actor {}: {}",
+            governance_pack_id,
+            principal.user_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackSourceUpgradePrepareResponse.model_validate(result)
+
+
 @router.post("/governance-packs/dry-run-upgrade", response_model=GovernancePackUpgradeDryRunResponse)
 async def dry_run_governance_pack_upgrade(
     payload: GovernancePackUpgradeDryRunRequest,
@@ -1504,6 +1679,62 @@ async def dry_run_governance_pack_upgrade(
         logger.warning(
             "Governance pack upgrade dry-run rejected for source {} target {}@{} in scope {}:{}: {}",
             payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    plan_payload = plan.model_dump() if hasattr(plan, "model_dump") else dict(plan)
+    return GovernancePackUpgradeDryRunResponse.model_validate({"plan": plan_payload})
+
+
+@router.post("/governance-packs/source/dry-run-upgrade", response_model=GovernancePackUpgradeDryRunResponse)
+async def dry_run_governance_pack_source_upgrade(
+    payload: GovernancePackSourceUpgradeDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeDryRunResponse:
+    """Dry-run a governance-pack upgrade using a prepared source candidate."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.load_prepared_candidate(
+            payload.candidate_id,
+            actor_id=principal.user_id,
+            revalidate_trust=True,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade dry-run rejected for source {} candidate {} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        plan = await governance_svc.dry_run_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade dry-run rejected for source {} candidate {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
             pack_id,
             pack_version,
             resolved_scope_type,
@@ -1551,6 +1782,143 @@ async def import_governance_pack(
     except ValueError as exc:
         logger.warning(
             "Governance pack import rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackImportResponse.model_validate(result)
+
+
+@router.post("/governance-packs/source/execute-upgrade", response_model=GovernancePackUpgradeExecutionResponse)
+async def execute_governance_pack_source_upgrade(
+    payload: GovernancePackSourceUpgradeExecuteRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeExecutionResponse:
+    """Execute a governance-pack upgrade using a validated prepared source candidate."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.validate_prepared_upgrade_candidate(
+            governance_pack_id=payload.source_governance_pack_id,
+            candidate_id=payload.candidate_id,
+            actor_id=principal.user_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade execute rejected for source {} candidate {} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await governance_svc.execute_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+            planner_inputs_fingerprint=payload.planner_inputs_fingerprint,
+            adapter_state_fingerprint=payload.adapter_state_fingerprint,
+        )
+    except (GovernancePackAlreadyExistsError, GovernancePackUpgradeConflictError, GovernancePackUpgradeStaleError) as exc:
+        logger.warning(
+            "Governance pack source upgrade execute conflict for source {} candidate {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade execute rejected for source {} candidate {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result_payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    return GovernancePackUpgradeExecutionResponse.model_validate(result_payload)
+
+
+@router.post("/governance-packs/source/import", response_model=GovernancePackImportResponse, status_code=201)
+async def import_governance_pack_source_candidate(
+    payload: GovernancePackSourceImportRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackImportResponse:
+    """Import a prepared governance-pack source candidate into immutable MCP Hub base objects."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.load_prepared_candidate(
+            payload.candidate_id,
+            actor_id=principal.user_id,
+            revalidate_trust=True,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source import rejected for candidate {} in scope {}:{}: {}",
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    source_metadata = dict(prepared.get("candidate") or {})
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await governance_svc.import_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+            source_metadata=source_metadata,
+        )
+    except GovernancePackAlreadyExistsError as exc:
+        logger.warning(
+            "Governance pack source import conflict for candidate {} pack {}@{} in scope {}:{}: {}",
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source import rejected for candidate {} pack {}@{} in scope {}:{}: {}",
+            payload.candidate_id,
             pack_id,
             pack_version,
             resolved_scope_type,
@@ -1636,6 +2004,42 @@ async def list_governance_packs(
         )
     rows = _dedupe_rows(rows)
     return [GovernancePackSummaryResponse.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/governance-packs/trust-policy",
+    response_model=GovernancePackTrustPolicyResponse,
+)
+async def get_governance_pack_trust_policy(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackTrustService = Depends(get_mcp_hub_governance_pack_trust_service),
+) -> GovernancePackTrustPolicyResponse:
+    """Return the deployment-wide governance-pack trust policy."""
+    _require_mutation_permission(principal)
+    try:
+        return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put(
+    "/governance-packs/trust-policy",
+    response_model=GovernancePackTrustPolicyResponse,
+)
+async def update_governance_pack_trust_policy(
+    payload: GovernancePackTrustPolicyRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackTrustService = Depends(get_mcp_hub_governance_pack_trust_service),
+) -> GovernancePackTrustPolicyResponse:
+    """Update the deployment-wide governance-pack trust policy."""
+    _require_mutation_permission(principal)
+    try:
+        updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    except GovernancePackTrustPolicyStaleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackTrustPolicyResponse.model_validate(updated)
 
 
 @router.get(
@@ -3130,6 +3534,7 @@ async def list_profile_credential_bindings(
 async def upsert_profile_credential_binding(
     profile_id: int,
     server_id: str,
+    payload: ProfileCredentialBindingUpsertRequest | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> CredentialBindingResponse:
@@ -3147,6 +3552,7 @@ async def upsert_profile_credential_binding(
         row = await svc.upsert_profile_credential_binding(
             profile_id=profile_id,
             external_server_id=server_id,
+            managed_secret_ref_id=(payload.managed_secret_ref_id if payload else None),
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3164,6 +3570,7 @@ async def upsert_profile_slot_credential_binding(
     profile_id: int,
     server_id: str,
     slot_name: str,
+    payload: ProfileCredentialBindingUpsertRequest | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> CredentialBindingResponse:
@@ -3182,6 +3589,7 @@ async def upsert_profile_slot_credential_binding(
             profile_id=profile_id,
             external_server_id=server_id,
             slot_name=slot_name,
+            managed_secret_ref_id=(payload.managed_secret_ref_id if payload else None),
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3278,6 +3686,7 @@ async def upsert_assignment_credential_binding(
             assignment_id=assignment_id,
             external_server_id=server_id,
             binding_mode=payload.binding_mode,
+            managed_secret_ref_id=payload.managed_secret_ref_id,
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3316,6 +3725,7 @@ async def upsert_assignment_slot_credential_binding(
             external_server_id=server_id,
             slot_name=slot_name,
             binding_mode=payload.binding_mode,
+            managed_secret_ref_id=payload.managed_secret_ref_id,
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3371,6 +3781,68 @@ async def delete_assignment_slot_credential_binding(
     if not deleted:
         raise HTTPException(status_code=404, detail="Credential binding not found")
     return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/permission-profiles/{profile_id}/credential-bindings/status/{server_id}/{slot_name}",
+    response_model=McpCredentialSlotStatusResponse,
+)
+@router.get(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}/status",
+    response_model=McpCredentialSlotStatusResponse,
+    include_in_schema=False,
+    deprecated=True,
+)
+async def get_profile_slot_credential_status(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+    broker: McpCredentialBrokerService = Depends(get_mcp_credential_broker_service),
+) -> McpCredentialSlotStatusResponse:
+    """Return the remediation status for a profile-scoped external credential slot."""
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    try:
+        status = await broker.get_slot_status(
+            server_id=server_id,
+            slot_name=slot_name,
+            profile_id=profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return McpCredentialSlotStatusResponse.model_validate(status)
+
+
+@router.get(
+    "/policy-assignments/{assignment_id}/credential-bindings/status/{server_id}/{slot_name}",
+    response_model=McpCredentialSlotStatusResponse,
+)
+@router.get(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}/status",
+    response_model=McpCredentialSlotStatusResponse,
+    include_in_schema=False,
+    deprecated=True,
+)
+async def get_assignment_slot_credential_status(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+    broker: McpCredentialBrokerService = Depends(get_mcp_credential_broker_service),
+) -> McpCredentialSlotStatusResponse:
+    """Return the remediation status for an assignment-scoped external credential slot."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    try:
+        status = await broker.get_slot_status(
+            server_id=server_id,
+            slot_name=slot_name,
+            assignment_id=assignment_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return McpCredentialSlotStatusResponse.model_validate(status)
 
 
 @router.get("/policy-assignments/{assignment_id}/external-access", response_model=EffectiveExternalAccessResponse)

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 
 describe("PlaygroundChat model identity guard", () => {
   it("keeps explicit model/provider identity headers in compare cards", () => {
-    const sourcePath = path.resolve(__dirname, "../PlaygroundChat.tsx")
+    const sourcePath = path.resolve(__dirname, "../PlaygroundCompareCluster.tsx")
     const source = fs.readFileSync(sourcePath, "utf8")
 
     expect(source).toContain("compare-model-identity-")

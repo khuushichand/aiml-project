@@ -1,17 +1,21 @@
 """Pydantic schemas for workspace CRUD."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class WorkspaceUpsertRequest(BaseModel):
     name: str
     archived: bool = False
+    study_materials_policy: Literal["general", "workspace"] = "general"
 
 
 class WorkspacePatchRequest(BaseModel):
     name: str | None = None
     archived: bool | None = None
+    study_materials_policy: Literal["general", "workspace"] | None = None
     banner_title: str | None = None
     banner_subtitle: str | None = None
     banner_color: str | None = None
@@ -26,6 +30,7 @@ class WorkspaceResponse(BaseModel):
     id: str
     name: str | None = None
     archived: bool = False
+    study_materials_policy: Literal["general", "workspace"] = "general"
     deleted: bool = False
     banner_title: str | None = None
     banner_subtitle: str | None = None

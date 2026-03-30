@@ -146,6 +146,9 @@ describe("SourceList researcher workflows", () => {
 
     render(<SourceList />)
 
+    // 3 results = compact density; reveal extended filters first
+    fireEvent.click(screen.getByRole("button", { name: "Show filters" }))
+
     fireEvent.click(screen.getByRole("button", { name: /PDF\s*1/i }))
 
     const list = screen.getByRole("list", { name: "Retrieved sources" })
@@ -210,6 +213,17 @@ describe("SourceList researcher workflows", () => {
     expect(freshnessBadge.className).toContain("text-danger")
   })
 
+  it("does not hijack Tab navigation from interactive controls inside a source card", () => {
+    render(<SourceList />)
+
+    const viewFullButton = screen.getByRole("button", { name: "View source 1" })
+    viewFullButton.focus()
+    vi.clearAllMocks()
+    fireEvent.keyDown(viewFullButton, { key: "Tab" })
+
+    expect(state.focusSource).not.toHaveBeenCalled()
+  })
+
   it("supports keyword and date-range filtering within sources", () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-03-01T00:00:00.000Z"))
@@ -243,6 +257,9 @@ describe("SourceList researcher workflows", () => {
     state.citations = [{ index: 1 }]
 
     render(<SourceList />)
+
+    // 2 results = compact density; reveal filters first
+    fireEvent.click(screen.getByRole("button", { name: "Show filters" }))
 
     fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
       target: { value: "archive migration" },
@@ -379,6 +396,52 @@ describe("SourceList researcher workflows", () => {
     })
   })
 
+  it("falls back to default filters when localStorage reads are blocked", () => {
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+
+    expect(() => render(<SourceList />)).not.toThrow()
+    expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe(
+      "relevance"
+    )
+    expect(
+      (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+    ).toBe("")
+
+    getItemSpy.mockRestore()
+  })
+
+  it("keeps filter controls interactive when localStorage writes are blocked", async () => {
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+
+    render(<SourceList />)
+
+    expect(() => {
+      fireEvent.change(screen.getByLabelText("Sort sources"), {
+        target: { value: "date" },
+      })
+      fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
+        target: { value: "source 1" },
+      })
+    }).not.toThrow()
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe("date")
+      expect(
+        (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+      ).toBe("source 1")
+    })
+
+    setItemSpy.mockRestore()
+  })
+
   it("supports reverse citation jump from cited source badges", () => {
     render(<SourceList />)
 
@@ -426,7 +489,8 @@ describe("SourceList researcher workflows", () => {
   it("supports pinning sources and prioritizes pinned cards in ordering", () => {
     render(<SourceList />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Pin source 10" }))
+    fireEvent.click(screen.getByLabelText("More actions for source 10"))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }))
 
     expect(screen.getByText("1 pinned")).toBeInTheDocument()
 
@@ -441,7 +505,8 @@ describe("SourceList researcher workflows", () => {
       })
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Unpin source 10" }))
+    fireEvent.click(screen.getByLabelText("More actions for source 10"))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin" }))
 
     const titlesAfterUnpin = within(list)
       .getAllByRole("heading", { level: 4 })
@@ -497,9 +562,8 @@ describe("SourceList researcher workflows", () => {
   it("supports ask-template variants and populates the query", () => {
     render(<SourceList />)
 
-    const templateSelect = screen.getByLabelText("Ask template for Source 1")
-    fireEvent.change(templateSelect, { target: { value: "summary" } })
-    fireEvent.click(screen.getByRole("button", { name: "Ask about Source 1" }))
+    fireEvent.click(screen.getByLabelText("More actions for source 1"))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Ask: Summarize" }))
 
     expect(state.setQuery).toHaveBeenCalledWith("Summarize Source 1")
   })
@@ -509,7 +573,7 @@ describe("SourceList researcher workflows", () => {
     Object.assign(navigator, { clipboard: { writeText } })
 
     render(<SourceList />)
-    fireEvent.click(screen.getAllByRole("button", { name: "Copy citation" })[0])
+    fireEvent.click(screen.getAllByRole("button", { name: "Cite" })[0])
 
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
@@ -532,5 +596,79 @@ describe("SourceList researcher workflows", () => {
         screen.queryByRole("dialog", { name: "Source keyboard shortcuts" })
       ).not.toBeInTheDocument()
     )
+  })
+
+  it("hides the date filter in compact density (<=3 results)", () => {
+    state.results = [makeResult(1), makeResult(2)]
+    state.citations = [{ index: 1 }]
+
+    render(<SourceList />)
+
+    expect(screen.queryByLabelText("Filter sources by date range")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Filter sources by keyword")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Sort sources")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Source type filters")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Content type filters")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Show filters" })).toBeInTheDocument()
+  })
+
+  it("reveals all filters in compact density after clicking Show filters", () => {
+    state.results = [makeResult(1), makeResult(2)]
+    state.citations = [{ index: 1 }]
+
+    render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Show filters" }))
+
+    expect(screen.getByLabelText("Filter sources by date range")).toBeInTheDocument()
+    expect(screen.getByLabelText("Filter sources by keyword")).toBeInTheDocument()
+    expect(screen.getByLabelText("Sort sources")).toBeInTheDocument()
+    expect(screen.getByLabelText("Source type filters")).toBeInTheDocument()
+    expect(screen.getByLabelText("Content type filters")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Hide filters" })).toBeInTheDocument()
+  })
+
+  it("shows all filters by default in full density (>9 results)", () => {
+    state.results = Array.from({ length: 12 }, (_, idx) => makeResult(idx + 1))
+    state.citations = [{ index: 3 }, { index: 8 }]
+
+    render(<SourceList />)
+
+    expect(screen.getByLabelText("Filter sources by date range")).toBeInTheDocument()
+    expect(screen.getByLabelText("Filter sources by keyword")).toBeInTheDocument()
+    expect(screen.getByLabelText("Sort sources")).toBeInTheDocument()
+    expect(screen.getByLabelText("Source type filters")).toBeInTheDocument()
+    expect(screen.getByLabelText("Content type filters")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Show filters" })).not.toBeInTheDocument()
+  })
+
+  it("shows keyword and sort but hides date and facets in default density (4-9 results)", () => {
+    state.results = Array.from({ length: 6 }, (_, idx) => makeResult(idx + 1))
+    state.citations = [{ index: 1 }]
+
+    render(<SourceList />)
+
+    expect(screen.getByLabelText("Filter sources by keyword")).toBeInTheDocument()
+    expect(screen.getByLabelText("Sort sources")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Filter sources by date range")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Source type filters")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Content type filters")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "More filters" })).toBeInTheDocument()
+  })
+
+  it("uses a single-column source stack and shorter keyboard hint in rail layout", () => {
+    state.results = Array.from({ length: 6 }, (_, idx) => makeResult(idx + 1))
+    state.citations = [{ index: 1 }]
+
+    render(<SourceList layout="rail" />)
+
+    const grid = screen.getByTestId("knowledge-source-grid")
+    expect(grid.className).toContain("grid-cols-1")
+    expect(grid.className).not.toContain("md:grid-cols-2")
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName === "SPAN" && element.textContent === "Jump: 1-9 • Tab cycles"
+      )
+    ).toBeInTheDocument()
   })
 })

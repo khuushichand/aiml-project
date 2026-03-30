@@ -2,6 +2,15 @@ export type RagSource = "media_db" | "notes" | "characters" | "chats" | "kanban"
 export type RagStrategy = "standard" | "agentic"
 export type RagSearchMode = "fts" | "vector" | "hybrid"
 export type RagFtsLevel = "media" | "chunk"
+export type RagTextChunkMethod =
+  | "semantic"
+  | "tokens"
+  | "paragraphs"
+  | "sentences"
+  | "words"
+  | "ebook_chapters"
+  | "json"
+  | "propositions"
 export type RagExpansionStrategy =
   | "acronym"
   | "synonym"
@@ -49,6 +58,11 @@ export type RagSettings = {
   index_namespace: string
   search_mode: RagSearchMode
   fts_level: RagFtsLevel
+  enable_text_late_chunking: boolean
+  chunk_method: RagTextChunkMethod
+  chunk_size: number
+  chunk_overlap: number
+  chunk_language: string
   hybrid_alpha: number
   enable_intent_routing: boolean
   top_k: number
@@ -250,6 +264,11 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   index_namespace: "",
   search_mode: "hybrid",
   fts_level: "chunk",
+  enable_text_late_chunking: false,
+  chunk_method: "sentences",
+  chunk_size: 500,
+  chunk_overlap: 50,
+  chunk_language: "",
   hybrid_alpha: 0.5,
   enable_intent_routing: true,
   top_k: 8,
@@ -511,6 +530,11 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
     parent_context_size: clampNumber(settings.parent_context_size, 100, 2000, 100),
     agentic_time_budget_sec: clampNumber(settings.agentic_time_budget_sec, 0.1, 30, 30),
     agentic_max_redundancy: clampNumber(settings.agentic_max_redundancy, 0, 1, 1),
+    chunk_size: Math.max(1, Math.round(settings.chunk_size)),
+    chunk_overlap: Math.max(
+      0,
+      Math.min(Math.round(settings.chunk_overlap), Math.max(0, Math.round(settings.chunk_size) - 1))
+    ),
   }
 
   const {
@@ -529,6 +553,15 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
     if (value === undefined || value === null) continue
     if (typeof value === "string" && value.trim() === "") continue
     if (Array.isArray(value) && value.length === 0) continue
+    if (
+      !normalizedSettings.enable_text_late_chunking &&
+      (key === "chunk_method" ||
+        key === "chunk_size" ||
+        key === "chunk_overlap" ||
+        key === "chunk_language")
+    ) {
+      continue
+    }
     options[key] = value
   }
   if (generation_model) options.generation_model = generation_model
@@ -555,6 +588,15 @@ export const toRagAdvancedOptions = (settings: RagSettings) => {
     if (value === undefined || value === null) continue
     if (typeof value === "string" && value.trim() === "") continue
     if (Array.isArray(value) && value.length === 0) continue
+    if (
+      !settings.enable_text_late_chunking &&
+      (key === "chunk_method" ||
+        key === "chunk_size" ||
+        key === "chunk_overlap" ||
+        key === "chunk_language")
+    ) {
+      continue
+    }
     options[key] = value
   }
   if (rag_profile && rag_profile !== "none") options.rag_profile = rag_profile

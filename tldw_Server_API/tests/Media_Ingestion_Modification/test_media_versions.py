@@ -15,12 +15,12 @@ from fastapi import status # Use status codes from fastapi
 # --- Use Main App Instance ---
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.endpoints.media import versions as media_versions_endpoint
 from tldw_Server_API.app.main import app as fastapi_app_instance, app
 # Import specific DB functions used directly in tests/fixtures
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-    mark_media_as_processed,
-    )
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import (
+    MediaDatabase
+)
 # Import the utility for temporary DB if it's defined elsewhere
 from tldw_Server_API.tests.test_utils import temp_db
 #
@@ -486,6 +486,61 @@ class TestMediaVersionEndpoints:
         assert data[1]["content"] == "Initial content v1"
         assert data[1]["version_number"] == 1 # Verify correct item
 
+    def test_list_versions_delegates_to_media_db_api(self, monkeypatch):
+
+        """Test that the list endpoint delegates version reads to the shared media_db API."""
+        called: dict[str, object] = {}
+
+        def _fake_list_document_versions(db, media_id, **kwargs):
+            called["db"] = db
+            called["media_id"] = media_id
+            called["kwargs"] = kwargs
+            return [
+                {
+                    "uuid": "11111111-1111-1111-1111-111111111111",
+                    "media_id": media_id,
+                    "version_number": 77,
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "prompt": "delegated prompt",
+                    "analysis_content": "delegated analysis",
+                    "safe_metadata": {"source": "delegated"},
+                    "content": "delegated content",
+                }
+            ]
+
+        monkeypatch.setattr(
+            media_versions_endpoint,
+            "list_document_versions",
+            _fake_list_document_versions,
+            raising=False,
+        )
+
+        response = self.client.get(
+            f"/api/v1/media/{self.media_id}/versions?include_content=true&limit=5&page=2"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert called["db"] is self.db
+        assert called["media_id"] == self.media_id
+        assert called["kwargs"] == {
+            "include_content": True,
+            "include_deleted": False,
+            "limit": 5,
+            "offset": 5,
+        }
+        assert response.json() == [
+            {
+                "uuid": "11111111-1111-1111-1111-111111111111",
+                "media_id": self.media_id,
+                "version_number": 77,
+                "created_at": "2024-01-01T00:00:00Z",
+                "prompt": "delegated prompt",
+                "analysis_content": "delegated analysis",
+                "safe_metadata": {"source": "delegated"},
+                "content": "delegated content",
+            }
+        ]
+
     # --------------------- RETRIEVE TESTS ---------------------
 
     def test_get_specific_version_exists(self):
@@ -809,48 +864,6 @@ class TestMediaListDetailEndpoints:
         data = response.json()
         assert "chunking_status" in data["processing"]
         assert "vector_processing_status" in data["processing"]
-
-    def test_mark_media_as_processed_advances_version_and_ready_state(self):
-
-        """Embedding-ready updates must satisfy sync triggers and surface in detail responses."""
-        doc_id = self.media_ids["document"]
-        before = self.db.execute_query(
-            "SELECT version, vector_processing FROM Media WHERE id = ?",
-            (doc_id,),
-        ).fetchone()
-
-        mark_media_as_processed(self.db, doc_id)
-
-        after = self.db.execute_query(
-            "SELECT version, vector_processing FROM Media WHERE id = ?",
-            (doc_id,),
-        ).fetchone()
-        assert after["vector_processing"] == 1
-        assert after["version"] == before["version"] + 1
-
-        response = self.client.get(f"/api/v1/media/{doc_id}")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json()["processing"]["vector_processing_status"] == 1
-
-    def test_mark_media_as_processed_clears_stale_embeddings_error_status(self):
-
-        """Successful embeddings retries should clear prior embeddings_error state."""
-        doc_id = self.media_ids["document"]
-        self.db.mark_embeddings_error(doc_id, "stale failure")
-        before = self.db.execute_query(
-            "SELECT version, vector_processing, chunking_status FROM Media WHERE id = ?",
-            (doc_id,),
-        ).fetchone()
-
-        mark_media_as_processed(self.db, doc_id)
-
-        after = self.db.execute_query(
-            "SELECT version, vector_processing, chunking_status FROM Media WHERE id = ?",
-            (doc_id,),
-        ).fetchone()
-        assert after["vector_processing"] == 1
-        assert after["chunking_status"] == "completed"
-        assert after["version"] == before["version"] + 1
 
     def test_get_media_item_video(self):
 

@@ -10,8 +10,12 @@ Tests cover:
 - Soft-delete and include_deleted behavior
 """
 import pytest
+from unittest.mock import MagicMock
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_files_repository import (
+    MediaFilesRepository,
+)
 
 
 @pytest.fixture
@@ -258,6 +262,81 @@ class TestSoftDeleteMediaFile:
         assert record is not None
         assert record["deleted"] == 1
 
+
+class TestMediaFilesRepository:
+    @pytest.mark.unit
+    def test_repository_lists_active_files(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        repo.insert(media_id=media_id, file_type="original", storage_path="repo/original.pdf")
+        repo.insert(media_id=media_id, file_type="thumbnail", storage_path="repo/thumb.png")
+
+        assert repo.has_original_file(media_id) is True
+        assert len(repo.list_for_media(media_id)) == 2
+
+    @pytest.mark.unit
+    def test_repository_soft_delete_hides_file(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        repo.insert(media_id=media_id, file_type="original", storage_path="repo/original.pdf")
+        record = repo.get_for_media(media_id, "original")
+
+        repo.soft_delete(record["id"])
+
+        assert repo.get_for_media(media_id, "original") is None
+        assert repo.get_for_media(media_id, "original", include_deleted=True)["deleted"] == 1
+
+    @pytest.mark.unit
+    def test_repository_insert_logs_dict_payloads(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        file_uuid = repo.insert(
+            media_id=media_id,
+            file_type="original",
+            storage_path="repo/original.pdf",
+        )
+
+        log_entry = next(
+            entry
+            for entry in db.get_sync_log_entries()
+            if entry["entity"] == "MediaFiles" and entry["entity_uuid"] == file_uuid
+        )
+
+        assert log_entry["operation"] == "create"
+        assert log_entry["payload"]["media_id"] == media_id
+        assert log_entry["payload"]["storage_path"] == "repo/original.pdf"
+
+    @pytest.mark.unit
+    def test_repository_hard_delete_logs_non_empty_entity_uuid(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        first_uuid = repo.insert(
+            media_id=media_id,
+            file_type="original",
+            storage_path="repo/original.pdf",
+        )
+        second_uuid = repo.insert(
+            media_id=media_id,
+            file_type="thumbnail",
+            storage_path="repo/thumb.png",
+        )
+
+        initial_change_count = len(db.get_sync_log_entries())
+        repo.soft_delete_for_media(media_id, hard_delete=True)
+        delete_entries = db.get_sync_log_entries(since_change_id=initial_change_count)
+
+        delete_file_uuids = {
+            entry["entity_uuid"]
+            for entry in delete_entries
+            if entry["entity"] == "MediaFiles" and entry["operation"] == "delete"
+        }
+
+        assert delete_file_uuids == {first_uuid, second_uuid}
+
     @pytest.mark.unit
     def test_soft_delete_increments_version(self, db_with_media):
         """Test that soft-delete increments the version number."""
@@ -322,3 +401,110 @@ class TestGetMediaFilesWithDeleted:
         # Should return both with include_deleted
         files = db.get_media_files(media_id, include_deleted=True)
         assert len(files) == 2
+
+
+class TestMediaFileRuntimeHelperForwarding:
+    @pytest.mark.unit
+    def test_insert_media_file_forwards_to_repository(self, monkeypatch):
+        import importlib
+
+        helper_module = importlib.import_module(
+            "tldw_Server_API.app.core.DB_Management.media_db.runtime.media_file_ops"
+        )
+
+        db = object()
+        repo = MagicMock()
+        repo.insert.return_value = "helper-uuid"
+        from_legacy_db = MagicMock(return_value=repo)
+        monkeypatch.setattr(MediaFilesRepository, "from_legacy_db", from_legacy_db)
+
+        result = helper_module.insert_media_file(
+            db,
+            11,
+            "original",
+            "files/original.pdf",
+            original_filename="original.pdf",
+            file_size=123,
+            mime_type="application/pdf",
+            checksum="abc",
+        )
+
+        assert result == "helper-uuid"
+        from_legacy_db.assert_called_once_with(db)
+        repo.insert.assert_called_once_with(
+            media_id=11,
+            file_type="original",
+            storage_path="files/original.pdf",
+            original_filename="original.pdf",
+            file_size=123,
+            mime_type="application/pdf",
+            checksum="abc",
+        )
+
+    @pytest.mark.unit
+    def test_get_media_file_forwards_to_repository(self, monkeypatch):
+        import importlib
+
+        helper_module = importlib.import_module(
+            "tldw_Server_API.app.core.DB_Management.media_db.runtime.media_file_ops"
+        )
+
+        db = object()
+        repo = MagicMock()
+        repo.get_for_media.return_value = {"id": 7}
+        from_legacy_db = MagicMock(return_value=repo)
+        monkeypatch.setattr(MediaFilesRepository, "from_legacy_db", from_legacy_db)
+
+        result = helper_module.get_media_file(db, 11, "thumbnail", include_deleted=True)
+
+        assert result == {"id": 7}
+        from_legacy_db.assert_called_once_with(db)
+        repo.get_for_media.assert_called_once_with(
+            media_id=11,
+            file_type="thumbnail",
+            include_deleted=True,
+        )
+
+    @pytest.mark.unit
+    def test_get_media_files_and_has_original_file_forwards_to_repository(self, monkeypatch):
+        import importlib
+
+        helper_module = importlib.import_module(
+            "tldw_Server_API.app.core.DB_Management.media_db.runtime.media_file_ops"
+        )
+
+        db = object()
+        repo = MagicMock()
+        repo.list_for_media.return_value = [{"id": 1}, {"id": 2}]
+        repo.has_original_file.return_value = True
+        from_legacy_db = MagicMock(return_value=repo)
+        monkeypatch.setattr(MediaFilesRepository, "from_legacy_db", from_legacy_db)
+
+        files = helper_module.get_media_files(db, 11, include_deleted=True)
+        has_original = helper_module.has_original_file(db, 11)
+
+        assert files == [{"id": 1}, {"id": 2}]
+        assert has_original is True
+        assert from_legacy_db.call_args_list == [((db,),), ((db,),)]
+        repo.list_for_media.assert_called_once_with(media_id=11, include_deleted=True)
+        repo.has_original_file.assert_called_once_with(11)
+
+    @pytest.mark.unit
+    def test_soft_delete_media_file_and_media_files_for_media_forwards_to_repository(self, monkeypatch):
+        import importlib
+
+        helper_module = importlib.import_module(
+            "tldw_Server_API.app.core.DB_Management.media_db.runtime.media_file_ops"
+        )
+
+        db = object()
+        repo = MagicMock()
+        from_legacy_db = MagicMock(return_value=repo)
+        monkeypatch.setattr(MediaFilesRepository, "from_legacy_db", from_legacy_db)
+
+        helper_module.soft_delete_media_file(db, 91)
+        helper_module.soft_delete_media_files_for_media(db, 11, hard_delete=True)
+
+        assert from_legacy_db.call_args_list == [((db,),), ((db,),)]
+        repo.soft_delete.assert_called_once_with(91)
+        repo.soft_delete_for_media.assert_called_once_with(media_id=11, hard_delete=True)

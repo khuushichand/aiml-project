@@ -22,7 +22,9 @@ https://github.com/gokhaneraslan/chatterbox-finetuning
 
 https://huggingface.co/nineninesix/kani-tts-2-en
 https://github.com/nineninesix-ai/kani-tts-2
-
+https://www.stavros.io/posts/i-made-a-voice-note-taker/
+https://github.com/skylord123/pebble-home-assistant-ws
+https://community.home-assistant.io/t/my-journey-to-a-reliable-and-enjoyable-locally-hosted-voice-assistant/944860
 https://github.com/ekwek1/soprano?tab=readme-ov-file#installation
 https://huggingface.co/kyutai
 https://huggingface.co/Echo9Zulu/Kokoro-82M-FP16-OpenVINO
@@ -33,6 +35,17 @@ https://github.com/NVIDIA/personaplex?tab=readme-ov-file
 https://github.com/kyutai-labs/pocket-tts
 https://github.com/supertone-inc/supertonic
 https://github.com/k2-fsa/ZipVoice
+
+
+
+Gemma
+    https://ai.google.dev/gemma/docs/get_started
+    https://ai.google.dev/gemma/docs/functiongemma/finetuning-with-functiongemma
+
+
+
+
+
 
 
 

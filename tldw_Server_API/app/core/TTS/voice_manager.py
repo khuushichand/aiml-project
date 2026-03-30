@@ -90,6 +90,13 @@ PROVIDER_REQUIREMENTS = {
         "sample_rate": 24000,
         "convert_to": "wav"
     },
+    "pocket_tts_cpp": {
+        "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a"],
+        "max_size_mb": 20,
+        "duration": {"min": 1, "max": 60},
+        "sample_rate": 24000,
+        "convert_to": "wav"
+    },
     "qwen3_tts": {
         "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".opus"],
         "max_size_mb": 50,
@@ -943,9 +950,23 @@ class VoiceManager:
             return False, f"Rate limit exceeded: {VOICE_RATE_LIMITS['upload_per_hour']} uploads per hour"
 
         # Check total storage
-        total_size = sum(
-            f.stat().st_size for f in voices_path.rglob("*") if f.is_file()
-        )
+        provider_cache_root = (voices_path / "providers").resolve()
+        total_size = 0
+        for file_path in voices_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            try:
+                resolved = file_path.resolve()
+                resolved.relative_to(provider_cache_root)
+                continue
+            except ValueError:
+                pass
+            except _VOICE_IO_EXCEPTIONS:
+                continue
+            try:
+                total_size += file_path.stat().st_size
+            except _VOICE_IO_EXCEPTIONS:
+                continue
 
         max_storage = VOICE_RATE_LIMITS["total_storage_mb"] * 1024 * 1024
         if total_size > max_storage:

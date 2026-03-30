@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import DOMPurify from "dompurify"
 import { Button, Modal, Spin, Empty, message, Checkbox, List, Dropdown } from "antd"
 import type { MenuProps } from "antd"
 import { Eye, Download, Copy, Check, MoreHorizontal } from "lucide-react"
@@ -139,6 +140,13 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
   ])
 
   const activeContent = step === "output" ? generatedContent : previewContent
+  const sanitizedPreviewHtml = useMemo(
+    () =>
+      previewFormat === "html" && previewContent
+        ? DOMPurify.sanitize(previewContent, { USE_PROFILES: { html: true } })
+        : null,
+    [previewContent, previewFormat]
+  )
 
   const handleCopy = useCallback(async () => {
     if (!activeContent) return
@@ -469,7 +477,9 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
           {previewFormat === "html" ? (
             <div
               className="prose prose-sm dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: previewContent }}
+              role="region"
+              aria-label={t("collections:templatePreview.contentRegion", { defaultValue: "Template preview" })}
+              dangerouslySetInnerHTML={{ __html: sanitizedPreviewHtml ?? "" }}
             />
           ) : (
             <pre className="whitespace-pre-wrap rounded-lg bg-bg p-4 text-sm">

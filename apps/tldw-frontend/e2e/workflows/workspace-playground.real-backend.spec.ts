@@ -4,7 +4,12 @@
  * These scenarios intentionally avoid route stubbing to catch regressions
  * that only appear when the page boots against a live API server.
  */
-import { type Page, type Response, type Request } from "@playwright/test"
+import {
+  type Page,
+  type Response,
+  type Request,
+  type Locator
+} from "@playwright/test"
 import {
   test,
   expect,
@@ -17,7 +22,9 @@ import {
   TEST_CONFIG,
   generateTestId
 } from "../utils/helpers"
-import { WorkspacePlaygroundPage } from "../utils/page-objects"
+import { WorkspacePlaygroundPage } from "../utils/page-objects/WorkspacePlaygroundPage"
+import { QuizPage } from "../utils/page-objects/QuizPage"
+import { FlashcardsPage } from "../utils/page-objects/FlashcardsPage"
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 }
 const CHAT_BOOTSTRAP_ENDPOINT =
@@ -115,88 +122,246 @@ const ensureNoServerReachabilityDialog = async (page: Page): Promise<void> => {
   await expect(serverDialog).toBeHidden({ timeout: 5_000 })
 }
 
-const setWorkspaceSelectedModel = async (
-  page: Page,
-  modelId: string
-): Promise<void> => {
-  await page.evaluate((nextModel) => {
-    const store = (window as { __tldw_useStoreMessageOption?: unknown })
-      .__tldw_useStoreMessageOption as
-        | {
-            setState?: (nextState: Record<string, unknown>) => void
-          }
-        | undefined
-    if (!store?.setState) {
-      throw new Error("Message option store is unavailable on window")
+type LiveWorkspaceSource = {
+  mediaId: number
+  title: string
+  type: "document"
+  url: string
+  content: string
+}
+
+type RagSearchCall = {
+  requestBody: Record<string, unknown>
+  responseBody: Record<string, unknown> | null
+  status: number
+}
+
+type ChatCompletionCall = {
+  requestBody: Record<string, unknown>
+  responseBody: Record<string, unknown> | null
+  status: number
+}
+
+type QuizListResponse = {
+  items: Array<{
+    id: number
+    name: string
+    workspace_id?: string | null
+    workspace_tag?: string | null
+    deleted?: boolean
+  }>
+}
+
+type FlashcardListResponse = {
+  items: Array<{
+    uuid: string
+    deck_id?: number | null
+    front: string
+    back: string
+  }>
+}
+
+type DeckListItem = {
+  id: number
+  name: string
+  workspace_id?: string | null
+}
+
+const normalizeWhitespace = (value: string): string =>
+  value.replace(/\s+/g, " ").trim()
+
+const normalizeAssistantMessageText = (value: string): string =>
+  value
+    .replace(/▋/g, "")
+    .split(/\n+/)
+    .map((line) => normalizeWhitespace(line))
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !/^(Mood:|Response complete$|Loading content(?:\.{3}|…)?)$/i.test(line)
+    )
+    .join(" ")
+
+const waitForCompletedAssistantReply = async (
+  workspacePage: WorkspacePlaygroundPage
+): Promise<string> => {
+  const assistantMessage = workspacePage.chatPanel.locator(
+    "article[aria-label*='Assistant message'], [data-role='assistant'], [data-message-role='assistant'], .assistant-message"
+  ).last()
+
+  await expect(assistantMessage).toBeVisible({ timeout: 30_000 })
+
+  const readCompletedReply = async (): Promise<string> => {
+    const isGenerating = await assistantMessage
+      .getByText(/Generating response/i)
+      .isVisible()
+      .catch(() => false)
+    const hasStopStreaming = await assistantMessage
+      .getByRole("button", {
+        name: /Stop streaming response|Stop Streaming/i
+      })
+      .isVisible()
+      .catch(() => false)
+    const text = normalizeAssistantMessageText(
+      (await assistantMessage.textContent().catch(() => "")) || ""
+    )
+
+    if (isGenerating || hasStopStreaming) {
+      return ""
     }
-    store.setState({ selectedModel: nextModel })
-  }, modelId)
+
+    return text
+  }
+
+  await expect
+    .poll(readCompletedReply, {
+      timeout: 90_000,
+      message: "Timed out waiting for the grounded workspace assistant reply"
+    })
+    .not.toBe("")
+
+  return readCompletedReply()
 }
 
-const cleanupMediaItem = async (mediaId: number | null): Promise<void> => {
-  if (!Number.isFinite(mediaId) || (mediaId as number) <= 0) {
-    return
-  }
+const seedLiveWorkspaceDocument = async (
+  title: string,
+  content: string
+): Promise<LiveWorkspaceSource> => {
+  const fileName = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.txt`
+  const body = new FormData()
+  body.append("media_type", "document")
+  body.append("title", title)
+  body.append("perform_analysis", "false")
+  body.append("perform_chunking", "false")
+  body.append("files", new Blob([content], { type: "text/plain" }), fileName)
 
-  const targetId = Math.trunc(mediaId as number)
-  const trashResponse = await fetchWithApiKey(`${TEST_CONFIG.serverUrl}/api/v1/media/${targetId}`, TEST_CONFIG.apiKey, {
-    method: "DELETE"
-  }).catch(() => null)
-
-  if (trashResponse && !trashResponse.ok && trashResponse.status !== 204 && trashResponse.status !== 404) {
-    throw new Error(`Soft delete for media ${targetId} returned HTTP ${trashResponse.status}`)
-  }
-
-  const permanentResponse = await fetchWithApiKey(
-    `${TEST_CONFIG.serverUrl}/api/v1/media/${targetId}/permanent`,
-    TEST_CONFIG.apiKey,
-    { method: "DELETE" }
-  ).catch(() => null)
-
-  if (
-    permanentResponse &&
-    !permanentResponse.ok &&
-    permanentResponse.status !== 204 &&
-    permanentResponse.status !== 404
-  ) {
-    throw new Error(`Permanent delete for media ${targetId} returned HTTP ${permanentResponse.status}`)
-  }
-}
-
-const fetchLiveMediaDetail = async (mediaId: number): Promise<Record<string, unknown>> => {
   const response = await fetchWithApiKey(
-    `${TEST_CONFIG.serverUrl}/api/v1/media/${mediaId}?include_content=true&include_versions=false&include_version_content=false`
+    `${TEST_CONFIG.serverUrl}/api/v1/media/add`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "POST",
+      body
+    }
   )
   if (!response.ok) {
-    throw new Error(`GET /api/v1/media/${mediaId} returned HTTP ${response.status}`)
+    throw new Error(
+      `Failed to seed live workspace media "${title}": ${response.status} ${await response.text()}`
+    )
   }
-  const payload = await response.json().catch(() => null)
-  if (!payload || typeof payload !== "object") {
-    throw new Error(`GET /api/v1/media/${mediaId} returned a non-object payload`)
+
+  const payload = await response.json().catch(() => ({}))
+  const result = Array.isArray(payload?.results)
+    ? payload.results[0]
+    : payload?.result || payload
+  const mediaId = Number(result?.db_id ?? result?.media_id ?? result?.id)
+  if (!Number.isFinite(mediaId) || mediaId <= 0) {
+    throw new Error(
+      `Live workspace media seed for "${title}" returned no usable media id: ${JSON.stringify(
+        payload
+      )}`
+    )
   }
-  return payload as Record<string, unknown>
+
+  const expectedSnippet = normalizeWhitespace(content).slice(0, 48)
+  await expect
+    .poll(
+      async () => {
+        const details = await fetchWithApiKey(
+          `${TEST_CONFIG.serverUrl}/api/v1/media/${mediaId}?include_content=true&include_versions=false&include_version_content=false`,
+          TEST_CONFIG.apiKey
+        )
+        if (!details.ok) return ""
+        const body = await details.json().catch(() => ({}))
+        return normalizeWhitespace(
+          String(
+            body?.content?.text ??
+              body?.content?.content ??
+              body?.transcript ??
+              ""
+          )
+        )
+      },
+      {
+        timeout: 30_000,
+        message: `Media ${mediaId} never exposed usable content for workspace grounding`
+      }
+    )
+    .toContain(expectedSnippet)
+
+  return {
+    mediaId,
+    title,
+    type: "document",
+    url: `file://${fileName}`,
+    content
+  }
 }
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : null
-
-const extractAddedMediaId = (payload: Record<string, unknown> | null): number => {
-  const firstResult =
-    Array.isArray(payload?.results) ? asRecord(payload.results[0]) : null
-  const singleResult = asRecord(payload?.result)
-  const candidate =
-    firstResult?.media_id ??
-    firstResult?.db_id ??
-    singleResult?.media_id ??
-    singleResult?.db_id ??
-    payload?.media_id ??
-    payload?.db_id ??
-    payload?.id
-  const mediaId = Number(candidate)
-  if (!Number.isFinite(mediaId) || mediaId <= 0) {
-    throw new Error(`Media add response returned no usable media id: ${JSON.stringify(payload)}`)
+const waitForRagSearchCall = async (
+  page: Page,
+  action: () => Promise<void>
+): Promise<RagSearchCall> => {
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method().toUpperCase() === "POST" &&
+      /\/api\/v1\/rag\/search(?:\?|$)/i.test(response.url()),
+    { timeout: 90_000 }
+  )
+  const [response] = await Promise.all([responsePromise, action()])
+  return {
+    requestBody:
+      (response.request().postDataJSON() as Record<string, unknown>) || {},
+    responseBody:
+      (await response.json().catch(() => null)) as Record<string, unknown> | null,
+    status: response.status()
   }
-  return mediaId
+}
+
+const waitForChatCompletionCall = async (
+  page: Page,
+  action: () => Promise<void>
+): Promise<ChatCompletionCall> => {
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method().toUpperCase() === "POST" &&
+      /\/api\/v1\/chat\/completions(?:\?|$)/i.test(response.url()),
+    { timeout: 90_000 }
+  )
+  const [response] = await Promise.all([responsePromise, action()])
+  return {
+    requestBody:
+      (response.request().postDataJSON() as Record<string, unknown>) || {},
+    responseBody:
+      (await response.json().catch(() => null)) as Record<string, unknown> | null,
+    status: response.status()
+  }
+}
+
+const waitForStudioArtifactCompletion = async (artifactCard: Locator) => {
+  await expect
+    .poll(
+      async () => {
+        const downloadVisible = await artifactCard
+          .getByRole("button", { name: /download/i })
+          .isVisible()
+          .catch(() => false)
+        if (downloadVisible) {
+          return "completed"
+        }
+
+        const cardText = (await artifactCard.textContent()) || ""
+        if (/failed|encountered an error|no usable/i.test(cardText)) {
+          return `failed:${cardText}`
+        }
+
+        return "pending"
+      },
+      {
+        timeout: 180_000,
+        message: "Studio artifact did not reach a completed state"
+      }
+    )
+    .toBe("completed")
 }
 
 const buildSeedSources = () => {
@@ -215,6 +380,127 @@ const buildSeedSources = () => {
       url: "https://example.com/workspace-real-source-b"
     }
   ]
+}
+
+const fetchJsonWithApiKey = async <T>(path: string): Promise<T> => {
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}${path}`,
+    TEST_CONFIG.apiKey
+  )
+  if (!response.ok) {
+    throw new Error(`GET ${path} failed with HTTP ${response.status}: ${await response.text()}`)
+  }
+  return (await response.json()) as T
+}
+
+const listQuizRecords = async (params: Record<string, string | number | boolean | undefined> = {}) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue
+    search.set(key, String(value))
+  }
+  const suffix = search.toString().length > 0 ? `?${search.toString()}` : ""
+  return await fetchJsonWithApiKey<QuizListResponse>(`/api/v1/quizzes${suffix}`)
+}
+
+const listDeckRecords = async (params: Record<string, string | number | boolean | undefined> = {}) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue
+    search.set(key, String(value))
+  }
+  const suffix = search.toString().length > 0 ? `?${search.toString()}` : ""
+  return await fetchJsonWithApiKey<DeckListItem[]>(`/api/v1/flashcards/decks${suffix}`)
+}
+
+const listFlashcardRecords = async (
+  params: Record<string, string | number | boolean | undefined> = {},
+) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue
+    search.set(key, String(value))
+  }
+  const suffix = search.toString().length > 0 ? `?${search.toString()}` : ""
+  return await fetchJsonWithApiKey<FlashcardListResponse>(`/api/v1/flashcards${suffix}`)
+}
+
+const waitForGeneratedArtifactRecord = async (
+  workspacePage: WorkspacePlaygroundPage,
+  artifactType: "quiz" | "flashcards"
+) => {
+  await expect
+    .poll(async () => workspacePage.getGeneratedArtifactRecord(artifactType), {
+      timeout: 120_000,
+      message: `Workspace ${artifactType} artifact never exposed a persisted record`
+    })
+    .not.toBeNull()
+  const artifact = await workspacePage.getGeneratedArtifactRecord(artifactType)
+  if (!artifact) {
+    throw new Error(`Workspace ${artifactType} artifact record missing after completion`)
+  }
+  return artifact
+}
+
+const waitForPersistedWorkspaceArtifact = async (
+  workspacePage: WorkspacePlaygroundPage,
+  artifactType: "quiz" | "flashcards"
+) => {
+  await expect
+    .poll(
+      async () => {
+        const artifact = await workspacePage.getGeneratedArtifactRecord(artifactType)
+        if (!artifact) {
+          return "missing"
+        }
+        const normalizedStatus = String(artifact.status || "").toLowerCase()
+        if (normalizedStatus === "failed") {
+          return `failed:${artifact.status}`
+        }
+        const persistedId = Number(
+          artifact.serverId ??
+            artifact.data?.quizId ??
+            artifact.data?.deckId ??
+            Number.NaN
+        )
+        if (Number.isFinite(persistedId) && persistedId > 0) {
+          return "persisted"
+        }
+        return "pending"
+      },
+      {
+        timeout: 180_000,
+        message: `Workspace ${artifactType} artifact never persisted a server record`
+      }
+    )
+    .toBe("persisted")
+
+  const artifact = await workspacePage.getGeneratedArtifactRecord(artifactType)
+  if (!artifact) {
+    throw new Error(`Workspace ${artifactType} artifact record missing after persistence`)
+  }
+  return artifact
+}
+
+const disableNextJsPortalPointerInterception = async (page: Page) => {
+  await page.evaluate(() => {
+    document.querySelectorAll("nextjs-portal").forEach((portal) => {
+      ;(portal as HTMLElement).style.pointerEvents = "none"
+    })
+  })
+}
+
+const clickActionable = async (locator: Locator) => {
+  try {
+    await locator.click({ timeout: 5_000 })
+  } catch (error) {
+    if (!String(error).includes("nextjs-portal")) {
+      throw error
+    }
+    await locator.focus()
+    await expect(locator).toBeFocused({ timeout: 5_000 })
+    await locator.press("Enter")
+  }
 }
 
 test.describe("Workspace Playground Workflow (Real Backend)", () => {
@@ -299,7 +585,7 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
-  test("ingests pasted text through the live add-source flow", async ({
+  test("grounds live chat requests on the selected source", async ({
     authedPage,
     serverInfo,
     diagnostics
@@ -312,443 +598,542 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
         "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
     )
 
-    const tracker = trackChatBootstrapResponses(authedPage)
-    const workspacePage = new WorkspacePlaygroundPage(authedPage)
-    const uniqueSlug = generateTestId("workspace-live-paste")
-    const sourceTitle = `Workspace Live Paste ${uniqueSlug}`
-    const sourceBody = `Live workspace ingestion body ${uniqueSlug}`
-    let createdMediaId: number | null = null
-
-    try {
-      await workspacePage.goto()
-      await workspacePage.waitForReady()
-      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
-
-      await workspacePage.openAddSourcesModal()
-      await workspacePage.addSourceModal.getByRole("tab", { name: /paste/i }).click()
-      await workspacePage.addSourceModal
-        .getByPlaceholder("Give your content a title")
-        .fill(sourceTitle)
-      await workspacePage.addSourceModal
-        .getByPlaceholder("Paste your text content here...")
-        .fill(sourceBody)
-
-      const uploadResponsePromise = authedPage.waitForResponse((response) => {
-        const request = response.request()
-        return (
-          request.method().toUpperCase() === "POST" &&
-          response.url().includes("/api/v1/media/add")
-        )
-      })
-
-      await workspacePage.addSourceModal
-        .getByRole("button", { name: /^add text$/i })
-        .click()
-
-      const uploadResponse = await uploadResponsePromise
-      expect(uploadResponse.ok()).toBeTruthy()
-      const uploadPayload = await uploadResponse.json().catch(() => null)
-      const createdCandidate =
-        uploadPayload?.results?.[0]?.media_id ??
-        uploadPayload?.results?.[0]?.db_id ??
-        uploadPayload?.result?.media_id ??
-        uploadPayload?.result?.db_id ??
-        uploadPayload?.media_id ??
-        uploadPayload?.db_id ??
-        uploadPayload?.id
-      createdMediaId = Number(createdCandidate)
-      expect(Number.isFinite(createdMediaId)).toBeTruthy()
-      const liveMediaId = createdMediaId as number
-      const uploadResult =
-        uploadPayload?.results?.[0] ??
-        uploadPayload?.result ??
-        uploadPayload
-      expect(
-        uploadResult?.embeddings_scheduled,
-        `Expected workspace source ingest to schedule embeddings, received ${JSON.stringify(uploadPayload)}`
-      ).toBeTruthy()
-
-      await expect(workspacePage.addSourceModal).toBeHidden({ timeout: 15_000 })
-
-      let liveMediaDetail = await fetchLiveMediaDetail(liveMediaId)
-      const initialVectorStatus =
-        (liveMediaDetail.processing as Record<string, unknown> | undefined)
-          ?.vector_processing_status ?? null
-      expect(
-        initialVectorStatus !== null,
-        `Expected media details to expose vector_processing_status, received ${JSON.stringify(liveMediaDetail)}`
-      ).toBeTruthy()
-      await expect
-        .poll(
-          async () => {
-            liveMediaDetail = await fetchLiveMediaDetail(liveMediaId)
-            return (
-              (liveMediaDetail.processing as Record<string, unknown> | undefined)
-                ?.vector_processing_status ?? null
-            )
-          },
-          {
-            timeout: 60_000,
-            message: `Timed out waiting for vector processing to complete: ${JSON.stringify(liveMediaDetail)}`
-          }
-        )
-        .toBe(1)
-
-      const sourceRow = workspacePage.sourcesPanel
-        .locator("[data-source-id]", { hasText: sourceTitle })
-        .first()
-      await expect(sourceRow).toBeVisible({ timeout: 15_000 })
-      await expect(
-        sourceRow.locator("span").filter({ hasText: /^ready$/i }).first()
-      ).toBeVisible({ timeout: 15_000 })
-      await expect(sourceRow.locator('input[type="checkbox"]')).toBeEnabled()
-
-      const sourceId = await sourceRow.getAttribute("data-source-id")
-      expect(sourceId).toBeTruthy()
-      await workspacePage.selectSourceById(sourceId!)
-      await workspacePage.expectSourceSelected(sourceId!)
-      await expect(workspacePage.sourcesPanel.getByText(/^1 selected$/i)).toBeVisible()
-      await ensureNoServerReachabilityDialog(authedPage)
-    } finally {
-      tracker.dispose()
-      await cleanupMediaItem(createdMediaId)
-    }
-
-    await assertNoCriticalErrors(diagnostics)
-  })
-
-  test("ingests a public URL through the live add-source URL tab and promotes it to ready", async ({
-    authedPage,
-    serverInfo,
-    diagnostics
-  }) => {
-    skipIfServerUnavailable(serverInfo)
-
-    const workspacePage = new WorkspacePlaygroundPage(authedPage)
-    const uniqueSlug = generateTestId("workspace-live-url")
-    const urlUnderTest = `https://example.com/?workspace-url-probe=${uniqueSlug}`
-    let createdMediaId: number | null = null
-
-    try {
-      await workspacePage.goto()
-      await workspacePage.waitForReady()
-      await ensureNoServerReachabilityDialog(authedPage)
-
-      const workspaceTag = await authedPage.evaluate(() => {
-        const store = (window as { __tldw_useWorkspaceStore?: unknown })
-          .__tldw_useWorkspaceStore as
-            | {
-                getState?: () => { workspaceTag?: string | null }
-              }
-            | undefined
-        return store?.getState?.().workspaceTag ?? null
-      })
-
-      await workspacePage.openAddSourcesModal()
-      await workspacePage.addSourceModal.getByRole("tab", { name: /^url$/i }).click()
-      await workspacePage.addSourceModal
-        .getByPlaceholder("https://example.com/article or YouTube URL")
-        .fill(urlUnderTest)
-
-      const addResponsePromise = authedPage.waitForResponse(
-        (response) =>
-          response.url().includes("/api/v1/media/add") &&
-          response.request().method().toUpperCase() === "POST"
-      )
-      await workspacePage.addSourceModal.getByRole("button", { name: /^add url$/i }).click()
-      const addResponse = await addResponsePromise
-      expect(addResponse.ok()).toBe(true)
-
-      const addPayload = (await addResponse.json().catch(() => null)) as
-        | Record<string, unknown>
-        | null
-      createdMediaId = extractAddedMediaId(addPayload)
-
-      await expect(workspacePage.addSourceModal).toBeHidden({ timeout: 10_000 })
-
-      let liveMediaDetail = await fetchLiveMediaDetail(createdMediaId)
-      const initialVectorStatus =
-        (liveMediaDetail.processing as Record<string, unknown> | undefined)
-          ?.vector_processing_status ?? null
-      expect(
-        initialVectorStatus !== null,
-        `Expected media details to expose vector_processing_status, received ${JSON.stringify(liveMediaDetail)}`
-      ).toBeTruthy()
-
-      const sourceRow = workspacePage.sourcesPanel
-        .locator("[data-source-id]", { hasText: urlUnderTest })
-        .first()
-      await expect(sourceRow).toBeVisible({ timeout: 30_000 })
-      await expect(sourceRow).toContainText(urlUnderTest, { timeout: 10_000 })
-
-      if (initialVectorStatus !== 1) {
-        await expect(
-          sourceRow.locator("span").filter({ hasText: /^processing$/i }).first()
-        ).toBeVisible({ timeout: 10_000 })
-        await expect(sourceRow.locator('input[type="checkbox"]')).toBeDisabled()
-      }
-
-      await expect
-        .poll(
-          async () => {
-            liveMediaDetail = await fetchLiveMediaDetail(createdMediaId!)
-            return (
-              (liveMediaDetail.processing as Record<string, unknown> | undefined)
-                ?.vector_processing_status ?? null
-            )
-          },
-          {
-            timeout: 60_000,
-            message: `Timed out waiting for URL-ingested workspace source to become vector-ready: ${JSON.stringify(
-              liveMediaDetail
-            )}`,
-          }
-        )
-        .toBe(1)
-
-      await expect(sourceRow.locator("span").filter({ hasText: /^ready$/i }).first()).toBeVisible({
-        timeout: 15_000
-      })
-      await expect(sourceRow.locator('input[type="checkbox"]')).toBeEnabled({
-        timeout: 15_000
-      })
-
-      if (typeof workspaceTag === "string" && workspaceTag.trim().length > 0) {
-        await expect
-          .poll(
-            async () => {
-              const detail = await fetchLiveMediaDetail(createdMediaId!)
-              return Array.isArray(detail.keywords) ? detail.keywords : []
-            },
-            {
-              timeout: 15_000,
-              message: `Timed out waiting for workspace keyword tag on media ${createdMediaId}`
-          }
-        )
-        .toContain(workspaceTag)
-      }
-
-      const sourceId = await sourceRow.getAttribute("data-source-id")
-      expect(sourceId).toBeTruthy()
-      await workspacePage.selectSourceById(sourceId!)
-      await workspacePage.expectSourceSelected(sourceId!)
-    } finally {
-      await cleanupMediaItem(createdMediaId)
-    }
-
-    await assertNoCriticalErrors(diagnostics)
-  })
-
-  test("submits grounded live chat for a selected source and reopens the matching assistant turn from workspace search", async ({
-    authedPage,
-    serverInfo,
-    diagnostics
-  }) => {
-    skipIfServerUnavailable(serverInfo)
-    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
-    test.skip(
-      !chatBootstrapPreflight.reachable,
-      chatBootstrapPreflight.reason ||
-        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    const fixtureId = generateTestId("workspace-chat-grounding")
+    const probeToken = `${fixtureId}-beacon-fox`
+    const selectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Alpha`,
+      `Workspace chat grounding source. Token ${probeToken}. Deterministic verification requires stable include media ids.`
+    )
+    const unselectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Beta`,
+      `Workspace chat distractor source. Token ${fixtureId}-distractor.`
     )
 
-    const availableModel = serverInfo.models?.[0]
-    test.skip(!availableModel, "Skipping grounded live chat test: no live chat models reported by /api/v1/llm/providers")
-
-    test.setTimeout(180_000)
-
     const tracker = trackChatBootstrapResponses(authedPage)
     const workspacePage = new WorkspacePlaygroundPage(authedPage)
-    const uniqueSlug = generateTestId("workspace-live-grounded-chat")
-    const sourceTitle = `Workspace Live Grounded ${uniqueSlug}`
-    const sourceBody =
-      `Grounded workspace source marker LIVE-GROUNDED-${uniqueSlug.toUpperCase()}. ` +
-      "This source explains that evidence handling should stay grounded in the selected source."
-    const userQuestion =
-      "In one sentence, what does the selected source say about evidence handling?"
-    let createdMediaId: number | null = null
+    const question = `What does the source say about ${probeToken}?`
 
     try {
       await workspacePage.goto()
       await workspacePage.waitForReady()
       await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
-      await setWorkspaceSelectedModel(authedPage, availableModel!)
 
-      await workspacePage.openAddSourcesModal()
-      await workspacePage.addSourceModal.getByRole("tab", { name: /paste/i }).click()
-      await workspacePage.addSourceModal
-        .getByPlaceholder("Give your content a title")
-        .fill(sourceTitle)
-      await workspacePage.addSourceModal
-        .getByPlaceholder("Paste your text content here...")
-        .fill(sourceBody)
-
-      const uploadResponsePromise = authedPage.waitForResponse((response) => {
-        const request = response.request()
-        return (
-          request.method().toUpperCase() === "POST" &&
-          response.url().includes("/api/v1/media/add")
-        )
-      })
-
-      await workspacePage.addSourceModal
-        .getByRole("button", { name: /^add text$/i })
-        .click()
-
-      const uploadResponse = await uploadResponsePromise
-      expect(uploadResponse.ok()).toBeTruthy()
-      const uploadPayload = await uploadResponse.json().catch(() => null)
-      const createdCandidate =
-        uploadPayload?.results?.[0]?.media_id ??
-        uploadPayload?.results?.[0]?.db_id ??
-        uploadPayload?.result?.media_id ??
-        uploadPayload?.result?.db_id ??
-        uploadPayload?.media_id ??
-        uploadPayload?.db_id ??
-        uploadPayload?.id
-      createdMediaId = Number(createdCandidate)
-      expect(Number.isFinite(createdMediaId)).toBeTruthy()
-      const liveMediaId = createdMediaId as number
-      const uploadResult =
-        uploadPayload?.results?.[0] ??
-        uploadPayload?.result ??
-        uploadPayload
-      expect(
-        uploadResult?.embeddings_scheduled,
-        `Expected workspace source ingest to schedule embeddings, received ${JSON.stringify(uploadPayload)}`
-      ).toBeTruthy()
-
-      await expect(workspacePage.addSourceModal).toBeHidden({ timeout: 15_000 })
-
-      let liveMediaDetail = await fetchLiveMediaDetail(liveMediaId)
-      const initialVectorStatus =
-        (liveMediaDetail.processing as Record<string, unknown> | undefined)
-          ?.vector_processing_status ?? null
-      expect(
-        initialVectorStatus !== null,
-        `Expected media details to expose vector_processing_status, received ${JSON.stringify(liveMediaDetail)}`
-      ).toBeTruthy()
+      await workspacePage.seedSources([selectedSource, unselectedSource])
       await expect
-        .poll(
-          async () => {
-            liveMediaDetail = await fetchLiveMediaDetail(liveMediaId)
-            return (
-              (liveMediaDetail.processing as Record<string, unknown> | undefined)
-                ?.vector_processing_status ?? null
-            )
-          },
-          {
-            timeout: 60_000,
-            message: `Timed out waiting for vector processing to complete: ${JSON.stringify(liveMediaDetail)}`
-          }
-        )
-        .toBe(1)
-
-      const sourceRow = workspacePage.sourcesPanel
-        .locator("[data-source-id]", { hasText: sourceTitle })
-        .first()
-      await expect(sourceRow).toBeVisible({ timeout: 15_000 })
-      await expect(
-        sourceRow.locator("span").filter({ hasText: /^ready$/i }).first()
-      ).toBeVisible({ timeout: 15_000 })
-
-      const sourceId = await sourceRow.getAttribute("data-source-id")
-      expect(sourceId).toBeTruthy()
-      await workspacePage.selectSourceById(sourceId!)
-      await workspacePage.expectSourceSelected(sourceId!)
-      await expect(
-        workspacePage.chatPanel.getByText("Answers will be grounded in your selected sources")
-      ).toBeVisible({ timeout: 15_000 })
-
-      const ragResponsePromise = authedPage.waitForResponse((response) => {
-        const request = response.request()
-        return (
-          request.method().toUpperCase() === "POST" &&
-          response.url().includes("/api/v1/rag/search")
-        )
-      })
-      const chatCompletionResponsePromise = authedPage.waitForResponse((response) => {
-        const request = response.request()
-        return (
-          request.method().toUpperCase() === "POST" &&
-          response.url().includes("/api/v1/chat/completions")
-        )
-      })
-
-      const chatInput = workspacePage.chatPanel.getByPlaceholder(/ask about your sources/i)
-      await chatInput.fill(userQuestion)
-      await chatInput.press("Enter")
-
-      const ragResponse = await ragResponsePromise
-      expect(ragResponse.ok()).toBeTruthy()
-      const ragRequestBody =
-        (ragResponse.request().postDataJSON() as Record<string, unknown> | null) || {}
-      expect(ragRequestBody.query).toBe(userQuestion)
-      expect(ragRequestBody.include_media_ids).toEqual([createdMediaId])
-      const ragResponseBody = await ragResponse.json().catch(() => null)
-      const ragResults = Array.isArray(ragResponseBody?.documents)
-        ? ragResponseBody.documents
-        : Array.isArray(ragResponseBody?.results)
-          ? ragResponseBody.results
-        : []
-      expect(
-        ragResults.length,
-        `Expected grounded retrieval results for live chat, received ${JSON.stringify(ragResponseBody)}`
-      ).toBeGreaterThan(0)
-      expect(ragResponseBody?.errors ?? []).toEqual([])
-
-      const chatCompletionResponse = await chatCompletionResponsePromise
-      expect(chatCompletionResponse.ok()).toBeTruthy()
-
-      const messageItems = workspacePage.chatPanel.locator("[data-chat-message-id]")
-      await expect
-        .poll(async () => await messageItems.count(), { timeout: 60_000 })
-        .toBeGreaterThanOrEqual(2)
-
-      const assistantMessage = messageItems.last()
-      const assistantBody = assistantMessage.locator("article p").first()
-      let assistantText = ""
-      await expect
-        .poll(
-          async () => {
-            assistantText = ((await assistantBody.textContent()) || "")
-              .replace(/\s+/g, " ")
-              .trim()
-            if (/generating response/i.test(assistantText)) {
-              return 0
-            }
-            return assistantText.length
-          },
-          { timeout: 60_000 }
-        )
-        .toBeGreaterThan(20)
-      expect(assistantText).not.toMatch(
-        /only answer questions that are related to the provided context/i
-      )
-
-      const searchQuery =
-        assistantText.split(/\s+/).slice(0, 6).join(" ")
-      expect(searchQuery.length).toBeGreaterThan(10)
-
-      await workspacePage.openGlobalSearchWithShortcut()
-      await workspacePage.globalSearchInput.fill(searchQuery)
-
-      const assistantResult = workspacePage.globalSearchModal
-        .getByRole("button", { name: /assistant message/i })
-        .first()
-      await expect(assistantResult).toBeVisible({ timeout: 15_000 })
-      await assistantResult.click()
-
-      await expect(workspacePage.globalSearchModal).toBeHidden({ timeout: 10_000 })
-      await expect
-        .poll(async () => (await assistantMessage.getAttribute("class")) || "", {
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
           timeout: 10_000
         })
-        .toContain("ring-2")
+        .toBeGreaterThanOrEqual(2)
+
+      await workspacePage.selectSourceByTitle(selectedSource.title)
+      await workspacePage.expectSourceSelectedByTitle(selectedSource.title)
+      await expect(workspacePage.getSelectedSourceTag(selectedSource.title)).toBeVisible({
+        timeout: 10_000
+      })
+
+      const ragCall = await waitForRagSearchCall(authedPage, async () => {
+        await workspacePage.sendChatMessage(question)
+      })
+
+      expect(ragCall.status).toBe(200)
+      expect(ragCall.requestBody.include_media_ids).toEqual([selectedSource.mediaId])
+      expect(ragCall.requestBody.sources).toEqual(["media_db"])
+      expect(String(ragCall.requestBody.query ?? "")).toContain(probeToken)
+      await expect(workspacePage.chatPanel.getByText(question)).toBeVisible({
+        timeout: 10_000
+      })
+      const groundedReply = await waitForCompletedAssistantReply(workspacePage)
+      expect(groundedReply.length).toBeGreaterThan(0)
+      expect(groundedReply).not.toMatch(
+        /cannot reach server|unable to reach server|request failed|connection/i
+      )
+
       await ensureNoServerReachabilityDialog(authedPage)
     } finally {
       tracker.dispose()
-      await cleanupMediaItem(createdMediaId)
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("scopes studio compare-sources generation to the selected media ids", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    test.setTimeout(120_000)
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const fixtureId = generateTestId("workspace-studio-scope")
+    const leftSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Left`,
+      `Left comparison source. Token ${fixtureId}-left. Claim: alpha baseline improved by 11 percent.`
+    )
+    const rightSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Right`,
+      `Right comparison source. Token ${fixtureId}-right. Claim: beta baseline improved by 19 percent.`
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.seedSources([leftSource, rightSource])
+      await expect
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
+          timeout: 10_000
+        })
+        .toBeGreaterThanOrEqual(2)
+
+      await workspacePage.selectSourceByTitle(leftSource.title)
+      await workspacePage.selectSourceByTitle(rightSource.title)
+      await workspacePage.expectSourceSelectedByTitle(leftSource.title)
+      await workspacePage.expectSourceSelectedByTitle(rightSource.title)
+      await expect(
+        workspacePage.getStudioOutputButton("Compare Sources")
+      ).toBeEnabled({ timeout: 10_000 })
+
+      const beforeCount = await workspacePage.getStudioArtifactCards().count()
+      const chatCall = await waitForChatCompletionCall(authedPage, async () => {
+        await workspacePage.getStudioOutputButton("Compare Sources").click()
+      })
+
+      expect(chatCall.status).toBe(200)
+      const messages = Array.isArray(chatCall.requestBody.messages)
+        ? (chatCall.requestBody.messages as Array<Record<string, unknown>>)
+        : []
+      const requestText = messages
+        .map((message) =>
+          typeof message.content === "string" ? message.content : ""
+        )
+        .join("\n")
+      expect(requestText).toContain(leftSource.title)
+      expect(requestText).toContain(rightSource.title)
+      expect(requestText).toContain(
+        "Compare the selected sources and produce"
+      )
+      expect(
+        String(
+          ((chatCall.responseBody?.choices as Array<Record<string, unknown>> | undefined)?.[0]
+            ?.message as Record<string, unknown> | undefined)?.content ?? ""
+        ).trim().length
+      ).toBeGreaterThan(0)
+
+      await expect(workspacePage.getStudioArtifactCards()).toHaveCount(
+        beforeCount + 1,
+        { timeout: 90_000 }
+      )
+      const artifactCard = workspacePage.getStudioArtifactCards().first()
+      await waitForStudioArtifactCompletion(artifactCard)
+      await expect(artifactCard).toContainText(/Compare Sources/i)
+
+      await ensureNoServerReachabilityDialog(authedPage)
+    } finally {
+      tracker.dispose()
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("searches live chat turns from the workspace global search surface", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const fixtureId = generateTestId("workspace-global-search")
+    const probeToken = `${fixtureId}-search-token`
+    const selectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Search`,
+      `Workspace search source. Token ${probeToken}.`
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const question = `What does the document say about ${probeToken}?`
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.seedSources([selectedSource])
+      await expect
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
+          timeout: 10_000
+        })
+        .toBeGreaterThanOrEqual(1)
+
+      await workspacePage.selectSourceByTitle(selectedSource.title)
+      await workspacePage.expectSourceSelectedByTitle(selectedSource.title)
+
+      const ragCall = await waitForRagSearchCall(authedPage, async () => {
+        await workspacePage.sendChatMessage(question)
+      })
+      expect(ragCall.status).toBe(200)
+      expect(ragCall.requestBody.include_media_ids).toEqual([selectedSource.mediaId])
+
+      await workspacePage.openGlobalSearchWithShortcut()
+      await workspacePage.searchWorkspace(`chat: ${probeToken}`)
+
+      const chatResult = workspacePage.getGlobalSearchResult(probeToken)
+      await expect(chatResult).toBeVisible({ timeout: 10_000 })
+      await expect(chatResult).toContainText(/Chat/i)
+      await workspacePage.globalSearchInput.press("Enter")
+      await expect(workspacePage.globalSearchModal).toBeHidden({ timeout: 10_000 })
+
+      await ensureNoServerReachabilityDialog(authedPage)
+    } finally {
+      tracker.dispose()
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("keeps a workspace-generated quiz hidden until forced visible, then moves it to general without changing its record id", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    test.setTimeout(300_000)
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const fixtureId = generateTestId("workspace-study-quiz")
+    const probeToken = `${fixtureId}-quiz-token`
+    const selectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Quiz`,
+      `Workspace quiz source for ${probeToken}. The source is intentionally specific so the generated study artifact has stable content.`
+    )
+    const companionSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Quiz Companion`,
+      `Workspace quiz companion source for ${probeToken}-companion. The second source keeps the generation path aligned with the existing workspace output matrix.`
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const quizPage = new QuizPage(authedPage)
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.resetWorkspace(`Workspace ${fixtureId}`)
+      await workspacePage.setStudyMaterialsPolicy("workspace")
+      await workspacePage.seedSources([selectedSource, companionSource])
+      await expect
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
+          timeout: 10_000
+        })
+        .toBeGreaterThanOrEqual(1)
+      await workspacePage.selectSourceByTitle(selectedSource.title)
+      await workspacePage.selectSourceByTitle(companionSource.title)
+      await workspacePage.expectSourceSelectedByTitle(selectedSource.title)
+      await workspacePage.expectSourceSelectedByTitle(companionSource.title)
+
+      const beforeArtifacts = await workspacePage.getStudioArtifactCards().count()
+      await disableNextJsPortalPointerInterception(authedPage)
+      await clickActionable(workspacePage.getStudioOutputButton("Quiz"))
+
+      await expect(workspacePage.getStudioArtifactCards()).toHaveCount(
+        beforeArtifacts + 1,
+        { timeout: 90_000 }
+      )
+      const quizArtifact = await waitForPersistedWorkspaceArtifact(
+        workspacePage,
+        "quiz"
+      )
+      const quizId = Number(quizArtifact.serverId ?? quizArtifact.data?.quizId)
+      expect(Number.isFinite(quizId) && quizId > 0).toBe(true)
+      const workspaceId = await workspacePage.getWorkspaceId()
+      expect(workspaceId).toBeTruthy()
+
+      const quizQuestions = await fetchJsonWithApiKey<{
+        items: Array<{ id: number }>
+      }>(`/api/v1/quizzes/${quizId}/questions?include_answers=true&limit=100&offset=0`)
+      expect(quizQuestions.items.length).toBeGreaterThan(0)
+
+      const persistedQuizList = await listQuizRecords({
+        include_workspace_items: true,
+        limit: 100,
+        offset: 0
+      })
+      const persistedQuiz = persistedQuizList.items.find((item) => item.id === quizId)
+      expect(persistedQuiz).toBeTruthy()
+      expect(persistedQuiz).toMatchObject({
+        id: quizId,
+        workspace_id: workspaceId
+      })
+
+      await quizPage.goto()
+      await quizPage.assertPageReady()
+      await quizPage.switchToTab("manage")
+      await expect(quizPage.getManageQuizStartButton(quizId)).toBeHidden({
+        timeout: 10_000
+      })
+
+      await expect(quizPage.manageShowWorkspaceQuizzesToggle).toBeVisible({
+        timeout: 10_000
+      })
+      await quizPage.manageShowWorkspaceQuizzesToggle.click()
+      await expect(quizPage.getManageQuizStartButton(quizId)).toBeVisible({
+        timeout: 10_000
+      })
+
+      await quizPage.gotoPath(
+        `/quiz?tab=take&start_quiz_id=${quizId}&highlight_quiz_id=${quizId}&include_workspace_items=1`
+      )
+      await quizPage.assertPageReady()
+      await expect(
+        authedPage.getByRole("dialog").filter({ hasText: /Ready to begin\?/i })
+      ).toBeVisible({
+        timeout: 10_000
+      })
+
+      await quizPage.goto()
+      await quizPage.assertPageReady()
+      await quizPage.switchToTab("manage")
+      await expect(quizPage.manageShowWorkspaceQuizzesToggle).toBeVisible({
+        timeout: 10_000
+      })
+      await quizPage.manageShowWorkspaceQuizzesToggle.click()
+      await quizPage.getManageQuizEditButton(quizId).click()
+      const quizEditModal = authedPage.getByTestId("manage-edit-quiz-modal")
+      const workspaceIdInput = quizEditModal.getByLabel("Workspace ID")
+      await expect(workspaceIdInput).toBeVisible({ timeout: 10_000 })
+      await workspaceIdInput.fill("")
+      await quizEditModal.getByRole("button", { name: "Save" }).click()
+
+      await expect
+        .poll(
+          async () => {
+            const updatedQuiz = await fetchJsonWithApiKey<{
+              id: number
+              workspace_id?: string | null
+            }>(`/api/v1/quizzes/${quizId}`)
+            return updatedQuiz.workspace_id ?? null
+          },
+          {
+            timeout: 30_000,
+            message: "Quiz workspace scope never moved back to general"
+          }
+        )
+        .toBeNull()
+
+      const generalQuizList = await listQuizRecords({
+        include_workspace_items: false,
+        limit: 100,
+        offset: 0
+      })
+      expect(generalQuizList.items.some((item) => item.id === quizId)).toBe(true)
+      const scopedQuizList = await listQuizRecords({
+        workspace_id: workspaceId || undefined,
+        include_workspace_items: false,
+        limit: 100,
+        offset: 0
+      })
+      expect(scopedQuizList.items.some((item) => item.id === quizId)).toBe(false)
+
+      await quizPage.goto()
+      await quizPage.assertPageReady()
+      await quizPage.switchToTab("manage")
+      await expect(quizPage.getManageQuizStartButton(quizId)).toBeVisible({
+        timeout: 10_000
+      })
+    } finally {
+      tracker.dispose()
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("keeps a workspace-generated flashcards deck hidden until forced visible, then moves it to general without changing its record id", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    test.setTimeout(300_000)
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const fixtureId = generateTestId("workspace-study-flashcards")
+    const probeToken = `${fixtureId}-flashcards-token`
+    const selectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Flashcards`,
+      `Workspace flashcards source for ${probeToken}. The source is intentionally specific so the generated deck remains stable enough for native-page assertions.`
+    )
+    const companionSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Flashcards Companion`,
+      `Workspace flashcards companion source for ${probeToken}-companion. The second source helps exercise the same multi-source path as the output matrix probe.`
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const flashcardsPage = new FlashcardsPage(authedPage)
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.resetWorkspace(`Workspace ${fixtureId}`)
+      await workspacePage.setStudyMaterialsPolicy("workspace")
+      await workspacePage.seedSources([selectedSource, companionSource])
+      await expect
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
+          timeout: 10_000
+        })
+        .toBeGreaterThanOrEqual(1)
+      await workspacePage.selectSourceByTitle(selectedSource.title)
+      await workspacePage.selectSourceByTitle(companionSource.title)
+      await workspacePage.expectSourceSelectedByTitle(selectedSource.title)
+      await workspacePage.expectSourceSelectedByTitle(companionSource.title)
+
+      const beforeArtifacts = await workspacePage.getStudioArtifactCards().count()
+      await disableNextJsPortalPointerInterception(authedPage)
+      await clickActionable(workspacePage.getStudioOutputButton("Flashcards"))
+
+      await expect(workspacePage.getStudioArtifactCards()).toHaveCount(
+        beforeArtifacts + 1,
+        { timeout: 90_000 }
+      )
+      const flashcardArtifact = await waitForPersistedWorkspaceArtifact(
+        workspacePage,
+        "flashcards"
+      )
+      const deckId = Number(flashcardArtifact.serverId ?? flashcardArtifact.data?.deckId)
+      expect(Number.isFinite(deckId) && deckId > 0).toBe(true)
+      const workspaceId = await workspacePage.getWorkspaceId()
+      expect(workspaceId).toBeTruthy()
+
+      const flashcardList = await listFlashcardRecords({
+        deck_id: deckId,
+        include_workspace_items: true,
+        limit: 100,
+        offset: 0
+      })
+      expect(flashcardList.items.length).toBeGreaterThan(0)
+      const firstCardUuid = flashcardList.items[0]?.uuid
+      expect(firstCardUuid).toBeTruthy()
+
+      const deckRecords = await listDeckRecords({
+        include_workspace_items: true
+      })
+      const persistedDeck = deckRecords.find((deck) => deck.id === deckId)
+      expect(persistedDeck).toBeTruthy()
+      expect(persistedDeck).toMatchObject({
+        id: deckId,
+        workspace_id: workspaceId
+      })
+      const generalDecksBeforeMove = await listDeckRecords({
+        include_workspace_items: false
+      })
+      expect(generalDecksBeforeMove.some((deck) => deck.id === deckId)).toBe(false)
+
+      await flashcardsPage.gotoPath(
+        `/flashcards?deck_id=${deckId}&include_workspace_items=1`
+      )
+      await flashcardsPage.assertPageReady()
+      await expect(flashcardsPage.reviewDeckSelect).toBeVisible({
+        timeout: 10_000
+      })
+      const deckName = persistedDeck?.name ?? `Deck ${deckId}`
+      await expect(flashcardsPage.reviewDeckSelect.getByText(deckName, { exact: true })).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(flashcardsPage.reviewActiveCard).toBeVisible({ timeout: 10_000 })
+
+      await flashcardsPage.gotoPath(
+        `/flashcards?tab=manage&deck_id=${deckId}&include_workspace_items=1`
+      )
+      await flashcardsPage.assertPageReady()
+      await expect(flashcardsPage.manageMoveScopeButton).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(flashcardsPage.getManageFlashcardRow(firstCardUuid)).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(flashcardsPage.manageMoveScopeButton).toBeEnabled({
+        timeout: 10_000
+      })
+      await flashcardsPage.manageMoveScopeButton.click()
+      const flashcardsMoveModal = authedPage
+        .getByRole("dialog")
+        .filter({ hasText: /Move deck scope/i })
+      const workspaceIdInput = flashcardsMoveModal.getByLabel("Workspace ID")
+      await expect(workspaceIdInput).toBeVisible({ timeout: 10_000 })
+      await workspaceIdInput.fill("")
+      await flashcardsMoveModal.getByRole("button", { name: "Save" }).click()
+
+      await expect
+        .poll(
+          async () => {
+            const updatedDecks = await listDeckRecords({
+              include_workspace_items: false
+            })
+            return updatedDecks.some((deck) => deck.id === deckId)
+          },
+          {
+            timeout: 30_000,
+            message: "Flashcards deck never moved back to general scope"
+          }
+        )
+        .toBe(true)
+
+      const remainingWorkspaceDecks = await listDeckRecords({
+        workspace_id: workspaceId || undefined,
+        include_workspace_items: false
+      })
+      expect(remainingWorkspaceDecks.some((deck) => deck.id === deckId)).toBe(false)
+
+      const updatedDecks = await listDeckRecords({
+        include_workspace_items: false
+      })
+      expect(updatedDecks.some((deck) => deck.id === deckId)).toBe(true)
+      const updatedFlashcardList = await listFlashcardRecords({
+        deck_id: deckId,
+        include_workspace_items: false,
+        limit: 100,
+        offset: 0
+      })
+      expect(updatedFlashcardList.items.length).toBeGreaterThan(0)
+
+      await flashcardsPage.goto()
+      await flashcardsPage.assertPageReady()
+      await flashcardsPage.switchToTab("manage")
+      await expect(flashcardsPage.getManageFlashcardRow(firstCardUuid)).toBeVisible({
+        timeout: 10_000
+      })
+    } finally {
+      tracker.dispose()
     }
 
     await assertNoCriticalErrors(diagnostics)

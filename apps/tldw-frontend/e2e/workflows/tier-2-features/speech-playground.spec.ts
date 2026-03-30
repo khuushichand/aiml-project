@@ -54,6 +54,22 @@ test.describe("Speech Playground", () => {
       await expect(speech.stopButton).toBeVisible()
       await expect(speech.downloadButton).toBeVisible()
 
+      const inputSourcePicker = authedPage
+        .locator('[aria-label="Speech playground input source"]')
+        .first()
+      await expect(inputSourcePicker).toBeVisible()
+      await inputSourcePicker.click()
+      await expect(
+        authedPage.getByRole("option", { name: /Default microphone/i })
+      ).toBeVisible()
+      await expect(
+        authedPage.getByRole("option", { name: /Tab audio/i })
+      ).toHaveCount(0)
+      await expect(
+        authedPage.getByRole("option", { name: /System audio/i })
+      ).toHaveCount(0)
+      await authedPage.keyboard.press("Escape")
+
       await assertNoCriticalErrors(diagnostics)
     })
 
@@ -68,7 +84,9 @@ test.describe("Speech Playground", () => {
       // Switch to each mode and verify no crashes
       for (const mode of ["Speak", "Listen", "Round-trip"] as const) {
         await speech.selectMode(mode)
-        await authedPage.waitForTimeout(500)
+        await expect(
+          authedPage.locator(".ant-segmented .ant-segmented-item-selected").getByText(mode)
+        ).toBeVisible({ timeout: 5_000 })
       }
 
       await assertNoCriticalErrors(diagnostics)

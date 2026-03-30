@@ -16,6 +16,7 @@ import { isSecurityHealthData } from '@/lib/type-guards';
 import type { SecurityHealthData } from '@/types';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, Key, Users, Lock } from 'lucide-react';
 import Link from 'next/link';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type SecurityAlertStatus = {
   total_alerts?: number;
@@ -660,9 +661,7 @@ export default function SecurityPage() {
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    Loading...
-                  </div>
+                  <CardSkeleton />
                 ) : !alertStatus?.recent_alerts?.length ? (
                   <div className="text-center text-muted-foreground py-8">
                     <ShieldCheck className="h-12 w-12 mx-auto mb-2 text-green-500" />

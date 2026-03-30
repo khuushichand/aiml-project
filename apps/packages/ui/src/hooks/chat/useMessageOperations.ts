@@ -9,6 +9,7 @@ import { tldwClient } from "@/services/tldw/TldwApiClient";
 import type { ConversationState } from "@/services/tldw/TldwApiClient";
 import type { UploadedFile } from "@/db/dexie/types";
 import type { ChatHistory, Message, ReplyTarget } from "@/store/option";
+import type { ChatScope } from "@/types/chat-scope";
 import type { ChatModelSettingsStore } from "./chat-action-utils";
 
 export type UseMessageOperationsOptions = {
@@ -54,6 +55,7 @@ export type UseMessageOperationsOptions = {
   notification: any;
   discardCurrentTurnOnAbortRef: React.MutableRefObject<boolean>;
   selectedCharacter: { id?: string | number } | null;
+  scope?: ChatScope;
 };
 
 export const useMessageOperations = (opts: UseMessageOperationsOptions) => {
@@ -93,6 +95,7 @@ export const useMessageOperations = (opts: UseMessageOperationsOptions) => {
     notification,
     discardCurrentTurnOnAbortRef,
     selectedCharacter,
+    scope,
   } = opts;
 
   const stopStreamingRequest = React.useCallback(
@@ -253,6 +256,7 @@ export const useMessageOperations = (opts: UseMessageOperationsOptions) => {
     setSelectedSystemPrompt,
     setSystemPrompt: currentChatModelSettings.setSystemPrompt,
     serverChatId,
+    scope,
     setServerChatId,
     setServerChatTitle,
     setServerChatCharacterId,
@@ -285,6 +289,7 @@ export const useMessageOperations = (opts: UseMessageOperationsOptions) => {
     setSelectedSystemPrompt,
     setSystemPrompt: currentChatModelSettings.setSystemPrompt,
     serverChatId,
+    scope,
     setServerChatId,
     setServerChatTitle,
     setServerChatCharacterId,

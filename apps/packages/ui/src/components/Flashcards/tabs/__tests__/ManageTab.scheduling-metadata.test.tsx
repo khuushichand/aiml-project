@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { ManageTab } from "../ManageTab"
+import { ManageTab, buildFlashcardsWorkspaceVisibilityOptions } from "../ManageTab"
 import { clearSetting } from "@/services/settings/registry"
 import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 import {
   useUpdateFlashcardsBulkMutation,
   useDecksQuery,
@@ -11,6 +13,7 @@ import {
   useManageQuery,
   useTagSuggestionsQuery,
   useUpdateFlashcardMutation,
+  useUpdateDeckMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
@@ -88,6 +91,7 @@ vi.mock("../../hooks", () => ({
   useManageQuery: vi.fn(),
   useTagSuggestionsQuery: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
+  useUpdateDeckMutation: vi.fn(),
   useUpdateFlashcardsBulkMutation: vi.fn(),
   useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
@@ -139,6 +143,7 @@ const sampleCard: Flashcard = {
   interval_days: 5,
   repetitions: 3,
   lapses: 1,
+  queue_state: "review",
   due_at: null,
   last_reviewed_at: null,
   last_modified: null,
@@ -152,6 +157,8 @@ const sampleCard: Flashcard = {
 }
 
 describe("ManageTab scheduling metadata visibility", () => {
+  const updateDeckMutateAsync = vi.fn(async () => undefined)
+
   beforeEach(async () => {
     vi.clearAllMocks()
     await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
@@ -163,7 +170,9 @@ describe("ManageTab scheduling metadata visibility", () => {
           description: null,
           deleted: false,
           client_id: "test",
-          version: 1
+          version: 1,
+          scheduler_type: "sm2_plus",
+          scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
         }
       ],
       isLoading: false
@@ -201,6 +210,10 @@ describe("ManageTab scheduling metadata visibility", () => {
     } as any)
     vi.mocked(useUpdateFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useUpdateDeckMutation).mockReturnValue({
+      mutateAsync: updateDeckMutateAsync,
       isPending: false
     } as any)
     vi.mocked(useUpdateFlashcardsBulkMutation).mockReturnValue({
@@ -356,4 +369,139 @@ describe("ManageTab scheduling metadata visibility", () => {
       })
     })
   }, 15000)
+
+  it("hides workspace decks by default and reveals them when the toggle is enabled", async () => {
+    vi.mocked(useDecksQuery).mockImplementation((params: any) => ({
+      data: params?.include_workspace_items
+        ? [
+            {
+              id: 1,
+              name: "Biology",
+              description: null,
+              deleted: false,
+              client_id: "test",
+              version: 1,
+              scheduler_type: "sm2_plus",
+              scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+            },
+            {
+              id: 9,
+              name: "Workspace Biology",
+              description: "Scoped deck",
+              workspace_id: "workspace-77",
+              deleted: false,
+              client_id: "test",
+              version: 1,
+              scheduler_type: "sm2_plus",
+              scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+            }
+          ]
+        : [
+            {
+              id: 1,
+              name: "Biology",
+              description: null,
+              deleted: false,
+              client_id: "test",
+              version: 1,
+              scheduler_type: "sm2_plus",
+              scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+            }
+          ],
+      isLoading: false
+    } as any))
+    vi.mocked(useManageQuery).mockReturnValue({
+      data: {
+        items: [
+          {
+            ...sampleCard,
+            deck_id: 9
+          }
+        ],
+        count: 1
+      },
+      isFetching: false
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    expect(screen.getByText("Deck 9")).toBeInTheDocument()
+    expect(screen.queryByText("Workspace Biology")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Show workspace decks/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Workspace Biology")).toBeInTheDocument()
+    })
+    expect(vi.mocked(useDecksQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        include_workspace_items: true
+      })
+    )
+  })
+
+  it("filters decks and card queries to a selected workspace", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    await user.click(screen.getByRole("checkbox", { name: /Show workspace decks/i }))
+    expect(screen.getByTestId("flashcards-manage-workspace-filter")).toBeInTheDocument()
+    expect(
+      buildFlashcardsWorkspaceVisibilityOptions(true, "workspace-77")
+    ).toEqual(
+      expect.objectContaining({
+        workspaceId: "workspace-77",
+        includeWorkspaceItems: false
+      })
+    )
+  })
+
+  it("moves deck scope by patching workspace_id in the update payload", async () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    const deckSelect = within(
+      screen.getByTestId("flashcards-manage-deck-select")
+    ).getByRole("combobox")
+    fireEvent.mouseDown(deckSelect)
+    fireEvent.keyDown(deckSelect, { key: "ArrowDown", code: "ArrowDown" })
+    fireEvent.keyDown(deckSelect, { key: "Enter", code: "Enter" })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("flashcards-manage-move-scope")).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getByTestId("flashcards-manage-move-scope"))
+
+    fireEvent.change(screen.getByPlaceholderText("Leave blank for general scope"), {
+      target: { value: "workspace-77" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Save/i }))
+
+    await waitFor(() => {
+      expect(updateDeckMutateAsync).toHaveBeenCalledWith({
+        deckId: 1,
+        update: {
+          workspace_id: "workspace-77",
+          expected_version: 1
+        }
+      })
+    })
+  })
 })

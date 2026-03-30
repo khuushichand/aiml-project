@@ -66,12 +66,17 @@ test.describe("STT Playground", () => {
 
       // Toggle settings open
       await sttPage.settingsToggleButton.click()
-      await authedPage.waitForTimeout(500)
 
+      await expect
+        .poll(
+          async () => await languageLabel.first().isVisible().catch(() => false),
+          { timeout: 5_000 }
+        )
+        .not.toBe(settingsInitiallyVisible)
       const settingsAfterClick = await languageLabel.first().isVisible().catch(() => false)
 
       // State should have changed
-      expect(settingsInitiallyVisible).not.toEqual(settingsAfterClick)
+      expect(settingsAfterClick).not.toEqual(settingsInitiallyVisible)
 
       await assertNoCriticalErrors(diagnostics)
     })

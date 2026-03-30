@@ -39,3 +39,34 @@ async def test_collect_setup_tts_health_normalizes_service_bootstrap_failure(moc
     assert result["providers"] == {"total": 0, "available": 0, "details": {}}
     assert result["message"] == "TTS health check failed"
     assert result["status_code"] == 500
+
+
+@pytest.mark.asyncio
+async def test_get_stt_health_sanitizes_suspicious_runtime_strings(mocker):
+    mocker.patch(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.parse_transcription_model",
+        return_value=("whisper", None, None),
+    )
+    mocker.patch(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.validate_whisper_model_identifier",
+        side_effect=lambda value: value,
+    )
+    mocker.patch(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files.check_transcription_model_status",
+        return_value={
+            "available": False,
+            "usable": False,
+            "message": "Traceback: /Users/private/model.bin\nRuntimeError: boom",
+            "details": "/Users/private/model.bin",
+            "model": "whisper-1",
+        },
+    )
+
+    result = await audio_health.get_stt_health(
+        audio_health._build_internal_health_request("/api/v1/audio/transcriptions/health"),
+        model="whisper-1",
+        warm=False,
+    )
+
+    assert result["message"] == "Internal health diagnostics were suppressed."
+    assert "details" not in result

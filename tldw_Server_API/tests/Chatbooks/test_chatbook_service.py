@@ -160,6 +160,29 @@ class TestChatbookService:
         call_args = mock_db.execute_query.call_args[0]
         assert "INSERT OR REPLACE INTO export_jobs" in call_args[0]
 
+    def test_get_media_db_uses_shared_factory_and_caches_result(self, mock_db, tmp_path, monkeypatch):
+        """Media DB lookup should use the shared factory and cache the instance."""
+        monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
+        monkeypatch.setenv('USER_DB_BASE_DIR', str(tmp_path))
+        mock_db.execute_query.return_value = []
+
+        service = ChatbookService(user_id="test_user", user_id_int=7, db=mock_db)
+        fake_media_db = MagicMock()
+
+        with patch(
+            'tldw_Server_API.app.core.Chatbooks.chatbook_service.DatabasePaths.get_media_db_path',
+            return_value=Path('/tmp/media.db'),
+        ), patch(
+            'tldw_Server_API.app.core.Chatbooks.chatbook_service.create_media_database',
+            return_value=fake_media_db,
+        ) as mock_create_media_database:
+            first = service._get_media_db()
+            second = service._get_media_db()
+
+        assert first is fake_media_db
+        assert second is fake_media_db
+        mock_create_media_database.assert_called_once_with('test_user', db_path=Path('/tmp/media.db'))
+
     @pytest.mark.asyncio
     async def test_export_chatbook_sync(self, service, mock_db, tmp_path):
         """Test synchronous chatbook export."""

@@ -392,8 +392,7 @@ class AuthnzUsersRepo:
                         (int(user_id),),
                     )
                     # sqlite transaction shims may require explicit commit
-                    with contextlib.suppress(Exception):
-                        await conn.commit()
+                    await conn.commit()
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsersRepo.ensure_single_user_admin_user failed: {exc}")
             raise
@@ -437,8 +436,106 @@ class AuthnzUsersRepo:
                     "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
                     (int(user_id), role_id),
                 )
-                with contextlib.suppress(Exception):
-                    await conn.commit()
+                await conn.commit()
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsersRepo.assign_role_if_missing failed: {exc}")
+            raise
+
+    async def has_role_assignment(
+        self,
+        *,
+        user_id: int,
+        role_name: str,
+    ) -> bool:
+        """Return True when the user currently has the named role assignment."""
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres_backend():
+                    exists = await conn.fetchval(
+                        """
+                        SELECT 1
+                        FROM user_roles ur
+                        JOIN roles r ON r.id = ur.role_id
+                        WHERE ur.user_id = $1
+                          AND r.name = $2
+                          AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+                        LIMIT 1
+                        """,
+                        int(user_id),
+                        str(role_name),
+                    )
+                    return bool(exists)
+
+                cursor = await conn.execute(
+                    """
+                    SELECT 1
+                    FROM user_roles ur
+                    JOIN roles r ON r.id = ur.role_id
+                    WHERE ur.user_id = ?
+                      AND r.name = ?
+                      AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+                    LIMIT 1
+                    """,
+                    (int(user_id), str(role_name)),
+                )
+                return await cursor.fetchone() is not None
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzUsersRepo.has_role_assignment failed: {exc}")
+            raise
+
+    async def remove_role_if_present(
+        self,
+        *,
+        user_id: int,
+        role_name: str,
+    ) -> bool:
+        """Remove the named user role assignment when present."""
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres_backend():
+                    row = await conn.fetchrow(
+                        """
+                        DELETE FROM user_roles ur
+                        USING roles r
+                        WHERE ur.role_id = r.id
+                          AND ur.user_id = $1
+                          AND r.name = $2
+                        RETURNING ur.user_id
+                        """,
+                        int(user_id),
+                        str(role_name),
+                    )
+                    return row is not None
+
+                cursor = await conn.execute(
+                    "SELECT id FROM roles WHERE name = ?",
+                    (str(role_name),),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    return False
+                role_id = int(row[0])
+                delete_cursor = await conn.execute(
+                    """
+                    DELETE FROM user_roles
+                    WHERE user_id = ? AND role_id = ?
+                    """,
+                    (int(user_id), role_id),
+                )
+                await conn.commit()
+                try:
+                    return bool((delete_cursor.rowcount or 0) > 0)
+                except AttributeError:
+                    cursor = await conn.execute(
+                        """
+                        SELECT 1
+                        FROM user_roles
+                        WHERE user_id = ? AND role_id = ?
+                        LIMIT 1
+                        """,
+                        (int(user_id), role_id),
+                    )
+                    return await cursor.fetchone() is None
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzUsersRepo.remove_role_if_present failed: {exc}")
             raise

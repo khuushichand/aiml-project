@@ -2,11 +2,50 @@ import { Storage } from "@plasmohq/storage"
 import { tldwClient, tldwModels } from "./tldw"
 import { setNoOfRetrievedDocs, setTotalFilePerKB } from "./app"
 import { createSafeStorage } from "@/utils/safe-storage"
+import {
+  resolveWebUiQuickstartServerUrl,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
 
 const storage = createSafeStorage()
 
 // Default local tldw_server endpoint
 const DEFAULT_TLDW_URL = "http://127.0.0.1:8000"
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin:
+        typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
+    })
+  } catch {
+    return null
+  }
+}
 
 // Read API key from environment variables
 export const DEFAULT_TLDW_API_KEY = import.meta?.env?.VITE_TLDW_API_KEY || ""
@@ -35,11 +74,19 @@ export const getStoredTldwServerURL = async (): Promise<string | null> => {
 
 export const getTldwServerURL = async () => {
   const config = await tldwClient.getConfig()
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+  if (quickstartWebUiServerUrl) {
+    return quickstartWebUiServerUrl
+  }
   if (config?.serverUrl) {
     return config.serverUrl
   }
   // Fallback to stored URL or default
   const stored = await getStoredTldwServerURL()
+  const quickstartStoredServerUrl = getQuickstartWebUiServerUrl()
+  if (quickstartStoredServerUrl) {
+    return quickstartStoredServerUrl
+  }
   return stored || DEFAULT_TLDW_URL
 }
 

@@ -8,7 +8,8 @@ import {
   IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
   IMAGE_GENERATION_EVENT_MIRROR_PREFIX,
   IMAGE_GENERATION_USER_MESSAGE_TYPE,
-  PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY
+  PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY,
+  parseImageGenerationEventMirrorContent
 } from "@/utils/image-generation-chat"
 
 const {
@@ -286,7 +287,18 @@ const createHookOptions = (
   }
 }
 
-const invokeImageSubmit = async (onSubmit: any, imageEventSyncPolicy: "inherit" | "on" | "off") => {
+const invokeImageSubmit = async (
+  onSubmit: any,
+  imageEventSyncPolicy: "inherit" | "on" | "off",
+  referenceFileId?: number
+) => {
+  const imageGenerationRequest = {
+    prompt: "sunlit city skyline",
+    backend: "comfyui",
+    ...(typeof referenceFileId === "number"
+      ? { referenceFileId }
+      : {})
+  }
   await act(async () => {
     await onSubmit({
       message: "generate skyline",
@@ -294,10 +306,7 @@ const invokeImageSubmit = async (onSubmit: any, imageEventSyncPolicy: "inherit" 
       imageBackendOverride: "comfyui",
       userMessageType: IMAGE_GENERATION_USER_MESSAGE_TYPE,
       assistantMessageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
-      imageGenerationRequest: {
-        prompt: "sunlit city skyline",
-        backend: "comfyui"
-      },
+      imageGenerationRequest,
       imageGenerationSource: "generate-modal",
       imageEventSyncPolicy
     })
@@ -334,10 +343,7 @@ describe("useChatActions image event sync integration", () => {
           assistantImages: ["data:image/png;base64,AAAA"],
           generationInfo: {
             image_generation: {
-              request: {
-                prompt: "sunlit city skyline",
-                backend: "comfyui"
-              },
+              request: params?.imageGenerationRequest,
               source: "generate-modal",
               variant_count: 1,
               active_variant_index: 0,
@@ -372,7 +378,7 @@ describe("useChatActions image event sync integration", () => {
     const { options, getCurrentMessages } = createHookOptions()
     const { result } = renderHook(() => useChatActions(options))
 
-    await invokeImageSubmit(result.current.onSubmit, "on")
+    await invokeImageSubmit(result.current.onSubmit, "on", 77)
 
     expect(addChatMessageMock).toHaveBeenCalledTimes(1)
     expect(addChatMessageMock).toHaveBeenCalledWith(
@@ -382,6 +388,11 @@ describe("useChatActions image event sync integration", () => {
         content: expect.stringContaining(IMAGE_GENERATION_EVENT_MIRROR_PREFIX)
       })
     )
+    const mirroredContent = addChatMessageMock.mock.calls[0]?.[1]?.content as
+      | string
+      | undefined
+    const mirroredPayload = parseImageGenerationEventMirrorContent(mirroredContent)
+    expect(mirroredPayload?.request.referenceFileId).toBe(77)
     expect(updateMessageMediaMock).toHaveBeenCalledTimes(2)
     const lastCall = updateMessageMediaMock.mock.calls.at(-1)
     if (!lastCall) {

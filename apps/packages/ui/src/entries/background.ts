@@ -13,6 +13,7 @@ import {
   inferUploadMediaTypeFromFile,
   normalizeMediaType
 } from "@/services/tldw/media-routing"
+import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import {
   ensureSidepanelOpen,
   pickFirstString,
@@ -47,6 +48,10 @@ type BackgroundDiagnostics = {
   modelWarmCount: number
   lastModelWarmAt: number | null
   lastModelWarmError: string | null
+  runtimeMessageCount: number
+  runtimePingCount: number
+  lastRuntimeMessageType: string | null
+  lastRuntimeSenderUrl: string | null
   alarmFires: number
   lastAlarmAt: number | null
   ports: {
@@ -64,6 +69,10 @@ const backgroundDiagnostics: BackgroundDiagnostics = {
   modelWarmCount: 0,
   lastModelWarmAt: null,
   lastModelWarmError: null,
+  runtimeMessageCount: 0,
+  runtimePingCount: 0,
+  lastRuntimeMessageType: null,
+  lastRuntimeSenderUrl: null,
   alarmFires: 0,
   lastAlarmAt: null,
   ports: {
@@ -175,8 +184,11 @@ const warmModels = async (
 
 export default defineBackground({
   main() {
-    console.log('[BG_STARTUP] Background script main() starting', { timestamp: Date.now() })
     const storage = createSafeStorage()
+    let handleRuntimeMessageRef:
+      | ((message: any, sender: any) => Promise<any>)
+      | null = null
+    let initializePromise: Promise<void> | null = null
     let isCopilotRunning: boolean = false
     let actionIconClick: string = "webui"
     let contextMenuClick: string = "sidePanel"
@@ -248,6 +260,10 @@ export default defineBackground({
             : null
       }
     }
+
+    ;(globalThis as typeof globalThis & {
+      __tldwBackgroundDiagnostics?: () => ReturnType<typeof buildBackgroundDiagnostics>
+    }).__tldwBackgroundDiagnostics = buildBackgroundDiagnostics
 
 
     let refreshInFlight: Promise<any> | null = null
@@ -783,7 +799,6 @@ export default defineBackground({
       timeoutMs?: number
       quickIngestSessionId?: string
     }) => {
-      console.log('[HANDLE_UPLOAD] Called', { path: payload?.path, hasFile: !!payload?.file })
       const { path, method = 'POST', fields = {}, file, fileFieldName } = payload || {}
       const cfg = await storage.get<any>('tldwConfig')
       const isAbsolute = typeof path === 'string' && /^https?:/i.test(path)
@@ -873,14 +888,12 @@ export default defineBackground({
                   : 60000
         const timeout = setTimeout(() => controller.abort(), timeoutMs)
         let resp: Response
-        console.log('[HANDLE_UPLOAD] About to fetch', { url, method, timeoutMs })
         try {
           resp = await fetch(url, { method, headers, body: form, signal: controller.signal })
         } finally {
           clearTimeout(timeout)
           unregisterQuickIngestAbortController(quickIngestSessionId, controller)
         }
-        console.log('[HANDLE_UPLOAD] Fetch completed', { status: resp.status, ok: resp.ok })
         const contentType = resp.headers.get('content-type') || ''
         let data: any = null
         if (contentType.includes('application/json')) data = await resp.json().catch(() => null)
@@ -890,7 +903,6 @@ export default defineBackground({
           : formatErrorMessage(data, `Upload failed: ${resp.status}`)
         return { ok: resp.ok, status: resp.status, data, error }
       } catch (e: any) {
-        console.log('[HANDLE_UPLOAD] Fetch error', { message: e?.message, name: e?.name })
         const raw = String(e?.message || "")
         const isAbort = raw.toLowerCase().includes("abort")
         if (isAbort && isQuickIngestCancelled(payload?.quickIngestSessionId)) {
@@ -911,27 +923,12 @@ export default defineBackground({
     }
 
     const runTldwRequest = async (payload: any) => {
-      // DEBUG: Log incoming request
-      console.log('[BG_DEBUG] runTldwRequest called', {
-        path: payload?.path,
-        method: payload?.method,
-        noAuth: payload?.noAuth
-      })
-
       return tldwRequest(payload, {
         // IMPORTANT: getConfig must fetch fresh config each time it's called
         // (not pre-fetch once), because the config may not be seeded yet when
         // runTldwRequest is first invoked, but may be available on retry.
         getConfig: async () => {
-          const config = await storage.get<any>('tldwConfig')
-          console.log('[BG_DEBUG] tldwConfig from storage', {
-            hasConfig: !!config,
-            serverUrl: config?.serverUrl,
-            authMode: config?.authMode,
-            hasApiKey: !!config?.apiKey,
-            apiKeyPrefix: config?.apiKey?.substring?.(0, 10)
-          })
-          return config
+          return await storage.get<any>('tldwConfig')
         },
         refreshAuth: async () => {
           if (!refreshInFlight) {
@@ -953,19 +950,11 @@ export default defineBackground({
     }
 
     const handleTldwRequest = async (payload: any) => {
-      console.log('[BG_DEBUG] handleTldwRequest received', { path: payload?.path, method: payload?.method })
       const path = payload?.path
       if (isChatEndpoint(String(path || ""))) {
         return enqueueChatRequest(() => runTldwRequest(payload))
       }
-      try {
-        const result = await runTldwRequest(payload)
-        console.log('[BG_DEBUG] handleTldwRequest result', { path: payload?.path, ok: result?.ok, status: result?.status })
-        return result
-      } catch (error) {
-        console.log('[BG_DEBUG] handleTldwRequest error', { path: payload?.path, error: String(error) })
-        throw error
-      }
+      return await runTldwRequest(payload)
     }
 
     const extractIngestJobIds = (data: any): number[] => {
@@ -1536,7 +1525,7 @@ export default defineBackground({
         const fields: Record<string, any> = {
           media_type: mediaType,
           perform_analysis: Boolean(common.perform_analysis),
-          perform_chunking: Boolean(common.perform_chunking),
+          perform_chunking: resolvePerformChunking(common.perform_chunking),
           overwrite_existing: Boolean(common.overwrite_existing)
         }
         const resolvedDefaults: {
@@ -1939,7 +1928,7 @@ export default defineBackground({
       createSessionId: createQuickIngestSessionId
     })
 
-    const handleRuntimeMessage = async (message: any, sender: any) => {
+    handleRuntimeMessageRef = async (message: any, sender: any) => {
       // Simple ping for E2E tests - verifies message handler is working
       if (message.type === "tldw:ping") {
         return { ok: true, pong: true, timestamp: Date.now() }
@@ -2080,66 +2069,6 @@ export default defineBackground({
       return undefined
     }
 
-    console.log('[BG_STARTUP] Registering message listener')
-    const chromeGlobal = (globalThis as any).chrome
-    console.log('[BG_STARTUP] browser.runtime:', {
-      hasSendMessage: !!browser?.runtime?.sendMessage,
-      hasOnMessage: !!browser?.runtime?.onMessage,
-      hasOnMessageAddListener: !!browser?.runtime?.onMessage?.addListener,
-      browserType: typeof browser,
-      chromeType: typeof chromeGlobal,
-      sameSendMessage: browser?.runtime?.sendMessage === chromeGlobal?.runtime?.sendMessage,
-      sameOnMessage: browser?.runtime?.onMessage === chromeGlobal?.runtime?.onMessage
-    })
-
-    // Also add a direct chrome listener as backup
-    if (chromeGlobal?.runtime?.onMessage?.addListener) {
-      chromeGlobal.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
-        console.log('[BG_MSG_CHROME] Received via chrome.runtime:', { type: message?.type })
-        if (message?.type === 'tldw:ping') {
-          sendResponse({ ok: true, pong: true, timestamp: Date.now(), source: 'chrome-listener' })
-          return true
-        }
-        return false
-      })
-      console.log('[BG_STARTUP] Also added chrome.runtime.onMessage listener')
-    }
-
-    // Log raw listener registration
-    console.log('[BG_STARTUP] About to add browser.runtime.onMessage listener', {
-      onMessage: !!browser.runtime.onMessage,
-      addListener: typeof browser.runtime.onMessage?.addListener
-    })
-
-    browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      // Log EVERY message that arrives, even malformed ones
-      console.log('[BG_MSG_RAW] Raw message received!', {
-        messageType: typeof message,
-        messageKeys: message ? Object.keys(message) : [],
-        type: message?.type,
-        hasPayload: !!message?.payload,
-        senderUrl: sender?.url,
-        senderId: sender?.id
-      })
-      console.log('[BG_MSG] Received message', { type: message?.type, hasPayload: !!message?.payload })
-      void handleRuntimeMessage(message, sender)
-        .then((response) => {
-          console.log('[BG_MSG] Sending response', { type: message?.type, ok: response?.ok })
-          sendResponse(response)
-        })
-        .catch((error) => {
-          console.log('[BG_MSG] Handler error', { type: message?.type, error: String(error) })
-          logBackgroundError("runtime message", error)
-          sendResponse({
-            ok: false,
-            status: 0,
-            error: (error as Error)?.message || "Background error"
-          })
-        })
-      return true
-    })
-    console.log('[BG_STARTUP] Message listener registered')
-
     browser.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") return
       if (!changes || !Object.prototype.hasOwnProperty.call(changes, "tldwConfig")) {
@@ -2149,7 +2078,6 @@ export default defineBackground({
     })
 
     browser.runtime.onConnect.addListener((port) => {
-      console.log('[BG_CONNECT] Port connected', { name: port.name })
       if (port.name === "pgCopilot") {
         isCopilotRunning = true
         backgroundDiagnostics.ports.copilot += 1
@@ -2773,6 +2701,57 @@ export default defineBackground({
       }
     })
 
+    const ensureInitialized = () => {
+      if (!initializePromise) {
+        initializePromise = initialize().catch((error) => {
+          initializePromise = null
+          handleRuntimeMessageRef = null
+          throw error
+        })
+      }
+      return initializePromise
+    }
+
+    const runtimeOnMessage =
+      (globalThis as any).chrome?.runtime?.onMessage || browser.runtime.onMessage
+
+    runtimeOnMessage.addListener((message: any, sender: any, sendResponse: any) => {
+      backgroundDiagnostics.runtimeMessageCount += 1
+      backgroundDiagnostics.lastRuntimeMessageType =
+        typeof message?.type === "string" ? message.type : null
+      backgroundDiagnostics.lastRuntimeSenderUrl =
+        typeof sender?.url === "string"
+          ? sender.url
+          : typeof sender?.tab?.url === "string"
+            ? sender.tab.url
+            : null
+      if (message?.type === "tldw:ping") {
+        backgroundDiagnostics.runtimePingCount += 1
+        sendResponse({ ok: true, pong: true, timestamp: Date.now() })
+        return
+      }
+
+      void ensureInitialized()
+        .then(async () => {
+          if (!handleRuntimeMessageRef) {
+            return undefined
+          }
+          return await handleRuntimeMessageRef(message, sender)
+        })
+        .then((response) => {
+          sendResponse(response)
+        })
+        .catch((error) => {
+          logBackgroundError("runtime message", error)
+          sendResponse({
+            ok: false,
+            status: 0,
+            error: (error as Error)?.message || "Background error"
+          })
+        })
+      return true
+    })
+
     if (browser?.alarms) {
       browser.alarms.onAlarm.addListener((alarm) => {
         if (alarm.name !== MODEL_WARM_ALARM_NAME) return
@@ -2782,7 +2761,7 @@ export default defineBackground({
       })
     }
 
-    initialize()
+    void ensureInitialized()
   },
   persistent: false
 })

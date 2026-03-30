@@ -36,7 +36,10 @@ from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    get_media_by_id,
+    search_media,
+)
 from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import (
     create_batch as db_create_batch,
 )
@@ -1554,7 +1557,7 @@ class CreateFromMediaRequest(BaseModel):
 async def create_store_from_media(
     payload: CreateFromMediaRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     # Validate chunk method early to return 400/422 on invalid value before DB lookups
     valid_methods = {m.value for m in ChunkingMethod}
@@ -1565,7 +1568,7 @@ async def create_store_from_media(
     items: list[dict[str, Any]] = []
     if payload.media_ids:
         for mid in payload.media_ids:
-            rec = db.get_media_by_id(mid)
+            rec = get_media_by_id(db, mid)
             if rec:
                 items.append(rec)
     elif payload.keywords:
@@ -1577,7 +1580,8 @@ async def create_store_from_media(
 
             if match_mode == "all":
                 # Use comprehensive search to find items that have ALL specified keywords
-                results_list, _total = db.search_media_db(
+                results_list, _total = search_media(
+                    db,
                     search_query=None,
                     must_have_keywords=[k for k in (payload.keywords or []) if k and str(k).strip()],
                     results_per_page=10000,
@@ -1595,7 +1599,8 @@ async def create_store_from_media(
                     kw_clean = (kw or "").strip()
                     if not kw_clean:
                         continue
-                    res_list, _ = db.search_media_db(
+                    res_list, _ = search_media(
+                        db,
                         search_query=None,
                         must_have_keywords=[kw_clean],
                         results_per_page=10000,

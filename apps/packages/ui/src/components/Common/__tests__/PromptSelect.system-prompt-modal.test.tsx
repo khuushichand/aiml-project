@@ -1,0 +1,248 @@
+import React from "react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  getAllPrompts: vi.fn(async () => []),
+  getPromptById: vi.fn(async () => undefined)
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (_key: string, fallback?: string) => fallback || _key
+  })
+}))
+
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: (_key: string, defaultValue: unknown) =>
+    React.useState(defaultValue)
+}))
+
+vi.mock("@/db/dexie/helpers", () => ({
+  getAllPrompts: mocks.getAllPrompts,
+  getPromptById: mocks.getPromptById
+}))
+
+vi.mock("antd", async () => {
+  const React = await import("react")
+
+  const Input = React.forwardRef<HTMLInputElement, any>((props, ref) => (
+    <input
+      ref={ref}
+      aria-label={props["aria-label"] ?? props.placeholder}
+      value={props.value}
+      defaultValue={props.defaultValue}
+      onChange={props.onChange}
+      onKeyDown={props.onKeyDown}
+    />
+  ))
+
+  const TextArea = React.forwardRef<HTMLTextAreaElement, any>((props, ref) => (
+    <textarea
+      ref={ref}
+      aria-label={props["aria-label"] ?? props.placeholder ?? "System prompt"}
+      value={props.value}
+      defaultValue={props.defaultValue}
+      onChange={props.onChange}
+    />
+  ))
+
+  ;(Input as any).TextArea = TextArea
+
+  const renderMenuItems = (items: any[] = []) =>
+    items.map((item) => {
+      if (!item) return null
+      if (item.type === "group") {
+        return (
+          <div key={item.label}>
+            <div>{item.label}</div>
+            {renderMenuItems(item.children)}
+          </div>
+        )
+      }
+      if (item.key === "empty") {
+        return <div key="empty">{item.label}</div>
+      }
+      return (
+        <button
+          key={item.key}
+          type="button"
+          role="menuitem"
+          onClick={() => item.onClick?.()}
+        >
+          {item.label}
+        </button>
+      )
+    })
+
+  const Dropdown = ({
+    open,
+    onOpenChange,
+    menu,
+    popupRender,
+    children
+  }: any) => {
+    const menuNode = <div role="menu">{renderMenuItems(menu?.items)}</div>
+
+    return (
+      <div>
+        <div onClick={() => onOpenChange?.(!open)}>{children}</div>
+        {open ? (popupRender ? popupRender(menuNode) : menuNode) : null}
+      </div>
+    )
+  }
+
+  const Modal = ({ open, title, children, footer }: any) =>
+    open ? (
+      <div role="dialog" aria-label={typeof title === "string" ? title : undefined}>
+        <div>{title}</div>
+        <div>{children}</div>
+        <div>{footer}</div>
+      </div>
+    ) : null
+
+  return {
+    Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    Dropdown,
+    Empty: ({ description }: { description?: React.ReactNode }) => (
+      <div>{description ?? "Empty"}</div>
+    ),
+    Input,
+    Modal
+  }
+})
+
+import { PromptSelect } from "../PromptSelect"
+
+const buildPrompt = (overrides: Record<string, unknown> = {}) => ({
+  id: "prompt-1",
+  title: "Prompt One",
+  content: "Template body",
+  is_system: true,
+  createdAt: Date.now(),
+  ...overrides
+})
+
+const renderPromptSelect = (overrides: Partial<React.ComponentProps<typeof PromptSelect>> = {}) => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false
+      }
+    }
+  })
+
+  const props: React.ComponentProps<typeof PromptSelect> = {
+    selectedSystemPrompt: "prompt-1",
+    systemPrompt: "",
+    setSystemPrompt: vi.fn(),
+    setSelectedSystemPrompt: vi.fn(),
+    setSelectedQuickPrompt: vi.fn(),
+    ...overrides
+  }
+
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <PromptSelect {...props} />
+      </QueryClientProvider>
+    ),
+    props
+  }
+}
+
+describe("PromptSelect system prompt modal", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.getAllPrompts.mockResolvedValue([buildPrompt()])
+    mocks.getPromptById.mockResolvedValue(buildPrompt())
+  })
+
+  it("opens an editor modal with the effective selected template content", async () => {
+    const user = userEvent.setup()
+    renderPromptSelect()
+
+    await user.click(
+      await screen.findByRole("button", { name: "selectAPrompt" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: /edit system prompt/i }))
+
+    expect(await screen.findByDisplayValue("Template body")).toBeInTheDocument()
+  })
+
+  it("saves edited prompt content through setSystemPrompt", async () => {
+    const user = userEvent.setup()
+    const { props } = renderPromptSelect()
+
+    await user.click(
+      await screen.findByRole("button", { name: "selectAPrompt" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: /edit system prompt/i }))
+
+    const textarea = await screen.findByDisplayValue("Template body")
+    await user.clear(textarea)
+    await user.type(textarea, "Conversation override")
+    await user.click(screen.getByRole("button", { name: /save/i }))
+
+    await waitFor(() => {
+      expect(props.setSystemPrompt).toHaveBeenCalledWith("Conversation override")
+    })
+  })
+
+  it("clears redundant overrides when the saved text matches the selected template", async () => {
+    const user = userEvent.setup()
+    const { props } = renderPromptSelect({
+      systemPrompt: "Conversation override"
+    })
+
+    await user.click(
+      await screen.findByRole("button", { name: "selectAPrompt" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: /edit system prompt/i }))
+
+    const textarea = await screen.findByDisplayValue("Conversation override")
+    await user.clear(textarea)
+    await user.type(textarea, "Template body")
+    await user.click(screen.getByRole("button", { name: /save/i }))
+
+    await waitFor(() => {
+      expect(props.setSystemPrompt).toHaveBeenCalledWith("")
+    })
+  })
+
+  it("shows override-active copy when the live system prompt differs from the template", async () => {
+    const user = userEvent.setup()
+    renderPromptSelect({
+      systemPrompt: "Conversation override"
+    })
+
+    await user.click(
+      await screen.findByRole("button", { name: "selectAPrompt" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: /edit system prompt/i }))
+
+    expect(await screen.findByText(/override active/i)).toBeInTheDocument()
+  })
+
+  it("resets to an empty prompt when the selected template cannot be resolved", async () => {
+    const user = userEvent.setup()
+    const { props } = renderPromptSelect({
+      selectedSystemPrompt: "missing-prompt"
+    })
+
+    mocks.getAllPrompts.mockResolvedValue([])
+    mocks.getPromptById.mockRejectedValue(new Error("missing"))
+
+    await user.click(
+      await screen.findByRole("button", { name: "selectAPrompt" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: /edit system prompt/i }))
+    await user.click(screen.getByRole("button", { name: /reset/i }))
+
+    await waitFor(() => {
+      expect(props.setSystemPrompt).toHaveBeenCalledWith("")
+    })
+  })
+})

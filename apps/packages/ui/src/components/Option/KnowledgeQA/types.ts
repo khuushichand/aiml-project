@@ -17,12 +17,16 @@ export type ScopeSnapshot = {
   preset: RagPresetName
   sources: RagSettings["sources"]
   webFallback: boolean
+  includeMediaIds: number[]
+  includeNoteIds: string[]
 }
 
 export type PinnedSourceFilters = {
   mediaIds: number[]
   noteIds: string[]
 }
+
+export type ThreadHydrationResult = boolean | "terminal"
 
 // Retrieved document with citation info
 export type RagResult = {
@@ -139,6 +143,7 @@ export type SearchHistoryItem = {
   answerPreview?: string
   pinned?: boolean
   preset?: RagPresetName
+  settingsSnapshot?: Partial<RagSettings>
   keywords?: string[]
 }
 
@@ -213,8 +218,9 @@ export type KnowledgeQAActions = {
 
   // Thread actions
   createNewThread: (title?: string) => Promise<string>
-  selectThread: (threadId: string) => Promise<void>
-  selectSharedThread: (shareToken: string) => Promise<void>
+  startNewTopic: () => Promise<string>
+  selectThread: (threadId: string) => Promise<ThreadHydrationResult>
+  selectSharedThread: (shareToken: string) => Promise<ThreadHydrationResult>
   askFollowUp: (question: string) => Promise<void>
   branchFromTurn: (messageId: string) => Promise<void>
 
@@ -246,7 +252,10 @@ export type KnowledgeQAActions = {
 }
 
 // Context value combining state and actions
-export type KnowledgeQAContextValue = KnowledgeQAState & KnowledgeQAActions
+export type KnowledgeQAContextValue = KnowledgeQAState &
+  KnowledgeQAActions & {
+    historyHydrated: boolean
+  }
 
 // Export format options
 export type ExportFormat = "markdown" | "pdf" | "chatbook"

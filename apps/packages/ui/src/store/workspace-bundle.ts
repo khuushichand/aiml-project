@@ -5,6 +5,7 @@ import type {
   WorkspaceBanner,
   WorkspaceCollection,
   WorkspaceNote,
+  StudyMaterialsPolicy,
   WorkspaceSourceFolder,
   WorkspaceSourceFolderMembership,
   WorkspaceSource
@@ -22,6 +23,7 @@ export interface WorkspaceBundleSnapshot {
   workspaceName: string
   workspaceTag: string
   workspaceCreatedAt: ExportDateValue
+  studyMaterialsPolicy: StudyMaterialsPolicy | null
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
   sourceFolders?: WorkspaceSourceFolder[]
@@ -52,6 +54,7 @@ export interface WorkspaceExportBundle {
     name: string
     tag: string
     createdAt: ExportDateValue
+    studyMaterialsPolicy: StudyMaterialsPolicy | null
     collectionId?: WorkspaceCollection["id"] | null
     snapshot: WorkspaceBundleSnapshot
     chatSession?: WorkspaceBundleChatSession
@@ -232,7 +235,7 @@ const readFileAsArrayBuffer = async (file: File): Promise<ArrayBuffer> => {
  */
 export const sanitizeImportedChatSession = <T extends Record<string, any>>(
   session: T
-): T & { serverChatId: null } => ({
+): Omit<T, "serverChatId"> & { serverChatId: null } => ({
   ...session,
   serverChatId: null,
 })

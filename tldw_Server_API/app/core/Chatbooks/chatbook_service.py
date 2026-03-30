@@ -106,13 +106,17 @@ except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive guard f
     PromptsDatabase = None  # type: ignore
 
 try:
-    from ..DB_Management.Media_DB_v2 import (  # type: ignore
-        MediaDatabase,
+    from ..DB_Management.media_db.api import (  # type: ignore
+        create_media_database,
+        get_media_by_id,
         get_media_prompts,
         get_media_transcripts,
+        get_media_by_uuid,
     )
 except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
-    MediaDatabase = None  # type: ignore
+    create_media_database = None  # type: ignore
+    get_media_by_id = None  # type: ignore
+    get_media_by_uuid = None  # type: ignore
     get_media_transcripts = None  # type: ignore
     get_media_prompts = None  # type: ignore
 
@@ -451,7 +455,7 @@ class ChatbookService:
         # In-process async task registry (best-effort cancellation)
         self._tasks: dict[str, asyncio.Task] = {}
         self._prompts_db: PromptsDatabase | None = None
-        self._media_db: MediaDatabase | None = None
+        self._media_db: Any | None = None
         self._evaluations_db: EvaluationsDatabase | None = None
         self._chroma_manager: ChromaDBManager | None = None
 
@@ -598,10 +602,10 @@ class ChatbookService:
             self._prompts_db = None
         return self._prompts_db
 
-    def _get_media_db(self) -> MediaDatabase | None:
+    def _get_media_db(self) -> Any | None:
         """Lazily initialize and cache the media database."""
-        if MediaDatabase is None:
-            self._note_todo("Media export/import requires MediaDatabase module; skipping media coverage.")
+        if create_media_database is None:
+            self._note_todo("Media export/import requires media DB factory support; skipping media coverage.")
             return None
         if self._media_db is not None:
             return self._media_db
@@ -610,7 +614,7 @@ class ChatbookService:
             return None
         try:
             db_path = DatabasePaths.get_media_db_path(self.user_id_int)
-            self._media_db = MediaDatabase(db_path, client_id=self.user_id)
+            self._media_db = create_media_database(self.user_id, db_path=db_path)
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
             logger.warning(f"Failed to initialize MediaDatabase for chatbooks export: {exc}")
             self._note_todo("Media export/import initialization failed; inspect logs for details.")
@@ -786,16 +790,16 @@ class ChatbookService:
             payload[key] = self._normalize_datetime(value)
         return payload
 
-    def _fetch_media_record(self, media_db: MediaDatabase, identifier: str) -> dict[str, Any] | None:
+    def _fetch_media_record(self, media_db: Any, identifier: str) -> dict[str, Any] | None:
         """Retrieve a media row by integer id or uuid."""
         record: dict[str, Any] | None = None
         try:
-            record = media_db.get_media_by_id(int(identifier))
+            record = get_media_by_id(media_db, int(identifier))
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             record = None
         if not record:
             try:
-                record = media_db.get_media_by_uuid(str(identifier))
+                record = get_media_by_uuid(media_db, str(identifier))
             except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 record = None
         if record and isinstance(record, dict):

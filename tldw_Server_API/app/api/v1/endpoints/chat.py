@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import math
 import os
@@ -38,10 +39,12 @@ from fastapi import (
 
 from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    apply_llm_provider_overrides_to_listing,
     get_llm_provider_override,
     get_llm_provider_overrides_snapshot,
     get_override_credentials,
     get_override_default_model,
+    get_override_model_priority,
     validate_provider_override,
 )
 
@@ -83,6 +86,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
     ConversationListPagination,
     ConversationListResponse,
     ConversationMetadata,
+    ConversationScopeParams,
     ConversationTreeNode,
     ConversationTreePagination,
     ConversationTreeResponse,
@@ -127,7 +131,7 @@ from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector i
 from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_telemetry import (
     compute_persona_exemplar_telemetry,
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError, ChatBadRequestError
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -142,30 +146,40 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
     apply_prompt_templating,
-    build_structured_http_exception,
     build_call_params_from_request,
     build_context_and_messages,
     estimate_tokens_from_json,
     execute_non_stream_call,
     execute_streaming_call,
+    inject_research_context_into_prompt,
     moderate_input_messages,
     perform_chat_api_call,
+    perform_chat_api_call_async,
     prepare_structured_response_request,
     queue_is_active,
     resolve_provider_and_model,
     resolve_provider_api_key,
     is_model_known_for_provider,
 )
-from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
-    StructuredGenerationCapabilityError,
-    StructuredGenerationParseError,
-    StructuredGenerationSchemaError,
-)
 
 # Backward-compatible re-exports for legacy tests patching these symbols on the endpoint module.
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (  # noqa: F401
     apply_template_to_string,
     load_template,
+)
+from tldw_Server_API.app.core.LLM_Calls.routing import (
+    InMemoryRoutingDecisionStore,
+    RouterRequest,
+    RoutingUsageContext,
+    build_provider_order_for_routing,
+    flatten_provider_listing_for_routing,
+    log_model_router_usage,
+    resolve_routing_policy,
+    route_model,
+    select_llm_router_choice,
+)
+from tldw_Server_API.app.core.LLM_Calls.routing.candidate_pool import (
+    build_candidate_pool,
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
@@ -188,13 +202,16 @@ from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_pro
 
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     rbac_rate_limit,
     require_permissions,
     require_token_scope,
+)
+from tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps import (
+    get_request_routing_decision_store,
 )
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
@@ -225,8 +242,8 @@ from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_top
 from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
     assemble_persona_exemplar_prompt,
 )
-from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import (
-    extract_latest_user_turn_text,
+from tldw_Server_API.app.core.Persona.exemplar_runtime import (
+    append_persona_exemplar_sections,
 )
 from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
@@ -243,6 +260,7 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 
 from . import chat_dictionaries, chat_documents, chat_grammars
+from .llm_providers import get_configured_providers
 
 _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -724,6 +742,245 @@ def _build_test_mode_chat_response(
     return "Mock response from test mode"
 
 
+async def _build_context_and_messages_compat(
+    *,
+    chat_db: Any,
+    request_data: Any,
+    loop: asyncio.AbstractEventLoop,
+    metrics: Any,
+    default_save_to_db: bool,
+    final_conversation_id: str | None,
+    save_message_fn: Callable[..., Any],
+    runtime_state: dict[str, Any],
+) -> tuple[Any, Any, Any, Any, Any, Any]:
+    """Call build_context_and_messages with backward-compatible kwargs.
+
+    Some tests still monkeypatch the older helper signature that predates the
+    optional runtime_state parameter. Retry without that kwarg when needed so
+    legacy test doubles continue to work.
+    """
+    call_kwargs = {
+        "chat_db": chat_db,
+        "request_data": request_data,
+        "loop": loop,
+        "metrics": metrics,
+        "default_save_to_db": default_save_to_db,
+        "final_conversation_id": final_conversation_id,
+        "save_message_fn": save_message_fn,
+    }
+    try:
+        signature = inspect.signature(build_context_and_messages)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is None or "runtime_state" in signature.parameters:
+        return await build_context_and_messages(
+            **call_kwargs,
+            runtime_state=runtime_state,
+        )
+
+    return await build_context_and_messages(**call_kwargs)
+
+
+def _request_uses_vision_input(messages: list[Any]) -> bool:
+    """Return True when the request includes image content parts."""
+    for message in messages or []:
+        content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+        if isinstance(content, dict):
+            content = [content]
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict):
+                if str(part.get("type") or "").strip().lower() == "image_url":
+                    return True
+                continue
+            if str(getattr(part, "type", "") or "").strip().lower() == "image_url":
+                return True
+    return False
+
+
+def _extract_routing_requested_capabilities(
+    request_data: ChatCompletionRequest,
+) -> dict[str, Any]:
+    """Derive hard capability filters from the incoming request."""
+    response_format = getattr(request_data, "response_format", None)
+    if isinstance(response_format, dict):
+        response_type = str(response_format.get("type") or "").strip().lower()
+    else:
+        response_type = str(getattr(response_format, "type", "") or "").strip().lower()
+
+    return {
+        "tools": bool(getattr(request_data, "tools", None)),
+        "vision": _request_uses_vision_input(getattr(request_data, "messages", [])),
+        "json_mode": response_type in {"json_object", "json_schema"},
+        "reasoning": bool(getattr(request_data, "thinking_budget_tokens", None)),
+    }
+
+
+async def _select_auto_chat_llm_router_choice(
+    *,
+    router_request: RouterRequest,
+    policy: Any,
+    candidates: list[dict[str, Any]],
+    provider_listing: dict[str, Any],
+    request: Request,
+    current_user: User | None,
+    request_id: str | None,
+) -> tuple[dict[str, str] | None, dict[str, Any]]:
+    def _fallback_resolver(name: str) -> str | None:
+        key_val, _ = resolve_provider_api_key(
+            name,
+            prefer_module_keys_in_tests=True,
+        )
+        return key_val
+
+    user_id_int = getattr(current_user, "id_int", None)
+    if user_id_int is None:
+        try:
+            user_id_int = int(getattr(current_user, "id", None))
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            user_id_int = None
+
+    try:
+        request_state = getattr(request, "state", None)
+        user_id = getattr(request_state, "user_id", None)
+        api_key_id = getattr(request_state, "api_key_id", None)
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        user_id = None
+        api_key_id = None
+
+    async def _execute_router_call(router_model, router_messages):
+        byok_resolution = await resolve_byok_credentials(
+            router_model.provider,
+            user_id=user_id_int,
+            request=request,
+            fallback_resolver=_fallback_resolver,
+        )
+        try:
+            return await perform_chat_api_call_async(
+                api_endpoint=router_model.provider,
+                messages_payload=router_messages,
+                api_key=byok_resolution.api_key,
+                model=router_model.model,
+                max_tokens=64,
+                streaming=False,
+                user_identifier=str(getattr(current_user, "id", "auto-router")),
+                app_config=byok_resolution.app_config,
+            )
+        finally:
+            await byok_resolution.touch_last_used()
+
+    async def _log_router_usage(router_model, usage, latency_ms):
+        try:
+            await log_model_router_usage(
+                context=RoutingUsageContext(
+                    surface="chat",
+                    endpoint="POST:/api/v1/chat/completions",
+                    user_id=user_id,
+                    key_id=api_key_id,
+                    request_id=request_id,
+                    conversation_id=router_request.scope,
+                ),
+                provider=router_model.provider,
+                model=router_model.model,
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
+                latency_ms=latency_ms,
+                estimated=usage["total_tokens"] == 0,
+            )
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Auto chat router usage logging skipped: {}", exc)
+
+    try:
+        return await select_llm_router_choice(
+            router_request=router_request,
+            policy=policy,
+            candidates=candidates,
+            provider_listing=provider_listing,
+            execute_router_call=_execute_router_call,
+            log_router_usage=_log_router_usage,
+        )
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Auto chat LLM router call failed: {}", exc)
+        return None, {"error": type(exc).__name__}
+
+
+async def _resolve_auto_chat_routing_decision(
+    request_data: ChatCompletionRequest,
+    *,
+    request: Request,
+    sticky_store: InMemoryRoutingDecisionStore,
+    current_user: User | None,
+    request_id: str | None,
+) -> tuple[Any | None, dict[str, Any]]:
+    """Resolve `model='auto'` into a canonical provider/model pair."""
+    provider_listing = apply_llm_provider_overrides_to_listing(get_configured_providers())
+    default_provider = str(
+        provider_listing.get("default_provider") or _get_default_provider()
+    ).strip().lower() or _get_default_provider()
+    policy = resolve_routing_policy(
+        request_model=str(getattr(request_data, "model", "") or ""),
+        explicit_provider=getattr(request_data, "api_provider", None),
+        routing_override=getattr(request_data, "routing", None),
+        server_default_provider=default_provider,
+    )
+    requested_capabilities = _extract_routing_requested_capabilities(request_data)
+    candidates = build_candidate_pool(
+        boundary_mode=policy.boundary_mode,
+        pinned_provider=policy.pinned_provider,
+        server_default_provider=policy.server_default_provider,
+        requested_capabilities=requested_capabilities,
+        catalog=flatten_provider_listing_for_routing(provider_listing),
+    )
+    router_request = RouterRequest(
+        model="auto",
+        surface="chat",
+        latest_user_turn=_extract_latest_user_turn_text(getattr(request_data, "messages", [])),
+        scope=getattr(request_data, "conversation_id", None),
+        requested_capabilities=requested_capabilities,
+        routing_context={
+            "stream": bool(getattr(request_data, "stream", False)),
+            "response_format": bool(getattr(request_data, "response_format", None)),
+        },
+    )
+    llm_router_choice, llm_router_debug = await _select_auto_chat_llm_router_choice(
+        router_request=router_request,
+        policy=policy,
+        candidates=candidates,
+        provider_listing=provider_listing,
+        request=request,
+        current_user=current_user,
+        request_id=request_id,
+    )
+    decision = route_model(
+        request=router_request,
+        policy=policy,
+        candidates=candidates,
+        sticky_store=sticky_store,
+        llm_router_choice=llm_router_choice,
+        provider_order=build_provider_order_for_routing(
+            provider_listing,
+            objective=policy.objective,
+            priority_resolver=get_override_model_priority,
+        ),
+    )
+    return decision, {
+        "policy": {
+            "boundary_mode": policy.boundary_mode,
+            "pinned_provider": policy.pinned_provider,
+            "server_default_provider": policy.server_default_provider,
+            "objective": policy.objective,
+            "mode": policy.mode,
+            "strategy": policy.strategy,
+            "failure_mode": policy.failure_mode,
+        },
+        "candidate_count": len(candidates),
+        "llm_router": llm_router_debug,
+    }
+
+
 def _normalize_string_list(value: Any) -> list[str]:
     """Normalize mixed payload list/string values into list[str]."""
     if value is None:
@@ -817,18 +1074,9 @@ def _assemble_persona_runtime_guidance(
         conflicting_capability_tags=conflicting_capability_tags,
     )
 
-    updated_system_message = str(system_message or "")
-    for _, content, _ in assembly.sections:
-        if not str(content or "").strip():
-            continue
-        if updated_system_message.strip():
-            updated_system_message = f"{updated_system_message.rstrip()}\n\n{content}"
-        else:
-            updated_system_message = str(content).strip()
-
     return {
         "applied": bool(assembly.sections),
-        "system_message": updated_system_message,
+        "system_message": append_persona_exemplar_sections(system_message, assembly.sections),
         "sections": assembly.sections,
         "selected_exemplars": assembly.selected_exemplars,
         "rejected_exemplars": assembly.rejected_exemplars,
@@ -971,7 +1219,7 @@ async def _persist_persona_chat_reply_if_enabled(
     conversation_id: str | None,
     assistant_text: str,
 ) -> bool:
-    """Persist assistant reply into persona memory when conversation writeback is enabled."""
+    """Persist assistant replies for persona-backed chats when writeback is enabled."""
     if not _persona_memory_write_enabled(assistant_context):
         return False
     if not conversation_id:
@@ -1956,6 +2204,7 @@ async def create_chat_completion(
     request: Request,  # Request object for audit logging, rate limiting, and provider state access
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    routing_decision_store: InMemoryRoutingDecisionStore = Depends(get_request_routing_decision_store),
     current_user: User = Depends(get_request_user),
     Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
@@ -1993,35 +2242,15 @@ async def create_chat_completion(
 
     # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
-    explicit_model_requested = bool(str(raw_model_input or "").strip())
+    auto_model_requested = str(raw_model_input or "").strip().lower() == "auto"
+    explicit_model_requested = bool(str(raw_model_input or "").strip()) and not auto_model_requested
     strict_model_selection = _should_enforce_strict_model_selection()
     allow_provider_fallback_for_request = (
         ENABLE_PROVIDER_FALLBACK
         and not (strict_model_selection and explicit_model_requested)
     )
-
-    # Resolve provider/model for both metrics and execution, and record decision path
-    (
-        metrics_provider,
-        metrics_model,
-        selected_provider,
-        selected_model,
-        provider_debug,
-    ) = resolve_provider_and_model(
-        request_data=request_data,
-        metrics_default_provider=DEFAULT_LLM_PROVIDER,
-        normalize_default_provider=_get_default_provider(),
-    )
-
-    # Use metrics_* for request-level metrics/audit; selected_* for downstream calls
-    provider = metrics_provider
-    model = metrics_model
-    initial_provider = metrics_provider
-
-    try:
-        logger.debug("Provider/model resolution: {}", provider_debug)
-    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_err:  # pragma: no cover - defensive
-        logger.debug("Provider/model resolution logging skipped: {}", log_err)
+    routing_decision = None
+    routing_debug: dict[str, Any] | None = None
 
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
 
@@ -2034,7 +2263,108 @@ async def create_chat_completion(
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             user_base_dir = None
 
-    # Initialize audit context for logging
+    # Validate request payload using helper function before routing so auto model
+    # selection sees the finalized request shape, including validated/injected tools.
+    validation_start = time.time()
+    is_valid, error_message = await validate_request_payload(
+        request_data,
+        max_messages=MAX_MESSAGES_PER_REQUEST,
+        max_images=MAX_IMAGES_PER_REQUEST,
+        max_text_length=MAX_TEXT_LENGTH,
+        enforce_image_max_bytes=enforce_image_size,
+        max_image_bytes=max_image_bytes,
+    )
+    metrics.metrics.validation_duration.record(time.time() - validation_start)
+
+    if not is_valid:
+        metrics.track_validation_failure("payload", error_message)
+        logger.warning(f"Request validation failed: {error_message}")
+        if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
+            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
+
+    try:
+        if request_data.conversation_id:
+            request_data.conversation_id = validate_conversation_id(request_data.conversation_id)
+        if request_data.character_id:
+            request_data.character_id = validate_character_id(request_data.character_id)
+        if request_data.tools:
+            tools_as_dicts = [
+                tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool
+                for tool in request_data.tools
+            ]
+            provider_hint = request_data.api_provider or _get_default_provider()
+            request_data.tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
+        if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
+            request_data.tools = add_skill_tool_to_tools_list(
+                request_data.tools,
+                user_id=current_user.id,
+                base_path=user_base_dir,
+                db=chat_db,
+            )
+        if request_data.temperature is not None:
+            request_data.temperature = validate_temperature(request_data.temperature)
+        if request_data.max_tokens is not None:
+            request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
+    except ValueError as e:
+        logger.warning(f"Input validation error: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
+
+    if auto_model_requested:
+        routing_decision, routing_debug = await _resolve_auto_chat_routing_decision(
+            request_data,
+            request=request,
+            sticky_store=routing_decision_store,
+            current_user=current_user,
+            request_id=request_id,
+        )
+        if routing_decision is None:
+            candidate_count = int((routing_debug or {}).get("candidate_count") or 0)
+            if candidate_count > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error_code": "auto_routing_failed",
+                        "message": (
+                            "Auto-routing failed and the current routing policy did not allow "
+                            "deterministic fallback."
+                        ),
+                        "routing": routing_debug or {},
+                    },
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "auto_routing_no_candidates",
+                    "message": "No eligible models matched the current auto-routing constraints.",
+                    "routing": routing_debug or {},
+                },
+            )
+        if str((routing_debug or {}).get("policy", {}).get("boundary_mode") or "").strip().lower() == "pinned_provider":
+            allow_provider_fallback_for_request = False
+
+    (
+        metrics_provider,
+        metrics_model,
+        selected_provider,
+        selected_model,
+        provider_debug,
+    ) = resolve_provider_and_model(
+        request_data=request_data,
+        metrics_default_provider=DEFAULT_LLM_PROVIDER,
+        normalize_default_provider=_get_default_provider(),
+        routing_decision=routing_decision,
+    )
+
+    provider = metrics_provider
+    model = metrics_model
+    initial_provider = metrics_provider
+
+    try:
+        logger.debug("Provider/model resolution: {}", provider_debug)
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_err:  # pragma: no cover - defensive
+        logger.debug("Provider/model resolution logging skipped: {}", log_err)
+
     context = None
     if audit_service:
         try:
@@ -2055,14 +2385,12 @@ async def create_chat_completion(
                     "message_count": len(request_data.messages),
                     "streaming": request_data.stream,
                     "has_tools": bool(request_data.tools),
-                    "conversation_id": request_data.conversation_id
+                    "conversation_id": request_data.conversation_id,
                 }
             )
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_error:
             logger.warning(f"Failed to log audit event: {log_error}")
-            # Continue without logging rather than failing the request
 
-    # Log lightweight usage event for personalization (best-effort)
     try:
         usage_log.log_event(
             "chat.completions",
@@ -2072,11 +2400,6 @@ async def create_chat_completion(
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _usage_log_err:
         logger.debug(f"Usage event logging failed: {_usage_log_err}")
 
-    # Start tracking the request
-
-    # Resource Governor token reservation handle (endpoint-level). This is used to
-    # enforce token budgets with correct per-request units and to commit/refund
-    # after the completion is generated.
     _rg_handle_id = None
     _rg_policy_id = None
     rg_finalized = False
@@ -2091,56 +2414,6 @@ async def create_chat_completion(
     try:
         # Authentication is enforced via get_request_user dependency (JWT or X-API-KEY).
         # If it fails, FastAPI raises 401 before reaching here. No further checks needed.
-
-        # Validate request payload using helper function
-        validation_start = time.time()
-        is_valid, error_message = await validate_request_payload(
-            request_data,
-            max_messages=MAX_MESSAGES_PER_REQUEST,
-            max_images=MAX_IMAGES_PER_REQUEST,
-            max_text_length=MAX_TEXT_LENGTH,
-            enforce_image_max_bytes=enforce_image_size,
-            max_image_bytes=max_image_bytes,
-        )
-        metrics.metrics.validation_duration.record(time.time() - validation_start)
-
-        if not is_valid:
-            metrics.track_validation_failure("payload", error_message)
-            logger.warning(f"Request validation failed: {error_message}")
-            if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
-                raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
-            else:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
-
-        # Validate specific fields with validators
-        try:
-            if request_data.conversation_id:
-                request_data.conversation_id = validate_conversation_id(request_data.conversation_id)
-            if request_data.character_id:
-                request_data.character_id = validate_character_id(request_data.character_id)
-            if request_data.tools:
-                # Convert ToolDefinition objects to dictionaries for validation
-                tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool
-                                  for tool in request_data.tools]
-                provider_hint = request_data.api_provider or _get_default_provider()
-                validated_tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
-                # Keep the validated tools as dicts since that's what the LLM API expects
-                request_data.tools = validated_tools
-            if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
-                request_data.tools = add_skill_tool_to_tools_list(
-                    request_data.tools,
-                    user_id=current_user.id,
-                    base_path=user_base_dir,
-                    db=chat_db,
-                )
-            if request_data.temperature is not None:
-                request_data.temperature = validate_temperature(request_data.temperature)
-            if request_data.max_tokens is not None:
-                request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
-
-        except ValueError as e:
-            logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
 
         # Slash command handling: compute, moderate, then optionally inject
         try:
@@ -2849,7 +3122,7 @@ async def create_chat_completion(
                 conversation_created_this_turn,
                 llm_payload_messages,
                 should_persist,
-            ) = await build_context_and_messages(
+            ) = await _build_context_and_messages_compat(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,
@@ -2864,14 +3137,14 @@ async def create_chat_completion(
                 if isinstance(continuation_runtime.get("tldw_continuation"), dict)
                 else None
             )
-            assistant_context = (
-                continuation_runtime.get("assistant_context")
-                if isinstance(continuation_runtime.get("assistant_context"), dict)
-                else None
-            )
             assistant_parent_message_id = (
                 str(continuation_runtime.get("assistant_parent_message_id"))
                 if continuation_runtime.get("assistant_parent_message_id")
+                else None
+            )
+            assistant_context = (
+                continuation_runtime.get("assistant_context")
+                if isinstance(continuation_runtime.get("assistant_context"), dict)
                 else None
             )
 
@@ -2931,7 +3204,7 @@ async def create_chat_completion(
                     system_message=final_system_message,
                     assistant_context=assistant_context,
                     exemplars=persona_exemplars,
-                    current_turn_text=extract_latest_user_turn_text(templated_llm_payload),
+                    current_turn_text=_extract_latest_user_turn_text(templated_llm_payload),
                 )
                 final_system_message = runtime_guidance["system_message"]
                 persona_selected_exemplars = list(runtime_guidance["selected_exemplars"])
@@ -3049,8 +3322,6 @@ async def create_chat_completion(
             elif persona_debug_meta is not None:
                 if persona_strategy == "off":
                     persona_debug_meta["reason"] = "disabled_by_strategy"
-                elif is_persona_backed_chat:
-                    persona_debug_meta["reason"] = "persona_context_unavailable"
                 elif character_db_id_for_context is None:
                     persona_debug_meta["reason"] = "character_context_unavailable"
 
@@ -3098,29 +3369,23 @@ async def create_chat_completion(
 
             llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_api_provider)
 
+            llm_final_system_message, llm_templated_payload = inject_research_context_into_prompt(
+                final_system_message=final_system_message,
+                templated_llm_payload=templated_llm_payload,
+                research_context=getattr(request_data, "research_context", None),
+            )
+
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
                 request_data=request_data,
                 target_api_provider=target_api_provider,
                 provider_api_key=provider_api_key,
-                templated_llm_payload=templated_llm_payload,
-                final_system_message=final_system_message,
+                templated_llm_payload=llm_templated_payload,
+                final_system_message=llm_final_system_message,
                 app_config=app_config_override,
                 grammar_record=llamacpp_grammar_record,
             )
             cleaned_args["request"] = request
-            try:
-                structured_request_context = prepare_structured_response_request(
-                    provider=target_api_provider,
-                    response_format=cleaned_args.get("response_format"),
-                    requested_response_format=cleaned_args.get("_structured_requested_response_format"),
-                )
-            except (
-                StructuredGenerationCapabilityError,
-                StructuredGenerationParseError,
-                StructuredGenerationSchemaError,
-            ) as structured_exc:
-                raise build_structured_http_exception(structured_exc) from structured_exc
 
             def _get_default_model_for_provider_name(target_provider: str) -> str | None:
                 override_default = get_override_default_model(target_provider)
@@ -3187,15 +3452,14 @@ async def create_chat_completion(
                         },
                     )
 
-                refreshed_llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_provider)
                 refreshed_args = build_call_params_from_request(
                     request_data=request_data,
                     target_api_provider=target_provider,
                     provider_api_key=provider_api_key_new,
-                    templated_llm_payload=templated_llm_payload,
-                    final_system_message=final_system_message,
+                    templated_llm_payload=llm_templated_payload,
+                    final_system_message=llm_final_system_message,
                     app_config=refreshed_resolution.app_config,
-                    grammar_record=refreshed_llamacpp_grammar_record,
+                    grammar_record=_resolve_llamacpp_grammar_record(target_provider),
                 )
                 refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")
@@ -3429,7 +3693,7 @@ async def create_chat_completion(
                 total_tokens = min(MAX_TOKEN_CAP * 2, prompt_tokens + completion_tokens)
 
                 return {
-                    "id": f"mock-{provider}-{uuid.uuid4().hex[:8]}",
+                    "id": f"mock-{target_api_provider}-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion",
                     "created": int(time.time()),
                     "model": model_name,
@@ -3525,24 +3789,6 @@ async def create_chat_completion(
                             raise initial_exc
 
                         try:
-                            refreshed_structured_request_context = structured_request_context
-                            if refreshed_structured_request_context is not None:
-                                try:
-                                    refreshed_structured_request_context = prepare_structured_response_request(
-                                        provider=target_api_provider,
-                                        response_format=refreshed_args.get("response_format"),
-                                        requested_response_format=(
-                                            structured_request_context.requested_response_format
-                                            if structured_request_context is not None
-                                            else refreshed_args.get("_structured_requested_response_format")
-                                        ),
-                                    )
-                                except (
-                                    StructuredGenerationCapabilityError,
-                                    StructuredGenerationParseError,
-                                    StructuredGenerationSchemaError,
-                                ) as structured_exc:
-                                    raise build_structured_http_exception(structured_exc) from structured_exc
                             refreshed_response = perform_chat_api_call(**refreshed_args)
                             _record_openai_oauth_retry("success")
                             return refreshed_response
@@ -3566,7 +3812,7 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     return base
 
-            async def _on_stream_full_reply_for_assistant_runtime(full_reply: str) -> None:
+            async def _on_stream_full_reply_for_persona_telemetry(full_reply: str) -> None:
                 assistant_text = str(full_reply or "")
                 if character_db_id_for_context is not None:
                     persona_telemetry = compute_persona_exemplar_telemetry(
@@ -3626,10 +3872,9 @@ async def create_chat_completion(
                     enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
-                    structured_request_context=structured_request_context,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
-                    on_stream_full_reply=_on_stream_full_reply_for_assistant_runtime,
+                    on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
@@ -3677,7 +3922,6 @@ async def create_chat_completion(
                     enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
-                    structured_request_context=structured_request_context,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     self_monitoring_service=_self_mon_service,
@@ -3685,10 +3929,14 @@ async def create_chat_completion(
                     continuation_metadata=continuation_meta,
                 )
                 persona_telemetry: dict[str, Any] | None = None
+                assistant_reply_text = (
+                    _extract_assistant_text_from_completion_payload(encoded_payload)
+                    if isinstance(encoded_payload, dict)
+                    else ""
+                )
                 if isinstance(encoded_payload, dict) and character_db_id_for_context is not None:
-                    assistant_text = _extract_assistant_text_from_completion_payload(encoded_payload)
                     persona_telemetry = compute_persona_exemplar_telemetry(
-                        output_text=assistant_text,
+                        output_text=assistant_reply_text,
                         selected_exemplars=persona_selected_exemplars,
                     )
                     debug_id_for_logs = (
@@ -3733,7 +3981,6 @@ async def create_chat_completion(
                     meta_payload["persona"] = persona_debug_meta
 
                 if isinstance(encoded_payload, dict):
-                    assistant_reply_text = _extract_assistant_text_from_completion_payload(encoded_payload)
                     await _persist_persona_chat_reply_if_enabled(
                         assistant_context=assistant_context,
                         user_id=user_id,
@@ -4141,17 +4388,92 @@ def _parse_iso_datetime(value: str, field_name: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
-    character_id = conversation.get("character_id")
-    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
-    assistant_id = conversation.get("assistant_id")
-    if assistant_id is None and character_id is not None:
-        assistant_id = str(character_id)
+def _normalize_weights(w_bm25: float, w_recency: float) -> tuple[float, float]:
+    total = (w_bm25 or 0.0) + (w_recency or 0.0)
+    if total <= 0:
+        return 0.65, 0.35
+    return (w_bm25 / total), (w_recency / total)
+
+
+def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> float:
+    if dt_value is None or half_life_days <= 0:
+        return 0.0
+    now = datetime.now(timezone.utc)
+    age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
+    return math.exp(-age_days / half_life_days)
+
+
+def _resolve_conversation_scope(
+    scope_type: Literal["global", "workspace"] | None,
+    workspace_id: str | None,
+) -> ConversationScopeParams:
+    try:
+        return ConversationScopeParams(
+            scope_type=scope_type or "global",
+            workspace_id=workspace_id,
+        )
+    except ValidationError as exc:
+        detail = exc.errors()[0].get("msg") if exc.errors() else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        ) from exc
+
+
+def _scoped_conversation_fields(conversation: dict[str, Any]) -> dict[str, Any]:
     return {
-        "character_id": character_id,
-        "assistant_kind": assistant_kind,
-        "assistant_id": assistant_id,
+        "scope_type": conversation.get("scope_type") or "global",
+        "workspace_id": conversation.get("workspace_id"),
+    }
+
+
+def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "character_id": conversation.get("character_id"),
+        "assistant_kind": conversation.get("assistant_kind"),
+        "assistant_id": conversation.get("assistant_id"),
         "persona_memory_mode": conversation.get("persona_memory_mode"),
+    }
+
+
+def _conversation_search_deleted_scope(include_deleted: bool, deleted_only: bool) -> str:
+    if deleted_only:
+        return "deleted_only"
+    if include_deleted:
+        return "include_deleted"
+    return "active"
+
+
+def _conversation_search_query_strategy(
+    query: str | None,
+    *,
+    include_deleted: bool,
+    deleted_only: bool,
+) -> str:
+    if not (query or "").strip():
+        return "none"
+    if include_deleted or deleted_only:
+        return "deleted_text"
+    return "fts"
+
+
+def _conversation_search_metric_labels(
+    query: str | None,
+    *,
+    order_by: str,
+    include_deleted: bool,
+    deleted_only: bool,
+    outcome: str,
+) -> dict[str, str]:
+    return {
+        "query_strategy": _conversation_search_query_strategy(
+            query,
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
+        ),
+        "order_by": order_by,
+        "deleted_scope": _conversation_search_deleted_scope(include_deleted, deleted_only),
+        "outcome": outcome,
     }
 
 
@@ -4159,6 +4481,7 @@ def _verify_conversation_ownership(
     db: CharactersRAGDB,
     conversation_id: str,
     current_user: User,
+    scope: ConversationScopeParams | None = None,
 ) -> dict[str, Any]:
     conversation = db.get_conversation_by_id(conversation_id)
     if not conversation or conversation.get("deleted"):
@@ -4173,7 +4496,39 @@ def _verify_conversation_ownership(
     except (TypeError, ValueError):
         if str(conv_client_id) != str(user_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation") from None
+    expected_scope = scope or ConversationScopeParams()
+    conversation_scope = conversation.get("scope_type") or "global"
+    conversation_workspace_id = conversation.get("workspace_id")
+    if conversation_scope != expected_scope.scope_type:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    if (
+        expected_scope.scope_type == "workspace"
+        and conversation_workspace_id != expected_scope.workspace_id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return conversation
+
+
+def _verify_message_ownership(
+    db: CharactersRAGDB,
+    message_id: str,
+    current_user: User,
+    scope: ConversationScopeParams | None = None,
+) -> dict[str, Any]:
+    message = db.get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Message {message_id} not found",
+        )
+    conversation_id = message.get("conversation_id")
+    if not conversation_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Message {message_id} not found",
+        )
+    _verify_conversation_ownership(db, str(conversation_id), current_user, scope)
+    return message
 
 
 def _replace_conversation_keywords(
@@ -4423,28 +4778,21 @@ async def save_chat_knowledge(
 ):
     """Persist a snippet from a conversation into Notes (and optional Flashcard)."""
     try:
-        # Validate conversation ownership and optional message linkage before mutating.
-        conversation = db.get_conversation_by_id(payload.conversation_id)
-        if not conversation or conversation.get("deleted"):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-        conv_client_id = conversation.get("client_id")
-        user_id = current_user.id
-        if conv_client_id is None or user_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        try:
-            if int(conv_client_id) != int(user_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        except (TypeError, ValueError):
-            if str(conv_client_id) != str(user_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Forbidden for this conversation",
-                ) from None
+        scope = _resolve_conversation_scope(payload.scope_type, payload.workspace_id)
+        conversation = _verify_conversation_ownership(
+            db,
+            payload.conversation_id,
+            current_user,
+            scope,
+        )
 
         if payload.message_id:
-            message = db.get_message_by_id(payload.message_id)
-            if not message or message.get("deleted"):
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+            message = _verify_message_ownership(
+                db,
+                payload.message_id,
+                current_user,
+                scope,
+            )
             if message.get("conversation_id") != payload.conversation_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 
@@ -4510,68 +4858,6 @@ async def save_chat_knowledge(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet") from exc
 
 
-def _derive_conversation_search_observability(
-    *,
-    query: str | None,
-    include_deleted: bool,
-    deleted_only: bool,
-    order_by: str,
-) -> dict[str, Any]:
-    query_present = bool((query or "").strip())
-    if deleted_only:
-        deleted_scope = "deleted_only"
-    elif include_deleted:
-        deleted_scope = "include_deleted"
-    else:
-        deleted_scope = "active"
-
-    if not query_present:
-        query_strategy = "none"
-    elif include_deleted or deleted_only:
-        query_strategy = "deleted_text"
-    else:
-        query_strategy = "fts"
-
-    return {
-        "query_present": query_present,
-        "query_strategy": query_strategy,
-        "deleted_scope": deleted_scope,
-        "order_by": order_by,
-    }
-
-
-def _record_conversation_search_observability(
-    *,
-    outcome: str,
-    duration_seconds: float,
-    observability: dict[str, Any],
-) -> None:
-    try:
-        metrics = get_metrics_registry()
-    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Conversation search metrics unavailable: {}", exc)
-        return
-
-    labels = {
-        "query_strategy": str(observability["query_strategy"]),
-        "order_by": str(observability["order_by"]),
-        "deleted_scope": str(observability["deleted_scope"]),
-        "outcome": outcome,
-    }
-    try:
-        metrics.increment("chat_conversation_search_requests_total", labels=labels)
-    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Conversation search request metric failed: {}", exc)
-    try:
-        metrics.observe(
-            "chat_conversation_search_duration_seconds",
-            max(0.0, float(duration_seconds)),
-            labels=labels,
-        )
-    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Conversation search duration metric failed: {}", exc)
-
-
 @router.get(
     "/conversations",
     response_model=ConversationListResponse,
@@ -4600,12 +4886,9 @@ async def list_chat_conversations(
     keywords: list[str] | None = Query(None, description="Keyword filters (repeatable)"),
     cluster_id: str | None = Query(None, description="Cluster ID filter"),
     character_id: int | None = Query(None, description="Character ID filter"),
-    character_scope: Literal["all", "character", "non_character"] = Query(
-        "all",
-        description="Filter conversations by whether they are character-backed or not",
-    ),
-    include_deleted: bool = Query(False, description="Include soft-deleted conversations in results"),
-    deleted_only: bool = Query(False, description="Return only soft-deleted conversations"),
+    character_scope: str | None = Query(None, description="Character scope filter: all, character, or non_character"),
+    include_deleted: bool = Query(False, description="Include deleted conversations in results"),
+    deleted_only: bool = Query(False, description="Only return deleted conversations"),
     start_date: str | None = Query(None, description="ISO-8601 start date"),
     end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
@@ -4618,16 +4901,30 @@ async def list_chat_conversations(
     current_user: User = Depends(get_request_user),
 ):
     started_at = time.perf_counter()
-    include_deleted_effective = include_deleted or deleted_only
-    observability = _derive_conversation_search_observability(
-        query=query,
-        include_deleted=include_deleted_effective,
-        deleted_only=deleted_only,
-        order_by=order_by,
-    )
-    db_ms = 0.0
-    enrichment_ms = 0.0
+    effective_include_deleted = include_deleted or deleted_only
+    normalized_character_scope = character_scope.strip().lower() if character_scope and character_scope.strip() else None
+
+    def _record_search_outcome(outcome: str) -> dict[str, str]:
+        labels = _conversation_search_metric_labels(
+            query,
+            order_by=order_by,
+            include_deleted=effective_include_deleted,
+            deleted_only=deleted_only,
+            outcome=outcome,
+        )
+        duration_seconds = max(time.perf_counter() - started_at, 0.0)
+        registry = get_metrics_registry()
+        registry.increment("chat_conversation_search_requests_total", labels=labels)
+        registry.observe("chat_conversation_search_duration_seconds", duration_seconds, labels=labels)
+        return labels
+
     try:
+        if normalized_character_scope == "non_character" and character_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="character_scope=non_character cannot be combined with character_id",
+            )
+
         topic_filter = topic_label.strip() if topic_label else None
         topic_prefix = False
         if topic_filter and topic_filter.endswith("*"):
@@ -4641,22 +4938,16 @@ async def list_chat_conversations(
 
         start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
         end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
-
-        if character_id is not None and character_scope == "non_character":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="character_scope=non_character cannot be combined with character_id",
-            )
-
+        resolved_scope = _resolve_conversation_scope(scope_type, workspace_id)
         search_as_of = datetime.now(timezone.utc)
-        db_started_at = time.perf_counter()
+
         page_rows, total, _max_bm25 = db.search_conversations_page(
             query,
             client_id=str(current_user.id),
-            include_deleted=include_deleted_effective,
+            include_deleted=effective_include_deleted,
             deleted_only=deleted_only,
             character_id=character_id,
-            character_scope=character_scope,
+            character_scope=normalized_character_scope,
             state=state,
             topic_label=topic_filter,
             topic_prefix=topic_prefix,
@@ -4672,27 +4963,29 @@ async def list_chat_conversations(
             half_life_days=RECENCY_HALF_LIFE_DAYS,
             bm25_weight=CHAT_BM25_WEIGHT,
             recency_weight=CHAT_RECENCY_WEIGHT,
-            scope_type=scope_type,
-            workspace_id=workspace_id,
+            scope_type=resolved_scope.scope_type,
+            workspace_id=resolved_scope.workspace_id,
         )
-        db_ms = (time.perf_counter() - db_started_at) * 1000.0
-        enrichment_started_at = time.perf_counter()
         conv_ids = [row.get("id") for row in page_rows if row.get("id")]
         keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
-        message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
+        message_counts = (
+            db.count_messages_for_conversations(conv_ids, include_deleted=effective_include_deleted)
+            if conv_ids
+            else {}
+        )
         items: list[ConversationListItem] = []
         for row in page_rows:
             conv_id = row.get("id") or ""
             keyword_rows = keyword_map.get(conv_id, [])
             keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
             message_count = message_counts.get(conv_id, 0)
-            assistant_fields = _conversation_assistant_identity_fields(row)
 
             bm25_norm = row.get("bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
                 ConversationListItem(
                     id=conv_id,
-                    **assistant_fields,
+                    **_scoped_conversation_fields(row),
+                    **_conversation_assistant_identity_fields(row),
                     title=row.get("title"),
                     state=row.get("state") or "in-progress",
                     topic_label=row.get("topic_label"),
@@ -4707,7 +5000,6 @@ async def list_chat_conversations(
                     version=row.get("version") or 1,
                 )
             )
-        enrichment_ms = (time.perf_counter() - enrichment_started_at) * 1000.0
 
         pagination = ConversationListPagination(
             limit=limit,
@@ -4715,70 +5007,117 @@ async def list_chat_conversations(
             total=total,
             has_more=(offset + limit) < total,
         )
-        total_seconds = time.perf_counter() - started_at
-        _record_conversation_search_observability(
-            outcome="success",
-            duration_seconds=total_seconds,
-            observability=observability,
-        )
+        success_labels = _record_search_outcome("success")
         logger.debug(
             "Conversation search completed: {}",
             {
-                "query_present": observability["query_present"],
-                "query_strategy": observability["query_strategy"],
-                "deleted_scope": observability["deleted_scope"],
-                "character_scope": character_scope,
-                "date_field": date_field,
+                "query_strategy": success_labels["query_strategy"],
+                "order_by": success_labels["order_by"],
+                "deleted_scope": success_labels["deleted_scope"],
+                "returned": len(items),
+                "total": total,
                 "limit": limit,
                 "offset": offset,
-                "total": total,
-                "returned": len(items),
-                "has_more": pagination.has_more,
-                "db_ms": round(db_ms, 3),
-                "enrichment_ms": round(enrichment_ms, 3),
-                "total_ms": round(total_seconds * 1000.0, 3),
             },
         )
         return ConversationListResponse(items=items, pagination=pagination)
     except InputError as exc:
-        _record_conversation_search_observability(
-            outcome="validation",
-            duration_seconds=time.perf_counter() - started_at,
-            observability=observability,
-        )
+        _record_search_outcome("validation")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except HTTPException:
-        _record_conversation_search_observability(
-            outcome="validation",
-            duration_seconds=time.perf_counter() - started_at,
-            observability=observability,
-        )
+    except HTTPException as exc:
+        if 400 <= exc.status_code < 500:
+            _record_search_outcome("validation")
+        else:
+            error_labels = _record_search_outcome("server_error")
+            logger.error(
+                "Conversation list failed: {}",
+                {
+                    "query_strategy": error_labels["query_strategy"],
+                    "order_by": error_labels["order_by"],
+                    "deleted_scope": error_labels["deleted_scope"],
+                    "outcome": error_labels["outcome"],
+                },
+                exc_info=True,
+            )
         raise
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        total_seconds = time.perf_counter() - started_at
-        _record_conversation_search_observability(
-            outcome="server_error",
-            duration_seconds=total_seconds,
-            observability=observability,
-        )
+        error_labels = _record_search_outcome("server_error")
         logger.error(
-            "Conversation list failed: {} shape={}",
-            exc,
+            "Conversation list failed: {}",
             {
-                "query_present": observability["query_present"],
-                "query_strategy": observability["query_strategy"],
-                "deleted_scope": observability["deleted_scope"],
-                "character_scope": character_scope,
-                "date_field": date_field,
-                "limit": limit,
-                "offset": offset,
-                "db_ms": round(db_ms, 3),
-                "enrichment_ms": round(enrichment_ms, 3),
-                "total_ms": round(total_seconds * 1000.0, 3),
+                "query_strategy": error_labels["query_strategy"],
+                "order_by": error_labels["order_by"],
+                "deleted_scope": error_labels["deleted_scope"],
+                "outcome": error_labels["outcome"],
             },
             exc_info=True,
         )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Get conversation metadata",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Get conversation metadata [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+    include_in_schema=False,
+)
+async def get_chat_conversation(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
+        keyword_rows = db.get_keywords_for_conversation(conversation_id)
+        keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
+        try:
+            message_count = db.count_messages_for_conversation(conversation_id)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            message_count = 0
+
+        return ConversationListItem(
+            id=conversation.get("id") or conversation_id,
+            **_scoped_conversation_fields(conversation),
+            **_conversation_assistant_identity_fields(conversation),
+            title=conversation.get("title"),
+            state=conversation.get("state") or "in-progress",
+            topic_label=conversation.get("topic_label"),
+            bm25_norm=None,
+            last_modified=_coerce_datetime(conversation.get("last_modified")) or datetime.now(timezone.utc),
+            created_at=_coerce_datetime(conversation.get("created_at")) or datetime.now(timezone.utc),
+            message_count=message_count,
+            keywords=keywords_list,
+            cluster_id=conversation.get("cluster_id"),
+            source=conversation.get("source"),
+            external_ref=conversation.get("external_ref"),
+            version=conversation.get("version") or 1,
+        )
+    except HTTPException:
+        raise
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Conversation get failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load conversation",
+        ) from exc
 
 
 @router.patch(
@@ -4805,11 +5144,14 @@ async def list_chat_conversations(
 async def update_chat_conversation(
     payload: ConversationUpdateRequest,
     conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
-        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
         if conversation.get("version", 1) != payload.version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -4871,6 +5213,7 @@ async def update_chat_conversation(
 
         return ConversationListItem(
             id=updated.get("id") or conversation_id,
+            **_scoped_conversation_fields(updated),
             **_conversation_assistant_identity_fields(updated),
             title=updated.get("title"),
             state=updated.get("state") or "in-progress",
@@ -4922,11 +5265,14 @@ async def get_conversation_tree(
     limit: int = Query(50, ge=1, le=200, description="Root threads per page"),
     offset: int = Query(0, ge=0, description="Root thread offset"),
     max_depth: int = Query(4, ge=1, le=20, description="Max depth for the tree"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
-        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
         character_name = None
         if conversation.get("character_id"):
             card = db.get_character_card_by_id(int(conversation.get("character_id")))
@@ -5064,6 +5410,7 @@ async def get_conversation_tree(
 
         metadata = ConversationMetadata(
             id=conversation.get("id") or conversation_id,
+            **_scoped_conversation_fields(conversation),
             **_conversation_assistant_identity_fields(conversation),
             title=conversation.get("title"),
             state=conversation.get("state") or "in-progress",
@@ -5108,10 +5455,13 @@ async def get_conversation_tree(
 async def create_conversation_share_link(
     request_body: ConversationShareLinkCreateRequest,
     conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
-    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    scope = _resolve_conversation_scope(scope_type, workspace_id)
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
     now = datetime.now(timezone.utc)
     ttl_seconds = request_body.ttl_seconds or _KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS
     ttl_seconds = max(300, min(ttl_seconds, _KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS))
@@ -5177,10 +5527,13 @@ async def create_conversation_share_link(
 )
 async def list_conversation_share_links(
     conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
-    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    scope = _resolve_conversation_scope(scope_type, workspace_id)
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
     settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
     links = _prune_knowledge_qa_share_links(existing_links)
     if links != existing_links:
@@ -5250,10 +5603,13 @@ async def list_conversation_share_links(
 async def revoke_conversation_share_link(
     conversation_id: str = Path(..., description="Conversation ID"),
     share_id: str = Path(..., description="Share link ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
-    _verify_conversation_ownership(db, conversation_id, current_user)
+    scope = _resolve_conversation_scope(scope_type, workspace_id)
+    _verify_conversation_ownership(db, conversation_id, current_user, scope)
     settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
     links = _prune_knowledge_qa_share_links(existing_links)
 
@@ -5503,18 +5859,15 @@ class ConversationCitationsResponse(BaseModel):
 async def persist_rag_context(
     message_id: str = Path(..., description="The message ID to attach RAG context to"),
     request_body: RagContextPersistRequest = Body(...),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     """Persist RAG context (citations, retrieved documents, settings) with a message."""
     try:
-        # Verify the message exists and belongs to the user
-        message = db.get_message_by_id(message_id)
-        if not message:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Message {message_id} not found"
-            )
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        _verify_message_ownership(db, message_id, current_user, scope)
 
         # Convert RagContext to dict for storage
         rag_context_dict = request_body.rag_context.model_dump(exclude_none=True)
@@ -5561,18 +5914,15 @@ async def persist_rag_context(
 )
 async def get_rag_context(
     message_id: str = Path(..., description="The message ID to get RAG context for"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     """Retrieve RAG context stored with a message."""
     try:
-        # Verify the message exists
-        message = db.get_message_by_id(message_id)
-        if not message:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Message {message_id} not found"
-            )
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        _verify_message_ownership(db, message_id, current_user, scope)
 
         rag_context = db.get_message_rag_context(message_id)
         if not rag_context:
@@ -5611,18 +5961,15 @@ async def get_messages_with_rag_context(
     limit: int = Query(100, ge=1, le=500, description="Maximum messages to return"),
     offset: int = Query(0, ge=0, description="Number of messages to skip"),
     include_rag_context: bool = Query(True, description="Whether to include RAG context"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     """Get messages from a conversation with optional RAG context."""
     try:
-        # Verify conversation exists
-        conversation = db.get_conversation_by_id(conversation_id)
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Conversation {conversation_id} not found"
-            )
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        _verify_conversation_ownership(db, conversation_id, current_user, scope)
 
         messages = db.get_messages_with_rag_context(
             conversation_id,

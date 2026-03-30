@@ -60,6 +60,7 @@ export type Quiz = {
   id: number
   name: string
   description?: string | null
+  workspace_id?: string | null
   workspace_tag?: string | null
   media_id?: number | null
   source_bundle_json?: QuizGenerateSource[] | null
@@ -140,6 +141,7 @@ export type QuizAttempt = {
 export type QuizCreate = {
   name: string
   description?: string | null
+  workspace_id?: string | null
   workspace_tag?: string | null
   media_id?: number | null
   source_bundle_json?: QuizGenerateSource[] | null
@@ -150,6 +152,7 @@ export type QuizCreate = {
 export type QuizUpdate = {
   name?: string | null
   description?: string | null
+  workspace_id?: string | null
   workspace_tag?: string | null
   media_id?: number | null
   source_bundle_json?: QuizGenerateSource[] | null
@@ -194,7 +197,7 @@ type QuizGenerateRequestBase = {
   difficulty?: "easy" | "medium" | "hard" | "mixed"
   focus_topics?: string[]
   model?: string
-  api_provider?: string
+  workspace_id?: string | null
   workspace_tag?: string | null
 }
 
@@ -299,7 +302,9 @@ export type AttemptListResponse = {
 export type QuizListParams = {
   media_id?: number | null
   q?: string | null
+  workspace_id?: string | null
   workspace_tag?: string | null
+  include_workspace_items?: boolean | null
   limit?: number
   offset?: number
 }
@@ -375,7 +380,9 @@ export async function listQuizzes(params: QuizListParams = {}): Promise<QuizList
   return await quizzesClient.list<QuizListResponse>({
     media_id: params.media_id,
     q: params.q,
+    workspace_id: params.workspace_id,
     workspace_tag: params.workspace_tag,
+    include_workspace_items: params.include_workspace_items ?? false,
     limit: params.limit,
     offset: params.offset
   })

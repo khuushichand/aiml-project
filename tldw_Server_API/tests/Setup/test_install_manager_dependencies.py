@@ -1,11 +1,14 @@
 import importlib.util
 import json
 import os
+import sys
 import tempfile
+import types
 
 import pytest
 
 from tldw_Server_API.app.core.Setup import install_manager
+from tldw_Server_API.app.core.Setup.install_schema import InstallPlan, TTSInstall
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +93,133 @@ def test_dependencies_trigger_pip_install(monkeypatch):
         pip_cmd = commands[0]
         assert pip_cmd[:4] == [install_manager.sys.executable, '-m', 'pip', 'install']
         assert any('faster-whisper' in part for part in pip_cmd)
+
+
+def test_install_plan_accepts_kitten_tts():
+    plan = InstallPlan(tts=[TTSInstall(engine='kitten_tts', variants=['nano'])])
+
+    assert plan.tts[0].engine == 'kitten_tts'
+    assert plan.tts[0].variants == ['nano']
+
+
+def test_kitten_tts_dependencies_trigger_pip_install(monkeypatch):
+
+    plan = {
+        'stt': [],
+        'tts': [{'engine': 'kitten_tts', 'variants': ['nano']}],
+        'embeddings': {'huggingface': [], 'custom': [], 'onnx': []},
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setenv('TLDW_INSTALL_STATE_DIR', tmpdir)
+        monkeypatch.delenv('TLDW_SETUP_SKIP_PIP', raising=False)
+        monkeypatch.setenv('TLDW_SETUP_SKIP_DOWNLOADS', '1')
+
+        commands = []
+
+        original_find_spec = importlib.util.find_spec
+
+        def fake_find_spec(name):
+            if name == 'phonemizer':
+                return object()
+            if name in {'espeakng_loader', 'huggingface_hub'}:
+                return None
+            return original_find_spec(name)
+
+        monkeypatch.setattr(importlib.util, 'find_spec', fake_find_spec)
+        monkeypatch.setattr(install_manager, '_install_kitten_tts', lambda _variants: None, raising=False)
+
+        def fake_subprocess(cmd, check=False, capture_output=True, text=True):  # noqa: ARG001
+            commands.append(cmd)
+            return
+
+        monkeypatch.setattr(install_manager, '_run_subprocess', fake_subprocess)
+
+        install_manager.execute_install_plan(plan)
+
+        assert commands, "Expected pip install commands for KittenTTS dependencies"
+        flattened = ' '.join(' '.join(cmd) for cmd in commands)
+        assert 'phonemizer-fork' in flattened
+        assert 'espeakng_loader' in flattened
+
+
+def test_install_kitten_tts_rejects_unknown_variants(monkeypatch):
+    monkeypatch.setattr(install_manager, "_ensure_downloads_allowed", lambda _label: None)
+    monkeypatch.setattr(
+        install_manager,
+        "_resolve_kitten_tts_prefetch_settings",
+        lambda: {"cache_dir": "cache/kitten_tts", "revision": None},
+        raising=False,
+    )
+
+    fake_module = types.SimpleNamespace(
+        download_model_assets=lambda *_args, **_kwargs: pytest.fail("unknown variants should fail before downloads")
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.TTS.vendors.kittentts_compat",
+        fake_module,
+    )
+
+    with pytest.raises(ValueError, match="Unsupported KittenTTS variants: custom"):
+        install_manager._install_kitten_tts(["custom"])
+
+
+def test_cuda_available_requires_successful_nvidia_probe(monkeypatch):
+    monkeypatch.delenv("TLDW_SETUP_FORCE_CPU", raising=False)
+    monkeypatch.delenv("TLDW_SETUP_FORCE_GPU", raising=False)
+    monkeypatch.setenv("CUDA_HOME", "/opt/cuda")
+    monkeypatch.setattr(install_manager.shutil, "which", lambda _name: None)
+
+    def fake_run(*_args, **_kwargs):
+        raise AssertionError("nvidia-smi probe should not run when it is unavailable")
+
+    monkeypatch.setattr(install_manager.subprocess, "run", fake_run)
+
+    assert install_manager._cuda_available() is False
+
+
+def test_cuda_available_accepts_verified_nvidia_smi(monkeypatch):
+    monkeypatch.delenv("TLDW_SETUP_FORCE_CPU", raising=False)
+    monkeypatch.delenv("TLDW_SETUP_FORCE_GPU", raising=False)
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+    monkeypatch.setattr(install_manager.shutil, "which", lambda _name: "/usr/bin/nvidia-smi")
+
+    def fake_run(cmd, check, capture_output, text, timeout):  # noqa: ARG001
+        assert cmd == ["/usr/bin/nvidia-smi", "-L"]
+        assert timeout == 3
+        return types.SimpleNamespace(returncode=0, stdout="GPU 0: Test GPU\n", stderr="")
+
+    monkeypatch.setattr(install_manager.subprocess, "run", fake_run)
+
+    assert install_manager._cuda_available() is True
+
+
+def test_install_kitten_tts_prefetch_uses_configured_cache_dir(monkeypatch):
+    monkeypatch.setattr(install_manager, "_ensure_downloads_allowed", lambda _label: None)
+    monkeypatch.setattr(
+        install_manager,
+        "_resolve_kitten_tts_prefetch_settings",
+        lambda: {"cache_dir": "cache/kitten_tts", "revision": None},
+        raising=False,
+    )
+
+    download_calls: list[tuple[str, str | None, bool, str | None]] = []
+
+    fake_module = types.SimpleNamespace(
+        download_model_assets=lambda repo_id, *, cache_dir=None, auto_download=True, revision=None: download_calls.append(
+            (repo_id, cache_dir, auto_download, revision)
+        )
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.TTS.vendors.kittentts_compat",
+        fake_module,
+    )
+
+    install_manager._install_kitten_tts(["nano"])
+
+    assert download_calls == [
+        ("KittenML/kitten-tts-nano-0.8", "cache/kitten_tts", True, None)
+    ]

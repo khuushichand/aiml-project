@@ -22,8 +22,8 @@ vi.mock("@/components/Common/PromptSelect", () => ({
   PromptSelect: () => <div data-testid="prompt-select" />
 }))
 
-vi.mock("@/components/Common/CharacterSelect", () => ({
-  CharacterSelect: () => <div data-testid="character-select" />
+vi.mock("@/components/Common/AssistantSelect", () => ({
+  AssistantSelect: () => <div data-testid="character-select" />
 }))
 
 vi.mock("@/components/Layouts/ConnectionStatus", () => ({
@@ -63,6 +63,8 @@ const createProps = (
   voiceChatButton: null,
   modelUsageBadge: null,
   selectedSystemPrompt: undefined,
+  systemPrompt: "",
+  setSystemPrompt: vi.fn(),
   setSelectedSystemPrompt: vi.fn(),
   setSelectedQuickPrompt: vi.fn(),
   temporaryChat: false,
@@ -78,6 +80,7 @@ const createProps = (
   onOpenModelSettings: vi.fn(),
   modelSummaryLabel: "Model",
   promptSummaryLabel: "Prompt",
+  researchLaunchButton: null,
   hasDictation: false,
   speechAvailable: false,
   speechUsesServer: false,
@@ -202,6 +205,25 @@ describe("ComposerToolbar web search", () => {
     expect(
       sendButton.closest('[data-playground-toolbar-row="primary"]')
     ).toBeNull()
+  })
+
+  it("renders a deep research launch control in the casual actions row when provided", () => {
+    render(
+      <ComposerToolbar
+        {...createProps({
+          researchLaunchButton: (
+            <button type="button">Deep Research</button>
+          )
+        })}
+      />
+    )
+
+    const researchButton = screen.getByRole("button", {
+      name: "Deep Research"
+    })
+    expect(
+      researchButton.closest('[data-playground-toolbar-row="actions"]')
+    ).not.toBeNull()
   })
 
   it("does not render a standalone Generate control in the toolbar row", () => {

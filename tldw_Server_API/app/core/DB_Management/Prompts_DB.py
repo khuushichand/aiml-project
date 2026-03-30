@@ -58,7 +58,7 @@ from tldw_Server_API.app.core.testing import is_test_mode
 #
 # Functions:
 
-# --- Custom Exceptions (Mirrors Media_DB_v2) ---
+# --- Custom Exceptions (mirrors the legacy media DB shape) ---
 class DatabaseError(Exception):
     """Base exception for database related errors."""
     pass

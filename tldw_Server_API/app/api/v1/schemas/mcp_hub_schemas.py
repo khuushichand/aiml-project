@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ScopeType = Literal["global", "org", "team", "user"]
 CapabilityAdapterScopeType = Literal["global", "org", "team"]
@@ -36,6 +36,7 @@ WorkspaceSourceMode = Literal["inline", "named"]
 WorkspaceTrustSource = Literal["user_local", "shared_registry"]
 ExternalAuthTemplateTargetType = Literal["header", "env"]
 CredentialSlotPrivilegeClass = Literal["read", "write", "admin"]
+TrustSignerBindingStatus = Literal["active", "inactive", "revoked"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -692,6 +693,7 @@ class CredentialBindingResponse(BaseModel):
     external_server_id: str
     slot_name: str | None = None
     credential_ref: str
+    managed_secret_ref_id: int | None = None
     binding_mode: str
     usage_rules: dict[str, Any] = Field(default_factory=dict)
     created_by: int | None = None
@@ -700,8 +702,33 @@ class CredentialBindingResponse(BaseModel):
     updated_at: datetime | str | None = None
 
 
+class ProfileCredentialBindingUpsertRequest(BaseModel):
+    managed_secret_ref_id: int | None = Field(default=None, ge=1)
+
+
 class AssignmentCredentialBindingUpsertRequest(BaseModel):
     binding_mode: str = Field(default="grant", pattern="^(grant|disable)$")
+    managed_secret_ref_id: int | None = Field(default=None, ge=1)
+
+
+class McpCredentialSlotStatusResponse(BaseModel):
+    server_id: str
+    slot_name: str
+    binding_target_type: Literal["profile", "assignment"]
+    binding_target_id: str
+    credential_ref: str
+    managed_secret_ref_id: int | None = None
+    state: Literal[
+        "ready",
+        "missing",
+        "expired",
+        "reauth_required",
+        "approval_required",
+        "backend_unavailable",
+    ]
+    blocked_reason: str | None = None
+    backend_name: str | None = None
+    expires_at: datetime | str | None = None
 
 
 class EffectiveExternalAccessSlotResponse(BaseModel):
@@ -757,6 +784,106 @@ class GovernancePackImportRequest(BaseModel):
     owner_scope_type: ScopeType = Field(default="user")
     owner_scope_id: int | None = None
     pack: GovernancePackDocumentRequest
+
+
+class GovernancePackSourceRequest(BaseModel):
+    source_type: Literal["local_path", "git"]
+    local_path: str | None = None
+    repo_url: str | None = None
+    ref: str | None = None
+    ref_kind: Literal["branch", "tag", "commit"] | None = None
+    subpath: str | None = None
+
+
+class GovernancePackSourcePrepareRequest(BaseModel):
+    source: GovernancePackSourceRequest
+
+
+class GovernancePackSourceCandidateResponse(BaseModel):
+    id: int
+    source_type: str
+    source_location: str
+    source_ref_requested: str | None = None
+    source_ref_kind: Literal["branch", "tag", "commit"] | None = None
+    source_subpath: str | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str
+    source_verified: bool | None = None
+    source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
+    source_fetched_at: datetime | str | None = None
+    fetched_by: int | None = None
+
+
+class GovernancePackSourcePrepareResponse(BaseModel):
+    candidate: GovernancePackSourceCandidateResponse
+    manifest: GovernancePackReportManifestResponse
+
+
+class GovernancePackSourceDryRunRequest(BaseModel):
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+
+
+class GovernancePackSourceImportRequest(BaseModel):
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+
+
+GovernancePackSourceUpdateStatus = Literal[
+    "newer_version_available",
+    "no_update",
+    "source_drift_same_version",
+]
+
+
+class GovernancePackSourceUpdateCheckResponse(BaseModel):
+    governance_pack_id: int
+    status: GovernancePackSourceUpdateStatus
+    installed_manifest: GovernancePackReportManifestResponse
+    candidate_manifest: GovernancePackReportManifestResponse | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
+
+
+class GovernancePackSourceUpgradePrepareResponse(BaseModel):
+    status: GovernancePackSourceUpdateStatus
+    installed_manifest: GovernancePackReportManifestResponse
+    candidate_manifest: GovernancePackReportManifestResponse | None = None
+    candidate: GovernancePackSourceCandidateResponse
+    manifest: GovernancePackReportManifestResponse
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
+
+
+class GovernancePackSourceUpgradeDryRunRequest(BaseModel):
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+
+
+class GovernancePackSourceUpgradeExecuteRequest(BaseModel):
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+    planner_inputs_fingerprint: str = Field(..., min_length=1)
+    adapter_state_fingerprint: str = Field(..., min_length=1)
 
 
 class GovernancePackUpgradeDryRunRequest(BaseModel):
@@ -907,6 +1034,22 @@ class GovernancePackSummaryResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     bundle_digest: str
+    source_type: str | None = None
+    source_location: str | None = None
+    source_ref_requested: str | None = None
+    source_ref_kind: Literal["branch", "tag", "commit"] | None = None
+    source_subpath: str | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str | None = None
+    source_verified: bool | None = None
+    source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
+    source_fetched_at: datetime | str | None = None
+    fetched_by: int | None = None
     manifest: dict[str, Any] = Field(default_factory=dict)
     is_active_install: bool = True
     superseded_by_governance_pack_id: int | None = None
@@ -927,3 +1070,94 @@ class GovernancePackImportResponse(BaseModel):
     imported_object_counts: dict[str, int] = Field(default_factory=dict)
     blocked_objects: list[str] = Field(default_factory=list)
     report: GovernancePackDryRunReportResponse
+
+
+class GovernancePackTrustedSignerBinding(BaseModel):
+    fingerprint: str = Field(..., min_length=1, max_length=256)
+    display_name: str | None = Field(default=None, max_length=200)
+    repo_bindings: list[str] = Field(default_factory=list)
+    status: TrustSignerBindingStatus = "active"
+
+    @field_validator("fingerprint", mode="before")
+    @classmethod
+    def _validate_fingerprint(cls, value: Any) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise ValueError("fingerprint is required")
+        return cleaned
+
+    @field_validator("repo_bindings", mode="before")
+    @classmethod
+    def _validate_repo_bindings(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple, set)):
+            values = list(value)
+        else:
+            raise ValueError("repo_bindings must be a list of strings")
+        cleaned_values: list[str] = []
+        for item in values:
+            cleaned = str(item or "").strip()
+            if not cleaned:
+                raise ValueError("repo binding is required")
+            cleaned_values.append(cleaned)
+        return cleaned_values
+
+    @model_validator(mode="after")
+    def _require_repo_bindings(self) -> GovernancePackTrustedSignerBinding:
+        if not self.repo_bindings:
+            raise ValueError("trusted signer repo_bindings must not be empty")
+        return self
+
+
+def _validate_non_blank_string_list(value: Any, *, field_name: str) -> list[str]:
+    """Normalize a string collection while rejecting whitespace-only entries."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = list(value)
+    else:
+        raise ValueError(f"{field_name} must be a list of strings")
+    cleaned_values: list[str] = []
+    for item in values:
+        cleaned = str(item or "").strip()
+        if not cleaned:
+            raise ValueError(f"{field_name} entries cannot be blank")
+        cleaned_values.append(cleaned)
+    return cleaned_values
+
+
+class GovernancePackTrustPolicyRequest(BaseModel):
+    """Request payload for updating the deployment-wide governance-pack trust policy."""
+    allow_local_path_sources: bool = False
+    allowed_local_roots: list[str] = Field(default_factory=list)
+    allow_git_sources: bool = False
+    allowed_git_hosts: list[str] = Field(default_factory=list)
+    allowed_git_repositories: list[str] = Field(default_factory=list)
+    allowed_git_ref_kinds: list[str] = Field(default_factory=list)
+    require_git_signature_verification: bool = False
+    trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
+    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)
+    policy_fingerprint: str = Field(..., min_length=1)
+
+    @field_validator("trusted_git_key_fingerprints", mode="before")
+    @classmethod
+    def _validate_trusted_git_key_fingerprints(cls, value: Any) -> list[str]:
+        return _validate_non_blank_string_list(value, field_name="fingerprint")
+
+
+class GovernancePackTrustPolicyResponse(BaseModel):
+    """Deployment-wide governance-pack trust policy response payload."""
+    allow_local_path_sources: bool = False
+    allowed_local_roots: list[str] = Field(default_factory=list)
+    allow_git_sources: bool = False
+    allowed_git_hosts: list[str] = Field(default_factory=list)
+    allowed_git_repositories: list[str] = Field(default_factory=list)
+    allowed_git_ref_kinds: list[str] = Field(default_factory=list)
+    require_git_signature_verification: bool = False
+    trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
+    policy_fingerprint: str | None = None

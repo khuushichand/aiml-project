@@ -28,8 +28,61 @@ def _fallback_parse_transcription_model(
 ) -> tuple[str, str, str | None]:
     model_name = (model_name or "").strip()
     lowered = model_name.lower() or "whisper-1"
-    # Default everything to Whisper when the real parser is unavailable.
-    return "whisper", lowered, None
+
+    if "parakeet" in lowered:
+        if lowered.endswith("-mlx"):
+            return "parakeet", "parakeet", "mlx"
+        if lowered.endswith("-onnx"):
+            return "parakeet", "parakeet", "onnx"
+        if lowered.endswith("-cuda"):
+            return "parakeet", "parakeet", "cuda"
+        if lowered.endswith("-standard") or "nemo-parakeet" in lowered:
+            return "parakeet", "parakeet", "standard"
+        try:
+            stt_cfg = get_stt_config() or {}
+        except Exception:
+            stt_cfg = {}
+        variant = _normalize_parakeet_variant(stt_cfg.get("nemo_model_variant"))
+        return "parakeet", "parakeet", variant
+
+    if "canary" in lowered:
+        return "canary", "canary", "standard"
+
+    if lowered in {"qwen", "qwen2audio", "qwen2-audio"} or "qwen2audio" in lowered or "qwen2-audio" in lowered:
+        return "qwen2audio", ("qwen2audio" if lowered == "qwen" else model_name or "qwen2audio"), None
+
+    if "vibevoice" in lowered:
+        if lowered in {"vibevoice", "vibevoice-asr", "vibevoice_asr"}:
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model_id = str(stt_cfg.get("vibevoice_model_id", "microsoft/VibeVoice-ASR")).strip()
+            return "vibevoice", model_id or "microsoft/VibeVoice-ASR", None
+        return "vibevoice", model_name, None
+
+    if "qwen3" in lowered and "asr" in lowered:
+        try:
+            stt_cfg = get_stt_config() or {}
+        except Exception:
+            stt_cfg = {}
+        base_path = str(stt_cfg.get("qwen3_asr_model_path", "./models/qwen3_asr/1.7B")).strip()
+        if not base_path:
+            base_path = "./models/qwen3_asr/1.7B"
+        if "0.6b" in lowered:
+            if "1.7B" in base_path or "1.7b" in base_path:
+                model_path = base_path.replace("1.7B", "0.6B").replace("1.7b", "0.6b")
+            else:
+                model_path = str(Path(base_path).parent / "0.6B")
+        else:
+            model_path = base_path
+        return "qwen3-asr", model_path, None
+
+    if lowered.startswith("external:"):
+        return "external", model_name or "external:default", None
+
+    # Default to Whisper-family identifiers when the real parser is unavailable.
+    return "whisper", model_name or "whisper-1", None
 
 
 def _parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:

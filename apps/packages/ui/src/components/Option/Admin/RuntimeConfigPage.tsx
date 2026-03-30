@@ -54,7 +54,9 @@ const RuntimeConfigPage: React.FC = () => {
       cleanupForm.setFieldsValue(data)
     } catch (err: any) {
       markAdminGuardFromError(err)
-      message.error(sanitizeAdminErrorMessage(err) || "Failed to load cleanup settings")
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to load cleanup settings")
+      )
     } finally {
       setCleanupLoading(false)
     }
@@ -69,7 +71,9 @@ const RuntimeConfigPage: React.FC = () => {
       message.success("Cleanup settings saved")
     } catch (err: any) {
       markAdminGuardFromError(err)
-      message.error(sanitizeAdminErrorMessage(err) || "Failed to save cleanup settings")
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to save cleanup settings")
+      )
     } finally {
       setCleanupSaving(false)
     }
@@ -85,7 +89,9 @@ const RuntimeConfigPage: React.FC = () => {
       registrationForm.setFieldsValue(data)
     } catch (err: any) {
       markAdminGuardFromError(err)
-      message.error(sanitizeAdminErrorMessage(err) || "Failed to load registration settings")
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to load registration settings")
+      )
     } finally {
       setRegistrationLoading(false)
     }
@@ -100,7 +106,9 @@ const RuntimeConfigPage: React.FC = () => {
       message.success("Registration settings saved")
     } catch (err: any) {
       markAdminGuardFromError(err)
-      message.error(sanitizeAdminErrorMessage(err) || "Failed to save registration settings")
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to save registration settings")
+      )
     } finally {
       setRegistrationSaving(false)
     }

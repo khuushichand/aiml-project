@@ -862,6 +862,7 @@ export const SidepanelChatSidebar = ({
               data-testid="sidepanel-sidebar-new-chat"
               onClick={onNewTab}
               className="rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
+              aria-label={t("common:chatSidebar.newChat", "New Chat")}
               title={t("common:chatSidebar.newChat", "New Chat")}
             >
               <Plus className="size-4" />

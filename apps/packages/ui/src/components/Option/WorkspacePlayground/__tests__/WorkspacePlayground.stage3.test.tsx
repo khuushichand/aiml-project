@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import axe from "axe-core"
 import { WorkspacePlayground } from "../index"
@@ -213,11 +213,13 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
 
     fireEvent.keyDown(window, { key: "k", metaKey: true })
 
-    expect(
-      await screen.findByRole("dialog", { name: "Search workspace" })
-    ).toBeInTheDocument()
+    const dialog = await screen.findByRole("dialog", { name: "Search workspace" })
+    expect(dialog).toBeInTheDocument()
 
-    fireEvent.keyDown(window, { key: "Escape" })
+    fireEvent.keyDown(
+      within(dialog).getByPlaceholderText("Search sources, chat, and notes..."),
+      { key: "Escape" }
+    )
 
     await waitFor(() => {
       const dialog = screen.queryByRole("dialog", { name: "Search workspace" })

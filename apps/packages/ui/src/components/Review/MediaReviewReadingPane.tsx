@@ -64,6 +64,7 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
   // Determine what to show: previewed item (if no selection), or selected items in viewer mode
   const showPreviewMode = selectedIds.length === 0 && previewedDetail != null
   const effectiveItems = showPreviewMode ? [previewedDetail] : viewerItems
+  const navigationIndex = showPreviewMode ? previewIndex : focusIndex
 
   // Content for search/section navigation (use first effective item's content)
   const primaryContent = React.useMemo(() => {
@@ -653,22 +654,22 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
               <Button
                 size="small"
                 onClick={() => goRelative(-1)}
-                disabled={focusIndex <= 0}
+                disabled={navigationIndex <= 0}
                 icon={<ChevronLeft className="w-4 h-4" />}
               >
                 {t("mediaPage.prevItem", "Prev")}
               </Button>
             </Tooltip>
             <span className="text-xs text-text-muted min-w-[5rem] text-center">
-              {focusIndex >= 0
-                ? t("mediaPage.itemPosition", "Item {{current}} of {{total}}", { current: focusIndex + 1, total: allResults.length })
+              {navigationIndex >= 0
+                ? t("mediaPage.itemPosition", "Item {{current}} of {{total}}", { current: navigationIndex + 1, total: allResults.length })
                 : t("mediaPage.noItemSelected", "No item selected")}
             </span>
             <Tooltip title={t("mediaPage.nextItemTooltip", "Next item (→)")}>
               <Button
                 size="small"
                 onClick={() => goRelative(1)}
-                disabled={focusIndex < 0 || focusIndex >= allResults.length - 1}
+                disabled={navigationIndex < 0 || navigationIndex >= allResults.length - 1}
                 icon={<ChevronRight className="w-4 h-4" />}
                 iconPlacement="end"
               >

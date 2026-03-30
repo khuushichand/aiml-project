@@ -1,72 +1,23 @@
 import { lazy } from "react"
 import type { ReactElement } from "react"
-import type { LucideIcon } from "lucide-react"
-import {
-  ActivityIcon,
-  BookIcon,
-  BookMarked,
-  BookOpen,
-  BookText,
-  Bot,
-  BrainCircuitIcon,
-  CombineIcon,
-  CpuIcon,
-  Gauge,
-  GitBranch,
-  InfoIcon,
-  OrbitIcon,
-  ServerIcon,
-  ShareIcon,
-  Layers,
-  StickyNote,
-  Microscope,
-  FlaskConical,
-  MessageSquare,
-  ClipboardList,
-  MicIcon,
-  Trash2,
-  Table2,
-  Library,
-  ShieldCheck,
-  Headphones,
-  SquarePen,
-  ImageIcon,
-  SlidersHorizontal,
-  FileText,
-  Zap,
-  Sparkles,
-  ListTodo,
-} from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
+import { isHostedVisibleOptionPath } from "./option-route-visibility"
 
-// Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
-import OptionChat from "./option-chat"
-import OptionMediaMulti from "./option-media-multi"
-import OptionMedia from "./option-media"
 
 export type RouteKind = "options" | "sidepanel"
-
-export type NavGroupKey = "server" | "knowledge" | "workspace" | "about"
-
-type RouteNav = {
-  group: NavGroupKey
-  labelToken: string
-  icon: LucideIcon
-  order: number
-  beta?: boolean
-}
 
 export type RouteDefinition = {
   kind: RouteKind
   path: string
   element: ReactElement
   targets?: PlatformTarget[]
-  nav?: RouteNav
 }
+
 const OptionSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/general-settings"),
   "GeneralSettings"
@@ -85,7 +36,6 @@ const OptionShare = createSettingsRoute(
 )
 const OptionProcessed = lazy(() => import("./option-settings-processed"))
 const OptionHealth = lazy(() => import("./option-settings-health"))
-const OptionMediaTrash = lazy(() => import("./option-media-trash"))
 const OptionKnowledgeBase = createSettingsRoute(
   () => import("~/components/Option/Knowledge"),
   "KnowledgeSettings"
@@ -98,15 +48,6 @@ const OptionChatbooks = createSettingsRoute(
   () => import("~/components/Option/Settings/chatbooks"),
   "ChatbooksSettings"
 )
-const SidepanelChat = lazy(() => import("./sidepanel-chat"))
-const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
-const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
-const SidepanelCompanion = lazy(() => import("./sidepanel-companion"))
-const SidepanelCompanionConversation = lazy(
-  () => import("./sidepanel-companion-conversation")
-)
-const SidepanelPersona = lazy(() => import("./sidepanel-persona"))
-const SidepanelErrorBoundaryTest = lazy(() => import("./sidepanel-error-boundary-test"))
 const OptionRagSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/rag"),
   "RagSettings"
@@ -115,7 +56,6 @@ const OptionTldwSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/tldw"),
   "TldwSettings"
 )
-// OptionMedia and OptionMediaMulti are eagerly imported above
 const OptionNotes = lazy(() => import("./option-notes"))
 const OptionWorldBooks = createSettingsRoute(
   () => import("~/components/Option/Settings/WorkspaceLinks"),
@@ -178,7 +118,6 @@ const OptionQuickIngestSettings = createSettingsRoute(
   "QuickIngestSettings"
 )
 const OptionQuickChatPopout = lazy(() => import("./option-quick-chat-popout"))
-const OptionContentReview = lazy(() => import("./option-content-review"))
 const OptionChunkingPlayground = lazy(() => import("./option-chunking-playground"))
 const OptionDocumentation = lazy(() => import("./option-documentation"))
 const OptionQuiz = lazy(() => import("./option-quiz"))
@@ -195,6 +134,9 @@ const OptionGuardianSettings = createSettingsRoute(
 )
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
+const OptionIntegrations = lazy(() => import("./option-integrations"))
+const OptionAdminIntegrations = lazy(() => import("./option-admin-integrations"))
+const OptionScheduledTasks = lazy(() => import("./option-scheduled-tasks"))
 const OptionCompanion = lazy(() => import("./option-companion"))
 const OptionCompanionConversation = lazy(
   () => import("./option-companion-conversation")
@@ -219,17 +161,18 @@ const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionAgents = lazy(() => import("./option-agents"))
 const OptionAgentTasks = lazy(() => import("./option-agent-tasks"))
 const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
+const OptionSettingsMcpHub = lazy(() => import("./option-settings-mcp-hub"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
-// OptionChat is eagerly imported above
+const OptionSharedWithMe = lazy(() => import("./option-shared-with-me"))
+const OptionPublicShare = lazy(() => import("./option-public-share"))
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/", element: <OptionIndex /> },
   { kind: "options", path: "/setup", element: <OptionSetup /> },
-  { kind: "options", path: "/chat", element: <OptionChat /> },
   {
     kind: "options",
     path: "/onboarding-test",
@@ -240,134 +183,61 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "options",
     path: "/settings",
     element: <OptionSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:generalSettings.title",
-      icon: OrbitIcon,
-      order: 2
-    }
   },
   {
     kind: "options",
     path: "/settings/tldw",
     element: <OptionTldwSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:tldw.serverNav",
-      icon: ServerIcon,
-      order: 1
-    }
   },
   {
     kind: "options",
     path: "/settings/model",
     element: <OptionModal />,
-    nav: {
-      group: "server",
-      labelToken: "settings:manageModels.title",
-      icon: BrainCircuitIcon,
-      order: 6
-    }
   },
   {
     kind: "options",
     path: "/settings/mcp-hub",
-    element: <OptionMcpHub />,
-    nav: {
-      group: "server",
-      labelToken: "settings:mcpHubNav",
-      icon: ServerIcon,
-      order: 7
-    }
+    element: <OptionSettingsMcpHub />,
   },
   {
     kind: "options",
     path: "/settings/prompt",
     element: <OptionPrompt />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:managePrompts.title",
-      icon: BookIcon,
-      order: 6
-    }
   },
   {
     kind: "options",
     path: "/settings/evaluations",
     element: <OptionSettingsEvaluations />,
-    nav: {
-      group: "server",
-      labelToken: "settings:evaluationsSettings.title",
-      icon: FlaskConical,
-      order: 9,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/settings/chat",
     element: <OptionChatSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:chatSettingsNav",
-      icon: MessageSquare,
-      order: 3
-    }
   },
   {
     kind: "options",
     path: "/settings/ui",
     element: <OptionUiCustomization />,
-    nav: {
-      group: "server",
-      labelToken: "settings:uiCustomizationNav",
-      icon: SlidersHorizontal,
-      order: 3.5
-    }
   },
   {
     kind: "options",
     path: "/settings/splash",
     element: <OptionSplashSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:splashSettingsNav",
-      icon: Sparkles,
-      order: 3.6
-    }
   },
   {
     kind: "options",
     path: "/settings/quick-ingest",
     element: <OptionQuickIngestSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:quickIngestSettingsNav",
-      icon: ClipboardList,
-      order: 4
-    }
   },
   {
     kind: "options",
     path: "/settings/speech",
     element: <OptionSpeechSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:speechSettingsNav",
-      icon: MicIcon,
-      order: 5
-    }
   },
   {
     kind: "options",
     path: "/settings/image-generation",
     element: <OptionImageGenerationSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:imageGenerationSettingsNav",
-      icon: ImageIcon,
-      order: 7
-    }
   },
   {
     kind: "options",
@@ -378,102 +248,52 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "options",
     path: "/settings/share",
     element: <OptionShare />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:manageShare.title",
-      icon: ShareIcon,
-      order: 7
-    }
   },
   { kind: "options", path: "/settings/processed", element: <OptionProcessed /> },
   {
     kind: "options",
     path: "/settings/health",
     element: <OptionHealth />,
-    nav: {
-      group: "server",
-      labelToken: "settings:healthNav",
-      icon: ActivityIcon,
-      order: 11
-    }
   },
   {
     kind: "options",
     path: "/settings/prompt-studio",
     element: <OptionSettingsPromptStudio />,
-    nav: {
-      group: "server",
-      labelToken: "settings:promptStudio.nav",
-      icon: Microscope,
-      order: 10,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/settings/knowledge",
     element: <OptionKnowledgeBase />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:manageKnowledge.title",
-      icon: BookText,
-      order: 1
-    }
   },
   {
     kind: "options",
     path: "/settings/chatbooks",
     element: <OptionChatbooks />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:chatbooksNav",
-      icon: BookText,
-      order: 4
-    }
+  },
+  {
+    kind: "options",
+    path: "/shared",
+    element: <OptionSharedWithMe />,
   },
   {
     kind: "options",
     path: "/settings/characters",
     element: <OptionCharacters />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:charactersNav",
-      icon: BookIcon,
-      order: 5
-    }
   },
   {
     kind: "options",
     path: "/settings/world-books",
     element: <OptionWorldBooks />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:worldBooksNav",
-      icon: BookOpen,
-      order: 2
-    }
   },
   {
     kind: "options",
     path: "/settings/chat-dictionaries",
     element: <OptionDictionaries />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:chatDictionariesNav",
-      icon: BookMarked,
-      order: 3
-    }
   },
   {
     kind: "options",
     path: "/settings/rag",
     element: <OptionRagSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:rag.title",
-      icon: CombineIcon,
-      order: 4
-    }
   },
   { kind: "options", path: "/chunking-playground", element: <OptionChunkingPlayground /> },
   { kind: "options", path: "/documentation", element: <OptionDocumentation /> },
@@ -481,174 +301,73 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "options",
     path: "/settings/about",
     element: <OptionAbout />,
-    nav: {
-      group: "about",
-      labelToken: "settings:about.title",
-      icon: InfoIcon,
-      order: 1
-    }
-  },
-  {
-    kind: "options",
-    path: "/review",
-    element: <Navigate to="/media-multi" replace />
   },
   {
     kind: "options",
     path: "/flashcards",
     element: <OptionFlashcards />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.flashcards",
-      icon: Layers,
-      order: 4
-    }
   },
   {
     kind: "options",
     path: "/quiz",
     element: <OptionQuiz />,
     targets: ALL_TARGETS,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.quiz",
-      icon: ClipboardList,
-      order: 5,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/writing-playground",
     element: <OptionWritingPlayground />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.writingPlayground",
-      icon: SquarePen,
-      order: 6,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: REPO2TXT_PATH,
     element: <OptionRepo2Txt />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:repo2txt.nav",
-      icon: FileText,
-      order: 7
-    }
   },
   {
     kind: "options",
     path: "/model-playground",
     element: <OptionModelPlayground />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:modelPlaygroundNav",
-      icon: FlaskConical,
-      order: 5,
-      beta: true
-    }
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },
   { kind: "options", path: "/watchlists", element: <OptionWatchlists /> },
+  {
+    kind: "options",
+    path: "/integrations",
+    element: <OptionIntegrations />,
+  },
+  {
+    kind: "options",
+    path: "/admin/integrations",
+    element: <OptionAdminIntegrations />
+  },
+  {
+    kind: "options",
+    path: "/scheduled-tasks",
+    element: <OptionScheduledTasks />,
+  },
   { kind: "options", path: "/kanban", element: <OptionKanbanPlayground /> },
   {
     kind: "options",
     path: "/data-tables",
     element: <OptionDataTables />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.dataTables",
-      icon: Table2,
-      order: 8,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/collections",
     element: <OptionCollections />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.collections",
-      icon: Library,
-      order: 9,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/sources",
     element: <OptionSources />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.sources",
-      icon: Layers,
-      order: 9.5,
-      beta: true
-    }
   },
   { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
   { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
   { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
   {
     kind: "options",
-    path: "/media",
-    element: <OptionMedia />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:mediaNav",
-      icon: BookText,
-      order: 6
-    }
-  },
-  {
-    kind: "options",
-    path: "/media-trash",
-    element: <OptionMediaTrash />,
-    nav: {
-      group: "knowledge",
-      labelToken: "settings:mediaTrashNav",
-      icon: Trash2,
-      order: 7
-    }
-  },
-  {
-    kind: "options",
-    path: "/media-multi",
-    element: <OptionMediaMulti />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.libraryView",
-      icon: Microscope,
-      order: 1
-    }
-  },
-  {
-    kind: "options",
-    path: "/content-review",
-    element: <OptionContentReview />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.contentReview",
-      icon: BookText,
-      order: 2
-    }
-  },
-  {
-    kind: "options",
     path: "/companion",
     element: <OptionCompanion />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.companion",
-      icon: Sparkles,
-      order: 2.5,
-      beta: true
-    }
   },
   {
     kind: "options",
@@ -660,13 +379,8 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "options",
     path: "/notes",
     element: <OptionNotes />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.notes",
-      icon: StickyNote,
-      order: 3
-    }
   },
+  { kind: "options", path: "/share/:token", element: <OptionPublicShare /> },
   { kind: "options", path: "/knowledge", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/thread/:threadId", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/shared/:shareToken", element: <OptionKnowledgeWorkspace /> },
@@ -684,25 +398,11 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "options",
     path: "/audiobook-studio",
     element: <OptionAudiobookStudio />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.audiobookStudio",
-      icon: Headphones,
-      order: 10,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/presentation-studio",
     element: <OptionPresentationStudio />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.presentationStudio",
-      icon: ImageIcon,
-      order: 10.25,
-      beta: true
-    }
   },
   {
     kind: "options",
@@ -723,145 +423,62 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "options",
     path: "/chat-workflows",
     element: <OptionChatWorkflows />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.chatWorkflows",
-      icon: ClipboardList,
-      order: 10.5,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/workflow-editor",
     element: <OptionWorkflowEditor />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.workflowEditor",
-      icon: GitBranch,
-      order: 11,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/acp-playground",
     element: <OptionACPPlayground />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:acpPlaygroundNav",
-      icon: Bot,
-      order: 12,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/agents",
     element: <OptionAgents />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.agents",
-      icon: Bot,
-      order: 12.2,
-      beta: true,
-    },
   },
   {
     kind: "options",
     path: "/agent-tasks",
     element: <OptionAgentTasks />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.agentTasks",
-      icon: ListTodo,
-      order: 12.4,
-      beta: true,
-    },
   },
   {
     kind: "options",
     path: "/mcp-hub",
     element: <OptionMcpHub />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:mcpHubNav",
-      icon: Bot,
-      order: 12.5,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/skills",
     element: <OptionSkills />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:skillsNav",
-      icon: Zap,
-      order: 13,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/workspace-playground",
     element: <OptionWorkspacePlayground />,
-    nav: {
-      group: "workspace",
-      labelToken: "settings:researchStudioNav",
-      icon: FlaskConical,
-      order: 0,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: DOCUMENT_WORKSPACE_PATH,
     element: <OptionDocumentWorkspace />,
-    nav: {
-      group: "workspace",
-      labelToken: "option:header.documentWorkspace",
-      icon: FileText,
-      order: 1,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/moderation-playground",
     element: <OptionModerationPlayground />,
     targets: ALL_TARGETS,
-    nav: {
-      group: "server",
-      labelToken: "option:moderationPlayground.nav",
-      icon: ShieldCheck,
-      order: 10
-    }
   },
   {
     kind: "options",
     path: "/settings/family-guardrails",
     element: <OptionFamilyGuardrailsWizard />,
-    nav: {
-      group: "server",
-      labelToken: "settings:familyGuardrailsWizardNav",
-      icon: ShieldCheck,
-      order: 8,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/settings/guardian",
     element: <OptionGuardianSettings />,
-    nav: {
-      group: "server",
-      labelToken: "settings:guardianNav",
-      icon: ShieldCheck,
-      order: 9,
-      beta: true
-    }
   },
   {
     kind: "options",
@@ -874,82 +491,29 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     path: "/admin/llamacpp",
     element: <OptionAdminLlamacpp />,
     targets: ALL_TARGETS,
-    nav: {
-      group: "server",
-      labelToken: "option:header.adminLlamacpp",
-      icon: CpuIcon,
-      order: 7
-    }
   },
   {
     kind: "options",
     path: "/admin/mlx",
     element: <OptionAdminMlx />,
     targets: ALL_TARGETS,
-    nav: {
-      group: "server",
-      labelToken: "option:header.adminMlx",
-      icon: Gauge,
-      order: 8
-    }
   },
   {
     kind: "options",
     path: "/admin/runtime-config",
     element: <OptionAdminRuntimeConfig />,
     targets: ALL_TARGETS,
-    nav: {
-      group: "server",
-      labelToken: "option:header.adminRuntimeConfig",
-      icon: SlidersHorizontal,
-      order: 10,
-      beta: true
-    }
   },
   {
     kind: "options",
     path: "/quick-chat-popout",
     element: <OptionQuickChatPopout />,
     targets: ALL_TARGETS
-  },
-  { kind: "sidepanel", path: "/", element: <SidepanelChat /> },
-  {
-    kind: "sidepanel",
-    path: "/agent",
-    element: <SidepanelAgent />,
-    targets: ALL_TARGETS
-  },
-  {
-    kind: "sidepanel",
-    path: "/companion",
-    element: <SidepanelCompanion />,
-    targets: ALL_TARGETS
-  },
-  {
-    kind: "sidepanel",
-    path: "/companion/conversation",
-    element: <SidepanelCompanionConversation />,
-    targets: ALL_TARGETS
-  },
-  {
-    kind: "sidepanel",
-    path: "/persona",
-    element: <SidepanelPersona />,
-    targets: ALL_TARGETS
-  },
-  { kind: "sidepanel", path: "/settings", element: <SidepanelSettings /> },
-  {
-    kind: "sidepanel",
-    path: "/error-boundary-test",
-    element: <SidepanelErrorBoundaryTest />,
-    targets: ALL_TARGETS
   }
 ]
 
 export const optionRoutes = ROUTE_DEFINITIONS.filter(
-  (route) => route.kind === "options"
-)
-
-export const sidepanelRoutes = ROUTE_DEFINITIONS.filter(
-  (route) => route.kind === "sidepanel"
+  (route) =>
+    route.kind === "options" &&
+    (!isHostedTldwDeployment() || isHostedVisibleOptionPath(route.path))
 )

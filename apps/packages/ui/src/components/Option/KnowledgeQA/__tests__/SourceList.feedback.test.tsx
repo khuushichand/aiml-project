@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { SourceList } from "../SourceList"
 
@@ -64,6 +64,8 @@ describe("SourceList source feedback", () => {
     vi.clearAllMocks()
     submitExplicitFeedbackMock.mockResolvedValue({ ok: true })
     trackMetricMock.mockResolvedValue(undefined)
+    state.currentThreadId = "thread-feedback"
+    state.messages = [{ id: "assistant-2", role: "assistant" }]
   })
 
   it("submits per-source relevance feedback with document and chunk ids", async () => {
@@ -104,5 +106,71 @@ describe("SourceList source feedback", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry feedback" }))
 
     await waitFor(() => expect(submitExplicitFeedbackMock).toHaveBeenCalledTimes(2))
+  })
+
+  it("resets source feedback state when the active answer session changes with the same results", async () => {
+    const { rerender } = render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Yes" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      )
+    )
+
+    state.currentThreadId = "thread-feedback-2"
+    state.messages = [{ id: "assistant-3", role: "assistant" }]
+    rerender(<SourceList />)
+
+    expect(screen.getByRole("button", { name: "Yes" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    )
+  })
+
+  it("ignores stale source feedback completion after the user switches to a different answer session", async () => {
+    let resolveFeedback: ((value: { ok: boolean }) => void) | null = null
+    submitExplicitFeedbackMock.mockImplementation(
+      () =>
+        new Promise<{ ok: boolean }>((resolve) => {
+          resolveFeedback = resolve
+        })
+    )
+
+    const { rerender } = render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }))
+
+    await waitFor(() =>
+      expect(submitExplicitFeedbackMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversation_id: "thread-feedback",
+          message_id: "assistant-2",
+          relevance_score: 5,
+        })
+      )
+    )
+
+    state.currentThreadId = "thread-feedback-2"
+    state.messages = [{ id: "assistant-3", role: "assistant" }]
+    rerender(<SourceList />)
+
+    await act(async () => {
+      resolveFeedback?.({ ok: true })
+      await Promise.resolve()
+    })
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Yes" })).toHaveAttribute(
+        "aria-pressed",
+        "false"
+      )
+    )
+    expect(trackMetricMock).not.toHaveBeenCalledWith({
+      type: "source_feedback_submit",
+      relevant: true,
+    })
   })
 })

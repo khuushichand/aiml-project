@@ -8,6 +8,7 @@ pytestmark = pytest.mark.unit
 from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
+from unittest.mock import call
 from datetime import datetime, timezone
 import uuid
 
@@ -139,7 +140,13 @@ def test_restore_note_success(client: TestClient):
     mock_chacha_db_instance.restore_note.assert_called_once_with(
         note_id=note_id_val, expected_version=expected_version
     )
-    mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id_val)
+    assert mock_chacha_db_instance.get_note_by_id.call_count == 2
+    mock_chacha_db_instance.get_note_by_id.assert_has_calls(
+        [
+            call(note_id=note_id_val, include_deleted=True),
+            call(note_id_val),
+        ]
+    )
     mock_chacha_db_instance.get_keywords_for_note.assert_called_once_with(note_id_val)
 
 

@@ -114,6 +114,33 @@ async def test_repo_external_server_secret_is_stored_separately(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_repo_ensure_tables_requires_governance_pack_distribution_tables(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await pool.execute("DROP TABLE mcp_governance_pack_source_candidates", ())
+    await pool.execute("DROP TABLE mcp_governance_pack_trust_policy", ())
+
+    with pytest.raises(RuntimeError, match="mcp_governance_pack_source_candidates"):
+        await repo.ensure_tables()
+
+
+@pytest.mark.asyncio
 async def test_repo_can_crud_permission_profile_and_policy_assignment(tmp_path, monkeypatch) -> None:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
@@ -629,6 +656,92 @@ async def test_repo_rejects_disable_binding_for_profile_target(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_repo_rejects_explicit_server_credential_ref_for_disable_binding(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json='{"url":"wss://docs.example/ws"}',
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(ValueError, match="disable bindings may not store explicit credential refs"):
+        await repo.create_credential_binding(
+            binding_target_type="assignment",
+            binding_target_id="11",
+            external_server_id="docs",
+            credential_ref="managed_secret_ref:17",
+            binding_mode="disable",
+            usage_rules={},
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_rejects_explicit_server_credential_ref_for_disable_binding(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json='{"url":"wss://docs.example/ws"}',
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(ValueError, match="disable bindings may not store explicit credential refs"):
+        await repo.create_credential_binding(
+            binding_target_type="assignment",
+            binding_target_id="11",
+            external_server_id="docs",
+            credential_ref="managed:shared-docs-token",
+            binding_mode="disable",
+            usage_rules={},
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_repo_credential_slot_name_is_unique_per_server(tmp_path, monkeypatch) -> None:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
@@ -786,6 +899,112 @@ async def test_repo_rejects_slot_binding_for_unknown_slot(tmp_path, monkeypatch)
             slot_name="token_write",
             credential_ref="slot",
             binding_mode="grant",
+            usage_rules={},
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_rejects_explicit_slot_credential_ref_for_disable_binding(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json='{"websocket":{"url":"wss://docs.example/ws"}}',
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+    await repo.create_external_server_credential_slot(
+        server_id="docs",
+        slot_name="token_readonly",
+        display_name="Read-only token",
+        secret_kind="bearer_token",
+        privilege_class="read",
+        is_required=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(ValueError, match="disable bindings may not store explicit credential refs"):
+        await repo.create_credential_binding(
+            binding_target_type="assignment",
+            binding_target_id="11",
+            external_server_id="docs",
+            slot_name="token_readonly",
+            credential_ref="managed_secret_ref:23",
+            binding_mode="disable",
+            usage_rules={},
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_rejects_explicit_slot_credential_ref_for_disable_binding(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await repo.upsert_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config_json='{"websocket":{"url":"wss://docs.example/ws"}}',
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+    await repo.create_external_server_credential_slot(
+        server_id="docs",
+        slot_name="token_readonly",
+        display_name="Read-only token",
+        secret_kind="bearer_token",
+        privilege_class="read",
+        is_required=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(ValueError, match="disable bindings may not store explicit credential refs"):
+        await repo.create_credential_binding(
+            binding_target_type="assignment",
+            binding_target_id="11",
+            external_server_id="docs",
+            slot_name="token_readonly",
+            credential_ref="managed:readonly-token",
+            binding_mode="disable",
             usage_rules={},
             actor_id=1,
         )

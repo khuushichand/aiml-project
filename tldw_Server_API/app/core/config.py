@@ -336,8 +336,16 @@ _DEFAULT_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8081",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
+    "http://[::1]",
+    "http://[::1]:8000",
+    "http://[::1]:8080",
+    "http://[::1]:8081",
+    "http://[::1]:3000",
+    "http://[::1]:3001",
     "https://localhost",
     "https://localhost:8080",
+    "https://[::1]",
+    "https://[::1]:8080",
 ]
 
 _ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")
@@ -353,6 +361,11 @@ elif not str(_ENV_ALLOWED).strip():
 else:
     ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
     _ALLOWED_ORIGINS_SOURCE = "env"
+
+
+def get_default_allowed_origins() -> list[str]:
+    """Return the built-in local/loopback CORS origins used for self-hosted browser access."""
+    return list(_DEFAULT_ALLOWED_ORIGINS)
 
 # --- API Configuration ---
 # API version prefix for all endpoints
@@ -2771,12 +2784,35 @@ def _resolve_allowed_origins_source() -> str:
     return _ALLOWED_ORIGINS_SOURCE
 
 
+def resolve_runtime_allowed_origins(
+    allowed_origins: list[str] | None = None,
+) -> tuple[list[str], str, bool]:
+    """Return effective CORS origins for the current runtime.
+
+    Non-production startup falls back to the built-in local/loopback origins when
+    configuration resolves to an explicit empty list so first-run self-hosting
+    continues to work. Production keeps the empty list so startup validation can
+    fail closed.
+    """
+    source = _resolve_allowed_origins_source()
+    candidate_origins = ALLOWED_ORIGINS if allowed_origins is None else allowed_origins
+    origins = [str(origin).strip() for origin in (candidate_origins or []) if str(origin).strip()]
+    if origins:
+        return origins, source, False
+
+    if is_production_environment():
+        return [], source, False
+
+    return get_default_allowed_origins(), f"{source}(local-fallback)", True
+
+
 def get_cors_runtime_diagnostics() -> dict[str, Any]:
     """Return effective CORS values with source attribution for startup diagnostics."""
     disable_cors, disable_cors_source = _resolve_disable_cors_value_and_source()
     allow_credentials, allow_credentials_source = _resolve_cors_allow_credentials_value_and_source()
-    allowed_origins = [str(origin).strip() for origin in ALLOWED_ORIGINS if str(origin).strip()]
-    allowed_origins_source = _resolve_allowed_origins_source()
+    allowed_origins, allowed_origins_source, allowed_origins_fallback = resolve_runtime_allowed_origins(
+        ALLOWED_ORIGINS
+    )
 
     try:
         _load_config_parser()
@@ -2792,6 +2828,7 @@ def get_cors_runtime_diagnostics() -> dict[str, Any]:
         "allowed_origins": allowed_origins,
         "allowed_origins_count": len(allowed_origins),
         "allowed_origins_source": allowed_origins_source,
+        "allowed_origins_fallback": allowed_origins_fallback,
         "config_path": config_meta.get("path"),
         "config_loaded": bool(config_meta.get("loaded")),
     }
@@ -3005,6 +3042,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "mcp-catalogs",
             "tools",
             "jobs",
+            "scheduled-tasks",
             "personalization",
             "orgs",
             "org-invites",

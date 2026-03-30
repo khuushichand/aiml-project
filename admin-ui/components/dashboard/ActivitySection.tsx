@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,7 @@ import {
 import {
   AreaChart,
   Area,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -35,6 +37,9 @@ type ActivityChartPoint = {
   name: string;
   requests: number;
   users: number;
+  errors?: number;
+  latencyAvgMs?: number;
+  costUsd?: number;
 };
 
 type ActivitySectionProps = {
@@ -101,7 +106,16 @@ export const ActivitySection = ({
   activityRange,
   onActivityRangeChange,
   loading = false,
-}: ActivitySectionProps) => (
+}: ActivitySectionProps) => {
+  const hasOverlay = activityChartData.some(d => d.errors != null || d.latencyAvgMs != null || d.costUsd != null);
+  const [overlayVisible, setOverlayVisible] = useState<Record<string, boolean>>({
+    errors: false,
+    latencyAvgMs: false,
+    costUsd: false,
+  });
+  const anyOverlayOn = Object.values(overlayVisible).some(Boolean);
+
+  return (
   <div className="grid gap-6 lg:grid-cols-3 mb-8">
     <Card className="lg:col-span-2">
       <CardHeader className="space-y-3">
@@ -128,15 +142,41 @@ export const ActivitySection = ({
               </Button>
             ))}
           </div>
+          {hasOverlay && (
+            <div className="flex items-center gap-1 mt-2" role="group" aria-label="Chart overlays">
+              {([
+                { key: 'errors', label: 'Errors', color: '#ef4444' },
+                { key: 'latencyAvgMs', label: 'Latency', color: '#f59e0b' },
+                { key: 'costUsd', label: 'Cost', color: '#8b5cf6' },
+              ] as const).map(({ key, label, color }) => {
+                const has = activityChartData.some((d) => (d as Record<string, unknown>)[key] != null);
+                if (!has) return null;
+                return (
+                  <Button
+                    key={key}
+                    type="button"
+                    size="sm"
+                    variant={overlayVisible[key] ? 'default' : 'outline'}
+                    onClick={() => setOverlayVisible(prev => ({ ...prev, [key]: !prev[key] }))}
+                    className="text-xs h-7 px-2"
+                    style={overlayVisible[key] ? { backgroundColor: color, borderColor: color } : undefined}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </CardHeader>
       <CardContent>
-        <div className="h-64">
+        <div className="h-64" role="img" aria-label={`Activity chart showing ${activityChartData.length} data points for requests and active users`}>
           <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
             <AreaChart data={activityChartData}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
               <XAxis dataKey="name" className="text-xs" />
-              <YAxis className="text-xs" />
+              <YAxis yAxisId="left" className="text-xs" />
+              {anyOverlayOn && <YAxis yAxisId="right" orientation="right" className="text-xs" />}
               <Tooltip
                 contentStyle={{
                   backgroundColor: 'hsl(var(--background))',
@@ -152,6 +192,7 @@ export const ActivitySection = ({
                 fill="#3b82f6"
                 fillOpacity={0.3}
                 name="Requests"
+                yAxisId="left"
               />
               <Area
                 type="monotone"
@@ -161,7 +202,20 @@ export const ActivitySection = ({
                 fill="#10b981"
                 fillOpacity={0.3}
                 name="Active Users"
+                yAxisId="left"
               />
+              {overlayVisible.errors && (
+                <Line type="monotone" dataKey="errors" stroke="#ef4444" strokeWidth={2}
+                  dot={false} yAxisId="left" name="Errors" />
+              )}
+              {overlayVisible.latencyAvgMs && (
+                <Line type="monotone" dataKey="latencyAvgMs" stroke="#f59e0b" strokeWidth={2}
+                  dot={false} yAxisId="right" name="Latency (ms)" />
+              )}
+              {overlayVisible.costUsd && (
+                <Line type="monotone" dataKey="costUsd" stroke="#8b5cf6" strokeWidth={2}
+                  strokeDasharray="5 5" dot={false} yAxisId="right" name="Cost ($)" />
+              )}
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -197,6 +251,11 @@ export const ActivitySection = ({
                 {cacheHitRateLabel && (
                   <p className="pl-7 text-xs text-muted-foreground">{cacheHitRateLabel}</p>
                 )}
+                {subsystemHealth.status !== 'healthy' && subsystemHealth.message && (
+                  <p className="pl-7 text-xs text-destructive truncate max-w-[250px]" title={subsystemHealth.message}>
+                    {subsystemHealth.message}
+                  </p>
+                )}
               </div>
               {getHealthBadge(subsystemHealth.status)}
             </div>
@@ -211,4 +270,5 @@ export const ActivitySection = ({
       </CardContent>
     </Card>
   </div>
-);
+  );
+};

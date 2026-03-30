@@ -1,12 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  createAudioCaptureSessionCoordinator,
+  type AudioCaptureSessionCoordinator
+} from "@/audio"
 
 export type AudioRecorderStatus = "idle" | "recording"
+
+export type AudioRecorderOptions = {
+  deviceId?: string | null
+}
+
+const AUDIO_CAPTURE_COORDINATOR_KEY = Symbol.for(
+  "tldw.audioCaptureSessionCoordinator"
+)
+
+const getAudioCaptureSessionCoordinator = (): AudioCaptureSessionCoordinator => {
+  const globalState = globalThis as typeof globalThis & {
+    [AUDIO_CAPTURE_COORDINATOR_KEY]?: AudioCaptureSessionCoordinator
+  }
+  if (!globalState[AUDIO_CAPTURE_COORDINATOR_KEY]) {
+    globalState[AUDIO_CAPTURE_COORDINATOR_KEY] =
+      createAudioCaptureSessionCoordinator()
+  }
+  return globalState[AUDIO_CAPTURE_COORDINATOR_KEY]
+}
+
+function buildAudioConstraints(
+  deviceId?: string | null
+): MediaStreamConstraints["audio"] {
+  return deviceId ? { deviceId: { exact: deviceId } } : true
+}
+
+function createCaptureBusyError(activeOwner: string): Error {
+  return new Error(`Audio capture is already active for ${activeOwner}`)
+}
 
 export interface AudioRecorderResult {
   status: AudioRecorderStatus
   blob: Blob | null
   durationMs: number
-  startRecording: () => Promise<void>
+  startRecording: (options?: AudioRecorderOptions) => Promise<void>
   stopRecording: () => void
   clearRecording: () => void
   loadBlob: (blob: Blob, durationMs: number) => void
@@ -24,6 +57,7 @@ export function useAudioRecorder(): AudioRecorderResult {
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<number>(0)
+  const captureOwnerRef = useRef(false)
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -32,12 +66,30 @@ export function useAudioRecorder(): AudioRecorderResult {
     }
   }, [])
 
+  const releaseCaptureOwner = useCallback(() => {
+    if (!captureOwnerRef.current) return
+    captureOwnerRef.current = false
+    getAudioCaptureSessionCoordinator().release("speech_playground")
+  }, [])
+
+  const reserveCaptureOwner = useCallback(() => {
+    if (captureOwnerRef.current) return
+    const coordinator = getAudioCaptureSessionCoordinator()
+    const activeOwner = coordinator.getActiveOwner()
+    if (activeOwner !== null) {
+      throw createCaptureBusyError(activeOwner)
+    }
+    coordinator.claim("speech_playground")
+    captureOwnerRef.current = true
+  }, [])
+
   const stopMediaTracks = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
     }
-  }, [])
+    releaseCaptureOwner()
+  }, [releaseCaptureOwner])
 
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state === "recording") {
@@ -45,42 +97,51 @@ export function useAudioRecorder(): AudioRecorderResult {
     }
   }, [])
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (options: AudioRecorderOptions = {}) => {
     chunksRef.current = []
+    reserveCaptureOwner()
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    streamRef.current = stream
-
-    const recorder = new MediaRecorder(stream)
-    recorderRef.current = recorder
-
-    recorder.ondataavailable = (event: BlobEvent) => {
-      if (event.data.size > 0) {
-        chunksRef.current.push(event.data)
-      }
-    }
-
-    recorder.onstop = () => {
-      const recordedBlob = new Blob(chunksRef.current, {
-        type: recorder.mimeType || "audio/webm"
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: buildAudioConstraints(options.deviceId)
       })
-      const finalDuration = Date.now() - startTimeRef.current
-      setBlob(recordedBlob)
-      setDurationMs(finalDuration)
+      streamRef.current = stream
+
+      const recorder = new MediaRecorder(stream)
+      recorderRef.current = recorder
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data)
+        }
+      }
+
+      recorder.onstop = () => {
+        const recordedBlob = new Blob(chunksRef.current, {
+          type: recorder.mimeType || "audio/webm"
+        })
+        const finalDuration = Date.now() - startTimeRef.current
+        setBlob(recordedBlob)
+        setDurationMs(finalDuration)
+        stopTimer()
+        stopMediaTracks()
+        setStatus("idle")
+        recorderRef.current = null
+      }
+
+      startTimeRef.current = Date.now()
+      recorder.start()
+      setStatus("recording")
+
+      timerRef.current = setInterval(() => {
+        setDurationMs(Date.now() - startTimeRef.current)
+      }, TIMER_INTERVAL_MS)
+    } catch (error) {
       stopTimer()
       stopMediaTracks()
-      setStatus("idle")
-      recorderRef.current = null
+      throw error
     }
-
-    startTimeRef.current = Date.now()
-    recorder.start()
-    setStatus("recording")
-
-    timerRef.current = setInterval(() => {
-      setDurationMs(Date.now() - startTimeRef.current)
-    }, TIMER_INTERVAL_MS)
-  }, [stopTimer, stopMediaTracks])
+  }, [reserveCaptureOwner, stopTimer, stopMediaTracks])
 
   const clearRecording = useCallback(() => {
     setBlob(null)

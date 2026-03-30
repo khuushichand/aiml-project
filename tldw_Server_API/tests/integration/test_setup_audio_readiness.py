@@ -85,7 +85,12 @@ def test_audio_provision_endpoint_accepts_resource_profile(mocker):
         )
 
     assert response.status_code == 200
-    execute_mock.assert_called_once_with("cpu_local", resource_profile="balanced", safe_rerun=False)
+    execute_mock.assert_called_once_with(
+        "cpu_local",
+        resource_profile="balanced",
+        tts_choice=None,
+        safe_rerun=False,
+    )
 
 
 def test_audio_provision_endpoint_offloads_bundle_execution(monkeypatch, mocker):
@@ -118,7 +123,7 @@ def test_audio_provision_endpoint_offloads_bundle_execution(monkeypatch, mocker)
         (
             setup_endpoint.install_manager.execute_audio_bundle,
             ("cpu_local",),
-            {"resource_profile": "balanced", "safe_rerun": True},
+            {"resource_profile": "balanced", "tts_choice": None, "safe_rerun": True},
         )
     ]
 

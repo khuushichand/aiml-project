@@ -225,7 +225,7 @@ const createThrottledLocalStorage = (delay = 1000): StateStorage => {
               localStorage.setItem(name, pendingValue)
             } catch (e) {
               // Ignore storage quota errors silently
-              console.debug('[folder-store] Storage write failed:', e)
+              // Ignore storage quota errors silently
             }
             pendingValue = null
           }
@@ -312,7 +312,6 @@ export const useFolderStore = createWithEqualityFn<FolderState>()(
 
         // Skip if we already know the folder API is not available
         if (state.folderApiAvailable === false) {
-          console.debug('[folder-store] Skipping refresh - folder API not available')
           return
         }
 
@@ -345,7 +344,7 @@ export const useFolderStore = createWithEqualityFn<FolderState>()(
           const hasNotFound = responses.some((res) => res.status === 404)
 
           if (hasNotFound) {
-            console.debug('[folder-store] Folder API not available (404) - disabling folder sync')
+            // Folder API not available (404) - disabling folder sync
             set({
               isLoading: false,
               folderApiAvailable: false
@@ -410,7 +409,7 @@ export const useFolderStore = createWithEqualityFn<FolderState>()(
           const is404 = errorStatus === 404 || errorMsg.includes('404')
 
           if (is404) {
-            console.debug('[folder-store] Folder API not available (404) - disabling folder sync')
+            // Folder API not available (404) - disabling folder sync
             set({
               isLoading: false,
               folderApiAvailable: false

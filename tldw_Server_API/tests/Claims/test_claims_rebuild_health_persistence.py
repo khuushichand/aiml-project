@@ -1,23 +1,41 @@
+from contextlib import contextmanager
+
 from tldw_Server_API.app.core.AuthNZ.permissions import CLAIMS_ADMIN
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.config import settings
 
 
 def test_claims_rebuild_health_reads_persisted(monkeypatch, tmp_path):
-
-
     base_dir = tmp_path / "user_dbs"
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("CLAIMS_MONITORING_SYSTEM_USER_ID", "1")
     settings["USER_DB_BASE_DIR"] = str(base_dir)
     settings["CLAIMS_MONITORING_SYSTEM_USER_ID"] = 1
+
+    @contextmanager
+    def _managed_media_database(client_id, *, db_path=None, initialize=True, **_kwargs):
+        db = MediaDatabase(db_path=db_path, client_id=client_id)
+        try:
+            if initialize:
+                db.initialize_db()
+            yield db
+        finally:
+            db.close_connection()
+
+    monkeypatch.setattr(
+        claims_service,
+        "managed_media_database",
+        _managed_media_database,
+        raising=False,
+    )
     monkeypatch.setattr(
         claims_service,
         "create_media_database",
-        lambda client_id, db_path: MediaDatabase(db_path=db_path, client_id=client_id),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
     )
 
     db_path = get_user_media_db_path(1)
