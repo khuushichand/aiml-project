@@ -20,4 +20,4 @@
 **Goal**: Verify the touched scope, update the plan, and push the follow-up commit to the PR branch.
 **Success Criteria**: Relevant tests pass, Bandit is clean for touched Python scope if any, and the branch is pushed.
 **Tests**: `git diff --check`, targeted frontend tests, targeted smoke command(s), additional checks as needed.
-**Status**: In Progress
+**Status**: Complete
