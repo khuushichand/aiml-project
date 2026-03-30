@@ -98,6 +98,25 @@ describe("Splash Stage 5 overlay behavior", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
+  it("stops intercepting pointer events as soon as fade-out begins", () => {
+    const onDismiss = vi.fn()
+
+    render(
+      <SplashOverlay
+        card={createCard({ duration: 10_000 })}
+        message="Dismiss me"
+        onDismiss={onDismiss}
+      />
+    )
+
+    const dialog = screen.getByRole("dialog", { name: "Splash screen" })
+    fireEvent.click(dialog)
+
+    expect(dialog.style.opacity).toBe("0")
+    expect(dialog.style.pointerEvents).toBe("none")
+    expect(onDismiss).not.toHaveBeenCalled()
+  })
+
   it("reduced-motion mode renders static HTML overlay without canvas", () => {
     mockMatchMedia(true)
 

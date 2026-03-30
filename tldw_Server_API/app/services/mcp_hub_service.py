@@ -233,7 +233,10 @@ class McpHubService:
             raise BadRequestError("absolute_root is required")
         if not candidate.is_absolute():
             raise BadRequestError("absolute_root must be an absolute path")
-        return str(candidate.resolve(strict=False))
+        normalized = candidate.resolve(strict=False)  # lgtm[py/path-injection] admin-configured absolute workspace roots are normalized here for later policy enforcement
+        if str(normalized) in {normalized.anchor, "/"}:
+            raise BadRequestError("absolute_root must not be the filesystem root")
+        return str(normalized)
 
     @staticmethod
     def _scope_reference_allowed(

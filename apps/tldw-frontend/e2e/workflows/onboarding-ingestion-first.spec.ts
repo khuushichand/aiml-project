@@ -7,7 +7,7 @@ import {
   assertNoCriticalErrors,
   skipIfServerUnavailable,
 } from "../utils/fixtures"
-import { TEST_CONFIG, waitForConnection } from "../utils/helpers"
+import { TEST_CONFIG, dismissConnectionModals, waitForConnection } from "../utils/helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -182,10 +182,20 @@ async function clickOnboardingCtaAndExpectRoute(
   ctaTestId: string,
   expectedUrl: RegExp
 ): Promise<void> {
+  const clearBlockingOverlays = async () => {
+    const splash = page.getByRole("dialog", { name: "Splash screen" }).first()
+    if (await splash.isVisible().catch(() => false)) {
+      await splash.click({ force: true })
+      await splash.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
+    }
+    await dismissConnectionModals(page)
+  }
+
   const cta = page.getByTestId(ctaTestId)
   let lastError: unknown
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    await clearBlockingOverlays()
     await expect(cta).toBeVisible({ timeout: 15_000 })
     await cta.click()
     try {

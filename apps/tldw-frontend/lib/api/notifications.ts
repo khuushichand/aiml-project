@@ -1,4 +1,9 @@
-import { buildAuthHeaders, getApiBaseUrl, apiClient } from "@web/lib/api"
+import {
+  buildAuthHeaders,
+  getApiBaseUrl,
+  apiClient,
+  shouldIncludeBrowserCredentials
+} from "@web/lib/api"
 import { streamStructuredSSE } from "@web/lib/sse"
 import {
   buildNotificationsQuery as buildNotificationsQueryShared,
@@ -43,7 +48,7 @@ async function readNotificationsStream(
       {
         method: "GET",
         headers,
-        credentials: "include",
+        credentials: shouldIncludeBrowserCredentials() ? "include" : "same-origin",
         signal
       },
       (event) => {

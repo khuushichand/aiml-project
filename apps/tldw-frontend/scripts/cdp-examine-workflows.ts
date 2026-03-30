@@ -79,6 +79,21 @@ interface Summary {
   results: WorkflowResult[]
 }
 
+export function buildApiProxyTarget(
+  requestUrl: string | undefined,
+  serverUrl: string
+): URL {
+  const parsedRequestUrl = new URL(requestUrl || "/", "http://localhost")
+  if (!parsedRequestUrl.pathname.startsWith("/api/")) {
+    throw new Error("Only /api/* requests may be proxied")
+  }
+  const backendOrigin = new URL(serverUrl)
+  return new URL(
+    `${parsedRequestUrl.pathname}${parsedRequestUrl.search}`,
+    backendOrigin
+  )
+}
+
 // ─── Benign Patterns ──────────────────────────────────────────────────────────
 
 const BENIGN_PATTERNS = [
@@ -1157,7 +1172,7 @@ async function startExtensionServer(
 
       // Proxy API requests
       if (url.pathname.startsWith("/api/")) {
-        const target = new URL(req.url || "/", CONFIG.serverUrl)
+        const target = buildApiProxyTarget(req.url, CONFIG.serverUrl)
         const proxyReq = http.request(
           target,
           { method: req.method, headers: req.headers },
@@ -1607,7 +1622,9 @@ async function main(): Promise<void> {
   console.log(`  Artifacts: ${CONFIG.artifactsDir}`)
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err)
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error("Fatal error:", err)
+    process.exit(1)
+  })
+}

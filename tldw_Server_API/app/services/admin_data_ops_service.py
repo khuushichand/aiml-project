@@ -384,8 +384,14 @@ def _retention_preview_secret() -> bytes:
     if not secret_seed:
         raise RuntimeError("preview_signature_secret_unavailable")
     pepper = getattr(settings, "API_KEY_PEPPER", None) or ""
-    material = f"{secret_seed}|{pepper}|retention-preview|{_RETENTION_PREVIEW_SCHEMA_VERSION}"
-    return hashlib.sha256(material.encode("utf-8")).digest()
+    salt = f"{pepper}|retention-preview|{_RETENTION_PREVIEW_SCHEMA_VERSION}".encode("utf-8")
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        str(secret_seed).encode("utf-8"),
+        salt,
+        200_000,
+        dklen=32,
+    )
 
 
 def build_retention_preview_signature(

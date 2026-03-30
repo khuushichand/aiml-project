@@ -5,6 +5,7 @@ import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import { createJsonResponseLike } from "@/services/tldw/json-response-like"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
 import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
@@ -2316,10 +2317,7 @@ export class TldwApiClient {
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
     const safeData = normalizeChatCompletionResponseBody(data)
-    return new Response(JSON.stringify(safeData), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })
+    return createJsonResponseLike(safeData, { status: 200 })
   }
 
   async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {

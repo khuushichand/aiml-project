@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -57,6 +58,11 @@ router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 INVALID_AUDIO_BUNDLE_REQUEST_DETAIL = "Invalid audio bundle request"
 INVALID_AUDIO_PACK_EXPORT_REQUEST_DETAIL = "Invalid audio pack export request"
 AUDIO_BUNDLE_NOT_FOUND_DETAIL = "Audio bundle not found"
+_SUSPICIOUS_SETUP_DETAIL_RE = re.compile(
+    r"traceback|stack(?:\s*trace)?|exception|\/Users\/|[A-Za-z]:\\|\.py:\d+",
+    re.IGNORECASE,
+)
+_SANITIZED_SETUP_DETAIL_MESSAGE = "Internal setup diagnostics were suppressed."
 
 
 class ConfigUpdates(BaseModel):
@@ -78,6 +84,25 @@ class SetupCompleteRequest(BaseModel):
 
 class AssistantQuestion(BaseModel):
     question: str = Field(..., min_length=1, description="Natural language question for the setup assistant")
+
+
+def _sanitize_setup_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return (
+            _SANITIZED_SETUP_DETAIL_MESSAGE
+            if _SUSPICIOUS_SETUP_DETAIL_RE.search(value)
+            else value
+        )
+    if isinstance(value, list):
+        return [_sanitize_setup_payload(item) for item in value]
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"details", "exception", "traceback", "stack", "stack_trace"}:
+                continue
+            sanitized[key] = _sanitize_setup_payload(item)
+        return sanitized
+    return value
 
 
 class AudioBundleProvisionRequest(BaseModel):
@@ -116,6 +141,10 @@ class AudioPackExportRequest(BaseModel):
         DEFAULT_AUDIO_RESOURCE_PROFILE,
         min_length=1,
         description="Selected resource profile within the curated audio bundle.",
+    )
+    pack_name: str | None = Field(
+        None,
+        description="Optional filename-friendly pack name for the generated audio pack manifest.",
     )
     pack_path: str | None = Field(
         None,
@@ -363,7 +392,8 @@ async def verify_audio_bundle(
 ) -> AudioBundleOperationResponse:
     """Verify the primary STT/TTS paths for a curated audio bundle."""
 
-    return await _execute_audio_bundle_verification(payload)
+    result = await _execute_audio_bundle_verification(payload)
+    return _sanitize_setup_payload(result)
 
 
 async def _execute_audio_bundle_verification(
@@ -433,7 +463,11 @@ async def verify_admin_audio_bundle(
 ) -> dict[str, Any]:
     """Verify a curated audio bundle through the shared admin installer UI."""
 
-    return await _execute_audio_bundle_verification(payload, allow_completed_when_disabled=True)
+    result = await _execute_audio_bundle_verification(
+        payload,
+        allow_completed_when_disabled=True,
+    )
+    return _sanitize_setup_payload(result)
 
 
 @router.post("/audio/packs/export", openapi_extra={"security": []}, response_model=AudioPackExportResponse)

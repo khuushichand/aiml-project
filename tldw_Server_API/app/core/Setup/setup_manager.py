@@ -317,7 +317,11 @@ def _normalize_root_path(raw: str, *, project_root: Path) -> Path | None:
         candidate = Path(value).expanduser()
     except Exception:
         candidate = Path(value)
-    candidate = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+    candidate = (
+        (project_root / candidate).resolve()  # lgtm[py/path-injection] normalization only; callers validate containment before use
+        if not candidate.is_absolute()
+        else candidate.resolve()  # lgtm[py/path-injection] admin/config normalization only; later validation enforces allowed roots
+    )
     return candidate
 
 
@@ -336,7 +340,7 @@ def _normalize_user_db_base_dir_candidate(raw: Any, *, project_root: Path) -> Pa
         except ValueError as exc:
             raise ValueError("Relative USER_DB_BASE_DIR must stay within the project root") from exc
     else:
-        candidate = candidate.resolve()
+        candidate = candidate.resolve()  # lgtm[py/path-injection] normalization only; _validate_user_db_base_dir_update constrains allowed roots
     return candidate
 
 
