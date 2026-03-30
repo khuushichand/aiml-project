@@ -165,7 +165,7 @@ def test_webui_dockerfile_installs_only_frontend_and_ui_workspaces():
         "Expected Dockerfile.webui to rewrite the workspace manifest down to the frontend and shared ui workspaces",
     )
     _require(
-        "RUN bun install --cwd /app/apps" in text,
+        "RUN bun install --frozen-lockfile --cwd /app/apps" in text,
         "Expected Dockerfile.webui to install the narrowed Bun workspace set",
     )
 
