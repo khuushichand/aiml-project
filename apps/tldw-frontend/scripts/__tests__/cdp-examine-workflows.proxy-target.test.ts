@@ -1,33 +1,57 @@
 import { describe, expect, it } from "vitest"
 
-import { buildApiProxyTarget } from "../cdp-examine-workflows"
+import { buildApiProxyRequestOptions } from "../cdp-examine-workflows"
 
-describe("buildApiProxyTarget", () => {
-  it("keeps API requests pinned to the configured backend origin", () => {
-    const target = buildApiProxyTarget(
-      "/api/v1/health?verbose=1",
-      "http://127.0.0.1:8000"
+describe("buildApiProxyRequestOptions", () => {
+  it("pins proxy requests to the configured backend connection fields", () => {
+    const options = buildApiProxyRequestOptions(
+      "https://evil.example/api/v1/admin?steal=1",
+      "https://127.0.0.1:8443",
+      "POST",
+      {
+        authorization: "Bearer token",
+        "content-type": "application/json",
+        host: "evil.example",
+        "x-forwarded-host": "evil.example",
+        "x-forwarded-proto": "http",
+      }
     )
 
-    expect(target.origin).toBe("http://127.0.0.1:8000")
-    expect(target.pathname).toBe("/api/v1/health")
-    expect(target.search).toBe("?verbose=1")
+    expect(options.protocol).toBe("https:")
+    expect(options.hostname).toBe("127.0.0.1")
+    expect(options.port).toBe("8443")
+    expect(options.method).toBe("POST")
+    expect(options.path).toBe("/api/v1/admin?steal=1")
+    expect(options.headers.authorization).toBe("Bearer token")
+    expect(options.headers["content-type"]).toBe("application/json")
+    expect(options.headers.host).toBeUndefined()
+    expect(options.headers["x-forwarded-host"]).toBeUndefined()
+    expect(options.headers["x-forwarded-proto"]).toBeUndefined()
   })
 
-  it("strips attacker-controlled origins from absolute request URLs", () => {
-    const target = buildApiProxyTarget(
-      "https://evil.example/api/v1/admin?steal=1",
-      "http://127.0.0.1:8000"
+  it("keeps API request paths pinned to the backend origin for relative URLs", () => {
+    const options = buildApiProxyRequestOptions(
+      "/api/v1/health?verbose=1",
+      "http://127.0.0.1:8000",
+      "GET",
+      {}
     )
 
-    expect(target.origin).toBe("http://127.0.0.1:8000")
-    expect(target.pathname).toBe("/api/v1/admin")
-    expect(target.search).toBe("?steal=1")
+    expect(options.protocol).toBe("http:")
+    expect(options.hostname).toBe("127.0.0.1")
+    expect(options.port).toBe("8000")
+    expect(options.method).toBe("GET")
+    expect(options.path).toBe("/api/v1/health?verbose=1")
   })
 
   it("rejects non-api requests", () => {
     expect(() =>
-      buildApiProxyTarget("/static/index.html", "http://127.0.0.1:8000")
+      buildApiProxyRequestOptions(
+        "/static/index.html",
+        "http://127.0.0.1:8000",
+        "GET",
+        {}
+      )
     ).toThrow("Only /api/* requests may be proxied")
   })
 })

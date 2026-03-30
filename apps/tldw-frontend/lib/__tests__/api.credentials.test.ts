@@ -10,6 +10,11 @@ async function loadShouldIncludeBrowserCredentials() {
   return apiModule.shouldIncludeBrowserCredentials
 }
 
+async function loadApiHelpers() {
+  process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:8000"
+  return import("../api")
+}
+
 describe("shouldIncludeBrowserCredentials", () => {
   const originalApiKey = process.env.NEXT_PUBLIC_X_API_KEY
   const originalApiBearer = process.env.NEXT_PUBLIC_API_BEARER
@@ -64,6 +69,23 @@ describe("shouldIncludeBrowserCredentials", () => {
   it("keeps browser credentials enabled before login so CSRF/session cookies can be used", () => {
     return loadShouldIncludeBrowserCredentials().then((shouldIncludeBrowserCredentials) => {
       expect(shouldIncludeBrowserCredentials()).toBe(true)
+    })
+  })
+
+  it("reuses stored single-user api keys from localStorage config for browser requests", () => {
+    localStorage.setItem(
+      "tldwConfig",
+      JSON.stringify({
+        authMode: "single-user",
+        apiKey: "stored-api-key"
+      })
+    )
+
+    return loadApiHelpers().then((apiModule) => {
+      expect(apiModule.shouldIncludeBrowserCredentials()).toBe(false)
+      expect(apiModule.buildAuthHeaders("GET")).toMatchObject({
+        "X-API-KEY": "stored-api-key"
+      })
     })
   })
 })
