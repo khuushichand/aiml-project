@@ -6,6 +6,8 @@ import { RecipesTab } from "../RecipesTab"
 
 const validateSpy = vi.fn()
 const createSpy = vi.fn()
+const setActiveTabSpy = vi.fn()
+const setSyntheticReviewRecipeKindSpy = vi.fn()
 const recipeManifestState = {
   data: {
     data: [
@@ -128,6 +130,14 @@ vi.mock("react-i18next", () => ({
       return key
     }
   })
+}))
+
+vi.mock("@/store/evaluations", () => ({
+  useEvaluationsStore: (selector: (state: any) => unknown) =>
+    selector({
+      setActiveTab: setActiveTabSpy,
+      setSyntheticReviewRecipeKind: setSyntheticReviewRecipeKindSpy
+    })
 }))
 
 vi.mock("../../hooks/useRecipes", () => ({
@@ -996,5 +1006,32 @@ describe("RecipesTab recipe launch flow", () => {
     expect(
       screen.getByText("No saved datasets yet. Create one from the Datasets tab or use an inline dataset.")
     ).toBeInTheDocument()
+  })
+
+  it("opens the shared synthetic review tab for supported rag recipes", async () => {
+    recipeLaunchReadinessState.data = {
+      data: {
+        recipe_id: "rag_retrieval_tuning",
+        ready: true,
+        can_enqueue_runs: true,
+        can_reuse_completed_runs: true,
+        runtime_checks: {
+          recipe_run_worker_enabled: true
+        },
+        message: null
+      }
+    }
+
+    render(<RecipesTab />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review synthetic retrieval drafts" })
+    )
+
+    expect(setSyntheticReviewRecipeKindSpy).toHaveBeenCalledWith(
+      "rag_retrieval_tuning"
+    )
+    expect(setActiveTabSpy).toHaveBeenCalledWith("synthetic-review")
   })
 })

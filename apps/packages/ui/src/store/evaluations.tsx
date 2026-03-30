@@ -21,6 +21,7 @@ import type {
 
 export type EvaluationsTab =
   | "recipes"
+  | "synthetic-review"
   | "evaluations"
   | "runs"
   | "datasets"
@@ -50,6 +51,7 @@ interface FormState {
 
 interface DataState {
   historyResults: EvaluationHistoryItem[]
+  syntheticReviewRecipeKind: string | null
   viewingDataset: DatasetResponse | null
   datasetSamples: DatasetSample[]
   datasetSamplesPage: number
@@ -103,6 +105,7 @@ interface FormActions {
 
 interface DataActions {
   setHistoryResults: (results: EvaluationHistoryItem[]) => void
+  setSyntheticReviewRecipeKind: (recipeKind: string | null) => void
   setViewingDataset: (dataset: DatasetResponse | null) => void
   setDatasetSamples: (samples: DatasetSample[]) => void
   setDatasetSamplesPage: (page: number) => void
@@ -190,6 +193,7 @@ const initialFormState: FormState = {
 
 const initialDataState: DataState = {
   historyResults: [],
+  syntheticReviewRecipeKind: null,
   viewingDataset: null,
   datasetSamples: [],
   datasetSamplesPage: 1,
@@ -258,6 +262,8 @@ export const useEvaluationsStore = createWithEqualityFn<EvaluationsState>()((set
   // ─────────────────────────────────────────────────────────────────────────
 
   setHistoryResults: (historyResults) => set({ historyResults }),
+  setSyntheticReviewRecipeKind: (syntheticReviewRecipeKind) =>
+    set({ syntheticReviewRecipeKind }),
   setViewingDataset: (viewingDataset) => set({ viewingDataset }),
   setDatasetSamples: (datasetSamples) => set({ datasetSamples }),
   setDatasetSamplesPage: (datasetSamplesPage) => set({ datasetSamplesPage }),

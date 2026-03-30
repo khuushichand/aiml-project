@@ -34,6 +34,11 @@ export class EvaluationsPage extends BasePage {
     return this.page.getByTestId("evaluations-tab-evaluations")
   }
 
+  /** Synthetic review tab trigger */
+  get syntheticReviewTab(): Locator {
+    return this.page.getByTestId("evaluations-tab-synthetic-review")
+  }
+
   /** Runs tab trigger */
   get runsTab(): Locator {
     return this.page.getByTestId("evaluations-tab-runs")
@@ -111,6 +116,16 @@ export class EvaluationsPage extends BasePage {
         },
       },
       {
+        name: "Review tab",
+        locator: this.syntheticReviewTab,
+        expectation: {
+          type: "state_change",
+          stateCheck: async () => {
+            return this.page.url()
+          },
+        },
+      },
+      {
         name: "Evaluations tab",
         locator: this.evaluationsTab,
         expectation: {
@@ -150,9 +165,19 @@ export class EvaluationsPage extends BasePage {
   /**
    * Switch to a specific tab by clicking its trigger.
    */
-  async switchTab(tab: "recipes" | "evaluations" | "runs" | "datasets" | "webhooks" | "history"): Promise<void> {
+  async switchTab(
+    tab:
+      | "recipes"
+      | "synthetic-review"
+      | "evaluations"
+      | "runs"
+      | "datasets"
+      | "webhooks"
+      | "history"
+  ): Promise<void> {
     const tabLocators: Record<string, Locator> = {
       recipes: this.recipesTab,
+      "synthetic-review": this.syntheticReviewTab,
       evaluations: this.evaluationsTab,
       runs: this.runsTab,
       datasets: this.datasetsTab,

@@ -254,6 +254,42 @@ export type RecipeRunReport = {
   recommendation_slots: Record<string, RecipeRecommendationSlot>
 }
 
+export type SyntheticEvalDraftSample = {
+  sample_id: string
+  recipe_kind: string
+  provenance: string
+  review_state: string
+  sample_payload?: Record<string, any>
+  sample_metadata?: Record<string, any>
+  source_kind?: string | null
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type SyntheticEvalQueueResponse = {
+  data: SyntheticEvalDraftSample[]
+  total: number
+}
+
+export type SyntheticEvalReviewActionRecord = {
+  action_id: string
+  sample_id: string
+  action: string
+  reviewer_id?: string | null
+  notes?: string | null
+  action_payload?: Record<string, any>
+  resulting_review_state?: string | null
+  created_at?: string | null
+}
+
+export type SyntheticEvalPromotionResponse = {
+  dataset_id: string
+  dataset_snapshot_ref: string
+  promotion_ids: string[]
+  sample_count: number
+}
+
 export type BenchmarkInfo = {
   name: string
   description?: string
@@ -512,6 +548,62 @@ export async function getRecipeRunReport(runId: string) {
   return await apiSend<RecipeRunReport>({
     path: `/api/v1/evaluations/recipe-runs/${encodeURIComponent(runId)}/report` as any,
     method: "GET"
+  })
+}
+
+export async function listSyntheticEvalQueue(params?: {
+  recipe_kind?: string
+  review_state?: string
+  source_kind?: string
+  limit?: number
+  offset?: number
+}) {
+  const query = new URLSearchParams()
+  if (params?.recipe_kind) query.set("recipe_kind", params.recipe_kind)
+  if (params?.review_state) query.set("review_state", params.review_state)
+  if (params?.source_kind) query.set("source_kind", params.source_kind)
+  if (params?.limit != null) query.set("limit", String(params.limit))
+  if (params?.offset != null) query.set("offset", String(params.offset))
+
+  const path =
+    "/api/v1/evaluations/synthetic/queue" +
+    (query.toString() ? `?${query.toString()}` : "")
+
+  return await apiSend<SyntheticEvalQueueResponse>({
+    path: path as any,
+    method: "GET"
+  })
+}
+
+export async function reviewSyntheticEvalSample(
+  sampleId: string,
+  payload: {
+    action: string
+    reviewer_id?: string
+    notes?: string
+    action_payload?: Record<string, any>
+    resulting_review_state?: string
+  }
+) {
+  return await apiSend<SyntheticEvalReviewActionRecord>({
+    path: `/api/v1/evaluations/synthetic/queue/${encodeURIComponent(sampleId)}/review` as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export async function promoteSyntheticEvalSamples(payload: {
+  sample_ids: string[]
+  dataset_name: string
+  dataset_description?: string
+  dataset_metadata?: Record<string, any>
+  promoted_by?: string
+  promotion_reason?: string
+}) {
+  return await apiSend<SyntheticEvalPromotionResponse>({
+    path: "/api/v1/evaluations/synthetic/promotions" as any,
+    method: "POST",
+    body: payload
   })
 }
 

@@ -37,6 +37,7 @@ import type {
   RecipeDatasetValidation,
   RecipeManifest
 } from "@/services/evaluations"
+import { useEvaluationsStore } from "@/store/evaluations"
 
 const { Paragraph, Text, Title } = Typography
 const { TextArea } = Input
@@ -283,6 +284,10 @@ export const RecipesTab: React.FC = () => {
     React.useState<RecipeDatasetValidation | null>(null)
   const [localError, setLocalError] = React.useState<string | null>(null)
   const [currentRunId, setCurrentRunId] = React.useState<string | null>(null)
+  const setActiveTab = useEvaluationsStore((s) => s.setActiveTab)
+  const setSyntheticReviewRecipeKind = useEvaluationsStore(
+    (s) => s.setSyntheticReviewRecipeKind
+  )
 
   const {
     data: manifestsResp,
@@ -315,6 +320,14 @@ export const RecipesTab: React.FC = () => {
   const runConfigEditorInvalid =
     runConfigText.trim().length > 0 && !parsedRunConfig
   const isLaunchable = selectedManifest?.launchable !== false
+  const syntheticReviewButtonLabel =
+    selectedManifest?.recipe_id === "rag_retrieval_tuning"
+      ? t("evaluations:recipeSyntheticReviewRetrievalCta", {
+          defaultValue: "Review synthetic retrieval drafts"
+        })
+      : t("evaluations:recipeSyntheticReviewAnswerQualityCta", {
+          defaultValue: "Review synthetic answer-quality drafts"
+        })
 
   React.useEffect(() => {
     if (!selectedRecipeId && manifests.length > 0) {
@@ -358,6 +371,12 @@ export const RecipesTab: React.FC = () => {
     return {
       dataset: parseJsonDataset(inlineDatasetText)
     }
+  }
+
+  const openSyntheticReview = () => {
+    if (!selectedManifest?.recipe_id) return
+    setSyntheticReviewRecipeKind(selectedManifest.recipe_id)
+    setActiveTab("synthetic-review")
   }
 
   const replaceInlineDataset = (nextDataset: DatasetSample[]) => {
@@ -1493,6 +1512,12 @@ export const RecipesTab: React.FC = () => {
                 >
                   {runButtonLabel}
                 </Button>
+                {(selectedManifest.recipe_id === "rag_retrieval_tuning" ||
+                  selectedManifest.recipe_id === "rag_answer_quality") && (
+                  <Button onClick={openSyntheticReview}>
+                    {syntheticReviewButtonLabel}
+                  </Button>
+                )}
               </Space>
             </div>
           </Card>

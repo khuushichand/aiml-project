@@ -82,6 +82,10 @@ vi.mock("../tabs/RecipesTab", () => ({
   RecipesTab: () => <div data-testid="recipes-tab-panel">Recipes panel</div>
 }))
 
+vi.mock("../tabs/SyntheticReviewTab", () => ({
+  SyntheticReviewTab: () => <div>Synthetic review panel</div>
+}))
+
 vi.mock("../tabs/EvaluationsTab", () => ({
   EvaluationsTab: () => <div>Evaluations panel</div>
 }))
@@ -107,6 +111,7 @@ describe("EvaluationsPage recipe-first entry", () => {
     render(<EvaluationsPage />)
 
     expect(screen.getByText("Recipes")).toBeInTheDocument()
+    expect(screen.getByText("Review")).toBeInTheDocument()
     expect(screen.getByTestId("recipes-tab-panel")).toBeInTheDocument()
   })
 })
