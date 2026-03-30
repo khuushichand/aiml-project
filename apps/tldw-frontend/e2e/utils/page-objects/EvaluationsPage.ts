@@ -58,6 +58,10 @@ export class EvaluationsPage extends BasePage {
     return this.page.getByRole("button", { name: /^Use / })
   }
 
+  recipeUseButton(recipeName: string): Locator {
+    return this.page.getByRole("button", { name: `Use ${recipeName}` })
+  }
+
   get validateDatasetButton(): Locator {
     return this.page.getByRole("button", { name: "Validate dataset" })
   }
@@ -171,6 +175,13 @@ export class EvaluationsPage extends BasePage {
     await expect(recipesTab).toHaveAttribute("aria-selected", "true", {
       timeout: 5_000,
     })
+  }
+
+  async selectRecipe(recipeName: string): Promise<void> {
+    await this.ensureRecipesTabSelected()
+    const button = this.recipeUseButton(recipeName)
+    await expect(button).toBeVisible({ timeout: 10_000 })
+    await button.click()
   }
 
   async assertRecipeCatalogVisible(): Promise<void> {

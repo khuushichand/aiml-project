@@ -450,6 +450,7 @@ export async function validateRecipeDataset(
   payload: {
     dataset_id?: string
     dataset?: DatasetSample[]
+    run_config?: Record<string, any>
   }
 ) {
   return await apiSend<RecipeDatasetValidation>({

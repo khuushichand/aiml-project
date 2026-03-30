@@ -34,7 +34,22 @@ const recipeManifestState = {
         description: "Tune retrieval candidates.",
         supported_modes: ["labeled", "unlabeled"],
         tags: ["rag", "retrieval"],
-        launchable: false
+        launchable: true,
+        capabilities: {
+          corpus_sources: ["media_db", "notes"],
+          candidate_creation_modes: ["auto_sweep", "manual"],
+          graded_relevance_scale: { min: 0, max: 3 }
+        },
+        default_run_config: {
+          candidate_creation_mode: "auto_sweep",
+          corpus_scope: { sources: ["media_db", "notes"] },
+          weak_supervision_budget: {
+            review_sample_fraction: 0.2,
+            max_review_samples: 25,
+            min_review_samples: 3,
+            synthetic_query_limit: 20
+          }
+        }
       }
     ]
   },
@@ -254,7 +269,22 @@ describe("RecipesTab recipe launch flow", () => {
         description: "Tune retrieval candidates.",
         supported_modes: ["labeled", "unlabeled"],
         tags: ["rag", "retrieval"],
-        launchable: false
+        launchable: true,
+        capabilities: {
+          corpus_sources: ["media_db", "notes"],
+          candidate_creation_modes: ["auto_sweep", "manual"],
+          graded_relevance_scale: { min: 0, max: 3 }
+        },
+        default_run_config: {
+          candidate_creation_mode: "auto_sweep",
+          corpus_scope: { sources: ["media_db", "notes"] },
+          weak_supervision_budget: {
+            review_sample_fraction: 0.2,
+            max_review_samples: 25,
+            min_review_samples: 3,
+            synthetic_query_limit: 20
+          }
+        }
       }
     ]
   }
@@ -444,6 +474,198 @@ describe("RecipesTab recipe launch flow", () => {
                 model: "bge-large"
               })
             ])
+          })
+        })
+      )
+    })
+  })
+
+  it("serializes guided rag retrieval tuning inputs into runnable recipe payloads", async () => {
+    recipeLaunchReadinessState.data = {
+      data: {
+        recipe_id: "rag_retrieval_tuning",
+        ready: true,
+        can_enqueue_runs: true,
+        can_reuse_completed_runs: true,
+        runtime_checks: {
+          recipe_run_worker_enabled: true
+        },
+        message: null
+      }
+    }
+
+    render(<RecipesTab />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
+    fireEvent.change(screen.getByLabelText("Media IDs"), {
+      target: { value: "10, 12" }
+    })
+    fireEvent.change(screen.getByLabelText("Note IDs"), {
+      target: { value: "note-7, note-9" }
+    })
+    fireEvent.click(screen.getByLabelText("Indexing fixed"))
+    fireEvent.change(screen.getByLabelText("Candidate creation mode"), {
+      target: { value: "manual" }
+    })
+    fireEvent.change(screen.getByLabelText("Candidate ID 1"), {
+      target: { value: "manual-hybrid" }
+    })
+    fireEvent.change(screen.getByLabelText("Search mode 1"), {
+      target: { value: "hybrid" }
+    })
+    fireEvent.change(screen.getByLabelText("Top K 1"), {
+      target: { value: "12" }
+    })
+    fireEvent.change(screen.getByLabelText("Hybrid alpha 1"), {
+      target: { value: "0.6" }
+    })
+    fireEvent.change(screen.getByLabelText("Reranking strategy 1"), {
+      target: { value: "cross_encoder" }
+    })
+    fireEvent.change(screen.getByLabelText("Chunking preset 1"), {
+      target: { value: "compact" }
+    })
+    fireEvent.change(screen.getByLabelText("Sample ID 1"), {
+      target: { value: "q-42" }
+    })
+    fireEvent.change(screen.getByLabelText("Query text 1"), {
+      target: { value: "find the beta architecture note" }
+    })
+    fireEvent.change(screen.getByLabelText("Relevant media targets 1 (optional)"), {
+      target: { value: "10:3\n12:1" }
+    })
+    fireEvent.change(screen.getByLabelText("Relevant note targets 1 (optional)"), {
+      target: { value: "note-7:2" }
+    })
+    fireEvent.change(screen.getByLabelText("Relevant spans 1 (optional)"), {
+      target: { value: "media_db,10,0,42,3\nnotes,note-7,5,25,2" }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
+
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipeId: "rag_retrieval_tuning",
+          dataset: [
+            {
+              sample_id: "q-42",
+              query: "find the beta architecture note",
+              targets: {
+                relevant_media_ids: [
+                  { id: "10", grade: 3 },
+                  { id: "12", grade: 1 }
+                ],
+                relevant_note_ids: [{ id: "note-7", grade: 2 }],
+                relevant_spans: [
+                  {
+                    source: "media_db",
+                    record_id: "10",
+                    start: 0,
+                    end: 42,
+                    grade: 3
+                  },
+                  {
+                    source: "notes",
+                    record_id: "note-7",
+                    start: 5,
+                    end: 25,
+                    grade: 2
+                  }
+                ]
+              }
+            }
+          ],
+          runConfig: expect.objectContaining({
+            candidate_creation_mode: "manual",
+            corpus_scope: {
+              sources: ["media_db", "notes"],
+              media_ids: [10, 12],
+              note_ids: ["note-7", "note-9"],
+              indexing_fixed: true
+            },
+            candidates: [
+              expect.objectContaining({
+                candidate_id: "manual-hybrid",
+                retrieval_config: expect.objectContaining({
+                  search_mode: "hybrid",
+                  top_k: 12,
+                  hybrid_alpha: 0.6,
+                  reranking_strategy: "cross_encoder"
+                }),
+                indexing_config: expect.objectContaining({
+                  chunking_preset: "compact"
+                })
+              })
+            ]
+          })
+        })
+      )
+    })
+  })
+
+  it("shows guided rag retrieval tuning controls and serializes a normalized launch payload", async () => {
+    recipeManifestState.data = {
+      data: [
+        {
+          recipe_id: "rag_retrieval_tuning",
+          recipe_version: "1",
+          name: "RAG Retrieval Tuning",
+          description: "Tune retrieval candidates.",
+          supported_modes: ["labeled", "unlabeled"],
+          tags: ["rag", "retrieval"],
+          launchable: true
+        },
+        {
+          recipe_id: "summarization_quality",
+          recipe_version: "1",
+          name: "Summarization Quality",
+          description: "Compare summarization candidates.",
+          supported_modes: ["labeled", "unlabeled"],
+          tags: ["summarization"],
+          launchable: true
+        }
+      ]
+    }
+    recipeLaunchReadinessState.data = {
+      data: {
+        recipe_id: "rag_retrieval_tuning",
+        ready: true,
+        can_enqueue_runs: true,
+        can_reuse_completed_runs: true,
+        runtime_checks: {
+          recipe_run_worker_enabled: true
+        },
+        message: null
+      }
+    }
+
+    render(<RecipesTab />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
+
+    expect(screen.getByText("Corpus sources")).toBeInTheDocument()
+    expect(screen.getByText("Weak supervision budget")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Add query sample" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Run recipe" })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
+
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipeId: "rag_retrieval_tuning",
+          runConfig: expect.objectContaining({
+            candidate_creation_mode: "auto_sweep",
+            corpus_scope: expect.objectContaining({
+              sources: ["media_db", "notes"]
+            }),
+            weak_supervision_budget: expect.objectContaining({
+              review_sample_fraction: 0.2,
+              max_review_samples: 25,
+              min_review_samples: 3,
+              synthetic_query_limit: 20
+            })
           })
         })
       )

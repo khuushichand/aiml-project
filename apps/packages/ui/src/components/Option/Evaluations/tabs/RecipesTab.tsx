@@ -30,6 +30,7 @@ import {
   useValidateRecipeDataset
 } from "../hooks/useRecipes"
 import { JsonEditor } from "../components"
+import { RagRetrievalTuningConfig } from "./recipe-configs/RagRetrievalTuningConfig"
 import type {
   DatasetSample,
   RecipeDatasetValidation,
@@ -56,6 +57,16 @@ const DEFAULT_INLINE_DATASETS: Record<string, string> = {
         query_id: "q-1",
         input: "find alpha",
         expected_ids: ["1"]
+      }
+    ],
+    null,
+    2
+  ),
+  rag_retrieval_tuning: JSON.stringify(
+    [
+      {
+        sample_id: "sample-1",
+        query: ""
       }
     ],
     null,
@@ -108,6 +119,33 @@ const DEFAULT_RUN_CONFIGS: Record<string, string> = {
         }
       ],
       media_ids: [1, 2]
+    },
+    null,
+    2
+  ),
+  rag_retrieval_tuning: JSON.stringify(
+    {
+      candidate_creation_mode: "auto_sweep",
+      corpus_scope: {
+        sources: ["media_db", "notes"]
+      },
+      weak_supervision_budget: {
+        review_sample_fraction: 0.2,
+        max_review_samples: 25,
+        min_review_samples: 3,
+        synthetic_query_limit: 20
+      },
+      retrieval_config: {
+        search_mode: "hybrid",
+        top_k: 10,
+        hybrid_alpha: 0.7,
+        enable_reranking: true,
+        reranking_strategy: "flashrank",
+        rerank_top_k: 10
+      },
+      indexing_config: {
+        chunking_preset: "baseline"
+      }
     },
     null,
     2
@@ -324,10 +362,12 @@ export const RecipesTab: React.FC = () => {
     try {
       setLocalError(null)
       const datasetPayload = buildDatasetPayload()
+      const runConfig = parseJsonObject(runConfigText, "Run config")
       const resp = await validateMutation.mutateAsync({
         recipeId: selectedManifest.recipe_id,
         datasetId: datasetPayload.datasetId,
-        dataset: datasetPayload.dataset
+        dataset: datasetPayload.dataset,
+        runConfig
       })
       setValidationResult(resp.data as RecipeDatasetValidation)
     } catch (error: any) {
@@ -1172,21 +1212,35 @@ export const RecipesTab: React.FC = () => {
                   )}
 
                   <div>
-                    <Text strong>
-                      {t("evaluations:recipeGuidedDatasetLabel", {
-                        defaultValue: "Dataset samples"
-                      })}
-                    </Text>
-                    <div className="mt-2">{renderGuidedDatasetEditor()}</div>
-                  </div>
+                    {selectedManifest.recipe_id === "rag_retrieval_tuning" ? (
+                      <RagRetrievalTuningConfig
+                        datasetSource="inline"
+                        dataset={parsedInlineDataset || defaultInlineDatasetForRecipe(selectedRecipeId)}
+                        runConfig={parsedRunConfig || defaultRunConfigForRecipe(selectedRecipeId)}
+                        onDatasetChange={replaceInlineDataset}
+                        onRunConfigChange={replaceRunConfig}
+                      />
+                    ) : (
+                      <div className="space-y-3">
+                        <div>
+                          <Text strong>
+                            {t("evaluations:recipeGuidedDatasetLabel", {
+                              defaultValue: "Dataset samples"
+                            })}
+                          </Text>
+                          <div className="mt-2">{renderGuidedDatasetEditor()}</div>
+                        </div>
 
-                  <div>
-                    <Text strong>
-                      {t("evaluations:recipeGuidedRunConfigLabel", {
-                        defaultValue: "Run settings"
-                      })}
-                    </Text>
-                    <div className="mt-2">{renderGuidedRunConfigEditor()}</div>
+                        <div>
+                          <Text strong>
+                            {t("evaluations:recipeGuidedRunConfigLabel", {
+                              defaultValue: "Run settings"
+                            })}
+                          </Text>
+                          <div className="mt-2">{renderGuidedRunConfigEditor()}</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <Collapse
@@ -1247,14 +1301,24 @@ export const RecipesTab: React.FC = () => {
                       })}
                     />
                   )}
-                  <div>
-                    <Text strong>
-                      {t("evaluations:recipeGuidedRunConfigLabel", {
-                        defaultValue: "Run settings"
-                      })}
-                    </Text>
-                    <div className="mt-2">{renderGuidedRunConfigEditor()}</div>
-                  </div>
+                  {selectedManifest.recipe_id === "rag_retrieval_tuning" ? (
+                    <RagRetrievalTuningConfig
+                      datasetSource="saved"
+                      dataset={[]}
+                      runConfig={parsedRunConfig || defaultRunConfigForRecipe(selectedRecipeId)}
+                      onDatasetChange={() => {}}
+                      onRunConfigChange={replaceRunConfig}
+                    />
+                  ) : (
+                    <div>
+                      <Text strong>
+                        {t("evaluations:recipeGuidedRunConfigLabel", {
+                          defaultValue: "Run settings"
+                        })}
+                      </Text>
+                      <div className="mt-2">{renderGuidedRunConfigEditor()}</div>
+                    </div>
+                  )}
                   <Collapse
                     ghost
                     destroyOnHidden

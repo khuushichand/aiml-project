@@ -55,11 +55,13 @@ export function useValidateRecipeDataset() {
       recipeId: string
       datasetId?: string
       dataset?: DatasetSample[]
+      runConfig?: Record<string, any>
     }) =>
       ensureOk(
         await validateRecipeDataset(params.recipeId, {
           dataset_id: params.datasetId,
-          dataset: params.dataset
+          dataset: params.dataset,
+          run_config: params.runConfig
         })
       ),
     onError: (error: any) => {
