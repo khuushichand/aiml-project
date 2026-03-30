@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+import tldw_Server_API.app.api.v1.API_Deps.personalization_deps as personalization_deps
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 
 
@@ -35,6 +38,22 @@ def test_companion_activity_round_trip(tmp_path) -> None:
     assert rows[0]["tags"] == ["research", "paper"]
     assert rows[0]["provenance"] == {"source_ids": ["42"]}
     assert rows[0]["metadata"] == {"title": "Example"}
+
+
+def test_personalization_dependency_uses_safe_for_user_factory(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(
+        personalization_deps.PersonalizationDB,
+        "for_user",
+        classmethod(lambda cls, user_id: sentinel),
+        raising=False,
+    )
+
+    result = personalization_deps.get_personalization_db_for_user(
+        user=SimpleNamespace(id="7")
+    )
+
+    assert result is sentinel
 
 
 def test_companion_knowledge_card_upsert_updates_existing_card(tmp_path) -> None:

@@ -321,11 +321,11 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     whisper_model_name = (parsed_model or requested_model or "").strip()
     try:
         whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
-    except ValueError as exc:
+    except ValueError:
         return {
             'available': False,
             'usable': False,
-            'message': str(exc),
+            'message': 'Invalid transcription model identifier.',
             'model': whisper_model_name,
             'provider': 'whisper',
             'on_demand': False,

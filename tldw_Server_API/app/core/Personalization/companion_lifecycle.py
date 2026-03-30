@@ -44,7 +44,7 @@ def _resolve_personalization_db(
     if personalization_db is not None:
         return personalization_db
     storage_user_id = resolve_companion_storage_user_id(user_id)
-    return PersonalizationDB(str(DatabasePaths.get_personalization_db_path(storage_user_id)))
+    return PersonalizationDB.for_user(storage_user_id)
 
 
 def _resolve_collections_db(

@@ -131,7 +131,7 @@ class _CompanionReflectionScheduler:
                 db_path = path / DatabasePaths.PERSONALIZATION_DB_NAME
                 if not db_path.exists():
                     continue
-                db = PersonalizationDB(str(db_path))
+                db = PersonalizationDB.for_path(db_path)
                 for user_id in db.list_profile_user_ids():
                     normalized_user_id = str(user_id).strip()
                     if not normalized_user_id or normalized_user_id in seen_user_ids:
