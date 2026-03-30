@@ -15,7 +15,8 @@ const recipeManifestState = {
         name: "Summarization Quality",
         description: "Compare summarization candidates.",
         supported_modes: ["labeled", "unlabeled"],
-        tags: ["summarization"]
+        tags: ["summarization"],
+        launchable: true
       },
       {
         recipe_id: "embeddings_model_selection",
@@ -23,7 +24,17 @@ const recipeManifestState = {
         name: "Embeddings Model Selection",
         description: "Compare embedding candidates.",
         supported_modes: ["labeled", "unlabeled"],
-        tags: ["embeddings"]
+        tags: ["embeddings"],
+        launchable: true
+      },
+      {
+        recipe_id: "rag_retrieval_tuning",
+        recipe_version: "1",
+        name: "RAG Retrieval Tuning",
+        description: "Tune retrieval candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["rag", "retrieval"],
+        launchable: false
       }
     ]
   },
@@ -218,24 +229,35 @@ describe("RecipesTab recipe launch flow", () => {
     vi.clearAllMocks()
     recipeManifestState.data = {
       data: [
-        {
-          recipe_id: "summarization_quality",
-          recipe_version: "1",
-          name: "Summarization Quality",
-          description: "Compare summarization candidates.",
-          supported_modes: ["labeled", "unlabeled"],
-          tags: ["summarization"]
-        },
-        {
-          recipe_id: "embeddings_model_selection",
-          recipe_version: "1",
-          name: "Embeddings Model Selection",
-          description: "Compare embedding candidates.",
-          supported_modes: ["labeled", "unlabeled"],
-          tags: ["embeddings"]
-        }
-      ]
-    }
+      {
+        recipe_id: "summarization_quality",
+        recipe_version: "1",
+        name: "Summarization Quality",
+        description: "Compare summarization candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["summarization"],
+        launchable: true
+      },
+      {
+        recipe_id: "embeddings_model_selection",
+        recipe_version: "1",
+        name: "Embeddings Model Selection",
+        description: "Compare embedding candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["embeddings"],
+        launchable: true
+      },
+      {
+        recipe_id: "rag_retrieval_tuning",
+        recipe_version: "1",
+        name: "RAG Retrieval Tuning",
+        description: "Tune retrieval candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["rag", "retrieval"],
+        launchable: false
+      }
+    ]
+  }
     recipeManifestState.isLoading = false
     recipeManifestState.isError = false
     recipeManifestState.error = null
@@ -524,6 +546,52 @@ describe("RecipesTab recipe launch flow", () => {
     expect(
       screen.getByText("Force rerun requires the recipe worker to be available.")
     ).toBeInTheDocument()
+  })
+
+  it("shows a non-launchable recipe notice and disables validate/run", async () => {
+    recipeManifestState.data = {
+      data: [
+        {
+          recipe_id: "rag_retrieval_tuning",
+          recipe_version: "1",
+          name: "RAG Retrieval Tuning",
+          description: "Tune retrieval candidates.",
+          supported_modes: ["labeled", "unlabeled"],
+          tags: ["rag", "retrieval"],
+          launchable: false
+        },
+        {
+          recipe_id: "summarization_quality",
+          recipe_version: "1",
+          name: "Summarization Quality",
+          description: "Compare summarization candidates.",
+          supported_modes: ["labeled", "unlabeled"],
+          tags: ["summarization"],
+          launchable: true
+        }
+      ]
+    }
+    recipeLaunchReadinessState.data = {
+      data: {
+        recipe_id: "rag_retrieval_tuning",
+        ready: false,
+        can_enqueue_runs: false,
+        can_reuse_completed_runs: false,
+        runtime_checks: {
+          recipe_launchable: false,
+          recipe_run_worker_enabled: false
+        },
+        message: null
+      }
+    }
+
+    render(<RecipesTab />)
+
+    expect(
+      screen.getByText("This recipe is not launchable yet.")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Validate dataset" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Run recipe" })).toBeDisabled()
   })
 
   it("keeps validation messaging focused on dataset format and runtime readiness", async () => {

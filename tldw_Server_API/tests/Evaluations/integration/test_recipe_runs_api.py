@@ -153,6 +153,10 @@ async def test_recipe_manifest_endpoints(async_api_client, auth_headers) -> None
     assert list_response.status_code == 200
     manifests = list_response.json()
     assert any(item["recipe_id"] == "summarization_quality" for item in manifests)
+    rag_manifest = next(
+        item for item in manifests if item["recipe_id"] == "rag_retrieval_tuning"
+    )
+    assert rag_manifest["launchable"] is False
 
     detail_response = await async_api_client.get(
         "/api/v1/evaluations/recipes/summarization_quality",
@@ -208,6 +212,25 @@ async def test_recipe_launch_readiness_endpoint_reports_worker_enabled(
 
 
 @pytest.mark.asyncio
+async def test_recipe_launch_readiness_endpoint_rejects_stub_manifest(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning/launch-readiness",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recipe_id"] == "rag_retrieval_tuning"
+    assert body["ready"] is False
+    assert body["can_enqueue_runs"] is False
+    assert body["can_reuse_completed_runs"] is False
+    assert "not launchable" in body["message"]
+
+
+@pytest.mark.asyncio
 async def test_recipe_validate_dataset_endpoint_returns_errors(async_api_client, auth_headers) -> None:
     response = await async_api_client.post(
         "/api/v1/evaluations/recipes/summarization_quality/validate-dataset",
@@ -224,6 +247,21 @@ async def test_recipe_validate_dataset_endpoint_returns_errors(async_api_client,
     body = response.json()
     assert body["valid"] is False
     assert body["errors"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_validate_dataset_endpoint_rejects_stub_manifest(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning/validate-dataset",
+        json={"dataset": _inline_dataset()},
+        headers=auth_headers,
+    )
+
+    assert response.status_code in {400, 409}
+    assert "not launchable" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -271,6 +309,24 @@ async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client,
     for slot in report["recommendation_slots"].values():
         assert slot["candidate_run_id"] is None
         assert slot["reason_code"] is not None
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_rejects_stub_manifest(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code in {400, 409}
+    assert "not launchable" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

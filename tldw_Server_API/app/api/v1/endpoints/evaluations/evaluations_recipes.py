@@ -42,6 +42,22 @@ def _service_for_user(current_user: User):
     return get_recipe_runs_service_for_user(stable_user_id)
 
 
+def _get_manifest_or_404(service, recipe_id: str) -> RecipeManifest:
+    try:
+        return service.get_manifest(recipe_id)
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
+
+
+def _ensure_launchable_manifest(manifest: RecipeManifest) -> None:
+    if manifest.launchable:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Recipe '{manifest.recipe_id}' is not launchable yet.",
+    )
+
+
 def get_recipe_run_job_enqueuer() -> Callable[..., str]:
     """Return the callable used to enqueue recipe-run Jobs."""
     return enqueue_recipe_run
@@ -72,10 +88,7 @@ async def get_recipe_manifest(
 ):
     del user_ctx
     service = _service_for_user(current_user)
-    try:
-        return service.get_manifest(recipe_id)
-    except RecipeDefinitionNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
+    return _get_manifest_or_404(service, recipe_id)
 
 
 @recipes_router.get(
@@ -90,12 +103,24 @@ async def get_recipe_launch_readiness(
 ):
     del user_ctx
     service = _service_for_user(current_user)
-    try:
-        service.get_manifest(recipe_id)
-    except RecipeDefinitionNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
-
+    manifest = _get_manifest_or_404(service, recipe_id)
     worker_enabled = recipe_run_jobs_worker_enabled()
+    if not manifest.launchable:
+        return RecipeLaunchReadiness(
+            recipe_id=recipe_id,
+            ready=False,
+            can_enqueue_runs=False,
+            can_reuse_completed_runs=False,
+            runtime_checks={
+                "recipe_launchable": False,
+                "recipe_run_worker_enabled": worker_enabled,
+            },
+            message=(
+                f"Recipe '{recipe_id}' is not launchable yet."
+                " It is exposed as a stub manifest only."
+            ),
+        )
+
     message = None
     if not worker_enabled:
         message = (
@@ -108,6 +133,7 @@ async def get_recipe_launch_readiness(
         can_enqueue_runs=worker_enabled,
         can_reuse_completed_runs=True,
         runtime_checks={
+            "recipe_launchable": True,
             "recipe_run_worker_enabled": worker_enabled,
         },
         message=message,
@@ -127,13 +153,13 @@ async def validate_recipe_dataset(
     del user_ctx
     service = _service_for_user(current_user)
     try:
+        manifest = _get_manifest_or_404(service, recipe_id)
+        _ensure_launchable_manifest(manifest)
         return service.validate_dataset(
             recipe_id,
             dataset_id=payload.get("dataset_id"),
             dataset=payload.get("dataset"),
         )
-    except RecipeDefinitionNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -159,6 +185,8 @@ async def create_recipe_run(
     stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
     service = _service_for_user(current_user)
     try:
+        manifest = _get_manifest_or_404(service, recipe_id)
+        _ensure_launchable_manifest(manifest)
         record = service.create_run(
             recipe_id,
             dataset_id=payload.get("dataset_id"),
@@ -178,12 +206,10 @@ async def create_recipe_run(
             if response is not None:
                 response.status_code = status.HTTP_202_ACCEPTED
         elif response is not None:
-            response.status_code = status.HTTP_200_OK
+                response.status_code = status.HTTP_200_OK
         if response is not None:
             response.headers["Location"] = f"/api/v1/evaluations/recipe-runs/{record.run_id}"
         return record
-    except RecipeDefinitionNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
     except ValueError as exc:
         logger.debug("Recipe run creation rejected: {}", exc)
         raise HTTPException(

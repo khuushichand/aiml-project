@@ -247,6 +247,10 @@ export const RecipesTab: React.FC = () => {
     datasetSource === "inline" && inlineDatasetText.trim().length > 0 && !parsedInlineDataset
   const runConfigEditorInvalid =
     runConfigText.trim().length > 0 && !parsedRunConfig
+  const isLaunchable = selectedManifest?.launchable !== false
+  const nonLaunchableMessage = selectedManifest
+    ? "This recipe is not launchable yet."
+    : null
 
   React.useEffect(() => {
     if (!selectedRecipeId && manifests.length > 0) {
@@ -356,7 +360,7 @@ export const RecipesTab: React.FC = () => {
 
   const canEnqueueRuns = launchReadiness?.can_enqueue_runs !== false
   const canReuseCompletedRuns = launchReadiness?.can_reuse_completed_runs !== false
-  const runButtonDisabled = !canEnqueueRuns && forceRerun
+  const runButtonDisabled = !isLaunchable || (!canEnqueueRuns && forceRerun)
   const runButtonLabel = !canEnqueueRuns && canReuseCompletedRuns && !forceRerun
     ? t("evaluations:recipeReuseRunCta", {
         defaultValue: "Try matching run"
@@ -1060,6 +1064,18 @@ export const RecipesTab: React.FC = () => {
             </Paragraph>
 
             <div className="space-y-3">
+              {!isLaunchable && (
+                <Alert
+                  type="info"
+                  showIcon
+                  title={nonLaunchableMessage}
+                  description={t("evaluations:recipeLaunchDisabledDescription", {
+                    defaultValue:
+                      "Validation and run creation are disabled for this stub manifest until the recipe is implemented."
+                  })}
+                />
+              )}
+
               {launchReadiness?.message && (
                 <Alert
                   type="warning"
@@ -1369,6 +1385,7 @@ export const RecipesTab: React.FC = () => {
                 <Button
                   onClick={handleValidate}
                   loading={validateMutation.isPending}
+                  disabled={!isLaunchable}
                 >
                   {t("evaluations:recipeValidateCta", {
                     defaultValue: "Validate dataset"

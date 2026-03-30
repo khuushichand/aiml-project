@@ -164,6 +164,7 @@ export type RecipeManifest = {
   description: string
   supported_modes: Array<"labeled" | "unlabeled">
   tags: string[]
+  launchable: boolean
   capabilities?: Record<string, any>
   default_run_config?: Record<string, any>
 }

@@ -16,6 +16,7 @@ _RAG_RETRIEVAL_TUNING_RECIPE = StaticRecipeDefinition(
         recipe_version="1",
         name="RAG Retrieval Tuning",
         description="Tune retrieval candidates across labeled and unlabeled corpora.",
+        launchable=False,
         supported_modes=["labeled", "unlabeled"],
         tags=["rag", "retrieval", "tuning", "recipe-v1"],
         capabilities={
