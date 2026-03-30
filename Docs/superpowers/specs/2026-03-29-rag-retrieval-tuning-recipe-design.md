@@ -177,6 +177,14 @@ The recipe should support two corpus source modes:
 
 The report should always persist the effective corpus scope so a run remains reproducible even if the live collection changes later.
 
+For ingested-corpus runs, persisting scope alone is not sufficient. The recipe should also persist:
+
+- a stable corpus snapshot reference where feasible
+- a dataset or corpus content hash
+- the effective media id set used at execution time
+
+Recipe runs must not rely on a mutable live collection definition as the sole source of truth for later report interpretation or rerun reuse.
+
 ### Supervision Modes
 
 The recipe should support:
@@ -230,7 +238,8 @@ Each retrieval sample should conceptually include:
 `targets` should support:
 
 - `relevant_media_ids`
-- `relevant_chunk_ids`
+- `relevant_chunk_ids` only when chunk ids are stable for the candidate set being compared
+- canonical passage/span targets for chunking-sensitive comparisons, such as `media_id + character/token offsets`
 
 This allows four valid dataset shapes:
 
@@ -238,6 +247,12 @@ This allows four valid dataset shapes:
 - chunk-level only
 - both
 - weak-supervision with missing targets initially
+
+Chunk-level labels need an additional rule:
+
+- if the candidate sweep changes chunking, overlap, or chunk boundary logic, chunk-level gold labels must not depend on ephemeral chunk ids alone
+- chunk-level evaluation in those runs should use canonical passage/span targets that can be remapped into each candidate’s chunk space
+- if canonical span targets are unavailable, chunk-level evaluation must be disabled for chunking-changing comparisons or constrained to a fixed indexing baseline
 
 ### Candidate Model
 
@@ -259,6 +274,25 @@ Candidate configs should normalize into two layers:
    - reranker enabled/disabled plus params
 
 This separation matters because some candidate changes require a fresh index while others can reuse the same index.
+
+The recipe should distinguish explicitly between:
+
+- `retrieval_only` candidate changes that can reuse an index
+- `index_affecting` candidate changes that require a separate materialized index
+
+Recipe execution must never overwrite or mutate the live serving index used by normal product retrieval. Candidate indexes should be isolated artifacts keyed by:
+
+- corpus snapshot or dataset content hash
+- normalized indexing config hash
+- user id / tenant scope
+- recipe run or reusable artifact id
+
+The implementation should define:
+
+- when a prior candidate index can be reused
+- when a new temporary index must be built
+- how temporary indexes are cleaned up or expired
+- how index build failures surface without corrupting other candidates
 
 ### Candidate Creation
 
@@ -282,6 +316,14 @@ Examples of safe auto-sweep axes:
 
 The system should not default to large unbounded tuning grids.
 
+The default sweep should also have an explicit budget envelope, for example:
+
+- a maximum candidate count
+- a maximum number of index-affecting candidates
+- a maximum number of expensive hosted reranker or embedding combinations
+
+The UI should communicate that the recommended sweep is intentionally small and diagnostic, not exhaustive.
+
 ### Execution Flow
 
 Recommended execution flow:
@@ -293,8 +335,9 @@ Recommended execution flow:
 5. run retrieval for every query/candidate pair
 6. capture retrieved media ids, retrieved chunk ids, ranks, scores, and latency
 7. compute media-level and chunk-level metrics separately
-8. combine into recommendation slots and confidence summary
-9. reserve or present review samples where required
+8. if reranking is enabled, compute first-pass retrieval metrics separately from post-rerank metrics
+9. combine into recommendation slots and confidence summary
+10. reserve or present review samples where required
 
 The execution path should stay retrieval-only in V1. It should not call answer generation for the main scoring loop.
 
@@ -302,10 +345,10 @@ The execution path should stay retrieval-only in V1. It should not call answer g
 
 Primary metrics:
 
-- `Recall@k`
-- `MRR`
-- `NDCG@k`
-- `Precision@k` when labels support it
+- first-pass `Recall@k`
+- post-rerank `MRR`
+- post-rerank `NDCG@k`
+- post-rerank `Precision@k` when labels support it
 
 Secondary metrics:
 
@@ -318,10 +361,19 @@ The recipe should compute:
 
 - `media_relevance_score`
 - `chunk_relevance_score`
+- `first_pass_recall_score`
+- `post_rerank_quality_score`
 - `retrieval_quality_score`
 - `overall_score`
 
 The default weighting should be configurable, but the report should keep media-level and chunk-level performance visible rather than collapsing them too early.
+
+If a candidate includes reranking, the report should show at least two stages:
+
+- pre-rerank retrieval coverage
+- post-rerank ranking quality
+
+This prevents reranking gains from hiding a degraded first-pass retriever.
 
 If only one relevance level exists in the dataset, the scoring model should degrade cleanly to that level.
 
@@ -347,6 +399,13 @@ Confidence should be derived from:
 - agreement between weak labels and reviewed samples, when available
 
 Weak-supervision runs should carry lower default confidence than labeled runs unless validated human review evidence materially increases trust.
+
+Weak-supervision runs also need explicit operational limits and review thresholds. V1 should define defaults for:
+
+- maximum synthetic query count per run
+- maximum judged label generation volume per run
+- reserved review sample size or minimum review percentage
+- conditions under which `best_overall` remains provisional until review is completed
 
 ### UI And Results Contract
 
@@ -386,14 +445,16 @@ The page should avoid opening with raw metric tables only.
 
 ### Manifest And Framework Extension
 
-This recipe is likely to need richer manifest metadata than the current framework exposes. The recipe manifest should eventually support wizard-oriented hints such as:
+This recipe requires richer manifest metadata than the current framework exposes. The manifest upgrade should be treated as a prerequisite for a clean implementation, not a later polish step.
+
+The current manifest surface only exposes a small set of generic fields, while the current `Recipes` tab already hardcodes per-recipe behavior. Implementing this recipe cleanly should include a manifest/schema extension that supports wizard-oriented hints such as:
 
 - supported corpus source types
 - supported candidate generation modes
 - supported metric families
 - whether human review is required or optional
 
-That should be handled as an intentional framework improvement rather than hardcoded inside the tab.
+That should be handled as an intentional framework improvement rather than by adding another bespoke branch inside the tab component.
 
 ## Weak-Supervision And Human Review
 
@@ -404,6 +465,7 @@ The recipe should make this explicit in both run status and reports:
 - labels were synthetic, judge-derived, or user-supplied
 - a human review sample was reserved
 - confidence was adjusted accordingly
+- recommendations may be provisional until the minimum review threshold is met
 
 If the system later uses LLM judges for relevance or realism checks, the workflow should encourage:
 
