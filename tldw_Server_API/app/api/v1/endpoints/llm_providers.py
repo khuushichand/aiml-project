@@ -1169,11 +1169,17 @@ def _resolve_model_tokenizer_support(
     model_name: str,
     config_parser: Any,
 ) -> dict[str, Any]:
+    strict_mode_effective = _strict_token_counting_enabled_shared(default=False)
+    if _truthy(os.getenv("TEST_MODE")) and _truthy(os.getenv("E2E_INPROCESS")):
+        return _skipped_model_tokenizer_support(
+            "Tokenizer probe skipped in in-process test mode to avoid heavyweight runtime imports",
+            strict_mode_effective=strict_mode_effective,
+        )
     try:
         return resolve_tokenizer_metadata(
             provider_name,
             model_name,
-            strict_mode_effective=_strict_token_counting_enabled_shared(default=False),
+            strict_mode_effective=strict_mode_effective,
             config_parser=config_parser,
             runtime_probe_exact=True,
             runtime_probe_timeout_seconds=2.0,
@@ -1187,7 +1193,7 @@ def _resolve_model_tokenizer_support(
             "source": None,
             "detokenize": False,
             "count_accuracy": "unavailable",
-            "strict_mode_effective": _strict_token_counting_enabled_shared(default=False),
+            "strict_mode_effective": strict_mode_effective,
         }
 
 

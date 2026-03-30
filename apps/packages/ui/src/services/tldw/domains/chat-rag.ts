@@ -98,6 +98,11 @@ const normalizeChatCompletionResponseBody = (
 }
 
 const sanitizeChatCompletionPayload = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return isSuspiciousChatCompletionString(value)
+      ? CHAT_COMPLETION_ERROR_MESSAGE
+      : value
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeChatCompletionPayload(item))
   }
