@@ -108,7 +108,7 @@ Track A is the next planning target and should stay narrowly scoped.
 - support existing personas as well as newly created personas
 - persist and serve a canonical resolved buddy profile
 - store and normalize overlay preferences when present
-- expose backend read contracts required for later rendering work
+- expose backend read contracts required for later rendering work through a dedicated persona buddy sub-resource
 
 ### Out Of Scope
 
@@ -120,13 +120,29 @@ Track A is the next planning target and should stay narrowly scoped.
 
 Track A may define reserved extension points needed by Tracks B and C, but it should not require Track B or C implementation work in the first plan.
 
+### Track A API Contract
+
+Track A should expose buddy data through a dedicated persona-scoped sub-resource rather than by overloading every existing persona payload immediately.
+
+Recommended day-one read contract:
+
+- `GET /api/v1/persona/profiles/{persona_id}/buddy`
+
+Optional follow-on reads may project a buddy summary into other persona surfaces later, but Track A should treat the buddy as a dedicated sub-resource owned by persona.
+
 ## Design
 
 ### 1. Domain Model
 
 Each persona owns exactly one buddy facet.
 
-The buddy facet should be treated as a stable sub-resource of the persona profile rather than as a free-floating object in its own right. The facet may eventually warrant dedicated persistence tables or helper modules, but the product contract is one-to-one ownership by persona.
+The buddy facet should be treated as a stable sub-resource of the persona profile rather than as a free-floating object in its own right. The facet should be stored in the persona domain, not in the separate personalization or companion domain.
+
+Implementation constraint:
+
+- Track A should persist buddy state in the persona storage layer, keyed by `persona_id`
+- Track A should not store canonical buddy identity in `PersonalizationDB`
+- a dedicated persona-buddy table or equivalent persona-scoped storage contract is preferred over mutating unrelated personalization records
 
 The facet should distinguish between:
 
@@ -148,12 +164,13 @@ Day-one derived-core outputs should include:
 
 Day-one derivation inputs should prefer stable persona signals, such as:
 
+- persona id
 - persona name
-- persona role or archetype
-- tone or style metadata
 - source-character lineage
-- voice defaults or other stylistic defaults
-- future explicit appearance hints when present
+- origin-character snapshot metadata
+- explicit appearance hints when they exist in a future schema
+
+Day-one derivation should not use highly mutable fields such as freeform `system_prompt`, setup progress, or live-tuned voice defaults as primary identity inputs. Those fields may inform future presentation refinements, but they should not cause the persona's core buddy identity to churn during normal editing.
 
 The exact derivation heuristic is an implementation detail, but the contract is not: identical persona inputs should produce a stable derived core unless the derivation version changes intentionally.
 
@@ -201,6 +218,8 @@ Track A's required resolved-profile contract should stay limited to identity and
 
 Fields needed mainly for Track B or C, such as display modes, bubble behavior, motion profiles, or proactive interaction hints, should be treated as reserved extension points rather than mandatory Track A payload requirements.
 
+The resolved profile should be fetched through the dedicated buddy sub-resource. Existing `PersonaProfileResponse` payloads may later include summary pointers or cached fields if useful, but Track A should not require widening the current persona profile response contract to land the buddy system.
+
 ### 2. Lifecycle Rules
 
 Buddy lifecycle is persona lifecycle, not pet lifecycle.
@@ -215,10 +234,22 @@ Track A must also cover personas that already exist before the buddy facet ships
 
 The required behavior is lazy initialization on read or update:
 
-- if an existing persona is loaded and no buddy facet exists, the system derives and persists one before returning the resolved profile
+- if the buddy sub-resource is requested for an existing persona and no buddy facet exists, the system derives and persists one before returning the resolved profile
 - if an existing persona is updated and no buddy facet exists, the same derivation path applies
 
 An optional background repair or backfill job may be added later for hardening, but Track A must not rely on a separate migration-only pass to satisfy the "every persona gets a buddy" rule.
+
+#### Versioning Constraint
+
+Lazy initialization must not create surprising optimistic-concurrency churn for the main persona profile.
+
+Track A should therefore treat buddy persistence as independent from the current `PersonaProfileResponse.version` flow:
+
+- lazy buddy initialization should not bump the main persona profile version
+- fetching the buddy sub-resource may create or repair buddy state
+- normal persona profile reads should not require write-back solely to surface buddy data
+
+If Track A needs write-on-read behavior for buddy creation, that write should occur in buddy-specific storage rather than through the existing persona profile update path.
 
 #### Update
 
@@ -297,6 +328,17 @@ Behavior:
 - animation intensity scales by tier
 - offline or degraded states should fall back to a static or low-motion representation, not disappearance
 - non-persona chat should not automatically receive buddy presence unless a real persona context is active
+
+#### Coexistence With Existing Avatar Paths
+
+Track B should coexist with the repo's existing `avatar_url`-based persona and assistant rendering paths rather than attempting an all-at-once replacement.
+
+Rules:
+
+- buddy-aware persona surfaces should prefer the resolved buddy profile for buddy rendering
+- existing `avatar_url` fields may remain in place for legacy or non-buddy consumers
+- Track B should not require immediate removal of `avatar_url` from existing persona summaries or assistant-selection flows
+- when both exist, the buddy render is the canonical persona-face treatment, while `avatar_url` remains a compatibility path until later cleanup work chooses otherwise
 
 ### 4. Interaction Model
 
