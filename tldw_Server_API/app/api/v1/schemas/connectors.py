@@ -2,18 +2,27 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+def _validate_connector_source_type(provider: str, type_: str) -> None:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_type = str(type_ or "").strip().lower()
+    if normalized_type == "collection" and normalized_provider != "zotero":
+        raise ValueError("Connector source type 'collection' is only supported for provider 'zotero'.")
+    if normalized_provider == "zotero" and normalized_type != "collection":
+        raise ValueError("Zotero sources must use type 'collection'.")
 
 
 class ConnectorProvider(BaseModel):
-    name: Literal["drive", "notion", "gmail", "onedrive"]
-    auth_type: Literal["oauth2", "token"] = "oauth2"
+    name: Literal["drive", "notion", "gmail", "onedrive", "zotero"]
+    auth_type: Literal["oauth1", "oauth2", "token"] = "oauth2"
     scopes_required: list[str] = Field(default_factory=list)
 
 
 class ConnectorAccount(BaseModel):
     id: int
-    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    provider: Literal["drive", "notion", "gmail", "onedrive", "zotero"]
     display_name: str
     created_at: str | None = None
     connected: bool = True
@@ -38,19 +47,26 @@ class ConnectorSourceSyncSummary(BaseModel):
     active_job_id: str | None = None
     tracked_item_count: int = 0
     degraded_item_count: int = 0
+    duplicate_count: int = 0
+    metadata_only_count: int = 0
 
 
 class ConnectorSource(BaseModel):
     id: int
     account_id: int
-    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    provider: Literal["drive", "notion", "gmail", "onedrive", "zotero"]
     remote_id: str
-    type: Literal["folder", "file", "page", "database", "link"]
+    type: Literal["folder", "file", "page", "database", "link", "collection"]
     path: str | None = None
     options: SyncOptions = Field(default_factory=SyncOptions)
     enabled: bool = True
     last_synced_at: str | None = None
     sync: ConnectorSourceSyncSummary | None = None
+
+    @model_validator(mode="after")
+    def validate_provider_type_pairing(self) -> "ConnectorSource":
+        _validate_connector_source_type(self.provider, self.type)
+        return self
 
 
 class ImportJob(BaseModel):
@@ -75,7 +91,7 @@ class ConnectorSyncJobSummary(BaseModel):
 
 class ConnectorSourceSyncStatus(BaseModel):
     source_id: int
-    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    provider: Literal["drive", "notion", "gmail", "onedrive", "zotero"]
     enabled: bool = True
     state: str = "idle"
     sync_mode: str = "manual"
@@ -95,17 +111,19 @@ class ConnectorSourceSyncStatus(BaseModel):
     active_job: ConnectorSyncJobSummary | None = None
     tracked_item_count: int = 0
     degraded_item_count: int = 0
+    duplicate_count: int = 0
+    metadata_only_count: int = 0
 
 
 class ConnectorSourceSyncTriggerResponse(BaseModel):
     source_id: int
-    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    provider: Literal["drive", "notion", "gmail", "onedrive", "zotero"]
     status: Literal["queued"] = "queued"
     job: ImportJob
 
 
 class ConnectorWebhookCallbackResponse(BaseModel):
-    provider: Literal["drive", "onedrive"]
+    provider: Literal["drive", "onedrive", "zotero"]
     status: Literal["queued", "duplicate", "ignored"] = "ignored"
     queued_jobs: int = 0
     duplicate_notifications: int = 0
@@ -120,7 +138,9 @@ class AuthorizeURLResponse(BaseModel):
 
 class ConnectorPolicy(BaseModel):
     org_id: int
-    enabled_providers: list[Literal["drive", "notion", "gmail", "onedrive"]] = Field(default_factory=lambda: ["drive", "notion"])
+    enabled_providers: list[Literal["drive", "notion", "gmail", "onedrive", "zotero"]] = Field(
+        default_factory=lambda: ["drive", "notion", "zotero"]
+    )
     allowed_export_formats: list[Literal["md", "txt", "pdf"]] = Field(default_factory=lambda: ["md", "txt", "pdf"])
     allowed_file_types: list[str] = Field(default_factory=list, description="Extensions or MIME prefixes")
     max_file_size_mb: int = 500
@@ -140,11 +160,16 @@ class ConnectorSourceCreateRequest(BaseModel):
     model_config = {"extra": 'forbid'}
 
     account_id: int
-    provider: Literal["drive", "notion", "gmail", "onedrive"]
+    provider: Literal["drive", "notion", "gmail", "onedrive", "zotero"]
     remote_id: str
-    type: Literal["folder", "file", "page", "database", "link"]
+    type: Literal["folder", "file", "page", "database", "link", "collection"]
     path: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_provider_type_pairing(self) -> "ConnectorSourceCreateRequest":
+        _validate_connector_source_type(self.provider, self.type)
+        return self
 
 
 class ConnectorSourcePatchRequest(BaseModel):

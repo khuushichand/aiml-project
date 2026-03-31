@@ -22,6 +22,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.External_Sources.connectors_service import (
     FILE_SYNC_PROVIDERS,
+    REFERENCE_MANAGER_PROVIDERS,
     create_import_job,
     list_sources_for_scheduler,
     prune_webhook_receipts,
@@ -127,13 +128,19 @@ class _ConnectorsSyncScheduler:
         if not bool(source.get("enabled", True)):
             return None
         provider = str(source.get("provider") or "").strip().lower()
-        if provider not in FILE_SYNC_PROVIDERS:
+        is_file_sync_provider = provider in FILE_SYNC_PROVIDERS
+        is_reference_manager_provider = provider in REFERENCE_MANAGER_PROVIDERS
+        if not is_file_sync_provider and not is_reference_manager_provider:
             return None
         if str(source.get("active_job_id") or "").strip():
             return None
         sync_mode = str(source.get("sync_mode") or "manual").strip().lower()
         renewal_due = False
-        if source.get("webhook_status") == "active" and str(source.get("webhook_subscription_id") or "").strip():
+        if (
+            is_file_sync_provider
+            and source.get("webhook_status") == "active"
+            and str(source.get("webhook_subscription_id") or "").strip()
+        ):
             expires_at = _parse_utc_datetime(source.get("webhook_expires_at"))
             if expires_at is not None:
                 renewal_due = expires_at <= (now + timedelta(seconds=_renewal_lookahead_seconds()))
@@ -141,7 +148,7 @@ class _ConnectorsSyncScheduler:
             return "subscription_renewal"
         if sync_mode not in {"poll", "hybrid"}:
             return None
-        if bool(source.get("needs_full_rescan")):
+        if is_file_sync_provider and bool(source.get("needs_full_rescan")):
             return "repair_rescan"
         return "incremental_sync"
 
