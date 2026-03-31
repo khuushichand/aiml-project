@@ -634,6 +634,63 @@ def test_start_authorize_zotero_requests_temporary_credential_and_persists_state
 
 
 @pytest.mark.integration
+def test_start_authorize_zotero_ignores_untrusted_request_base_when_connector_base_is_configured(
+    connectors_client,
+    monkeypatch,
+):
+    base_client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    oauth_state_calls: list[dict] = []
+    authorize_calls: list[dict] = []
+
+    async def _fake_create_oauth_state(db, user_id, provider, state, metadata=None):
+        oauth_state_calls.append(
+            {
+                "user_id": user_id,
+                "provider": provider,
+                "state": state,
+                "metadata": dict(metadata or {}),
+            }
+        )
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "https://trusted.example"
+
+        async def request_temporary_credential(self, callback_url):
+            authorize_calls.append({"callback_url": callback_url})
+            return {
+                "oauth_token": "temp-token",
+                "oauth_token_secret": "temp-secret",
+            }
+
+        def authorize_url(self, state=None, scopes=None, redirect_path=None):
+            authorize_calls.append(
+                {
+                    "state": state,
+                    "scopes": list(scopes or []),
+                    "redirect_path": redirect_path,
+                    "redirect_base": self.redirect_base,
+                }
+            )
+            return "https://www.zotero.org/oauth/authorize?oauth_token=temp-token"
+
+    client = TestClient(base_client.app, base_url="https://evil.example")
+    monkeypatch.setattr(ep, "create_oauth_state", _fake_create_oauth_state)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+    assert response.status_code == 200, response.text
+    assert oauth_state_calls[0]["provider"] == "zotero"
+    assert authorize_calls[0]["callback_url"].startswith(
+        "https://trusted.example/api/v1/connectors/providers/zotero/callback?state="
+    )
+    assert authorize_calls[1]["redirect_base"] == "https://trusted.example"
+
+
+@pytest.mark.integration
 def test_oauth_callback_accepts_zotero_oauth1_payload_and_persists_provider_identity(
     connectors_client,
     monkeypatch,

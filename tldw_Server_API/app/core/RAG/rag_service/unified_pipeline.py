@@ -4352,7 +4352,7 @@ async def unified_rag_pipeline(
                         sentinel_margin=rerank_sentinel_margin,
                     )
                     try:
-                        if isinstance(result.metadata, dict):
+                        if debug_mode and isinstance(result.metadata, dict):
                             result.metadata["pre_rerank_documents"] = [
                                 _serialize_result_document(doc)
                                 for doc in (result.documents or [])
@@ -4387,7 +4387,7 @@ async def unified_rag_pipeline(
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
                         result.documents = reranked[:(rerank_top_k or top_k)]
-                    if isinstance(result.metadata, dict):
+                    if debug_mode and isinstance(result.metadata, dict):
                         result.metadata["reranked_documents"] = [
                             _serialize_result_document(doc)
                             for doc in (result.documents or [])
