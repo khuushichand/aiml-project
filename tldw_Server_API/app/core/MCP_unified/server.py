@@ -449,7 +449,21 @@ class MCPServer:
                     })
                     logger.info("TEST_MODE auto-enabled MediaModule for deterministic tool catalogs")
 
-            # 5) Optional: Sandbox module (code interpreter) - disabled by default
+            # 5) Filesystem module is enabled by default for workspace-bounded fs primitives.
+            if os.getenv("MCP_ENABLE_FILESYSTEM_MODULE", "true").strip().lower() not in {"0", "false", "off", "no", "n"}:
+                if not any(m.get("id") == "filesystem" for m in modules_to_load if isinstance(m, dict)):
+                    modules_to_load.append({
+                        "id": "filesystem",
+                        "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.filesystem_module:FilesystemModule",
+                        "enabled": True,
+                        "name": "Filesystem",
+                        "version": "1.0.0",
+                        "department": "management",
+                        "settings": {},
+                    })
+                    logger.info("MCP filesystem module enabled by default; queuing FilesystemModule for registration")
+
+            # 6) Optional: Sandbox module (code interpreter) - disabled by default
             if _env_flag_enabled("MCP_ENABLE_SANDBOX_MODULE"):
                 modules_to_load.append({
                     "id": "sandbox",

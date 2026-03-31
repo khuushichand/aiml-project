@@ -350,6 +350,57 @@ Tool results include the serving module:
 
 See `Docs/MCP/Unified/Modules.md` for a complete guide.
 
+## 🧭 Phase-1 Virtual CLI Runtime
+
+Phase-1 adds a governed virtual CLI foundation to MCP Unified.
+
+- New module IDs: `filesystem`, `knowledge`, `run_command`
+- New tool names: `fs.list`, `fs.read_text`, `fs.write_text`, `run`
+- Typed MCP tools remain directly available; `run` is an additive orchestration surface.
+
+`run` is not a raw host shell. It compiles command steps into policy-checked MCP tool calls (`prepare_tool_call` / `execute_prepared_tool_call`) so approvals, RBAC, path scope, validation, and idempotency all still apply.
+
+Phase-1 command families:
+
+- Pure transforms (no MCP backend call): `grep`, `head`, `tail`, `json`
+- MCP-backed adapters:
+  - `ls` -> `fs.list`
+  - `cat` -> `fs.read_text`
+  - `write` -> `fs.write_text`
+  - `knowledge` -> `knowledge.search`, `knowledge.get`
+  - `media` -> `media.search`, `media.get`
+  - `mcp` -> `mcp.modules.list`, `mcp.tools.list`
+  - `sandbox` -> `sandbox.run`
+
+Default `run_command` runtime settings in module inventory:
+
+- `spill_dir: /tmp/mcp-run-command`
+- `spill_threshold_bytes: 65536`
+- `preview_line_limit: 200`
+- `preview_byte_limit: 51200`
+
+Targeted validation commands for this phase:
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest \
+  tldw_Server_API/app/core/MCP_unified/tests/test_protocol_nested_tool_preparation.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_filesystem_module.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_command_runtime_parser.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_command_runtime_registry.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_command_runtime_execution.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_command_runtime_presentation.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_run_command_module.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_idempotency_and_category.py \
+  tldw_Server_API/app/core/MCP_unified/tests/test_protocol_allowed_tools.py \
+  tldw_Server_API/tests/MCP/test_mcp_tools_execute_authz.py \
+  tldw_Server_API/tests/MCP_unified/test_mcp_protocol_path_scope.py \
+  -v
+```
+
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/MCP_unified -f json -o /tmp/bandit_mcp_virtual_cli_phase1.json
+```
+
 ## 🚢 Production Deployment
 
 ### Environment Variables (Required)

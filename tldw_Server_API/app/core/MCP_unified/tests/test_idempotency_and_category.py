@@ -2,6 +2,13 @@ import pytest
 
 from typing import Dict, Any
 
+from tldw_Server_API.app.core.MCP_unified.config import get_config
+from tldw_Server_API.app.core.MCP_unified.command_runtime.adapters import (
+    derive_step_idempotency_key,
+)
+from tldw_Server_API.app.core.MCP_unified.modules.implementations.run_command_module import (
+    RunCommandModule,
+)
 from tldw_Server_API.app.core.MCP_unified.protocol import IdempotencyManager, MCPProtocol, MCPRequest, RequestContext
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig, create_tool_definition
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
@@ -227,3 +234,118 @@ async def test_idempotency_local_lock_map_prunes_with_cache_bounds():
     # Local cache is size-bounded, and lock bookkeeping should track cache lifetime.
     assert len(manager._local_cache) <= 3
     assert len(manager._local_locks) <= 3
+
+
+def test_nested_step_idempotency_is_stable_and_content_derived():
+    first = derive_step_idempotency_key("parent-1", ["write", "notes.txt", "hello"], 0)
+    second = derive_step_idempotency_key("parent-1", ["write", "notes.txt", "hello"], 0)
+    different = derive_step_idempotency_key("parent-1", ["write", "notes.txt", "hello"], 1)
+    changed_args = derive_step_idempotency_key("parent-1", ["write", "notes.txt", "goodbye"], 0)
+
+    assert first == second
+    assert first is not None
+    assert different is not None
+    assert first != different
+    assert first != changed_args
+
+
+@pytest.mark.asyncio
+async def test_run_prepare_tool_call_classifies_write_chain_dynamically(monkeypatch):
+    monkeypatch.setenv("MCP_DISABLE_WRITE_TOOLS", "true")
+    try:
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        _ = None
+
+    registry = get_module_registry()
+    await registry.register_module(
+        "run_dynamic_write_prepare",
+        RunCommandModule,
+        ModuleConfig(name="run_dynamic_write_prepare"),
+    )
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+    ctx = RequestContext(request_id="run-write", user_id="u1", client_id="c1")
+
+    with pytest.raises(PermissionError, match="Write tools are disabled"):
+        await proto.prepare_tool_call(
+            params={"name": "run", "arguments": {"command": "write notes.txt hi"}},
+            context=ctx,
+        )
+
+    prepared = await proto.prepare_tool_call(
+        params={"name": "run", "arguments": {"command": "ls"}},
+        context=ctx,
+    )
+    assert prepared.is_write is False
+
+
+@pytest.mark.asyncio
+async def test_protocol_idempotency_key_is_forwarded_to_run_nested_steps(monkeypatch):
+    monkeypatch.setenv("MCP_DISABLE_WRITE_TOOLS", "false")
+    try:
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        _ = None
+
+    class _PreparedCall:
+        def __init__(self, params: dict[str, Any], idempotency_key: str | None = None):
+            self.params = dict(params)
+            self.idempotency_key = idempotency_key
+
+    class _ProtocolStub:
+        def __init__(self) -> None:
+            self.prepare_calls: list[_PreparedCall] = []
+
+        async def _handle_tools_list(self, params: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+            return {"tools": [{"name": "fs.write_text", "module": "filesystem", "canExecute": True}]}
+
+        async def prepare_tool_call(
+            self,
+            *,
+            params: dict[str, Any],
+            context: RequestContext,
+            idempotency_key: str | None = None,
+        ) -> _PreparedCall:
+            prepared = _PreparedCall(params=params, idempotency_key=idempotency_key)
+            self.prepare_calls.append(prepared)
+            return prepared
+
+        async def execute_prepared_tool_call(self, prepared: _PreparedCall) -> dict[str, Any]:
+            return {
+                "content": [{"type": "json", "json": {"path": "notes.txt", "bytes_written": 2}}],
+                "tool": prepared.params.get("name"),
+            }
+
+    registry = get_module_registry()
+    nested_protocol = _ProtocolStub()
+    await registry.register_module(
+        "run_nested_idempotency",
+        RunCommandModule,
+        ModuleConfig(name="run_nested_idempotency", settings={"protocol": nested_protocol}),
+    )
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+    ctx = RequestContext(request_id="run-idem-proto", user_id="u1", client_id="c1")
+
+    response = await proto.process_request(
+        MCPRequest(
+            method="tools/call",
+            params={
+                "name": "run",
+                "arguments": {"command": "write notes.txt hi"},
+                "idempotencyKey": "demo-1",
+            },
+            id="run-1",
+        ),
+        ctx,
+    )
+
+    assert response.error is None
+    assert nested_protocol.prepare_calls[0].idempotency_key == derive_step_idempotency_key(
+        "demo-1",
+        ["write", "notes.txt", "hi"],
+        0,
+    )

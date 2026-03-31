@@ -214,6 +214,12 @@ command   := WORD+
 - `||` executes next pipeline only if prior exit code is non-zero
 - `;` executes next pipeline regardless of prior result
 
+For v1, that `stdin` handoff is defined semantically, not as a required in-memory Python string. When pipe payloads stay under threshold they may remain inline. When they exceed the runtime spill threshold they may be represented by a spill-backed text-stream carrier, as long as:
+
+- the downstream command can recover the exact upstream UTF-8 text payload
+- no presentation footer, truncation marker, or binary-warning text is injected into the pipe payload
+- the carrier is a runtime-internal transport detail rather than agent-facing output formatting
+
 #### v1 pipe contract
 
 The command runtime is text-stream-first.
@@ -221,6 +227,7 @@ The command runtime is text-stream-first.
 Rules for v1:
 
 - pipe payloads are UTF-8 text only
+- oversized pipe payloads may move through the runtime as spill-backed text-stream carriers instead of resident strings
 - commands with structured results must serialize to JSON or NDJSON text when they participate in pipes
 - artifact-producing commands are terminal by default unless they expose an explicit text-rendering subcommand
 - `json` is the canonical bridge command for inspecting or transforming structured text output
@@ -252,7 +259,7 @@ Responsibilities:
 - parse the chain
 - execute raw command semantics
 - pass `stdout`, `stderr`, and exit codes between commands
-- keep pipe data unmodified
+- keep pipe payloads semantically unmodified, whether they are carried inline or through a spill-backed stream representation
 
 Must not do:
 
