@@ -25,7 +25,7 @@ Optional add-ons:
 - Pick the profile that matches your target environment.
 - For most users, start with the `quickstart-docker-webui` path via `make quickstart`.
 - Treat LAN/custom-host browser access as advanced configuration and stay on the default same-origin browser API requests through the WebUI proxy unless you specifically need another device or origin to reach the API.
-- Complete the guide sections in order: prerequisites, install, run, verify, troubleshoot.
+- Complete the guide sections in order: prerequisites, install, run, verify, troubleshoot, then follow the "What to Do Next" section for first API calls and provider setup.
 - Do not mix setup commands from other docs unless the guide explicitly links to them.
 - Apply add-ons only after your chosen base profile is healthy.
 - If speech is part of day-one setup, switch to the CPU or GPU/accelerated audio guide after the base profile is healthy instead of starting with the older STT/TTS reference pages.

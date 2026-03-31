@@ -1,3 +1,10 @@
+# -----------------------------------------------------------------------
+# Essential sections for first-time setup: [Setup], [Server]
+# Everything else can be left at defaults until you need the feature.
+#
+# Configuration precedence: Environment variables > .env file > config.txt
+# -----------------------------------------------------------------------
+
 [Setup]
 enable_first_time_setup = false
 setup_completed = true

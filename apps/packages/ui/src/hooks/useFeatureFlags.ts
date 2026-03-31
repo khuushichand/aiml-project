@@ -15,7 +15,6 @@ import {
 
 // Flag keys
 export const FEATURE_FLAGS = {
-  NEW_ONBOARDING: "ff_newOnboarding",
   NEW_CHAT: "ff_newChat",
   NEW_SETTINGS: "ff_newSettings",
   COMMAND_PALETTE: "ff_commandPalette",
@@ -203,10 +202,6 @@ export function useFeatureFlag(flag: FeatureFlagKey) {
  * Useful for settings page or debugging.
  */
 export function useAllFeatureFlags() {
-  const [newOnboarding, setNewOnboarding] = useStorage(
-    FEATURE_FLAGS.NEW_ONBOARDING,
-    true
-  )
   const [newChat, setNewChat] = useStorage(FEATURE_FLAGS.NEW_CHAT, true)
   const [newSettings, setNewSettings] = useStorage(
     FEATURE_FLAGS.NEW_SETTINGS,
@@ -278,7 +273,6 @@ export function useAllFeatureFlags() {
 
   return {
     flags: {
-      newOnboarding,
       newChat,
       newSettings,
       commandPalette,
@@ -296,7 +290,6 @@ export function useAllFeatureFlags() {
       researchStudioStatusGuardrailsV1
     },
     setters: {
-      setNewOnboarding,
       setNewChat,
       setNewSettings,
       setCommandPalette,
@@ -315,7 +308,6 @@ export function useAllFeatureFlags() {
     },
     // Enable all new UX features
     enableAll: useCallback(() => {
-      setNewOnboarding(true)
       setNewChat(true)
       setNewSettings(true)
       setCommandPalette(true)
@@ -332,7 +324,6 @@ export function useAllFeatureFlags() {
       setResearchStudioProvenanceV1(true)
       setResearchStudioStatusGuardrailsV1(true)
     }, [
-      setNewOnboarding,
       setNewChat,
       setNewSettings,
       setCommandPalette,
@@ -351,7 +342,6 @@ export function useAllFeatureFlags() {
     ]),
     // Disable all new UX features (revert to old)
     disableAll: useCallback(() => {
-      setNewOnboarding(false)
       setNewChat(false)
       setNewSettings(false)
       setCommandPalette(false)
@@ -368,7 +358,6 @@ export function useAllFeatureFlags() {
       setResearchStudioProvenanceV1(false)
       setResearchStudioStatusGuardrailsV1(false)
     }, [
-      setNewOnboarding,
       setNewChat,
       setNewSettings,
       setCommandPalette,
@@ -391,10 +380,6 @@ export function useAllFeatureFlags() {
 /**
  * Convenience hooks for specific features
  */
-export function useNewOnboarding() {
-  return useFeatureFlag(FEATURE_FLAGS.NEW_ONBOARDING)
-}
-
 export function useNewChat() {
   return useFeatureFlag(FEATURE_FLAGS.NEW_CHAT)
 }

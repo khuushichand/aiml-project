@@ -216,9 +216,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
     ensureEvidenceDirectory()
     await authedPage.addInitScript((cfg) => {
       try {
-        localStorage.setItem("ff_newOnboarding", JSON.stringify(true))
-      } catch {}
-      try {
         localStorage.setItem(
           "tldwConfig",
           JSON.stringify({

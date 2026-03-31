@@ -65,11 +65,12 @@ export function CompanionHomeShell({
             {surface}
           </span>
         </div>
-        <div className="grid gap-3 pt-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 pt-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="companion-home-quick-actions">
           {actions.map((action) => (
             <Link
               key={action.href}
               to={action.href}
+              data-testid={`companion-home-action-${action.href.replace(/\//g, "-").replace(/^-/, "")}`}
               className="rounded-2xl border border-border bg-bg/60 px-4 py-4 transition-colors hover:border-primary/40 hover:bg-primary/5"
             >
               <div className="text-sm font-semibold text-text">{action.label}</div>

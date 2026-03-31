@@ -8,6 +8,8 @@ Use this profile when you want a containerized single-user deployment with minim
 - Docker Compose
 - Git
 
+> **Windows users:** Use WSL2, Git Bash, or see the [No-Make Path](../../README.md#no-make-path-windows-friendly) in the main README.
+
 ## Install
 
 ```bash
@@ -16,12 +18,14 @@ cd tldw_server
 cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 ```
 
-Set a single-user API key in `tldw_Server_API/Config_Files/.env`:
+Optionally edit `tldw_Server_API/Config_Files/.env` to set your own API key:
 
 ```bash
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=replace-with-strong-key
 ```
+
+> **Note:** If you use `make quickstart`, the Docker entrypoint automatically detects placeholder keys (like `CHANGE_ME` or `replace-with-strong-key`) and generates a secure random key for you. You can retrieve it later with `make show-api-key`.
 
 ## Run
 
@@ -76,3 +80,46 @@ If you later need LAN/custom-host browser access as advanced configuration, swit
 - If containers do not start, check: `docker compose -f Dockerfiles/docker-compose.yml logs --tail=200`.
 - If API is unavailable, verify no port conflict on `8000`.
 - If auth errors appear, confirm `AUTH_MODE` and `SINGLE_USER_API_KEY` in `.env`.
+
+## What to Do Next
+
+1. **Open the WebUI** at http://localhost:8080 — the onboarding wizard will guide you through connecting to the server.
+2. **Retrieve your API key** (for curl, extension, or non-WebUI access):
+   ```bash
+   make show-api-key
+   # Or read it directly:
+   grep SINGLE_USER_API_KEY tldw_Server_API/Config_Files/.env | cut -d= -f2-
+   ```
+3. **Configure an LLM provider** — add a provider API key to `tldw_Server_API/Config_Files/.env` and restart:
+   ```bash
+   echo 'OPENAI_API_KEY=sk-your-key-here' >> tldw_Server_API/Config_Files/.env
+   docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml restart
+   ```
+4. **Try your first API call:**
+   ```bash
+   API_KEY=$(make show-api-key)
+   curl http://localhost:8000/api/v1/chat/completions \
+     -H "X-API-Key: $API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
+   ```
+5. **Set up speech** (optional) — follow the [CPU](./First_Time_Audio_Setup_CPU.md) or [GPU](./First_Time_Audio_Setup_GPU_Accelerated.md) audio guide.
+
+### How the Default Setup Works
+
+The Docker quickstart uses a **same-origin proxy**: the Next.js WebUI rewrites browser API requests through its own server to the backend at `http://app:8000`. This means:
+- The WebUI works without entering an API key in the browser.
+- Your browser talks to port 8080 (WebUI), not port 8000 (API) directly.
+- You only need the API key for direct API access (curl, scripts, browser extension, or advanced mode).
+
+To access the API from other devices on your LAN, see the advanced configuration in the main README.
+
+### Guided Setup Wizard (Optional)
+
+For a visual configuration wizard, edit `tldw_Server_API/Config_Files/config.txt` and set:
+```ini
+[Setup]
+enable_first_time_setup = true
+setup_completed = false
+```
+Then restart the containers and visit http://localhost:8000/setup (local access only by default).

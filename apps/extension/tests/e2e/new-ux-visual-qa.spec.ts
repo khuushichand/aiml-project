@@ -42,7 +42,7 @@ function captureConsole(page: any): string[] {
 test.describe('New UX Visual QA - Onboarding', () => {
   test('new single-step onboarding form', async () => {
     const { context, page } = await launchWithExtensionOrSkip(test, '', {
-      seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
+      seedConfig: withFeatures([])
       // No serverUrl triggers onboarding
     })
 
