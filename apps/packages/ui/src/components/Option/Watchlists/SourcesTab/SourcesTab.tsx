@@ -1430,12 +1430,14 @@ export const SourcesTab: React.FC = () => {
           >
             {t("watchlists:sources.export", "Export OPML")}
           </Button>
-          <Button
-            icon={<UploadCloud className="h-4 w-4" />}
-            onClick={() => setImportOpen(true)}
-          >
-            {t("watchlists:sources.import", "Import OPML")}
-          </Button>
+          <Tooltip title={t("watchlists:sources.importTooltip", "Import feeds from an OPML file (standard RSS reader export format)")}>
+            <Button
+              icon={<UploadCloud className="h-4 w-4" />}
+              onClick={() => setImportOpen(true)}
+            >
+              {t("watchlists:sources.import", "Import OPML")}
+            </Button>
+          </Tooltip>
           <Button
             type="primary"
             icon={<Plus className="h-4 w-4" />}
@@ -1554,12 +1556,14 @@ export const SourcesTab: React.FC = () => {
               >
                 {t("watchlists:sources.addSource", "Add Source")}
               </Button>
-              <Button
-                icon={<UploadCloud className="h-4 w-4" />}
-                onClick={() => setImportOpen(true)}
-              >
-                {t("watchlists:sources.import", "Import OPML")}
-              </Button>
+              <Tooltip title={t("watchlists:sources.importTooltip", "Import feeds from an OPML file (standard RSS reader export format)")}>
+                <Button
+                  icon={<UploadCloud className="h-4 w-4" />}
+                  onClick={() => setImportOpen(true)}
+                >
+                  {t("watchlists:sources.import", "Import OPML")}
+                </Button>
+              </Tooltip>
             </Space>
           </Empty>
         </div>

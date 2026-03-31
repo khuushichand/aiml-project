@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileOutput,
   FileText,
+  HelpCircle,
   LayoutDashboard,
   Newspaper,
   Play,
@@ -1281,42 +1282,50 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     {
       key: "sources",
       label: (
-        <span className="flex items-center gap-2">
-          <Rss className="h-4 w-4" />
-          {t("watchlists:tabs.sources", "Feeds")}
-          {tabAttentionBadge(overviewBadges.sources)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.sourcesTooltip", "RSS feeds, websites, or forums you want to monitor")}>
+          <span className="flex items-center gap-2">
+            <Rss className="h-4 w-4" />
+            {t("watchlists:tabs.sources", "Feeds")}
+            {tabAttentionBadge(overviewBadges.sources)}
+          </span>
+        </Tooltip>
       ),
       children: renderWatchlistsTab("sources")
     },
     {
       key: "jobs",
       label: (
-        <span className="flex items-center gap-2">
-          <CalendarClock className="h-4 w-4" />
-          {t("watchlists:tabs.jobs", "Monitors")}
-        </span>
+        <Tooltip title={t("watchlists:tabs.jobsTooltip", "Scheduled tasks that check your sources for new content")}>
+          <span className="flex items-center gap-2">
+            <CalendarClock className="h-4 w-4" />
+            {t("watchlists:tabs.jobs", "Monitors")}
+          </span>
+        </Tooltip>
       ),
       children: renderWatchlistsTab("jobs")
     },
     {
       key: "runs",
       label: (
-        <span className="flex items-center gap-2">
-          <Play className="h-4 w-4" />
-          {t("watchlists:tabs.runs", "Activity")}
-          {tabAttentionBadge(overviewBadges.runs)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.runsTooltip", "Individual execution records of your monitors")}>
+          <span className="flex items-center gap-2">
+            <Play className="h-4 w-4" />
+            {t("watchlists:tabs.runs", "Activity")}
+            {tabAttentionBadge(overviewBadges.runs)}
+          </span>
+        </Tooltip>
       ),
       children: renderWatchlistsTab("runs")
     },
     {
       key: "items",
       label: (
-        <span className="flex items-center gap-2">
-          <Newspaper className="h-4 w-4" />
-          {t("watchlists:tabs.items", "Articles")}
-        </span>
+        <Tooltip title={t("watchlists:tabs.itemsTooltip", "Articles and posts collected from your sources")}>
+          <span className="flex items-center gap-2">
+            <Newspaper className="h-4 w-4" />
+            {t("watchlists:tabs.items", "Articles")}
+          </span>
+        </Tooltip>
       ),
       children: renderWatchlistsTab("items")
     },
@@ -1358,11 +1367,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     {
       key: "sources",
       label: (
-        <span className="flex items-center gap-2">
-          <Rss className="h-4 w-4" />
-          {t("watchlists:tabs.sources", "Feeds")}
-          {tabAttentionBadge(overviewBadges.sources)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.sourcesTooltip", "RSS feeds, websites, or forums you want to monitor")}>
+          <span className="flex items-center gap-2">
+            <Rss className="h-4 w-4" />
+            {t("watchlists:tabs.sources", "Feeds")}
+            {tabAttentionBadge(overviewBadges.sources)}
+          </span>
+        </Tooltip>
       ),
       children: (
         <>
@@ -1381,10 +1392,12 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     {
       key: "items",
       label: (
-        <span className="flex items-center gap-2">
-          <Newspaper className="h-4 w-4" />
-          {t("watchlists:tabs.items", "Articles")}
-        </span>
+        <Tooltip title={t("watchlists:tabs.itemsTooltip", "Articles and posts collected from your sources")}>
+          <span className="flex items-center gap-2">
+            <Newspaper className="h-4 w-4" />
+            {t("watchlists:tabs.items", "Articles")}
+          </span>
+        </Tooltip>
       ),
       children: (
         <>
@@ -1404,11 +1417,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     {
       key: "outputs",
       label: (
-        <span className="flex items-center gap-2">
-          <FileOutput className="h-4 w-4" />
-          {t("watchlists:tabs.outputs", "Reports")}
-          {tabAttentionBadge(overviewBadges.outputs)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.outputsTooltip", "Generated reports and summaries from your sources")}>
+          <span className="flex items-center gap-2">
+            <FileOutput className="h-4 w-4" />
+            {t("watchlists:tabs.outputs", "Reports")}
+            {tabAttentionBadge(overviewBadges.outputs)}
+          </span>
+        </Tooltip>
       ),
       children: (
         <>
@@ -1490,8 +1505,19 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     >
       <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-text">
+        <h1 className="text-2xl font-semibold text-text flex items-center gap-2">
           {t("watchlists:title", "Watchlists")}
+          <Tooltip title={t("watchlists:help.docsTooltip", "Open watchlists documentation")}>
+            <a
+              href={WATCHLISTS_MAIN_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="watchlists-help-icon"
+              className="text-text-muted hover:text-primary"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </a>
+          </Tooltip>
         </h1>
         <p className="mt-1 text-sm text-text-muted">
           {t(

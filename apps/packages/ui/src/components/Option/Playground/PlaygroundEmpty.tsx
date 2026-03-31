@@ -156,6 +156,28 @@ export const PlaygroundEmpty = () => {
         onSecondaryAction={handleOpenQuickIngest}
         secondaryDisabled={false}
       />
+      <div className="mt-6">
+        <p className="text-sm font-medium text-text-muted mb-2">
+          {t("playground:empty.starterTitle", "Start with a guided mode:")}
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {starterCards.map((starter) => (
+            <button
+              key={starter.key}
+              type="button"
+              onClick={starter.action}
+              className="rounded-xl border border-border/60 bg-surface2/30 px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+            >
+              <div className="flex items-center gap-2 text-text">
+                {starter.icon}
+                <span className="text-sm font-medium">{starter.title}</span>
+              </div>
+              <p className="mt-1 text-xs text-text-muted">{starter.description}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="mt-6 rounded-xl border border-border bg-surface2/20 p-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
           {t("playground:empty.layoutGuideTitle", "Page regions")}
@@ -188,28 +210,6 @@ export const PlaygroundEmpty = () => {
           >
             {t("playground:empty.jumpKnowledge", "Open Search & Context")}
           </button>
-        </div>
-      </div>
-
-      <div className="mt-6">
-        <p className="text-sm font-medium text-text-muted mb-2">
-          {t("playground:empty.starterTitle", "Start with a guided mode:")}
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {starterCards.map((starter) => (
-            <button
-              key={starter.key}
-              type="button"
-              onClick={starter.action}
-              className="rounded-xl border border-border/60 bg-surface2/30 px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
-            >
-              <div className="flex items-center gap-2 text-text">
-                {starter.icon}
-                <span className="text-sm font-medium">{starter.title}</span>
-              </div>
-              <p className="mt-1 text-xs text-text-muted">{starter.description}</p>
-            </button>
-          ))}
         </div>
       </div>
 
