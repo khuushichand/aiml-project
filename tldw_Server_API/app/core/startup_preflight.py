@@ -132,7 +132,7 @@ def check_database_connectivity() -> dict[str, Any]:
     """
     name = "database_connectivity"
     db_url = os.environ.get("DATABASE_URL", "")
-    if not db_url.startswith("postgresql"):
+    if not db_url.startswith(("postgresql", "postgres")):
         return {"name": name, "status": "ok", "message": "SQLite (no remote check needed)"}
     try:
         import socket
@@ -151,7 +151,7 @@ def check_database_connectivity() -> dict[str, Any]:
         return {
             "name": name,
             "status": "fail",
-            "message": f"Cannot reach Postgres at {db_url.split('@')[-1] if '@' in db_url else 'DATABASE_URL'}: {exc}",
+            "message": f"Cannot reach Postgres at {host}:{port}: {exc}",
         }
     except Exception as exc:  # noqa: BLE001
         return {"name": name, "status": "warn", "message": f"Could not parse DATABASE_URL: {exc}"}

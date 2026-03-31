@@ -1,24 +1,11 @@
 import { Link } from "react-router-dom"
-import React from "react"
 
-import { useDemoMode } from "@/context/demo-mode"
+import { useSafeDemoMode } from "@/context/demo-mode"
 import { CompanionHomePage } from "./CompanionHomePage"
 
 type CompanionHomeShellProps = {
   surface: "options" | "sidepanel"
   onPersonalizationEnabled?: () => void
-}
-
-/**
- * Safe wrapper for useDemoMode that returns a no-op fallback
- * when DemoModeProvider is not in the component tree (e.g., sidepanel).
- */
-function useSafeDemoMode() {
-  try {
-    return useDemoMode()
-  } catch {
-    return { demoEnabled: false, setDemoEnabled: (_v: boolean) => {} }
-  }
 }
 
 export function CompanionHomeShell({
