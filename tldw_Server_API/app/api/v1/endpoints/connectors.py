@@ -164,13 +164,13 @@ def _as_str_or_none(value: Any) -> str | None:
 
 
 def _derive_sync_state(sync_state: dict[str, Any] | None, active_job: dict[str, Any] | None) -> str:
-    if sync_state and sync_state.get("needs_full_rescan"):
-        return "needs_full_rescan"
     status = str((active_job or {}).get("status") or "").strip().lower()
     if status == "processing":
         return "running"
     if status == "queued":
         return "queued"
+    if sync_state and sync_state.get("needs_full_rescan"):
+        return "needs_full_rescan"
     if sync_state and sync_state.get("last_sync_failed_at"):
         return "failed"
     if sync_state and sync_state.get("last_sync_succeeded_at"):

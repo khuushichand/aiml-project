@@ -1401,7 +1401,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               <p className="mt-1 text-xs text-text-subtle">
                 {t(
                   "settings:onboarding.apiKeyHelp",
-                  "Docker quickstart? The WebUI connects automatically. For API/extension access, run: make show-api-key. Local install? Check your .env file for SINGLE_USER_API_KEY."
+                  "Docker quickstart? The WebUI connects automatically, and no key is needed there. For API or extension access, run: make show-api-key. Local install? Check your .env file for SINGLE_USER_API_KEY."
                 )}
               </p>
             )}

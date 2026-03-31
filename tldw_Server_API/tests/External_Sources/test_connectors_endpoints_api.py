@@ -445,6 +445,7 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
     client, headers = connectors_client
 
     import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    import tldw_Server_API.app.core.Jobs.manager as jobs_manager
 
     async def _fake_list_sources(db, user_id):
         return [
@@ -482,9 +483,15 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
             "metadata_only_count": 1,
         }
 
+    class _FakeJobManager:
+        def get_job(self, job_id: int):
+            assert job_id == 88
+            return None
+
     monkeypatch.setattr(ep, "list_sources", _fake_list_sources)
     monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
     monkeypatch.setattr(ep, "get_source_binding_health", _fake_get_source_binding_health)
+    monkeypatch.setattr(jobs_manager, "JobManager", _FakeJobManager)
 
     response = client.get("/api/v1/connectors/sources", headers=headers)
     assert response.status_code == 200, response.text
@@ -990,6 +997,61 @@ def test_get_source_sync_status_returns_state_and_active_job(connectors_client, 
     assert body["degraded_item_count"] == 3
     assert body["duplicate_count"] == 2
     assert body["metadata_only_count"] == 5
+
+
+@pytest.mark.integration
+def test_get_source_sync_status_prefers_active_job_state_over_needs_full_rescan(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    import tldw_Server_API.app.core.Jobs.manager as jobs_manager
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "provider": "zotero",
+            "enabled": True,
+        }
+
+    async def _fake_get_source_sync_state(db, *, source_id):
+        return {
+            "source_id": source_id,
+            "sync_mode": "poll",
+            "needs_full_rescan": True,
+            "active_job_id": "88",
+            "active_job_started_at": "2026-03-30 20:00:00",
+        }
+
+    async def _fake_get_source_binding_health(db, *, source_id):
+        return {
+            "tracked_item_count": 0,
+            "degraded_item_count": 0,
+            "duplicate_count": 0,
+            "metadata_only_count": 0,
+        }
+
+    class _FakeJobManager:
+        def get_job(self, job_id: int):
+            assert job_id == 88
+            return {
+                "id": job_id,
+                "job_type": "incremental_sync",
+                "status": "processing",
+                "progress_percent": 10,
+                "result": {"processed": 1, "failed": 0, "skipped": 0},
+            }
+
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(ep, "get_source_binding_health", _fake_get_source_binding_health)
+    monkeypatch.setattr(jobs_manager, "JobManager", _FakeJobManager)
+
+    response = client.get("/api/v1/connectors/sources/88/sync", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "running"
+    assert body["needs_full_rescan"] is True
+    assert body["active_job"]["id"] == "88"
 
 
 @pytest.mark.integration

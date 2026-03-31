@@ -258,6 +258,28 @@ async def test_zotero_normalize_reference_item_extracts_year_from_free_form_date
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_zotero_normalize_reference_item_ignores_invalid_doi() -> None:
+    connector = ZoteroConnector(client_id="client-id", client_secret="client-secret", redirect_base="http://localhost")
+    raw_item = {
+        "key": "ITEM-BAD-DOI",
+        "data": {
+            "key": "ITEM-BAD-DOI",
+            "itemType": "journalArticle",
+            "title": "Paper With Malformed DOI",
+            "DOI": "definitely-not-a-doi",
+            "date": "2024",
+        },
+    }
+
+    item = await connector.normalize_reference_item(raw_item, [])
+
+    assert item.provider_item_key == "ITEM-BAD-DOI"
+    assert item.title == "Paper With Malformed DOI"
+    assert item.doi is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_zotero_exchange_code_parses_access_token_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

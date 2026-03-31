@@ -50,7 +50,7 @@ def test_tools_execute_with_bearer_token_no_permission_403():
     assert "tools.execute:echo" in hint or "tools.execute:*" in hint
 
 
-def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path):
+def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path, monkeypatch):
 
 
     # Point AuthNZ DB to a fresh SQLite file
@@ -105,11 +105,22 @@ def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path):
                 )
                 if not pid:
                     pid = await conn.fetchval("SELECT id FROM permissions WHERE name = $1", "tools.execute:*")
+                modules_read_pid = await conn.fetchval(
+                    "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING RETURNING id",
+                    "modules.read", "Read MCP modules", "modules"
+                )
+                if not modules_read_pid:
+                    modules_read_pid = await conn.fetchval("SELECT id FROM permissions WHERE name = $1", "modules.read")
                 rid = await conn.fetchval(
                     "INSERT INTO roles (name, description, is_system) VALUES ($1,$2,$3) RETURNING id",
                     "tool_role", "Role for tool exec", False
                 )
                 await conn.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", rid, pid)
+                await conn.execute(
+                    "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                    rid,
+                    modules_read_pid,
+                )
                 await conn.execute("INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", user_id, rid)
             else:
                 # SQLite
@@ -123,12 +134,26 @@ def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path):
                         ("tools.execute:*", "Wildcard tool execution", "tools")
                     )
                     pid = cur.lastrowid
+                cur = await conn.execute("SELECT id FROM permissions WHERE name = ?", ("modules.read",))
+                row = await cur.fetchone()
+                if row:
+                    modules_read_pid = row[0]
+                else:
+                    cur = await conn.execute(
+                        "INSERT INTO permissions (name, description, category) VALUES (?,?,?)",
+                        ("modules.read", "Read MCP modules", "modules")
+                    )
+                    modules_read_pid = cur.lastrowid
                 cur = await conn.execute(
                     "INSERT INTO roles (name, description, is_system) VALUES (?,?,?)",
                     ("tool_role", "Role for tool exec", 0)
                 )
                 rid = cur.lastrowid
                 await conn.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES (?,?)", (rid, pid))
+                await conn.execute(
+                    "INSERT INTO role_permissions (role_id, permission_id) VALUES (?,?)",
+                    (rid, modules_read_pid),
+                )
                 await conn.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)", (user_id, rid))
                 await conn.commit()
 
@@ -144,3 +169,31 @@ def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["result"] == "hello"
+
+    async def _fake_workspace_root(self, **kwargs):  # noqa: ARG001
+        return {
+            "workspace_root": str(tmp_path),
+            "workspace_id": "test-workspace",
+            "source": "test",
+            "reason": None,
+        }
+
+    from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
+        McpHubWorkspaceRootResolver,
+    )
+
+    monkeypatch.setattr(
+        McpHubWorkspaceRootResolver,
+        "resolve_for_context",
+        _fake_workspace_root,
+    )
+
+    run_payload = {"tool_name": "run", "arguments": {"command": "ls"}}
+    run_response = client.post(
+        "/api/v1/mcp/tools/execute",
+        json=run_payload,
+        headers={"X-API-KEY": api_key},
+    )
+    assert run_response.status_code == 200, run_response.text
+    run_body = run_response.json()
+    assert "[exit:0 |" in run_body["result"]

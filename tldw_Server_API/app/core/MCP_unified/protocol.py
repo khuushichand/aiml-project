@@ -5,10 +5,12 @@ Implements JSON-RPC 2.0 with enhanced error handling and request routing.
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import secrets
 import uuid
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from enum import IntEnum
 from pathlib import Path
@@ -203,6 +205,24 @@ class RequestContext:
             client_id=client_id,
             session_id=session_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedToolCall:
+    """Prepared tool execution context reused by nested tool orchestration."""
+
+    tool_name: str
+    tool_args: Any
+    module: BaseModule
+    module_id: Optional[str]
+    tool_def: Optional[dict[str, Any]]
+    is_write: Optional[bool]
+    normalized_idempotency_key: Optional[str]
+    idempotency_cache_key: Optional[str]
+    arguments_hash: Optional[str]
+    context_fingerprint: str
+    integrity_tag: str
+    context: RequestContext
 
 
 class IdempotencyManager:
@@ -519,6 +539,8 @@ class MCPProtocol:
         self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
         # Idempotency manager for write-capable tools
         self._idempotency = IdempotencyManager()
+        # Integrity secret for prepared tool call execution
+        self._prepared_call_secret = secrets.token_bytes(32)
         # Governance preflight state
         self._governance_service: Any | None = None
         self._governance_store: Any | None = None
@@ -697,6 +719,203 @@ class MCPProtocol:
             return hashlib.sha256(payload).hexdigest()
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             return None
+
+    async def _resolve_tool_definition(
+        self,
+        module: BaseModule,
+        tool_name: str,
+    ) -> Optional[dict[str, Any]]:
+        """Resolve a tool definition for a module/tool pair."""
+        try:
+            get_def = getattr(module, "get_tool_def", None)
+            if callable(get_def):
+                tool_def = await get_def(tool_name)  # type: ignore[misc]
+                if isinstance(tool_def, dict):
+                    return tool_def
+            tool_defs = await module.get_tools()
+            for candidate in tool_defs:
+                if isinstance(candidate, dict) and candidate.get("name") == tool_name:
+                    return candidate
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+            return None
+        return None
+
+    def _classify_write_tool_call(
+        self,
+        module: BaseModule,
+        tool_name: str,
+        tool_args: Any,
+        tool_def: Optional[dict[str, Any]],
+    ) -> Optional[bool]:
+        """Best-effort write classification using per-call module hook."""
+        try:
+            normalized_args = tool_args if isinstance(tool_args, dict) else {}
+            return module.is_write_tool_call(tool_name, normalized_args, tool_def=tool_def)
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    def _resolve_write_classification(
+        self,
+        module: BaseModule,
+        tool_name: str,
+        tool_args: Any,
+        tool_def: Optional[dict[str, Any]],
+        *,
+        fallback_to_name_heuristic: bool,
+    ) -> bool:
+        """Resolve write classification with optional legacy fallback."""
+        is_write = self._classify_write_tool_call(module, tool_name, tool_args, tool_def)
+        if is_write is not None:
+            return bool(is_write)
+        if fallback_to_name_heuristic:
+            return bool(re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
+        return False
+
+    @staticmethod
+    def _strip_forbidden_tool_argument_overrides(tool_args: dict[str, Any]) -> dict[str, Any]:
+        """Remove tool argument fields that could override request ownership/db scope."""
+        forbidden = {"user_id", "db_path", "db_paths", "chacha_db", "media_db", "prompts_db"}
+        sanitized = dict(tool_args)
+        for key in forbidden:
+            sanitized.pop(key, None)
+        return sanitized
+
+    def _harden_and_sanitize_tool_arguments(
+        self,
+        module: BaseModule,
+        tool_args: Any,
+    ) -> Any:
+        """Normalize tool arguments before policy and execution checks."""
+        if not isinstance(tool_args, dict):
+            return tool_args
+        hardened_args = self._strip_forbidden_tool_argument_overrides(tool_args)
+        try:
+            return module.sanitize_input(hardened_args)
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as san_err:
+            raise InvalidParamsException(f"Invalid arguments: {str(san_err)}") from san_err
+
+    def _prepared_tool_call_payload(
+        self,
+        *,
+        tool_name: str,
+        module_id: Optional[str],
+        is_write: Optional[bool],
+        idempotency_cache_key: Optional[str],
+        arguments_hash: Optional[str],
+        context_fingerprint: str,
+    ) -> bytes:
+        payload = {
+            "tool_name": str(tool_name),
+            "module_id": str(module_id or ""),
+            "is_write": bool(is_write),
+            "idempotency_cache_key": str(idempotency_cache_key or ""),
+            "arguments_hash": str(arguments_hash or ""),
+            "context_fingerprint": str(context_fingerprint or ""),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def _build_prepared_tool_call_integrity_tag(
+        self,
+        *,
+        tool_name: str,
+        module_id: Optional[str],
+        is_write: Optional[bool],
+        idempotency_cache_key: Optional[str],
+        arguments_hash: Optional[str],
+        context_fingerprint: str,
+    ) -> str:
+        payload = self._prepared_tool_call_payload(
+            tool_name=tool_name,
+            module_id=module_id,
+            is_write=is_write,
+            idempotency_cache_key=idempotency_cache_key,
+            arguments_hash=arguments_hash,
+            context_fingerprint=context_fingerprint,
+        )
+        return hmac.new(self._prepared_call_secret, payload, digestmod="sha256").hexdigest()
+
+    def _verify_prepared_tool_call_integrity(
+        self,
+        prepared: PreparedToolCall,
+    ) -> None:
+        if not isinstance(prepared.tool_name, str) or not self._tool_name_re.match(prepared.tool_name):
+            raise InvalidParamsException("Prepared tool call integrity check failed: invalid tool name")
+
+        expected_hash = self._hash_arguments(prepared.tool_args if isinstance(prepared.tool_args, dict) else {})
+        if expected_hash != prepared.arguments_hash:
+            raise InvalidParamsException("Prepared tool call integrity check failed: argument fingerprint mismatch")
+
+        expected_context_fingerprint = self._fingerprint_request_context(prepared.context)
+        if expected_context_fingerprint != prepared.context_fingerprint:
+            raise InvalidParamsException("Prepared tool call integrity check failed: context fingerprint mismatch")
+
+        expected_write = self._resolve_write_classification(
+            prepared.module,
+            prepared.tool_name,
+            prepared.tool_args,
+            prepared.tool_def,
+            fallback_to_name_heuristic=True,
+        )
+        if bool(expected_write) != bool(prepared.is_write):
+            raise InvalidParamsException("Prepared tool call integrity check failed: write classification mismatch")
+
+        expected_tag = self._build_prepared_tool_call_integrity_tag(
+            tool_name=prepared.tool_name,
+            module_id=prepared.module_id,
+            is_write=prepared.is_write,
+            idempotency_cache_key=prepared.idempotency_cache_key,
+            arguments_hash=prepared.arguments_hash,
+            context_fingerprint=prepared.context_fingerprint,
+        )
+        if not hmac.compare_digest(prepared.integrity_tag, expected_tag):
+            raise InvalidParamsException("Prepared tool call integrity check failed: signature mismatch")
+
+    def _fingerprint_request_context(self, context: RequestContext) -> str:
+        payload = {
+            "request_id": str(context.request_id or ""),
+            "user_id": str(context.user_id or ""),
+            "client_id": str(context.client_id or ""),
+            "session_id": str(context.session_id or ""),
+            "metadata": self._context_json_safe(getattr(context, "metadata", {})),
+            "db_paths": self._context_json_safe(getattr(context, "db_paths", {})),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _context_json_safe(self, value: Any) -> Any:
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {str(key): self._context_json_safe(item) for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))}
+        if isinstance(value, (list, tuple, set)):
+            return [self._context_json_safe(item) for item in value]
+        if is_dataclass(value):
+            return self._context_json_safe(asdict(value))
+        return str(value)
+
+    @staticmethod
+    def _normalize_idempotency_key(
+        params: dict[str, Any],
+        idempotency_key: str | None = None,
+    ) -> Optional[str]:
+        """Normalize idempotency key from explicit argument or request params."""
+        raw_idempotency_key = idempotency_key
+        if raw_idempotency_key is None:
+            raw_idempotency_key = params.get("idempotencyKey")
+            if raw_idempotency_key is None:
+                raw_idempotency_key = params.get("idempotency_key")
+
+        if raw_idempotency_key is None:
+            return None
+        if not isinstance(raw_idempotency_key, str):
+            raise InvalidParamsException("idempotencyKey must be a string")
+
+        normalized = raw_idempotency_key.strip()
+        if not normalized:
+            raise InvalidParamsException("idempotencyKey must not be empty")
+        return normalized
 
     def _audit_tool_event(
         self,
@@ -1335,20 +1554,19 @@ class MCPProtocol:
             module = None
             is_write = None
             try:
+                tool_args = params.get("arguments", {}) if isinstance(params, dict) else {}
                 if tool_name:
                     module = await self.module_registry.find_module_for_tool(tool_name)
                 if module is not None and tool_name:
-                    get_def = getattr(module, "get_tool_def", None)
-                    if callable(get_def):
-                        tool_def = await get_def(tool_name)  # type: ignore[misc]
-                    if tool_def is None:
-                        tool_defs = await module.get_tools()
-                        for _t in tool_defs:
-                            if isinstance(_t, dict) and _t.get("name") == tool_name:
-                                tool_def = _t
-                                break
-                if tool_def is not None and module is not None:
-                    is_write = module.is_write_tool_def(tool_def)
+                    tool_def = await self._resolve_tool_definition(module, tool_name)
+                    tool_args = self._harden_and_sanitize_tool_arguments(module, tool_args)
+                    is_write = self._resolve_write_classification(
+                        module,
+                        tool_name,
+                        tool_args,
+                        tool_def,
+                        fallback_to_name_heuristic=True,
+                    )
                 elif tool_name:
                     is_write = bool(re.search(r"(ingest|update|delete|create|import)", tool_name.lower()))
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
@@ -1945,24 +2163,23 @@ class MCPProtocol:
         params: dict[str, Any],
         context: RequestContext
     ) -> dict[str, Any]:
-        """Execute a tool"""
+        """Execute a tool."""
+        prepared = await self.prepare_tool_call(params=params, context=context)
+        return await self.execute_prepared_tool_call(prepared)
+
+    async def prepare_tool_call(
+        self,
+        params: dict[str, Any],
+        context: RequestContext,
+        idempotency_key: str | None = None,
+    ) -> PreparedToolCall:
+        """Prepare a tool invocation through protocol policy, validation, and governance checks."""
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
-        # Accept both camelCase and snake_case for idempotency
-        raw_idempotency_key = params.get("idempotencyKey")
-        if raw_idempotency_key is None:
-            raw_idempotency_key = params.get("idempotency_key")
-        idempotency_key: Optional[str] = None
+        normalized_idempotency_key = self._normalize_idempotency_key(params, idempotency_key=idempotency_key)
 
         if not tool_name:
             raise InvalidParamsException("Tool name is required")
-
-        if raw_idempotency_key is not None:
-            if not isinstance(raw_idempotency_key, str):
-                raise InvalidParamsException("idempotencyKey must be a string")
-            idempotency_key = raw_idempotency_key.strip()
-            if not idempotency_key:
-                raise InvalidParamsException("idempotencyKey must not be empty")
 
         # Strictly validate tool name
         if not self._tool_name_re.match(tool_name):
@@ -2007,30 +2224,17 @@ class MCPProtocol:
         module_id = self.module_registry.get_module_id_for_tool(tool_name) or getattr(module, "name", None)
 
         # Look up tool definition early for scope gating and validation
-        tool_def = None
-        try:
-            # Prefer a dedicated lookup if module implements it
-            get_def = getattr(module, "get_tool_def", None)
-            if callable(get_def):
-                tool_def = await get_def(tool_name)  # type: ignore[misc]
-            if tool_def is None:
-                tool_defs = await module.get_tools()
-                for _t in tool_defs:
-                    if isinstance(_t, dict) and _t.get("name") == tool_name:
-                        tool_def = _t
-                        break
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-            tool_def = None
+        tool_def = await self._resolve_tool_definition(module, tool_name)
+        tool_args = self._harden_and_sanitize_tool_arguments(module, tool_args)
 
-        # Determine write-capable status (best-effort)
-        is_write = None
-        try:
-            if tool_def is not None:
-                is_write = module.is_write_tool_def(tool_def)
-            else:
-                is_write = bool(re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-            is_write = None
+        # Determine write-capable status from sanitized arguments.
+        is_write = self._resolve_write_classification(
+            module,
+            tool_name,
+            tool_args,
+            tool_def,
+            fallback_to_name_heuristic=True,
+        )
 
         module_allowed = await self._has_module_permission(context, module_id)
         tool_allowed = await self._has_tool_permission(context, tool_name, is_write=is_write)
@@ -2041,41 +2245,14 @@ class MCPProtocol:
         if not tool_allowed:
             raise PermissionError(f"Permission denied for tool: {tool_name}")
 
-        # Harden arguments against cross-user/db overrides
-        try:
-            if isinstance(tool_args, dict):
-                forbidden = {"user_id", "db_path", "db_paths", "chacha_db", "media_db", "prompts_db"}
-                for k in list(tool_args.keys()):
-                    if k in forbidden:
-                        del tool_args[k]
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-            pass
-
-        # Central argument sanitization for all tools (deep)
-        try:
-            if isinstance(tool_args, dict):
-                tool_args = module.sanitize_input(tool_args)
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _san_e:
-            raise InvalidParamsException(f"Invalid arguments: {str(_san_e)}") from _san_e
-
         # Protocol-level pre-execution validation for write-capable tools
         # Ensures that modules validate arguments even if they forgot to call
         # validate_tool_arguments inside execute_tool.
         # Look up tool definition from module cache where possible
         if tool_def is None:
-            try:
-                get_def = getattr(module, "get_tool_def", None)
-                if callable(get_def):
-                    tool_def = await get_def(tool_name)  # type: ignore[misc]
-                if tool_def is None:
-                    tool_defs = await module.get_tools()
-                    for _t in tool_defs:
-                        if isinstance(_t, dict) and _t.get("name") == tool_name:
-                            tool_def = _t
-                            break
-            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                tool_def = None
+            tool_def = await self._resolve_tool_definition(module, tool_name)
 
+        idempotency_cache_key = None
         try:
             # Lightweight inputSchema validation (config-gated)
             cfg = get_config()
@@ -2087,18 +2264,6 @@ class MCPProtocol:
                     with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
                     raise
-
-            # Determine write-capable status
-            if is_write is None:
-                try:
-                    if tool_def is not None:
-                        is_write = module.is_write_tool_def(tool_def)
-                    else:
-                        # Fallback heuristic based on name
-                        import re as _re
-                        is_write = bool(_re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
-                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                    is_write = False
 
             # Optional policy: disable write-capable tools entirely
             if is_write:
@@ -2119,10 +2284,12 @@ class MCPProtocol:
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
                     raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}") from ve
 
-                idempotency_cache_key = None
-                if idempotency_key:
+                if normalized_idempotency_key:
                     idempotency_cache_key = self._make_idempotency_cache_key(
-                        context, module_id or getattr(module, "name", "unknown"), tool_name, idempotency_key
+                        context,
+                        module_id or getattr(module, "name", "unknown"),
+                        tool_name,
+                        normalized_idempotency_key,
                     )
         except ValueError as ve:
             # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
@@ -2193,6 +2360,44 @@ class MCPProtocol:
             tool_def=tool_def if isinstance(tool_def, dict) else None,
             context=context,
         )
+        context_fingerprint = self._fingerprint_request_context(context)
+        integrity_tag = self._build_prepared_tool_call_integrity_tag(
+            tool_name=tool_name,
+            module_id=module_id,
+            is_write=is_write,
+            idempotency_cache_key=idempotency_cache_key,
+            arguments_hash=args_hash,
+            context_fingerprint=context_fingerprint,
+        )
+
+        return PreparedToolCall(
+            tool_name=tool_name,
+            tool_args=tool_args,
+            module=module,
+            module_id=module_id,
+            tool_def=tool_def if isinstance(tool_def, dict) else None,
+            is_write=is_write,
+            normalized_idempotency_key=normalized_idempotency_key,
+            idempotency_cache_key=idempotency_cache_key,
+            arguments_hash=args_hash,
+            context_fingerprint=context_fingerprint,
+            integrity_tag=integrity_tag,
+            context=context,
+        )
+
+    async def execute_prepared_tool_call(self, prepared: PreparedToolCall) -> dict[str, Any]:
+        """Execute a previously prepared tool invocation."""
+        self._verify_prepared_tool_call_integrity(prepared)
+        tool_name = prepared.tool_name
+        tool_args = prepared.tool_args
+        module = prepared.module
+        module_id = prepared.module_id
+        tool_def = prepared.tool_def
+        is_write = prepared.is_write
+        normalized_idempotency_key = prepared.normalized_idempotency_key
+        idempotency_cache_key = prepared.idempotency_cache_key
+        args_hash = prepared.arguments_hash
+        context = prepared.context
 
         async def _execute_tool_call() -> dict[str, Any]:
             # Optional per-tool/category rate limits (ingestion vs read)
@@ -2243,10 +2448,25 @@ class MCPProtocol:
                     },
                 ) as span:
                     try:
+                        execution_args = tool_args
+                        tool_schema_props = (
+                            (tool_def or {}).get("inputSchema", {}).get("properties", {})
+                            if isinstance(tool_def, dict)
+                            else {}
+                        )
+                        if (
+                            normalized_idempotency_key
+                            and isinstance(tool_args, dict)
+                            and isinstance(tool_schema_props, dict)
+                            and "idempotencyKey" in tool_schema_props
+                            and "idempotencyKey" not in tool_args
+                        ):
+                            execution_args = dict(tool_args)
+                            execution_args["idempotencyKey"] = normalized_idempotency_key
                         result = await module.execute_with_circuit_breaker(
                             module.execute_tool,
                             tool_name,
-                            tool_args,
+                            execution_args,
                             context
                         )
                         span.set_attribute("mcp.status", "success")
