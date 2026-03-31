@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Awaitable, Callable
 
+from loguru import logger
+
 from tldw_Server_API.app.services.shutdown_models import (
     ShutdownComponent,
     ShutdownPhase,
@@ -73,6 +75,8 @@ class ShutdownTransportRegistry:
     ) -> RegisteredTransportFamily:
         family = RegisteredTransportFamily(name=name, active_count=active_count, drain=drain)
         with self._lock:
+            if name in self._families:
+                logger.warning(f"Shutdown transport family re-registered; replacing existing entry: {name}")
             self._families[name] = family
         return family
 

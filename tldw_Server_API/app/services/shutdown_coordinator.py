@@ -387,7 +387,13 @@ class ShutdownCoordinator:
 
     @staticmethod
     async def _invoke_stop(component: ShutdownComponent) -> None:
-        outcome = component.stop()
+        stop_callable = component.stop
+        if inspect.iscoroutinefunction(stop_callable) or inspect.iscoroutinefunction(
+            getattr(stop_callable, "__call__", None)
+        ):
+            outcome = stop_callable()
+        else:
+            outcome = await asyncio.to_thread(stop_callable)
         if inspect.isawaitable(outcome):
             await outcome
 

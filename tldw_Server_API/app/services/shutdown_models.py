@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from typing import Awaitable, Callable, Literal
 
 
-class ShutdownPhase(StrEnum):
+class ShutdownPhase(str, Enum):
     TRANSITION = "transition"
     ACCEPTORS = "acceptors"
     PRODUCERS = "producers"
@@ -14,7 +14,7 @@ class ShutdownPhase(StrEnum):
     FINALIZERS = "finalizers"
 
 
-class ShutdownPolicy(StrEnum):
+class ShutdownPolicy(str, Enum):
     DEV_FAST = "dev_fast"
     PROD_DRAIN = "prod_drain"
     BEST_EFFORT = "best_effort"

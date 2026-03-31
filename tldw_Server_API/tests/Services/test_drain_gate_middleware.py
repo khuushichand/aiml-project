@@ -31,14 +31,17 @@ def draining_client(test_app):
         yield client
 
 
-def test_drain_gate_allows_health_but_rejects_mutation(test_app, draining_client):
+def test_drain_gate_allows_health_and_liveness_but_rejects_mutation(test_app, draining_client):
     ok = draining_client.get("/health")
     head_ok = draining_client.head("/health")
+    liveness_ok = draining_client.get("/api/v1/healthz")
     blocked = draining_client.post("/api/v1/chat/completions", json={"messages": []})
     if ok.status_code != 200:
         raise AssertionError(f"expected /health to stay open, got {ok.status_code}")
     if head_ok.status_code != 200:
         raise AssertionError(f"expected HEAD /health to stay open, got {head_ok.status_code}")
+    if liveness_ok.status_code != 200:
+        raise AssertionError(f"expected /api/v1/healthz to stay open, got {liveness_ok.status_code}")
     if blocked.status_code != 503:
         raise AssertionError(f"expected drain gate to return 503, got {blocked.status_code}")
     if blocked.json()["reason"] != "shutdown_in_progress":
@@ -94,12 +97,17 @@ def test_drain_gate_rejects_guarded_request_before_llm_budget_runs(test_app, dra
 @pytest.mark.parametrize(
     "method,path",
     [
+        ("GET", "/health"),
         ("HEAD", "/health"),
         ("HEAD", "/ready"),
         ("HEAD", "/health/ready"),
+        ("GET", "/healthz"),
+        ("HEAD", "/healthz"),
+        ("GET", "/api/v1/healthz"),
+        ("HEAD", "/api/v1/healthz"),
     ],
 )
-def test_control_plane_head_paths_are_allowlisted(method, path):
+def test_control_plane_probe_paths_are_allowlisted(method, path):
     from tldw_Server_API.app.core.Security.drain_gate_middleware import _is_allowlisted_control_plane_path
 
     request = SimpleNamespace(method=method, url=SimpleNamespace(path=path))

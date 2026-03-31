@@ -81,6 +81,82 @@ async def test_asgi_transport_without_lifespan_bypasses_shutdown_coordinator(
     assert lifecycle_state is None or lifecycle_state.draining is False
 
 
+def test_build_legacy_shutdown_context_uses_explicit_fields() -> None:
+    from tldw_Server_API.app.main import _build_legacy_shutdown_context
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import LegacyShutdownContext
+
+    readiness_state = {"ready": True}
+    usage_task = object()
+    llm_usage_task = object()
+    chatbooks_cleanup_task = object()
+    chatbooks_cleanup_stop_event = object()
+    storage_cleanup_service = object()
+
+    context = _build_legacy_shutdown_context(
+        readiness_state=readiness_state,
+        usage_task=usage_task,
+        llm_usage_task=llm_usage_task,
+        authnz_scheduler_started=True,
+        chatbooks_cleanup_task=chatbooks_cleanup_task,
+        chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+        storage_cleanup_service=storage_cleanup_service,
+    )
+
+    assert isinstance(context, LegacyShutdownContext)
+    assert context.readiness_state is readiness_state
+    assert context.usage_task is usage_task
+    assert context.llm_usage_task is llm_usage_task
+    assert context.authnz_scheduler_started is True
+    assert context.chatbooks_cleanup_task is chatbooks_cleanup_task
+    assert context.chatbooks_cleanup_stop_event is chatbooks_cleanup_stop_event
+    assert context.storage_cleanup_service is storage_cleanup_service
+
+
+def test_apply_shutdown_transition_gate_logs_guard_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    from fastapi import FastAPI
+
+    from tldw_Server_API.app import main as main_module
+
+    app = FastAPI()
+    debug_messages: list[str] = []
+    warning_messages: list[str] = []
+
+    def _raise_lifecycle_state(_app):
+        raise RuntimeError("lookup failed")
+
+    def _raise_mark_shutdown(_app, _readiness_state):
+        raise RuntimeError("mark failed")
+
+    class _FailingJobManager:
+        @classmethod
+        def set_acquire_gate(cls, _enabled: bool) -> None:
+            raise RuntimeError("gate failed")
+
+    fake_jobs_manager = types.ModuleType("tldw_Server_API.app.core.Jobs.manager")
+    fake_jobs_manager.JobManager = _FailingJobManager
+
+    monkeypatch.setattr(main_module, "get_or_create_lifecycle_state", _raise_lifecycle_state)
+    monkeypatch.setattr(main_module, "mark_lifecycle_shutdown", _raise_mark_shutdown)
+    monkeypatch.setattr(main_module.logger, "debug", lambda message, *args, **kwargs: debug_messages.append(str(message)))
+    monkeypatch.setattr(
+        main_module.logger,
+        "warning",
+        lambda message, *args, **kwargs: warning_messages.append(str(message)),
+    )
+    monkeypatch.setitem(sys.modules, fake_jobs_manager.__name__, fake_jobs_manager)
+
+    main_module._apply_shutdown_transition_gate(app, {})
+
+    assert any("lifecycle state lookup skipped" in message for message in debug_messages)
+    assert any("failed to mark lifecycle shutdown" in message for message in warning_messages)
+    assert any("job acquire gate unavailable" in message for message in debug_messages)
+
+
 @pytest.mark.integration
 def test_lifecycle_hooks_called_in_order() -> None:
     from tldw_Server_API.app.main import app
@@ -229,7 +305,11 @@ def test_shutdown_migrated_legacy_slice_uses_prod_drain_profile(
                 phases=phase_summaries,
             )
 
-    def _fake_build_legacy_shutdown_plan(_app, _locals_map):
+    captured_contexts: list[object] = []
+
+    def _fake_build_legacy_shutdown_plan(_app, _context):
+        if _context is not None:
+            captured_contexts.append(_context)
         return [
             ShutdownComponent(
                 name="lifecycle_gate",
@@ -264,6 +344,7 @@ def test_shutdown_migrated_legacy_slice_uses_prod_drain_profile(
     fake_shutdown_legacy_adapters = types.ModuleType(
         "tldw_Server_API.app.services.shutdown_legacy_adapters"
     )
+    fake_shutdown_legacy_adapters.LegacyShutdownContext = shutdown_legacy_adapters.LegacyShutdownContext
     fake_shutdown_legacy_adapters.build_legacy_shutdown_plan = _fake_build_legacy_shutdown_plan
     fake_shutdown_legacy_adapters.register_legacy_shutdown_components = (
         shutdown_legacy_adapters.register_legacy_shutdown_components
@@ -292,6 +373,11 @@ def test_shutdown_migrated_legacy_slice_uses_prod_drain_profile(
         assert client.get("/health").status_code == 200
 
     assert _SpyShutdownCoordinator.created_profiles == ["dev_fast", "prod_drain"]
+    assert len(captured_contexts) == 1
+    assert getattr(captured_contexts[0], "readiness_state", None) is not None
+    assert hasattr(captured_contexts[0], "usage_task")
+    assert hasattr(captured_contexts[0], "llm_usage_task")
+    assert hasattr(captured_contexts[0], "authnz_scheduler_started")
     assert [component.name for component in _SpyShutdownCoordinator.instances[0].registered] == [
         "lifecycle_gate",
     ]
@@ -395,7 +481,7 @@ def test_shutdown_skipped_best_effort_component_falls_back_to_direct_stop(
                 phases=phase_summaries,
             )
 
-    def _fake_build_legacy_shutdown_plan(_app, _locals_map):
+    def _fake_build_legacy_shutdown_plan(_app, _context):
         return [
             ShutdownComponent(
                 name="lifecycle_gate",
@@ -416,6 +502,7 @@ def test_shutdown_skipped_best_effort_component_falls_back_to_direct_stop(
     fake_shutdown_legacy_adapters = types.ModuleType(
         "tldw_Server_API.app.services.shutdown_legacy_adapters"
     )
+    fake_shutdown_legacy_adapters.LegacyShutdownContext = shutdown_legacy_adapters.LegacyShutdownContext
     fake_shutdown_legacy_adapters.build_legacy_shutdown_plan = _fake_build_legacy_shutdown_plan
     fake_shutdown_legacy_adapters.register_legacy_shutdown_components = (
         shutdown_legacy_adapters.register_legacy_shutdown_components

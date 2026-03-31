@@ -8,7 +8,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from tldw_Server_API.app.services.app_lifecycle import is_lifecycle_draining
-CONTROL_PLANE_DRAIN_PATHS: frozenset[str] = frozenset({"/health", "/ready", "/health/ready"})
+CONTROL_PLANE_DRAIN_PATHS: frozenset[str] = frozenset(
+    {
+        "/health",
+        "/ready",
+        "/health/ready",
+        "/healthz",
+        "/api/v1/healthz",
+        "/api/v1/health/live",
+    }
+)
 CONTROL_PLANE_DRAIN_ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
     {(method, path) for method in ("GET", "HEAD") for path in CONTROL_PLANE_DRAIN_PATHS}
 )

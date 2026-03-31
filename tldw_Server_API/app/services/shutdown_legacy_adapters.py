@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -18,13 +18,24 @@ StopCallable = Callable[[], Awaitable[None] | None]
 
 
 @dataclass(frozen=True, slots=True)
+class LegacyShutdownContext:
+    readiness_state: MutableMapping[str, Any] | None = None
+    usage_task: Any = None
+    llm_usage_task: Any = None
+    authnz_scheduler_started: bool = False
+    chatbooks_cleanup_task: Any = None
+    chatbooks_cleanup_stop_event: Any = None
+    storage_cleanup_service: Any = None
+
+
+@dataclass(frozen=True, slots=True)
 class _LegacyShutdownSpec:
     name: str
     phase: ShutdownPhase
     policy: ShutdownPolicy
     default_timeout_ms: int
-    enabled: Callable[[Mapping[str, Any]], bool]
-    stop: Callable[[Any, Mapping[str, Any]], StopCallable]
+    enabled: Callable[[LegacyShutdownContext], bool]
+    stop: Callable[[Any, LegacyShutdownContext], StopCallable]
 
 
 def _plan_visibility(plan: list[ShutdownComponent]) -> dict[str, Any]:
@@ -107,12 +118,12 @@ def get_legacy_shutdown_suppressed_component_names(
     }
 
 
-def _transition_enabled(_: Mapping[str, Any]) -> bool:
+def _transition_enabled(_: LegacyShutdownContext) -> bool:
     return True
 
 
-def _transition_stop(app: Any, locals_map: Mapping[str, Any]) -> StopCallable:
-    readiness_state = locals_map.get("READINESS_STATE")
+def _transition_stop(app: Any, context: LegacyShutdownContext) -> StopCallable:
+    readiness_state = context.readiness_state
 
     async def _stop() -> None:
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JobManager
@@ -126,12 +137,12 @@ def _transition_stop(app: Any, locals_map: Mapping[str, Any]) -> StopCallable:
     return _stop
 
 
-def _usage_enabled(locals_map: Mapping[str, Any]) -> bool:
-    return locals_map.get("usage_task") is not None
+def _usage_enabled(context: LegacyShutdownContext) -> bool:
+    return context.usage_task is not None
 
 
-def _usage_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
-    usage_task = locals_map.get("usage_task")
+def _usage_stop(_: Any, context: LegacyShutdownContext) -> StopCallable:
+    usage_task = context.usage_task
 
     async def _stop() -> None:
         if usage_task is not None:
@@ -142,12 +153,12 @@ def _usage_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
     return _stop
 
 
-def _llm_usage_enabled(locals_map: Mapping[str, Any]) -> bool:
-    return locals_map.get("llm_usage_task") is not None
+def _llm_usage_enabled(context: LegacyShutdownContext) -> bool:
+    return context.llm_usage_task is not None
 
 
-def _llm_usage_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
-    llm_usage_task = locals_map.get("llm_usage_task")
+def _llm_usage_stop(_: Any, context: LegacyShutdownContext) -> StopCallable:
+    llm_usage_task = context.llm_usage_task
 
     async def _stop() -> None:
         if llm_usage_task is not None:
@@ -158,11 +169,11 @@ def _llm_usage_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
     return _stop
 
 
-def _authnz_enabled(locals_map: Mapping[str, Any]) -> bool:
-    return bool(locals_map.get("_authnz_sched_started"))
+def _authnz_enabled(context: LegacyShutdownContext) -> bool:
+    return bool(context.authnz_scheduler_started)
 
 
-def _authnz_stop(_: Any, __: Mapping[str, Any]) -> StopCallable:
+def _authnz_stop(_: Any, __: LegacyShutdownContext) -> StopCallable:
     async def _stop() -> None:
         from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
 
@@ -171,15 +182,13 @@ def _authnz_stop(_: Any, __: Mapping[str, Any]) -> StopCallable:
     return _stop
 
 
-def _chatbooks_enabled(locals_map: Mapping[str, Any]) -> bool:
-    return locals_map.get("chatbooks_cleanup_task") is not None or locals_map.get(
-        "chatbooks_cleanup_stop_event"
-    ) is not None
+def _chatbooks_enabled(context: LegacyShutdownContext) -> bool:
+    return context.chatbooks_cleanup_task is not None or context.chatbooks_cleanup_stop_event is not None
 
 
-def _chatbooks_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
-    stop_event = locals_map.get("chatbooks_cleanup_stop_event")
-    task = locals_map.get("chatbooks_cleanup_task")
+def _chatbooks_stop(_: Any, context: LegacyShutdownContext) -> StopCallable:
+    stop_event = context.chatbooks_cleanup_stop_event
+    task = context.chatbooks_cleanup_task
 
     async def _stop() -> None:
         if stop_event is not None:
@@ -190,12 +199,12 @@ def _chatbooks_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
     return _stop
 
 
-def _storage_enabled(locals_map: Mapping[str, Any]) -> bool:
-    return locals_map.get("storage_cleanup_service") is not None
+def _storage_enabled(context: LegacyShutdownContext) -> bool:
+    return context.storage_cleanup_service is not None
 
 
-def _storage_stop(_: Any, locals_map: Mapping[str, Any]) -> StopCallable:
-    storage_cleanup_service = locals_map.get("storage_cleanup_service")
+def _storage_stop(_: Any, context: LegacyShutdownContext) -> StopCallable:
+    storage_cleanup_service = context.storage_cleanup_service
 
     async def _stop() -> None:
         if storage_cleanup_service is not None:
@@ -256,11 +265,15 @@ _LEGACY_SHUTDOWN_SPECS: tuple[_LegacyShutdownSpec, ...] = (
 )
 
 
-def build_legacy_shutdown_plan(app: Any, locals_map: Mapping[str, Any]) -> list[ShutdownComponent]:
+def build_legacy_shutdown_plan(
+    app: Any,
+    context: LegacyShutdownContext | None = None,
+) -> list[ShutdownComponent]:
     """Build the legacy shutdown inventory without changing the teardown order yet."""
+    shutdown_context = context or LegacyShutdownContext()
     plan: list[ShutdownComponent] = []
     for spec in _LEGACY_SHUTDOWN_SPECS:
-        if not spec.enabled(locals_map):
+        if not spec.enabled(shutdown_context):
             continue
         plan.append(
             ShutdownComponent(
@@ -268,7 +281,7 @@ def build_legacy_shutdown_plan(app: Any, locals_map: Mapping[str, Any]) -> list[
                 phase=spec.phase,
                 policy=spec.policy,
                 default_timeout_ms=spec.default_timeout_ms,
-                stop=spec.stop(app, locals_map),
+                stop=spec.stop(app, shutdown_context),
             )
         )
 

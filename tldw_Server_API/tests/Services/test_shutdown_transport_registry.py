@@ -117,6 +117,36 @@ def test_transport_registry_snapshot_reports_active_counts() -> None:
     assert registry.total_active_sessions() == 7
 
 
+def test_transport_registry_duplicate_registration_logs_and_replaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app.services import shutdown_transport_registry as registry_module
+
+    registry = registry_module.ShutdownTransportRegistry()
+    warning_messages: list[str] = []
+
+    monkeypatch.setattr(
+        registry_module.logger,
+        "warning",
+        lambda message, *args, **kwargs: warning_messages.append(str(message)),
+    )
+
+    first = registry.register_family(
+        "alpha",
+        active_count=lambda: 1,
+        drain=lambda timeout_s=None: None,
+    )
+    second = registry.register_family(
+        "alpha",
+        active_count=lambda: 2,
+        drain=lambda timeout_s=None: None,
+    )
+
+    assert first is not second
+    assert registry.get_family("alpha") is second
+    assert any("alpha" in message for message in warning_messages)
+
+
 @pytest.mark.asyncio
 async def test_prompt_studio_transport_registry_hook_tracks_and_drains_connections() -> None:
     from tldw_Server_API.app.api.v1.endpoints.prompt_studio import prompt_studio_websocket

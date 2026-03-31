@@ -141,21 +141,46 @@ def _apply_shutdown_transition_gate(app: FastAPI, readiness_state: Any | None) -
     """Move the app into draining mode and gate new jobs."""
     try:
         lifecycle_state = get_or_create_lifecycle_state(app)
-    except _STARTUP_GUARD_EXCEPTIONS:
+    except _STARTUP_GUARD_EXCEPTIONS as exc:
         lifecycle_state = None
+        logger.debug(f"Shutdown transition gate: lifecycle state lookup skipped: {exc}")
 
     try:
         if lifecycle_state is None or lifecycle_state.phase != "draining" or not lifecycle_state.draining:
             mark_lifecycle_shutdown(app, readiness_state)
-    except _STARTUP_GUARD_EXCEPTIONS:
-        pass
+    except _STARTUP_GUARD_EXCEPTIONS as exc:
+        logger.warning(f"Shutdown transition gate: failed to mark lifecycle shutdown: {exc}")
 
     try:
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
 
         _JM.set_acquire_gate(True)
-    except _IMPORT_EXCEPTIONS:
-        pass
+    except _IMPORT_EXCEPTIONS as exc:
+        logger.debug(f"Shutdown transition gate: job acquire gate unavailable: {exc}")
+
+
+def _build_legacy_shutdown_context(
+    *,
+    readiness_state: Any | None,
+    usage_task: Any = None,
+    llm_usage_task: Any = None,
+    authnz_scheduler_started: bool = False,
+    chatbooks_cleanup_task: Any = None,
+    chatbooks_cleanup_stop_event: Any = None,
+    storage_cleanup_service: Any = None,
+) -> "LegacyShutdownContext":
+    """Collect the explicit shutdown dependencies used by legacy adapters."""
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import LegacyShutdownContext
+
+    return LegacyShutdownContext(
+        readiness_state=readiness_state,
+        usage_task=usage_task,
+        llm_usage_task=llm_usage_task,
+        authnz_scheduler_started=authnz_scheduler_started,
+        chatbooks_cleanup_task=chatbooks_cleanup_task,
+        chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+        storage_cleanup_service=storage_cleanup_service,
+    )
 
 
 def _build_coordinated_shutdown_coordinator(
@@ -163,7 +188,7 @@ def _build_coordinated_shutdown_coordinator(
     legacy_shutdown_plan: list[Any],
     *,
     transport_registry: Any | None = None,
-):
+) -> tuple["ShutdownCoordinator", list["ShutdownComponent"], list["ShutdownComponent"]]:
     """Assemble the production drain coordinator with legacy and transport owners."""
     from tldw_Server_API.app.services.shutdown_coordinator import ShutdownCoordinator
     from tldw_Server_API.app.services.shutdown_transport_registry import (
@@ -1556,6 +1581,12 @@ async def lifespan(app: FastAPI):
         _JM.set_acquire_gate(False)
     except _IMPORT_EXCEPTIONS:
         pass
+    usage_task = None
+    llm_usage_task = None
+    chatbooks_cleanup_task = None
+    chatbooks_cleanup_stop_event = None
+    storage_cleanup_service = None
+    _authnz_sched_started = False
     # Fail fast if the assembled app contains duplicate method+path route registrations.
     _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
     # Run environmental preflight checks before heavy initialization.
@@ -3702,9 +3733,16 @@ async def lifespan(app: FastAPI):
             build_legacy_shutdown_plan,
         )
 
-        shutdown_locals = dict(locals())
-        shutdown_locals["READINESS_STATE"] = READINESS_STATE
-        legacy_shutdown_plan = build_legacy_shutdown_plan(app, shutdown_locals)
+        shutdown_context = _build_legacy_shutdown_context(
+            readiness_state=READINESS_STATE,
+            usage_task=usage_task,
+            llm_usage_task=llm_usage_task,
+            authnz_scheduler_started=_authnz_sched_started,
+            chatbooks_cleanup_task=chatbooks_cleanup_task,
+            chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+            storage_cleanup_service=storage_cleanup_service,
+        )
+        legacy_shutdown_plan = build_legacy_shutdown_plan(app, shutdown_context)
         legacy_phase_groups: dict[str, list[str]] = {}
         for component in legacy_shutdown_plan:
             legacy_phase_groups.setdefault(component.phase.value, []).append(component.name)

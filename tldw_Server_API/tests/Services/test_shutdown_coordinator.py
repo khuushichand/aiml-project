@@ -49,7 +49,10 @@ def component(
 
 
 def test_build_legacy_shutdown_plan_includes_known_legacy_components() -> None:
-    from tldw_Server_API.app.services.shutdown_legacy_adapters import build_legacy_shutdown_plan
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+        LegacyShutdownContext,
+        build_legacy_shutdown_plan,
+    )
 
     class _App:
         pass
@@ -57,10 +60,10 @@ def test_build_legacy_shutdown_plan_includes_known_legacy_components() -> None:
     app = _App()
     plan = build_legacy_shutdown_plan(
         app,
-        {
-            "usage_task": object(),
-            "_authnz_sched_started": True,
-        },
+        LegacyShutdownContext(
+            usage_task=object(),
+            authnz_scheduler_started=True,
+        ),
     )
 
     assert [component.name for component in plan] == [
@@ -77,7 +80,10 @@ def test_build_legacy_shutdown_plan_includes_known_legacy_components() -> None:
 
 
 def test_build_legacy_shutdown_plan_records_visibility_on_app_state() -> None:
-    from tldw_Server_API.app.services.shutdown_legacy_adapters import build_legacy_shutdown_plan
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+        LegacyShutdownContext,
+        build_legacy_shutdown_plan,
+    )
 
     class _State:
         pass
@@ -88,7 +94,7 @@ def test_build_legacy_shutdown_plan_records_visibility_on_app_state() -> None:
 
     app = _App()
 
-    plan = build_legacy_shutdown_plan(app, {})
+    plan = build_legacy_shutdown_plan(app, LegacyShutdownContext())
 
     assert app.state._tldw_shutdown_legacy_inventory_visible is True
     assert app.state._tldw_shutdown_legacy_phase_groups == {
@@ -99,19 +105,22 @@ def test_build_legacy_shutdown_plan_records_visibility_on_app_state() -> None:
 
 
 def test_build_legacy_shutdown_plan_orders_migrated_components_usage_before_storage() -> None:
-    from tldw_Server_API.app.services.shutdown_legacy_adapters import build_legacy_shutdown_plan
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+        LegacyShutdownContext,
+        build_legacy_shutdown_plan,
+    )
 
     class _App:
         pass
 
     plan = build_legacy_shutdown_plan(
         _App(),
-        {
-            "chatbooks_cleanup_task": object(),
-            "storage_cleanup_service": object(),
-            "usage_task": object(),
-            "llm_usage_task": object(),
-        },
+        LegacyShutdownContext(
+            chatbooks_cleanup_task=object(),
+            storage_cleanup_service=object(),
+            usage_task=object(),
+            llm_usage_task=object(),
+        ),
     )
 
     assert [component.name for component in plan] == [
@@ -157,17 +166,18 @@ def test_shutdown_legacy_adapters_import_is_lazy_for_optional_stop_helpers(
     )
 
     module = importlib.import_module(module_name)
+    LegacyShutdownContext = module.LegacyShutdownContext
 
     class _App:
         pass
 
     plan = module.build_legacy_shutdown_plan(
         _App(),
-        {
-            "usage_task": object(),
-            "llm_usage_task": object(),
-            "_authnz_sched_started": True,
-        },
+        LegacyShutdownContext(
+            usage_task=object(),
+            llm_usage_task=object(),
+            authnz_scheduler_started=True,
+        ),
     )
 
     assert [component.name for component in plan] == [
@@ -351,6 +361,33 @@ async def test_coordinator_runs_same_phase_components_in_parallel() -> None:
     assert summary.phases[ShutdownPhase.WORKERS].component_names == ["worker-a", "worker-b"]
     assert summary.components["worker-a"].result == "stopped"
     assert summary.components["worker-b"].result == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_offloads_sync_stop_callables_to_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    to_thread_calls: list[Callable[[], Awaitable[None] | None]] = []
+    events: list[str] = []
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        to_thread_calls.append(func)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("tldw_Server_API.app.services.shutdown_coordinator.asyncio.to_thread", _fake_to_thread)
+
+    coordinator = ShutdownCoordinator(profile="dev_fast")
+
+    def _sync_stop() -> None:
+        events.append("sync")
+
+    coordinator.register(component("producer-a", phase="producers", stop=_sync_stop))
+
+    summary = await coordinator.shutdown()
+
+    assert to_thread_calls == [_sync_stop]
+    assert summary.components["producer-a"].result == "stopped"
+    assert events == ["sync"]
 
 
 @pytest.mark.asyncio
