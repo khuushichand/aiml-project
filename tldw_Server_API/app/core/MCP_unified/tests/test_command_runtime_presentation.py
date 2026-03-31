@@ -214,7 +214,8 @@ def test_presentation_keeps_textual_stderr_visible_when_binary_fragments_exist()
 @pytest.mark.asyncio
 async def test_presentation_keeps_pipe_abort_explanation_alongside_binary_stderr_notice(tmp_path: Path) -> None:
     class _Backend:
-        async def execute(self, argv, stdin):  # noqa: ANN001
+        async def execute(self, argv, stdin, handler_context=None):  # noqa: ANN001
+            del handler_context
             if argv[0] == "first":
                 return CommandStepResult(stdout=b"\xff\xfeout", stderr=b"\xff\xfeerr", exit_code=0)
             return CommandStepResult(stdout="should-not-run", stderr="", exit_code=0)

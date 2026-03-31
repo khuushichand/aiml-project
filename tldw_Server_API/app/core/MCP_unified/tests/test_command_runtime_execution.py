@@ -20,7 +20,13 @@ class _FakeBackend:
         self.handlers = handlers
         self.calls: list[tuple[list[str], str]] = []
 
-    async def execute(self, argv: list[str], stdin: str) -> CommandStepResult:
+    async def execute(
+        self,
+        argv: list[str],
+        stdin: str,
+        handler_context=None,  # noqa: ANN001
+    ) -> CommandStepResult:
+        del handler_context
         self.calls.append((list(argv), stdin))
         handler = self.handlers[argv[0]]
         return handler(argv, stdin)

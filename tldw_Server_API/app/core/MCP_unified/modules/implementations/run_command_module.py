@@ -33,8 +33,13 @@ class _AdapterBackend(CommandBackend):
     def __init__(self, adapters: PhaseOneCommandAdapters) -> None:
         self._adapters = adapters
 
-    async def execute(self, argv: list[str], stdin: Any) -> CommandStepResult:
-        return await self._adapters.execute(argv, stdin)
+    async def execute(
+        self,
+        argv: list[str],
+        stdin: Any,
+        handler_context: Any | None = None,
+    ) -> CommandStepResult:
+        return await self._adapters.execute(argv, stdin, handler_context)
 
 
 class RunCommandModule(BaseModule):

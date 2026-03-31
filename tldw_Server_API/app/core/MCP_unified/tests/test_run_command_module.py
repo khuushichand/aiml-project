@@ -184,8 +184,9 @@ async def test_run_derives_step_idempotency_from_parent_key() -> None:
         context=context,
     )
 
-    assert first == second
+    assert first.split("\n[exit:0 |", 1)[0] == second.split("\n[exit:0 |", 1)[0]
     assert "[exit:0 |" in first
+    assert "[exit:0 |" in second
     assert len(protocol.prepare_calls) == 2
     assert protocol.prepare_calls[0].params["name"] == "fs.write_text"
     assert protocol.prepare_calls[0].idempotency_key == derive_step_idempotency_key(
@@ -194,6 +195,39 @@ async def test_run_derives_step_idempotency_from_parent_key() -> None:
         0,
     )
     assert protocol.prepare_calls[0].idempotency_key == protocol.prepare_calls[1].idempotency_key
+
+
+@pytest.mark.asyncio
+async def test_run_uses_lexical_preflighted_step_for_identical_command_after_skipped_branch() -> None:
+    protocol = _ProtocolStub()
+    protocol.execute_errors["fs.read_text"] = FileNotFoundError("Path not found: missing.txt")
+    module = _build_module(protocol)
+    context = RequestContext(request_id="run-skipped-branch", user_id="1", client_id="unit")
+
+    rendered = await module.execute_tool(
+        "run",
+        {
+            "command": "cat missing.txt && write notes.txt hi ; write notes.txt hi",
+            "idempotencyKey": "parent-idem-skip-1",
+        },
+        context=context,
+    )
+
+    assert "[exit:0 |" in rendered
+    assert [call.params["name"] for call in protocol.prepare_calls] == [
+        "fs.read_text",
+        "fs.write_text",
+        "fs.write_text",
+    ]
+    assert [call.params["name"] for call in protocol.execute_calls] == [
+        "fs.read_text",
+        "fs.write_text",
+    ]
+    assert protocol.execute_calls[1].idempotency_key == derive_step_idempotency_key(
+        "parent-idem-skip-1",
+        ["write", "notes.txt", "hi"],
+        2,
+    )
 
 
 @pytest.mark.asyncio

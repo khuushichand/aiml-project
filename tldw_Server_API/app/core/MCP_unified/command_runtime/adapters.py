@@ -6,11 +6,11 @@ import difflib
 import hashlib
 import json
 from collections.abc import Iterator
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from .executor import HandlerInvocationContext
 from .models import CommandChain, CommandSpillReference, CommandStepResult
 from .registry import CommandDescriptor
 
@@ -107,7 +107,7 @@ class PhaseOneCommandAdapters:
 
     def __init__(self, context: AdapterContext) -> None:
         self.context = context
-        self._preflighted: dict[str, deque[_PreparedStep]] = {}
+        self._preflighted: dict[tuple[str, int], _PreparedStep] = {}
         self._next_step_index = 0
 
     def requires_whole_chain_preflight(self, chain: CommandChain) -> bool:
@@ -160,19 +160,22 @@ class PhaseOneCommandAdapters:
                     if self._is_passthrough_governed_exception(exc):
                         raise
                     raise PreflightCommandError(self._governed_error_result(exc)) from exc
-                signature = normalize_step_content(argv)
-                bucket = self._preflighted.setdefault(signature, deque())
-                bucket.append(_PreparedStep(prepared=prepared, plan=plan_or_error))
+                prepared_key = (normalize_step_content(argv), step_index)
+                self._preflighted[prepared_key] = _PreparedStep(prepared=prepared, plan=plan_or_error)
                 step_index += 1
 
-    async def execute(self, argv: list[str], stdin: Any) -> CommandStepResult:
+    async def execute(
+        self,
+        argv: list[str],
+        stdin: Any,
+        handler_context: Any | None = None,
+    ) -> CommandStepResult:
         """Execute one command invocation for the runtime backend."""
 
         if not argv:
             return CommandStepResult(stderr="Missing command", exit_code=127)
 
-        step_index = self._next_step_index
-        self._next_step_index += 1
+        step_index = self._resolve_step_index(handler_context)
         descriptor = self.context.visible_commands.get(argv[0])
         if descriptor is None:
             return self._unknown_command_result(argv[0])
@@ -184,12 +187,11 @@ class PhaseOneCommandAdapters:
 
     async def _execute_governed(self, argv: list[str], step_index: int) -> CommandStepResult:
         signature = normalize_step_content(argv)
-        bucket = self._preflighted.get(signature)
         handled_exceptions = self._handled_governed_exceptions()
         try:
-            if bucket:
-                prepared_step = bucket.popleft()
-            else:
+            prepared_key = (signature, step_index)
+            prepared_step = self._preflighted.pop(prepared_key, None)
+            if prepared_step is None:
                 plan_or_error = self._governed_plan(argv)
                 if isinstance(plan_or_error, _UsageError):
                     return CommandStepResult(stderr=plan_or_error.message, exit_code=plan_or_error.exit_code)
@@ -212,6 +214,13 @@ class PhaseOneCommandAdapters:
             return self._governed_error_result(exc)
 
         return CommandStepResult(stdout=rendered, stderr="", exit_code=0)
+
+    def _resolve_step_index(self, handler_context: Any | None) -> int:
+        if isinstance(handler_context, HandlerInvocationContext):
+            return int(handler_context.lexical_step_index)
+        step_index = self._next_step_index
+        self._next_step_index += 1
+        return step_index
 
     def _execute_pure_transform(self, argv: list[str], stdin: Any) -> CommandStepResult:
         command = argv[0]

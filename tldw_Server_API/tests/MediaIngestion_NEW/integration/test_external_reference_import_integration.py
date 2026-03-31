@@ -66,9 +66,11 @@ class _FakeZoteroConnector:
         account,
         collection_key: str,
         *,
+        collection_name: str | None = None,
         cursor: str | None = None,
         page_size: int = 100,
     ):
+        del collection_name
         assert account["tokens"]["access_token"] == "tok"
         assert account["provider_user_id"] == "123456"
         assert collection_key == "COLL1234"

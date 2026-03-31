@@ -388,10 +388,12 @@ async def sync_reference_manager_source(
     metadata_only = 0
     failed = 0
     total = 0
+    collection_name = str(source.get("path") or "").strip() or None
 
     items, page_cursor = await connector.list_collection_items(
         account,
         collection_key,
+        collection_name=collection_name,
         cursor=current_cursor,
         page_size=100,
     )

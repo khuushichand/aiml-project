@@ -22,7 +22,15 @@ class _ReferenceManagerStub:
     async def list_collections(self, account, *, cursor=None, page_size=100):  # pragma: no cover - contract stub
         return [], None
 
-    async def list_collection_items(self, account, collection_key, *, cursor=None, page_size=100):  # pragma: no cover - contract stub
+    async def list_collection_items(
+        self,
+        account,
+        collection_key,
+        *,
+        collection_name=None,
+        cursor=None,
+        page_size=100,
+    ):  # pragma: no cover - contract stub
         return [], None
 
     async def list_item_attachments(self, account, provider_item_key):  # pragma: no cover - contract stub
