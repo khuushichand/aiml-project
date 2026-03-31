@@ -37,7 +37,10 @@ const ExtensionIntro: React.FC<{
         onClick={onDemo}
         className="w-full rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-text-subtle transition-colors hover:bg-surface-hover"
       >
-        Try demo mode (no server needed)
+        <span>Try demo mode (no server needed)</span>
+        <span className="block mt-1 text-xs opacity-70">
+          Explore with sample data. Chat and search use demo content only.
+        </span>
       </button>
     </div>
     <a

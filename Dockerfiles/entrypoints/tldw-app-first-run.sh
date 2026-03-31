@@ -127,7 +127,12 @@ if [ "$AUTH_MODE" = "single_user" ] && [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [
   mkdir -p "$AUTH_MARKER_DIR"
   if [ ! -f "$AUTH_MARKER_FILE" ]; then
     echo "[entrypoint] Running first-use auth initialization..."
-    python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+    # Note: `if !` suppresses set -e for this command; the explicit exit 1
+    # below is load-bearing — do not remove it.
+    if ! python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive; then
+      echo "[entrypoint] ERROR: Auth initialization failed. Fix configuration and restart." >&2
+      exit 1
+    fi
     touch "$AUTH_MARKER_FILE"
     echo "[entrypoint] Auth initialization complete."
   fi

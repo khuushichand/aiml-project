@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom"
+import React from "react"
 
+import { useDemoMode } from "@/context/demo-mode"
 import { CompanionHomePage } from "./CompanionHomePage"
 
 type CompanionHomeShellProps = {
@@ -7,10 +9,25 @@ type CompanionHomeShellProps = {
   onPersonalizationEnabled?: () => void
 }
 
+/**
+ * Safe wrapper for useDemoMode that returns a no-op fallback
+ * when DemoModeProvider is not in the component tree (e.g., sidepanel).
+ */
+function useSafeDemoMode() {
+  try {
+    return useDemoMode()
+  } catch {
+    return { demoEnabled: false, setDemoEnabled: (_v: boolean) => {} }
+  }
+}
+
 export function CompanionHomeShell({
   surface,
   onPersonalizationEnabled
 }: CompanionHomeShellProps) {
+  const { demoEnabled, setDemoEnabled } = useSafeDemoMode()
+  const demoExitPath = surface === "sidepanel" ? "/settings" : "/setup"
+
   const actions =
     surface === "sidepanel"
       ? [
@@ -48,22 +65,39 @@ export function CompanionHomeShell({
       className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8"
       data-testid="companion-home-shell"
     >
+      {demoEnabled && (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 px-5 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-text">
+                You are in demo mode
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                Chat and search use sample data only. Connect a server for full functionality.
+              </p>
+            </div>
+            <Link
+              to={demoExitPath}
+              onClick={() => setDemoEnabled(false)}
+              className="shrink-0 rounded-lg border border-border bg-bg px-3 py-1.5 text-xs font-medium text-text transition-colors hover:bg-surface-hover"
+            >
+              Connect a server
+            </Link>
+          </div>
+        </div>
+      )}
+
       <CompanionHomePage
         onPersonalizationEnabled={onPersonalizationEnabled}
         surface={surface}
       />
 
       <div className="rounded-3xl border border-border/80 bg-surface/90 p-5 shadow-sm backdrop-blur-sm">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-text">Quick actions</h2>
-            <p className="mt-1 text-sm text-text-muted">
-              Keep the old escape hatches close while Companion Home grows into the default dashboard.
-            </p>
-          </div>
-          <span className="rounded-full border border-border/70 bg-bg/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-            {surface}
-          </span>
+        <div>
+          <h2 className="text-lg font-semibold text-text">Quick actions</h2>
+          <p className="mt-1 text-sm text-text-muted">
+            Jump to the main features.
+          </p>
         </div>
         <div className="grid gap-3 pt-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="companion-home-quick-actions">
           {actions.map((action) => (

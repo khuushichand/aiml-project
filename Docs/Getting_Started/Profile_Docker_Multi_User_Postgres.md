@@ -18,11 +18,30 @@ cd tldw_server
 cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 ```
 
-Configure multi-user mode and Postgres connection in `.env`:
+Configure multi-user mode in `.env`:
 
 ```bash
 AUTH_MODE=multi_user
-JWT_SECRET_KEY=your-secret-min-32-chars    # Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Generate and set the required secrets (run each command, paste the output into `.env`):
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+# Paste output as: JWT_SECRET_KEY=<output>
+
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+# Paste output as: MCP_JWT_SECRET=<output>
+
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+# Paste output as: MCP_API_KEY_SALT=<output>
+```
+
+> **Note:** `JWT_SECRET_KEY` is for the main auth system. `MCP_JWT_SECRET` and `MCP_API_KEY_SALT` are for the MCP subsystem. All three must be unique values.
+
+Set the Postgres connection URL (see Postgres Options below):
+
+```bash
 DATABASE_URL=postgresql://tldw_user:your_password@postgres:5432/tldw_users
 ```
 
@@ -68,6 +87,7 @@ curl -sS http://127.0.0.1:8000/api/v1/config/quickstart
 - If startup fails, verify `DATABASE_URL` points to reachable Postgres.
 - Confirm Postgres credentials and network access from containers.
 - Check logs: `docker compose -f Dockerfiles/docker-compose.yml logs --tail=200`.
+- If port 8000 is already in use, stop the conflicting process or change the host port mapping in docker-compose.
 
 ## What to Do Next
 

@@ -3,6 +3,11 @@
 # Everything else can be left at defaults until you need the feature.
 #
 # Configuration precedence: Environment variables > .env file > config.txt
+#
+# When to use which:
+#   .env        — secrets (API keys, passwords, JWT tokens)
+#   config.txt  — runtime tuning (chunking, RAG, TTS, provider URLs)
+#   env vars    — CI/Docker overrides that should not be persisted
 # -----------------------------------------------------------------------
 
 [Setup]

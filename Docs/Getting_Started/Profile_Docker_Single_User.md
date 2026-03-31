@@ -80,6 +80,7 @@ If you later need LAN/custom-host browser access as advanced configuration, swit
 - If containers do not start, check: `docker compose -f Dockerfiles/docker-compose.yml logs --tail=200`.
 - If API is unavailable, verify no port conflict on `8000`.
 - If auth errors appear, confirm `AUTH_MODE` and `SINGLE_USER_API_KEY` in `.env`.
+- If port 8000 or 8080 is already in use, stop the conflicting process or change the host port mapping in docker-compose (e.g., `"9000:8000"`).
 
 ## What to Do Next
 

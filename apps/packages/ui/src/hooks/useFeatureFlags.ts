@@ -15,21 +15,36 @@ import {
 
 // Flag keys
 export const FEATURE_FLAGS = {
+  /** Redesigned chat interface with sidebar and streaming */
   NEW_CHAT: "ff_newChat",
+  /** Redesigned settings pages layout */
   NEW_SETTINGS: "ff_newSettings",
+  /** Cmd+K command palette for quick navigation */
   COMMAND_PALETTE: "ff_commandPalette",
+  /** Compact message bubbles in chat */
   COMPACT_MESSAGES: "ff_compactMessages",
+  /** Collapsible sidebar in chat view */
   CHAT_SIDEBAR: "ff_chatSidebar",
+  /** Side-by-side model comparison in chat */
   COMPARE_MODE: "ff_compareMode",
+  /** Streaming responses in knowledge QA */
   KNOWLEDGE_QA_STREAMING: "ff_knowledgeQaStreaming",
+  /** Side-by-side comparison in knowledge QA */
   KNOWLEDGE_QA_COMPARISON: "ff_knowledgeQaComparison",
+  /** Branching conversation trees in knowledge QA */
   KNOWLEDGE_QA_BRANCHING: "ff_knowledgeQaBranching",
+  /** Navigation panel in media viewer */
   MEDIA_NAVIGATION_PANEL: "ff_mediaNavigationPanel",
+  /** Rich content rendering in media viewer */
   MEDIA_RICH_RENDERING: "ff_mediaRichRendering",
+  /** Display mode selector in media analysis */
   MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR: "ff_mediaAnalysisDisplayModeSelector",
+  /** Use generated fallback as default in media navigation */
   MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT:
     "ff_mediaNavigationGeneratedFallbackDefault",
+  /** Provenance tracking in Research Studio */
   RESEARCH_STUDIO_PROVENANCE_V1: "research_studio_provenance_v1",
+  /** Status guardrails in Research Studio */
   RESEARCH_STUDIO_STATUS_GUARDRAILS_V1:
     "research_studio_status_guardrails_v1"
 } as const
