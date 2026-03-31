@@ -30,6 +30,13 @@ class ChatMetricLabels(Enum):
     USER = "user_id"
     CATEGORY = "category"
     ACTION = "action"
+    PRESENTATION_VARIANT = "presentation_variant"
+    COHORT = "cohort"
+    ELIGIBLE = "eligible"
+    INELIGIBLE_REASON = "ineligible_reason"
+    FIRST_TOOL = "first_tool"
+    FALLBACK_TOOL = "fallback_tool"
+    OUTCOME = "outcome"
 
 
 @dataclass
@@ -97,6 +104,12 @@ class ChatMetrics:
 
     # Fallback metrics
     provider_fallback_successes: Any
+
+    # Run-first rollout metrics
+    run_first_rollout: Any
+    run_first_first_tool: Any
+    run_first_fallback_after_run: Any
+    run_first_completion_proxy: Any
 
 
 class ChatMetricsCollector:
@@ -340,6 +353,27 @@ class ChatMetricsCollector:
             provider_fallback_successes=self.meter.create_counter(
                 name="chat_provider_fallback_success_total",
                 description="Count of successful provider fallback transitions",
+                unit="1",
+            ),
+            # Run-first rollout metrics
+            run_first_rollout=self.meter.create_counter(
+                name="chat_run_first_rollout_total",
+                description="Count of run-first rollout exposures",
+                unit="1",
+            ),
+            run_first_first_tool=self.meter.create_counter(
+                name="chat_run_first_first_tool_total",
+                description="Count of first selected tools under run-first rollout",
+                unit="1",
+            ),
+            run_first_fallback_after_run=self.meter.create_counter(
+                name="chat_run_first_fallback_after_run_total",
+                description="Count of typed-tool fallbacks after run under rollout",
+                unit="1",
+            ),
+            run_first_completion_proxy=self.meter.create_counter(
+                name="chat_run_first_completion_proxy_total",
+                description="Count of completion proxy outcomes under rollout",
                 unit="1",
             )
         )
@@ -755,6 +789,120 @@ class ChatMetricsCollector:
         except Exception as metrics_error:
             # Metrics must never break the flow
             logger.debug("Fallback metrics emission failed", exc_info=metrics_error)
+
+    def _run_first_base_labels(
+        self,
+        *,
+        presentation_variant: str,
+        cohort: str,
+        provider: str,
+        model: str,
+        streaming: bool,
+        eligible: bool,
+        ineligible_reason: str | None,
+    ) -> dict[str, str]:
+        return {
+            ChatMetricLabels.PRESENTATION_VARIANT.value: str(presentation_variant or "").strip() or "unknown",
+            ChatMetricLabels.COHORT.value: str(cohort or "").strip() or "unknown",
+            ChatMetricLabels.PROVIDER.value: str(provider or "").strip() or "unknown",
+            ChatMetricLabels.MODEL.value: str(model or "").strip() or "unknown",
+            ChatMetricLabels.STREAMING.value: str(bool(streaming)).lower(),
+            ChatMetricLabels.ELIGIBLE.value: str(bool(eligible)).lower(),
+            ChatMetricLabels.INELIGIBLE_REASON.value: (
+                str(ineligible_reason or "").strip() or "none"
+            ),
+        }
+
+    def track_run_first_rollout(
+        self,
+        *,
+        presentation_variant: str,
+        cohort: str,
+        provider: str,
+        model: str,
+        streaming: bool,
+        eligible: bool,
+        ineligible_reason: str | None,
+    ) -> None:
+        labels = self._run_first_base_labels(
+            presentation_variant=presentation_variant,
+            cohort=cohort,
+            provider=provider,
+            model=model,
+            streaming=streaming,
+            eligible=eligible,
+            ineligible_reason=ineligible_reason,
+        )
+        self.metrics.run_first_rollout.add(1, labels)
+
+    def track_run_first_first_tool(
+        self,
+        *,
+        presentation_variant: str,
+        cohort: str,
+        provider: str,
+        model: str,
+        streaming: bool,
+        eligible: bool,
+        first_tool: str,
+    ) -> None:
+        labels = self._run_first_base_labels(
+            presentation_variant=presentation_variant,
+            cohort=cohort,
+            provider=provider,
+            model=model,
+            streaming=streaming,
+            eligible=eligible,
+            ineligible_reason=None,
+        )
+        labels[ChatMetricLabels.FIRST_TOOL.value] = str(first_tool or "").strip() or "unknown"
+        self.metrics.run_first_first_tool.add(1, labels)
+
+    def track_run_first_fallback_after_run(
+        self,
+        *,
+        presentation_variant: str,
+        cohort: str,
+        provider: str,
+        model: str,
+        streaming: bool,
+        eligible: bool,
+        fallback_tool: str,
+    ) -> None:
+        labels = self._run_first_base_labels(
+            presentation_variant=presentation_variant,
+            cohort=cohort,
+            provider=provider,
+            model=model,
+            streaming=streaming,
+            eligible=eligible,
+            ineligible_reason=None,
+        )
+        labels[ChatMetricLabels.FALLBACK_TOOL.value] = str(fallback_tool or "").strip() or "unknown"
+        self.metrics.run_first_fallback_after_run.add(1, labels)
+
+    def track_run_first_completion_proxy(
+        self,
+        *,
+        presentation_variant: str,
+        cohort: str,
+        provider: str,
+        model: str,
+        streaming: bool,
+        eligible: bool,
+        outcome: str,
+    ) -> None:
+        labels = self._run_first_base_labels(
+            presentation_variant=presentation_variant,
+            cohort=cohort,
+            provider=provider,
+            model=model,
+            streaming=streaming,
+            eligible=eligible,
+            ineligible_reason=None,
+        )
+        labels[ChatMetricLabels.OUTCOME.value] = str(outcome or "").strip() or "unknown"
+        self.metrics.run_first_completion_proxy.add(1, labels)
 
     # ---------------- Moderation helpers ----------------
     def track_moderation_input(self, user_id: str, action: str, category: str = "default"):

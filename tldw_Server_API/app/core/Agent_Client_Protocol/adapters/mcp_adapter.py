@@ -16,12 +16,20 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_runners import 
     AgentDrivenRunner,
     LLMDrivenRunner,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_tool_presentation import (
+    present_acp_tools,
+)
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport import (
     MCPTransport,
     create_transport,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.exceptions import ValidationError
+from tldw_Server_API.app.core.config import (
+    resolve_acp_run_first_presentation_variant,
+    resolve_acp_run_first_provider_allowlist,
+    resolve_acp_run_first_rollout_mode,
+)
 
 
 class MCPAdapter(ProtocolAdapter):
@@ -107,6 +115,31 @@ class MCPAdapter(ProtocolAdapter):
                         "MCP llm_driven orchestration requires protocol_config keys: "
                         "llm_caller and tool_gate"
                     )
+                provider = str(pc.get("mcp_llm_provider") or "").strip()
+                model = str(pc.get("mcp_llm_model") or "").strip()
+                rollout_mode = resolve_acp_run_first_rollout_mode()
+                presented_tools = present_acp_tools(
+                    session_id=self._config.session_id,
+                    tools=self._tools,
+                    rollout_mode=rollout_mode,
+                    provider_key=f"{provider}:{model}" if provider or model else "",
+                    provider_allowlist=resolve_acp_run_first_provider_allowlist(),
+                    presentation_variant=resolve_acp_run_first_presentation_variant(),
+                )
+                rollout_token = str(rollout_mode or "").strip().lower()
+                run_first_metrics_context = {
+                    "agent_type": "mcp",
+                    "presentation_variant": presented_tools.presentation_variant,
+                    "cohort": (
+                        "gated"
+                        if rollout_token in {"gated", "on", "enabled", "true", "1"}
+                        else "control"
+                    ),
+                    "provider": provider or "unknown",
+                    "model": model or "unknown",
+                    "eligible": presented_tools.eligible,
+                    "ineligible_reason": presented_tools.ineligible_reason,
+                }
                 runner = LLMDrivenRunner(
                     transport=self._transport,
                     event_callback=self._config.event_callback,
@@ -116,6 +149,9 @@ class MCPAdapter(ProtocolAdapter):
                     tool_gate=tool_gate,
                     tools=self._tools,
                     max_iterations=pc.get("mcp_max_iterations", 20),
+                    llm_tools=presented_tools.openai_tools,
+                    prompt_fragment=presented_tools.prompt_fragment,
+                    run_first_metrics_context=run_first_metrics_context,
                 )
             elif orchestration == "agent_driven":
                 runner = AgentDrivenRunner(

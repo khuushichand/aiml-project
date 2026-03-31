@@ -35,6 +35,9 @@ def _make_runner(
     transport_returns: list[dict] | None = None,
     cancel_after: int | None = None,
     max_iterations: int = 20,
+    llm_tools: list[dict] | None = None,
+    prompt_fragment: str | None = None,
+    run_first_metrics_context: dict[str, object] | None = None,
 ):
     """Helper to build an LLMDrivenRunner with mocked dependencies."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_runners import (
@@ -88,6 +91,9 @@ def _make_runner(
         tool_gate=tool_gate,
         tools=MCP_TOOLS,
         max_iterations=max_iterations,
+        llm_tools=llm_tools,
+        prompt_fragment=prompt_fragment,
+        run_first_metrics_context=run_first_metrics_context,
     )
     return runner, transport, llm_caller, tool_gate, callback, cancel_event
 
@@ -356,4 +362,194 @@ async def test_llm_driven_with_governance_filter_emits_single_permission_request
         AgentEventKind.TOOL_CALL,
         AgentEventKind.TOOL_RESULT,
         AgentEventKind.COMPLETION,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_uses_presented_tools_and_prompt_fragment():
+    """Presented ACP tools and prompt fragment should be passed through unchanged."""
+    llm_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "run",
+                "description": "Preferred first tool.",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Fallback tool.",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+    runner, _transport, llm_caller, _tool_gate, _callback, _cancel_event = _make_runner(
+        llm_responses=[LLMResponse(text="done")],
+        llm_tools=llm_tools,
+        prompt_fragment="ACP run-first guidance.",
+    )
+
+    await runner.run([{"role": "user", "content": "hello"}])
+
+    messages_arg, tools_arg = llm_caller.call.await_args.args
+    assert messages_arg[0] == {"role": "system", "content": "ACP run-first guidance."}
+    assert messages_arg[1] == {"role": "user", "content": "hello"}
+    assert [tool["function"]["name"] for tool in tools_arg] == ["run", "search"]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_records_run_first_metrics_for_fallback_after_run(monkeypatch):
+    """ACP runner should record rollout, first tool, fallback, and end-turn completion."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters import mcp_runners
+
+    rollout_calls: list[dict] = []
+    first_tool_calls: list[dict] = []
+    fallback_calls: list[dict] = []
+    completion_calls: list[dict] = []
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_rollout",
+        lambda **kwargs: rollout_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_first_tool",
+        lambda **kwargs: first_tool_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_fallback_after_run",
+        lambda **kwargs: fallback_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_completion_proxy",
+        lambda **kwargs: completion_calls.append(kwargs),
+    )
+
+    tool_calls = [
+        LLMToolCall(id="tc1", name="run", arguments={"command": "ls"}),
+        LLMToolCall(id="tc2", name="search", arguments={"query": "docs"}),
+    ]
+    runner, _transport, _llm_caller, _tool_gate, _callback, _cancel_event = _make_runner(
+        llm_responses=[
+            LLMResponse(tool_calls=tool_calls),
+            LLMResponse(text="done"),
+        ],
+        transport_returns=[
+            {"content": [{"type": "text", "text": "ok"}]},
+            {"content": [{"type": "text", "text": "search result"}]},
+        ],
+        run_first_metrics_context={
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+        },
+    )
+
+    await runner.run([{"role": "user", "content": "hello"}])
+
+    assert rollout_calls == [
+        {
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+        }
+    ]
+    assert first_tool_calls == [
+        {
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+            "first_tool": "run",
+        }
+    ]
+    assert fallback_calls == [
+        {
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+            "fallback_tool": "search",
+        }
+    ]
+    assert completion_calls == [
+        {
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+            "outcome": "end_turn",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_records_max_iterations_completion_proxy(monkeypatch):
+    """ACP runner should record max-iteration exits as a non-success completion outcome."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters import mcp_runners
+
+    completion_calls: list[dict] = []
+    monkeypatch.setattr(mcp_runners.acp_metrics, "record_run_first_rollout", lambda **_kwargs: None)
+    monkeypatch.setattr(mcp_runners.acp_metrics, "record_run_first_first_tool", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_fallback_after_run",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_completion_proxy",
+        lambda **kwargs: completion_calls.append(kwargs),
+    )
+
+    tc = LLMToolCall(id="tc1", name="run", arguments={"command": "ls"})
+    runner, _transport, _llm_caller, _tool_gate, _callback, _cancel_event = _make_runner(
+        llm_responses=[LLMResponse(tool_calls=[tc])],
+        max_iterations=1,
+        run_first_metrics_context={
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+        },
+    )
+
+    await runner.run([{"role": "user", "content": "hello"}])
+
+    assert completion_calls == [
+        {
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+            "outcome": "max_iterations",
+        }
     ]
