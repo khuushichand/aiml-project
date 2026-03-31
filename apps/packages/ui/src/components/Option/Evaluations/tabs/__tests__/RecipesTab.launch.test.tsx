@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { RecipesTab } from "../RecipesTab"
+import { useGenerateSyntheticEvalDrafts } from "../../hooks/useSyntheticEval"
 
 const validateSpy = vi.fn()
 const createSpy = vi.fn()
+const generateSyntheticDraftsSpy = vi.fn()
 const setActiveTabSpy = vi.fn()
 const setSyntheticReviewRecipeKindSpy = vi.fn()
+const setSyntheticReviewBatchIdSpy = vi.fn()
+const setSyntheticReviewSampleIdsSpy = vi.fn()
 const recipeManifestState = {
   data: {
     data: [
@@ -136,9 +141,28 @@ vi.mock("@/store/evaluations", () => ({
   useEvaluationsStore: (selector: (state: any) => unknown) =>
     selector({
       setActiveTab: setActiveTabSpy,
-      setSyntheticReviewRecipeKind: setSyntheticReviewRecipeKindSpy
+      setSyntheticReviewRecipeKind: setSyntheticReviewRecipeKindSpy,
+      setSyntheticReviewBatchId: setSyntheticReviewBatchIdSpy,
+      setSyntheticReviewSampleIds: setSyntheticReviewSampleIdsSpy
     })
 }))
+
+vi.mock("@/hooks/useAntdNotification", () => ({
+  useAntdNotification: () => ({
+    success: vi.fn(),
+    error: vi.fn()
+  })
+}))
+
+vi.mock("@/services/evaluations", async () => {
+  const actual = await vi.importActual<typeof import("@/services/evaluations")>(
+    "@/services/evaluations"
+  )
+  return {
+    ...actual,
+    generateSyntheticEvalDrafts: (...args: any[]) => generateSyntheticDraftsSpy(...args)
+  }
+})
 
 vi.mock("../../hooks/useRecipes", () => ({
   getRecipeRunUserErrorMessage: (error: unknown) => {
@@ -337,6 +361,7 @@ describe("RecipesTab recipe launch flow", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    generateSyntheticDraftsSpy.mockReset()
     recipeManifestState.data = {
       data: [
       {
@@ -456,6 +481,48 @@ describe("RecipesTab recipe launch flow", () => {
         status: "completed"
       }
     })
+  })
+
+  it("stores synthetic review handoff state after draft generation succeeds", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false }
+      }
+    })
+    generateSyntheticDraftsSpy.mockResolvedValue({
+      ok: true,
+      data: {
+        generation_batch_id: "batch-123",
+        samples: [{ sample_id: "draft-1" }, { sample_id: "draft-2" }]
+      }
+    })
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+
+    const { result } = renderHook(() => useGenerateSyntheticEvalDrafts(), {
+      wrapper
+    })
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        recipe_kind: "rag_answer_quality",
+        target_sample_count: 12
+      })
+    })
+
+    expect(generateSyntheticDraftsSpy).toHaveBeenCalledWith({
+      recipe_kind: "rag_answer_quality",
+      target_sample_count: 12
+    })
+    expect(setSyntheticReviewRecipeKindSpy).toHaveBeenCalledWith("rag_answer_quality")
+    expect(setSyntheticReviewBatchIdSpy).toHaveBeenCalledWith("batch-123")
+    expect(setSyntheticReviewSampleIdsSpy).toHaveBeenCalledWith([
+      "draft-1",
+      "draft-2"
+    ])
   })
 
   it("validates, launches, and renders the current recipe report", async () => {

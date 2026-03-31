@@ -30,8 +30,11 @@ const queueState = {
 
 const reviewMutateAsync = vi.fn()
 const promoteMutateAsync = vi.fn()
+const useSyntheticEvalQueueSpy = vi.fn(() => queueState)
 const storeState = {
   syntheticReviewRecipeKind: "rag_retrieval_tuning",
+  syntheticReviewBatchId: "batch-123",
+  syntheticReviewSampleIds: ["draft-1"],
   setSyntheticReviewRecipeKind: vi.fn()
 }
 
@@ -58,7 +61,7 @@ vi.mock("@/store/evaluations", () => ({
 }))
 
 vi.mock("../../hooks/useSyntheticEval", () => ({
-  useSyntheticEvalQueue: () => queueState,
+  useSyntheticEvalQueue: (params: any) => useSyntheticEvalQueueSpy(params),
   useReviewSyntheticEvalSample: () => ({
     mutateAsync: reviewMutateAsync,
     isPending: false,
@@ -154,7 +157,20 @@ describe("SyntheticReviewTab", () => {
   beforeEach(() => {
     reviewMutateAsync.mockReset()
     promoteMutateAsync.mockReset()
+    useSyntheticEvalQueueSpy.mockClear()
     storeState.setSyntheticReviewRecipeKind.mockReset()
+  })
+
+  it("requests the queue filtered to the stored generation batch when present", () => {
+    render(<SyntheticReviewTab />)
+
+    expect(useSyntheticEvalQueueSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipeKind: "rag_retrieval_tuning",
+        reviewState: "draft",
+        generationBatchId: "batch-123"
+      })
+    )
   })
 
   it("renders the filtered queue and applies review actions", () => {

@@ -272,6 +272,27 @@ export type SyntheticEvalQueueResponse = {
   total: number
 }
 
+export type SyntheticEvalGenerationRequest = {
+  recipe_kind: string
+  corpus_scope?: Record<string, any> | string[]
+  generation_metadata?: Record<string, any>
+  context_snapshot_ref?: string
+  retrieval_baseline_ref?: string
+  reference_answer?: string
+  real_examples?: Record<string, any>[]
+  seed_examples?: Record<string, any>[]
+  target_sample_count: number
+}
+
+export type SyntheticEvalGenerationResponse = {
+  generation_batch_id?: string | null
+  samples: SyntheticEvalDraftSample[]
+  source_breakdown?: Record<string, number>
+  coverage?: Record<string, string[]>
+  missing_coverage?: Record<string, string[]>
+  corpus_scope?: Record<string, any>
+}
+
 export type SyntheticEvalReviewActionRecord = {
   action_id: string
   sample_id: string
@@ -555,6 +576,7 @@ export async function listSyntheticEvalQueue(params?: {
   recipe_kind?: string
   review_state?: string
   source_kind?: string
+  generation_batch_id?: string
   limit?: number
   offset?: number
 }) {
@@ -562,6 +584,9 @@ export async function listSyntheticEvalQueue(params?: {
   if (params?.recipe_kind) query.set("recipe_kind", params.recipe_kind)
   if (params?.review_state) query.set("review_state", params.review_state)
   if (params?.source_kind) query.set("source_kind", params.source_kind)
+  if (params?.generation_batch_id) {
+    query.set("generation_batch_id", params.generation_batch_id)
+  }
   if (params?.limit != null) query.set("limit", String(params.limit))
   if (params?.offset != null) query.set("offset", String(params.offset))
 
@@ -572,6 +597,16 @@ export async function listSyntheticEvalQueue(params?: {
   return await apiSend<SyntheticEvalQueueResponse>({
     path: path as any,
     method: "GET"
+  })
+}
+
+export async function generateSyntheticEvalDrafts(
+  payload: SyntheticEvalGenerationRequest
+) {
+  return await apiSend<SyntheticEvalGenerationResponse>({
+    path: "/api/v1/evaluations/synthetic/drafts/generate" as any,
+    method: "POST",
+    body: payload
   })
 }
 

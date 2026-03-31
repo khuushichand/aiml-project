@@ -6,7 +6,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { useEvaluationsStore } from "@/store/evaluations"
 import {
+  generateSyntheticEvalDrafts,
   listSyntheticEvalQueue,
   promoteSyntheticEvalSamples,
   reviewSyntheticEvalSample
@@ -25,6 +27,7 @@ export function useSyntheticEvalQueue(params: {
   recipeKind?: string | null
   reviewState?: string | null
   sourceKind?: string | null
+  generationBatchId?: string | null
   limit?: number
   offset?: number
 }) {
@@ -36,6 +39,7 @@ export function useSyntheticEvalQueue(params: {
       params.recipeKind || null,
       params.reviewState || null,
       params.sourceKind || null,
+      params.generationBatchId || null,
       params.limit || 50,
       params.offset || 0
     ],
@@ -45,10 +49,66 @@ export function useSyntheticEvalQueue(params: {
           recipe_kind: params.recipeKind || undefined,
           review_state: params.reviewState || undefined,
           source_kind: params.sourceKind || undefined,
+          generation_batch_id: params.generationBatchId || undefined,
           limit: params.limit,
           offset: params.offset
         })
       )
+  })
+}
+
+export function useGenerateSyntheticEvalDrafts() {
+  const queryClient = useQueryClient()
+  const { t } = useTranslation(["evaluations", "common"])
+  const notification = useAntdNotification()
+  const setSyntheticReviewRecipeKind = useEvaluationsStore(
+    (s) => s.setSyntheticReviewRecipeKind
+  )
+  const setSyntheticReviewBatchId = useEvaluationsStore(
+    (s) => s.setSyntheticReviewBatchId
+  )
+  const setSyntheticReviewSampleIds = useEvaluationsStore(
+    (s) => s.setSyntheticReviewSampleIds
+  )
+
+  return useMutation({
+    mutationFn: async (params: {
+      recipe_kind: string
+      corpus_scope?: Record<string, any> | string[]
+      generation_metadata?: Record<string, any>
+      context_snapshot_ref?: string
+      retrieval_baseline_ref?: string
+      reference_answer?: string
+      real_examples?: Record<string, any>[]
+      seed_examples?: Record<string, any>[]
+      target_sample_count: number
+    }) => ensureOk(await generateSyntheticEvalDrafts(params)),
+    onSuccess: (response, variables) => {
+      const sampleIds = Array.isArray(response.data?.samples)
+        ? response.data.samples
+            .map((sample) => sample.sample_id)
+            .filter((sampleId): sampleId is string => Boolean(sampleId))
+        : []
+      setSyntheticReviewRecipeKind(variables.recipe_kind)
+      setSyntheticReviewBatchId(response.data?.generation_batch_id || null)
+      setSyntheticReviewSampleIds(sampleIds)
+      notification.success({
+        message: t("evaluations:syntheticGenerationSuccessTitle", {
+          defaultValue: "Synthetic drafts created"
+        })
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ["evaluations", "synthetic", "queue"]
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("evaluations:syntheticGenerationErrorTitle", {
+          defaultValue: "Failed to generate synthetic drafts"
+        }),
+        description: error?.message
+      })
+    }
   })
 }
 

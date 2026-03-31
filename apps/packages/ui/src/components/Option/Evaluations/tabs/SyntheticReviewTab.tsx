@@ -55,6 +55,8 @@ const queryPreview = (sample: SyntheticEvalDraftSample): string =>
 export const SyntheticReviewTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
   const storedRecipeKind = useEvaluationsStore((s) => s.syntheticReviewRecipeKind)
+  const storedBatchId = useEvaluationsStore((s) => s.syntheticReviewBatchId)
+  const storedSampleIds = useEvaluationsStore((s) => s.syntheticReviewSampleIds)
   const setStoredRecipeKind = useEvaluationsStore((s) => s.setSyntheticReviewRecipeKind)
 
   const [reviewState, setReviewState] = React.useState<string>("draft")
@@ -65,12 +67,17 @@ export const SyntheticReviewTab: React.FC = () => {
   const { data, isLoading, isError, error } = useSyntheticEvalQueue({
     recipeKind: storedRecipeKind && storedRecipeKind !== "all" ? storedRecipeKind : null,
     reviewState: reviewState !== "all" ? reviewState : null,
+    generationBatchId: storedBatchId || null,
     limit: 100
   })
   const reviewMutation = useReviewSyntheticEvalSample()
   const promoteMutation = usePromoteSyntheticEvalSamples()
 
-  const queueItems = Array.isArray(data?.data?.data) ? data.data.data : []
+  const rawQueueItems = Array.isArray(data?.data?.data) ? data.data.data : []
+  const queueItems =
+    !storedBatchId && storedSampleIds.length > 0
+      ? rawQueueItems.filter((sample) => storedSampleIds.includes(sample.sample_id))
+      : rawQueueItems
   const totalQueueItems = typeof data?.data?.total === "number" ? data.data.total : queueItems.length
 
   React.useEffect(() => {
@@ -129,6 +136,14 @@ export const SyntheticReviewTab: React.FC = () => {
             selected: selectedIds.length
           })}
         </Paragraph>
+        {storedBatchId ? (
+          <Paragraph className="mt-2 text-xs text-text-muted">
+            {t("evaluations:syntheticReviewBatchSummary", {
+              defaultValue: "Showing generated draft batch {{batchId}}.",
+              batchId: storedBatchId
+            })}
+          </Paragraph>
+        ) : null}
 
         <div className="grid gap-3 md:grid-cols-[minmax(0,220px)_minmax(0,220px)_minmax(0,1fr)_auto]">
           <div>
