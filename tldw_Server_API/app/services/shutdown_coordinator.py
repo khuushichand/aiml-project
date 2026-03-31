@@ -321,6 +321,8 @@ class ShutdownCoordinator:
         stop_task.add_done_callback(self._consume_stop_task_result)
 
         try:
+            # Keep the stop task shielded so wait_for() can time out promptly even if
+            # the underlying stop path swallows CancelledError during hard cutoff.
             await asyncio.wait_for(asyncio.shield(stop_task), timeout=timeout_ms / 1000.0)
         except TimeoutError:
             stop_task.cancel()
