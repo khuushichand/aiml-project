@@ -621,6 +621,32 @@ class TestDatasetManagement:
         assert data["id"] == dataset_id
         assert data["name"] == sample_dataset_request["name"]
 
+    def test_get_dataset_supports_sample_paging(self, client, auth_headers):
+
+        """Test getting one paged slice of dataset samples."""
+        sample_dataset_request = {
+            "name": "paged_dataset",
+            "samples": [
+                {"input": f"sample-{index}", "expected": f"label-{index}"}
+                for index in range(6)
+            ],
+        }
+        create_response = client.post(
+            "/api/v1/evaluations/datasets",
+            json=sample_dataset_request,
+            headers=auth_headers,
+        )
+        dataset_id = create_response.json()["id"]
+
+        response = client.get(
+            f"/api/v1/evaluations/datasets/{dataset_id}?include_samples=true&limit=2&offset=2",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sample_count"] == 6
+        assert [sample["input"] for sample in data["samples"]] == ["sample-2", "sample-3"]
+
     def test_list_datasets(self, client, auth_headers, sample_dataset_request):
 
         """Test listing datasets"""

@@ -625,7 +625,7 @@ async def browse_provider_sources(
     email = await get_account_email(db, user_id, account_id)
     conn = get_connector_by_name(provider)
     account_payload = {**acct, "tokens": tokens, "email": email}
-    if provider == "zotero" and "provider_user_id" not in account_payload:
+    if provider == "zotero" and not str(account_payload.get("provider_user_id") or "").strip():
         provider_user_id = str(tokens.get("provider_user_id") or tokens.get("userID") or tokens.get("user_id") or "").strip()
         if provider_user_id:
             account_payload["provider_user_id"] = provider_user_id

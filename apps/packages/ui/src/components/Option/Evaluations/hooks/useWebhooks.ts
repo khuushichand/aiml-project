@@ -69,8 +69,8 @@ export function useDeleteWebhook() {
   const notification = useAntdNotification()
 
   return useMutation({
-    mutationFn: async (webhookId: string) =>
-      ensureOk(await deleteWebhook(webhookId)),
+    mutationFn: async (url: string) =>
+      ensureOk(await deleteWebhook(url)),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["evaluations", "webhooks"]

@@ -1,9 +1,4 @@
-import {
-  buildAuthHeaders,
-  getApiBaseUrl,
-  apiClient,
-  shouldIncludeBrowserCredentials
-} from "@web/lib/api"
+import { buildAuthHeaders, getApiBaseUrl, apiClient } from "@web/lib/api"
 import { streamStructuredSSE } from "@web/lib/sse"
 import {
   buildNotificationsQuery as buildNotificationsQueryShared,
@@ -29,6 +24,10 @@ export type {
   SubscribeNotificationsOptions
 } from "@/services/notifications"
 
+const shouldUseCookieCredentials = (headers: Record<string, string>): boolean => {
+  return !headers.Authorization && !headers["X-API-KEY"]
+}
+
 async function readNotificationsStream(
   signal: AbortSignal,
   after: number,
@@ -40,6 +39,7 @@ async function readNotificationsStream(
   if (after > 0) {
     headers["Last-Event-ID"] = String(after)
   }
+  const useCookieCredentials = shouldUseCookieCredentials(headers)
 
   let cursor = after
   try {
@@ -48,7 +48,7 @@ async function readNotificationsStream(
       {
         method: "GET",
         headers,
-        credentials: shouldIncludeBrowserCredentials() ? "include" : "same-origin",
+        credentials: useCookieCredentials ? "include" : "omit",
         signal
       },
       (event) => {
@@ -79,32 +79,50 @@ export async function listNotifications(params?: {
   offset?: number
   include_archived?: boolean
 }): Promise<NotificationsListResponse> {
+  const headers = buildAuthHeaders("GET")
   return apiClient.get<NotificationsListResponse>(
     `/notifications${buildNotificationsQueryShared({
       limit: params?.limit ?? 100,
       offset: params?.offset ?? 0,
       include_archived: params?.include_archived ?? false
-    })}`
+    })}`,
+    { withCredentials: shouldUseCookieCredentials(headers) }
   )
 }
 
 export async function getUnreadCount(): Promise<NotificationsUnreadCountResponse> {
-  return apiClient.get<NotificationsUnreadCountResponse>("/notifications/unread-count")
+  const headers = buildAuthHeaders("GET")
+  return apiClient.get<NotificationsUnreadCountResponse>("/notifications/unread-count", {
+    withCredentials: shouldUseCookieCredentials(headers)
+  })
 }
 
 export async function markNotificationsRead(ids: number[]): Promise<{ updated: number }> {
-  return apiClient.post<{ updated: number }>("/notifications/mark-read", { ids })
+  const headers = buildAuthHeaders("POST")
+  return apiClient.post<{ updated: number }>("/notifications/mark-read", { ids }, {
+    withCredentials: shouldUseCookieCredentials(headers)
+  })
 }
 
 export async function dismissNotification(notificationId: number): Promise<{ dismissed: boolean }> {
-  return apiClient.post<{ dismissed: boolean }>(`/notifications/${notificationId}/dismiss`)
+  const headers = buildAuthHeaders("POST")
+  return apiClient.post<{ dismissed: boolean }>(
+    `/notifications/${notificationId}/dismiss`,
+    undefined,
+    {
+      withCredentials: shouldUseCookieCredentials(headers)
+    }
+  )
 }
 
 export async function snoozeNotification(
   notificationId: number,
   minutes: number
 ): Promise<NotificationSnoozeResponse> {
+  const headers = buildAuthHeaders("POST")
   return apiClient.post<NotificationSnoozeResponse>(`/notifications/${notificationId}/snooze`, {
     minutes
+  }, {
+    withCredentials: shouldUseCookieCredentials(headers)
   })
 }

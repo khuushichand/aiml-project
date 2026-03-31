@@ -151,13 +151,22 @@ async def list_datasets(
 )
 async def get_dataset(
     dataset_id: str,
+    include_samples: bool = Query(default=True),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
-        row = svc.db.get_dataset(dataset_id, created_by=stable_user_id)
+        row = await svc.get_dataset(
+            dataset_id,
+            created_by=stable_user_id,
+            include_samples=include_samples,
+            limit=limit if include_samples else None,
+            offset=offset if include_samples else 0,
+        )
         if not row:
             raise create_error_response(
                 message="Dataset not found",

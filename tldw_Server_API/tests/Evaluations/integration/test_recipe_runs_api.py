@@ -1,155 +1,752 @@
+from __future__ import annotations
+
 import os
-from typing import Tuple
+from typing import Any
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_recipes import (
+    get_recipe_run_job_enqueuer,
+)
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import (
+    router as evaluations_unified_router,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
+from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
+    RECIPE_RUN_REUSE_ENTITY_TYPE,
+    RecipeRunsService,
+)
+from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import build_dataset_content_hash
+
+pytestmark = [pytest.mark.integration]
 
 
-@pytest.fixture()
-def recipe_runs_client() -> Tuple[TestClient, dict]:
-    os.environ.setdefault("AUTH_MODE", "single_user")
-    os.environ.setdefault("TESTING", "true")
-    os.environ.setdefault("TEST_MODE", "true")
+@pytest.fixture(autouse=True)
+def _override_recipe_run_enqueue_dependency():
+    from tldw_Server_API.app.main import app
 
-    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_recipes import recipe_router
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    def _noop_enqueue(record, *, owner_user_id=None, job_manager=None):
+        del record, owner_user_id, job_manager
+        return "job-noop"
 
-    app = FastAPI()
-    app.include_router(recipe_router, prefix="/api/v1/evaluations")
-
-    api_key = get_settings().SINGLE_USER_API_KEY
-    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
-    client = TestClient(app)
-    return client, headers
+    app.dependency_overrides[get_recipe_run_job_enqueuer] = lambda: _noop_enqueue
+    yield
+    app.dependency_overrides.pop(get_recipe_run_job_enqueuer, None)
 
 
-@pytest.mark.integration
-def test_rag_retrieval_tuning_recipe_api_flow(recipe_runs_client, monkeypatch):
-    client, headers = recipe_runs_client
+def _inline_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "input": "Summarize the meeting notes.",
+            "expected": "A concise summary of the meeting notes.",
+        }
+    ]
 
-    class _StubService:
-        def list_recipes(self):
-            return [
-                {
-                    "id": "rag_retrieval_tuning",
-                    "version": "v1",
-                    "display_name": "RAG Retrieval Tuning",
-                    "description": "Tune retrieval settings against your own corpus.",
-                    "status": "stable",
-                }
-            ]
 
-        def get_recipe_manifest(self, recipe_id: str):
-            return {
-                "id": recipe_id,
-                "version": "v1",
-                "display_name": "RAG Retrieval Tuning",
-                "description": "Tune retrieval settings against your own corpus.",
-                "status": "stable",
-            }
+def _run_config() -> dict[str, Any]:
+    return {
+        "candidate_model_ids": [
+            "openai:gpt-4.1-mini",
+            "local:mistral-small",
+        ],
+        "judge_config": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+        },
+        "prompts": {
+            "system": "Compare model outputs.",
+        },
+        "weights": {
+            "quality": 0.8,
+            "cost": 0.2,
+        },
+        "comparison_mode": "leaderboard",
+        "source_normalization": {
+            "strip_citations": True,
+        },
+        "context_policy": {
+            "mode": "strict",
+        },
+        "execution_policy": {
+            "max_parallel_candidates": 2,
+        },
+    }
 
-        def validate_recipe_dataset(self, recipe_id: str, payload: dict):
-            if not payload.get("dataset_id"):
-                return {"valid": False, "errors": ["dataset_id is required"]}
-            if not payload.get("candidate_models"):
-                return {"valid": False, "errors": ["candidate_models is required"]}
-            return {"valid": True, "errors": []}
 
-        def create_recipe_run(self, recipe_id: str, payload: dict, *, created_by: str | None = None):
-            return {
-                "id": "recipe_run_1",
-                "object": "recipe_run",
-                "recipe_id": recipe_id,
-                "recipe_version": "v1",
-                "dataset_id": payload["dataset_id"],
-                "dataset_version": payload.get("dataset_version"),
-                "candidate_models": payload["candidate_models"],
-                "status": "pending",
-                "review_state": "review_required",
-                "config_hash": "sha256:abc123",
-                "reused": False,
-            }
+def _embeddings_run_config() -> dict[str, Any]:
+    return {
+        "comparison_mode": "embedding_only",
+        "candidates": [
+            {"provider": "openai", "model": "text-embedding-3-small"},
+            {"provider": "local", "model": "bge-small", "is_local": True},
+        ],
+        "media_ids": [1, 2],
+    }
 
-        def get_recipe_run(self, run_id: str, *, created_by: str | None = None):
-            return {
-                "id": run_id,
-                "object": "recipe_run",
-                "recipe_id": "rag_retrieval_tuning",
-                "recipe_version": "v1",
-                "dataset_id": "dataset_1",
-                "dataset_version": "v1",
-                "candidate_models": ["m1", "m2"],
-                "status": "completed",
-                "review_state": "not_required",
-                "config_hash": "sha256:abc123",
-                "reused": False,
-            }
 
-        def get_recipe_report(self, run_id: str, *, created_by: str | None = None):
-            return {
-                "id": run_id,
-                "object": "recipe_report",
-                "recipe_id": "rag_retrieval_tuning",
-                "best_overall": {"model": "m1"},
-                "best_overall_reason_code": None,
-                "best_cheap": {"model": "m2"},
-                "best_cheap_reason_code": None,
-                "best_local": None,
-                "best_local_reason_code": "no_local_candidate",
-                "review_state": "not_required",
-                "confidence": {
-                    "sample_count": 2,
-                    "variance": 0.0,
-                    "winner_margin": 0.12,
-                    "judge_agreement": None,
-                    "warning_codes": [],
+def _embeddings_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "query_id": "q-1",
+            "input": "find alpha",
+            "expected_ids": ["1"],
+        },
+        {
+            "query_id": "q-2",
+            "input": "find beta",
+            "expected_ids": ["2"],
+        },
+    ]
+
+
+def _rag_dataset() -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": "q-1",
+            "query": "find the architecture note",
+            "targets": {
+                "relevant_media_ids": [{"id": 10, "grade": 3}],
+                "relevant_note_ids": [{"id": "note-7", "grade": 2}],
+            },
+        }
+    ]
+
+
+def _rag_run_config() -> dict[str, Any]:
+    return {
+        "candidate_creation_mode": "manual",
+        "corpus_scope": {
+            "sources": ["media_db", "notes"],
+            "media_ids": [10],
+            "note_ids": ["note-7"],
+            "indexing_fixed": True,
+        },
+        "candidates": [
+            {
+                "candidate_id": "baseline",
+                "retrieval_config": {
+                    "search_mode": "hybrid",
+                    "top_k": 5,
+                    "hybrid_alpha": 0.7,
+                    "enable_reranking": False,
                 },
+                "indexing_config": {"chunking_preset": "fixed_index"},
             }
+        ],
+    }
 
-    import tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_recipes as recipes
 
-    monkeypatch.setattr(recipes, "get_recipe_runs_service_for_user", lambda user_id: _StubService())
+def _mark_recipe_run_completed(db: EvaluationsDatabase, run_id: str) -> None:
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE evaluation_recipe_runs
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE run_id = ?
+            """,
+            (RunStatus.COMPLETED.value, run_id),
+        )
+        conn.commit()
 
-    list_resp = client.get("/api/v1/evaluations/recipes", headers=headers)
-    assert list_resp.status_code == 200
-    assert list_resp.json()["data"][0]["id"] == "rag_retrieval_tuning"
 
-    manifest_resp = client.get("/api/v1/evaluations/recipes/rag_retrieval_tuning", headers=headers)
-    assert manifest_resp.status_code == 200
-    assert manifest_resp.json()["id"] == "rag_retrieval_tuning"
+def _set_reuse_mapping(
+    db: EvaluationsDatabase,
+    *,
+    reuse_hash: str,
+    user_id: str,
+    run_id: str,
+) -> None:
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE idempotency_keys
+            SET entity_id = ?
+            WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
+            """,
+            (run_id, user_id, RECIPE_RUN_REUSE_ENTITY_TYPE, reuse_hash),
+        )
+        conn.commit()
 
-    validate_resp = client.post(
-        "/api/v1/evaluations/recipes/rag_retrieval_tuning/validate-dataset",
-        json={"dataset_id": "dataset_1"},
-        headers=headers,
+
+def test_evaluations_unified_router_registers_recipe_routes_before_eval_id_routes() -> None:
+    paths = [route.path for route in evaluations_unified_router.routes if hasattr(route, "path")]
+
+    assert "/evaluations/recipes" in paths
+    assert "/evaluations/recipe-runs/{run_id}" in paths
+    assert paths.index("/evaluations/recipes") < paths.index("/evaluations/{eval_id}")
+
+
+@pytest.mark.asyncio
+async def test_recipe_manifest_endpoints(async_api_client, auth_headers) -> None:
+    list_response = await async_api_client.get(
+        "/api/v1/evaluations/recipes",
+        headers=auth_headers,
     )
-    assert validate_resp.status_code == 200
-    assert validate_resp.json()["valid"] is False
 
-    create_resp = client.post(
+    assert list_response.status_code == 200
+    manifests = list_response.json()
+    assert any(item["recipe_id"] == "summarization_quality" for item in manifests)
+    rag_manifest = next(
+        item for item in manifests if item["recipe_id"] == "rag_retrieval_tuning"
+    )
+    assert rag_manifest["launchable"] is True
+    assert rag_manifest["capabilities"]["corpus_sources"] == ["media_db", "notes"]
+    assert rag_manifest["default_run_config"]["candidate_creation_mode"] == "auto_sweep"
+
+    detail_response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning",
+        headers=auth_headers,
+    )
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["recipe_id"] == "rag_retrieval_tuning"
+    assert detail["launchable"] is True
+    assert detail["capabilities"]["candidate_creation_modes"] == ["auto_sweep", "manual"]
+    assert detail["default_run_config"]["corpus_scope"]["sources"] == ["media_db", "notes"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_launch_readiness_endpoint_reports_worker_disabled_by_default(
+    async_api_client,
+    auth_headers,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED", raising=False)
+    monkeypatch.delenv("EVALS_RECIPE_RUN_JOBS_WORKER_ENABLED", raising=False)
+
+    response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/summarization_quality/launch-readiness",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recipe_id"] == "summarization_quality"
+    assert body["ready"] is False
+    assert body["can_enqueue_runs"] is False
+    assert body["can_reuse_completed_runs"] is True
+    assert body["runtime_checks"]["recipe_run_worker_enabled"] is False
+    assert "recipe worker is not running" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_launch_readiness_endpoint_reports_worker_enabled(
+    async_api_client,
+    auth_headers,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED", "true")
+
+    response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/summarization_quality/launch-readiness",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready"] is True
+    assert body["can_enqueue_runs"] is True
+    assert body["runtime_checks"]["recipe_run_worker_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_recipe_launch_readiness_endpoint_reports_rag_worker_disabled_state(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.get(
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning/launch-readiness",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recipe_id"] == "rag_retrieval_tuning"
+    assert body["ready"] is False
+    assert body["can_enqueue_runs"] is False
+    assert body["can_reuse_completed_runs"] is True
+    assert "recipe worker is not running" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_validate_dataset_endpoint_returns_errors(async_api_client, auth_headers) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/validate-dataset",
+        json={
+            "dataset": [
+                {"input": "valid prompt", "expected": "summary"},
+                {"input": "missing label partner"},
+            ]
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert body["errors"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_validate_dataset_endpoint_returns_404_for_unknown_recipe(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/not_a_real_recipe/validate-dataset",
+        json={"dataset": _inline_dataset()},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Recipe not found"
+
+
+@pytest.mark.asyncio
+async def test_recipe_validate_dataset_endpoint_rejects_extra_fields(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/validate-dataset",
+        json={"dataset": _inline_dataset(), "unexpected": True},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_recipe_validate_dataset_endpoint_accepts_rag_retrieval_tuning(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/rag_retrieval_tuning/validate-dataset",
+        json={"dataset": _rag_dataset(), "run_config": _rag_run_config()},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["dataset_mode"] == "labeled"
+    assert body["corpus_scope"]["sources"] == ["media_db", "notes"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_metadata_and_report_endpoints(async_api_client, auth_headers) -> None:
+    payload = {
+        "dataset": _inline_dataset(),
+        "run_config": _run_config(),
+    }
+
+    create_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json=payload,
+        headers=auth_headers,
+    )
+
+    assert create_response.status_code == 202
+    created = create_response.json()
+    assert created["status"] == "pending"
+    assert created["metadata"]["run_config"] == payload["run_config"]
+    assert created["metadata"]["owner_user_id"]
+
+    run_id = created["run_id"]
+
+    metadata_response = await async_api_client.get(
+        f"/api/v1/evaluations/recipe-runs/{run_id}",
+        headers=auth_headers,
+    )
+
+    assert metadata_response.status_code == 200
+    assert metadata_response.json()["run_id"] == run_id
+
+    report_response = await async_api_client.get(
+        f"/api/v1/evaluations/recipe-runs/{run_id}/report",
+        headers=auth_headers,
+    )
+
+    assert report_response.status_code == 200
+    report = report_response.json()
+    assert report["run"]["run_id"] == run_id
+    assert set(report["recommendation_slots"]) == {
+        "best_overall",
+        "best_quality",
+        "best_cheap",
+        "best_local",
+    }
+    for slot in report["recommendation_slots"].values():
+        assert slot["candidate_run_id"] is None
+        assert slot["reason_code"] is not None
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_returns_404_for_unknown_recipe(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/not_a_real_recipe/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Recipe not found"
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_accepts_rag_retrieval_tuning(
+    async_api_client,
+    auth_headers,
+) -> None:
+    response = await async_api_client.post(
         "/api/v1/evaluations/recipes/rag_retrieval_tuning/runs",
         json={
-            "dataset_id": "dataset_1",
-            "dataset_version": "v1",
-            "candidate_models": ["m1", "m2"],
-            "data_mode": "unlabeled",
-            "run_config": {"retrieval_mode": "embedding_only"},
+            "dataset": _rag_dataset(),
+            "run_config": _rag_run_config(),
         },
-        headers=headers,
+        headers=auth_headers,
     )
-    assert create_resp.status_code == 202
-    assert create_resp.json()["status"] == "pending"
-    assert create_resp.json()["review_state"] == "review_required"
 
-    run_resp = client.get("/api/v1/evaluations/recipe-runs/recipe_run_1", headers=headers)
-    assert run_resp.status_code == 200
-    assert run_resp.json()["status"] == "completed"
+    assert response.status_code == 202
+    body = response.json()
+    assert body["recipe_id"] == "rag_retrieval_tuning"
+    assert body["metadata"]["run_config"]["corpus_scope"]["sources"] == ["media_db", "notes"]
+    assert body["metadata"]["inline_dataset"] == _rag_dataset()
 
-    report_resp = client.get("/api/v1/evaluations/recipe-runs/recipe_run_1/report", headers=headers)
-    assert report_resp.status_code == 200
-    report = report_resp.json()
-    assert report["best_overall"]["model"] == "m1"
-    assert report["best_overall_reason_code"] is None
-    assert report["best_local"] is None
-    assert report["confidence"]["sample_count"] == 2
+
+@pytest.mark.asyncio
+async def test_embeddings_recipe_run_create_persists_inline_dataset(async_api_client, auth_headers) -> None:
+    payload = {
+        "dataset": _embeddings_dataset(),
+        "run_config": _embeddings_run_config(),
+    }
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/embeddings_model_selection/runs",
+        json=payload,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["metadata"]["inline_dataset"] == payload["dataset"]
+    assert body["metadata"]["run_config"]["media_ids"] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_enqueues_pending_job(
+    async_api_client,
+    auth_headers,
+) -> None:
+    from tldw_Server_API.app.main import app
+
+    captured: dict[str, Any] = {}
+
+    def _capture_enqueue(record, *, owner_user_id=None, job_manager=None):
+        del job_manager
+        captured["run_id"] = record.run_id
+        captured["owner_user_id"] = owner_user_id
+        return "job-123"
+
+    app.dependency_overrides[get_recipe_run_job_enqueuer] = lambda: _capture_enqueue
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert captured["run_id"] == body["run_id"]
+    assert captured["owner_user_id"] == get_single_user_instance().id_str
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_create_endpoint_marks_run_failed_when_enqueue_fails(
+    async_api_client,
+    auth_headers,
+) -> None:
+    from tldw_Server_API.app.main import app
+
+    def _raise_enqueue(record, *, owner_user_id=None, job_manager=None):
+        del record, owner_user_id, job_manager
+        raise RuntimeError("queue unavailable")
+
+    app.dependency_overrides[get_recipe_run_job_enqueuer] = lambda: _raise_enqueue
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": _inline_dataset(),
+            "run_config": _run_config(),
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "recipe_run_enqueue_failed"
+
+    db = EvaluationsDatabase(os.environ["EVALUATIONS_TEST_DB_PATH"])
+    user_id = get_single_user_instance().id_str
+    reuse_hash = RecipeRunsService(db=db, user_id=user_id).build_reuse_hash(
+        "summarization_quality",
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
+    )
+    failed_run_id = db.lookup_idempotency(
+        RECIPE_RUN_REUSE_ENTITY_TYPE,
+        reuse_hash,
+        user_id,
+    )
+    assert failed_run_id is not None
+    failed_run = db.get_recipe_run(failed_run_id)
+    assert failed_run is not None
+    assert failed_run.status is RunStatus.FAILED
+    assert failed_run.metadata["jobs"]["worker_state"] == "enqueue_failed"
+    assert failed_run.metadata["jobs"]["error"] == "queue unavailable"
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_endpoint_reuses_completed_run_unless_forced(async_api_client, auth_headers) -> None:
+    db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
+    db = EvaluationsDatabase(db_path)
+    user_id = get_single_user_instance().id_str
+    dataset = _inline_dataset()
+    run_config = _run_config()
+    create_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert create_response.status_code == 202
+    created = create_response.json()
+    reuse_hash = created["metadata"]["reuse_hash"]
+
+    assert (
+        db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            user_id,
+        )
+        == created["run_id"]
+    )
+
+    _mark_recipe_run_completed(db, created["run_id"])
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    reused = response.json()
+    assert reused["run_id"] == created["run_id"]
+    assert reused["status"] == "completed"
+    assert (
+        db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            user_id,
+        )
+        == created["run_id"]
+    )
+
+    forced_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+            "force_rerun": True,
+        },
+        headers=auth_headers,
+    )
+
+    assert forced_response.status_code == 202
+    forced = forced_response.json()
+    assert forced["run_id"] != created["run_id"]
+    assert forced["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_endpoint_repairs_stale_reuse_mapping_to_latest_completed_run(
+    async_api_client,
+    auth_headers,
+) -> None:
+    db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
+    db = EvaluationsDatabase(db_path)
+    user_id = get_single_user_instance().id_str
+    dataset = _inline_dataset()
+    run_config = _run_config()
+
+    first_create_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert first_create_response.status_code == 202
+    first_run = first_create_response.json()
+    reuse_hash = first_run["metadata"]["reuse_hash"]
+    db.record_idempotency(
+        RECIPE_RUN_REUSE_ENTITY_TYPE,
+        reuse_hash,
+        first_run["run_id"],
+        user_id,
+    )
+
+    forced_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+            "force_rerun": True,
+        },
+        headers=auth_headers,
+    )
+
+    assert forced_response.status_code == 202
+    forced_run = forced_response.json()
+    _mark_recipe_run_completed(db, forced_run["run_id"])
+    _set_reuse_mapping(
+        db,
+        reuse_hash=reuse_hash,
+        user_id=user_id,
+        run_id=first_run["run_id"],
+    )
+
+    reused_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert reused_response.status_code == 200
+    reused = reused_response.json()
+    assert reused["run_id"] == forced_run["run_id"]
+    assert reused["status"] == "completed"
+    assert (
+        db.lookup_idempotency(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            user_id,
+        )
+        == forced_run["run_id"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_endpoint_does_not_reuse_completed_run_from_other_user(
+    async_api_client,
+    auth_headers,
+) -> None:
+    db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
+    db = EvaluationsDatabase(db_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+    current_user_id = get_single_user_instance().id_str
+    reuse_hash = RecipeRunsService(db=db, user_id=current_user_id).build_reuse_hash(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    other_user_run_id = db.create_recipe_run(
+        recipe_id="summarization_quality",
+        recipe_version="1",
+        status=RunStatus.COMPLETED,
+        dataset_content_hash=build_dataset_content_hash(dataset),
+        metadata={
+            "run_config": run_config,
+            "reuse_hash": reuse_hash,
+            "owner_user_id": "other-user",
+        },
+    )
+    _mark_recipe_run_completed(db, other_user_run_id)
+
+    reused_response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert reused_response.status_code == 202
+    reused = reused_response.json()
+    assert reused["run_id"] != other_user_run_id
+    assert reused["metadata"]["owner_user_id"] == current_user_id
+
+
+@pytest.mark.asyncio
+async def test_recipe_run_endpoint_reuses_legacy_completed_run_without_owner_in_single_user_mode(
+    async_api_client,
+    auth_headers,
+) -> None:
+    db_path = os.environ["EVALUATIONS_TEST_DB_PATH"]
+    db = EvaluationsDatabase(db_path)
+    dataset = _inline_dataset()
+    run_config = _run_config()
+    reuse_hash = RecipeRunsService(
+        db=db,
+        user_id=get_single_user_instance().id_str,
+    ).build_reuse_hash(
+        "summarization_quality",
+        dataset=dataset,
+        run_config=run_config,
+    )
+
+    legacy_run_id = db.create_recipe_run(
+        recipe_id="summarization_quality",
+        recipe_version="1",
+        status=RunStatus.COMPLETED,
+        dataset_content_hash=build_dataset_content_hash(dataset),
+        metadata={
+            "run_config": run_config,
+            "reuse_hash": reuse_hash,
+        },
+    )
+
+    response = await async_api_client.post(
+        "/api/v1/evaluations/recipes/summarization_quality/runs",
+        json={
+            "dataset": dataset,
+            "run_config": run_config,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    reused = response.json()
+    assert reused["run_id"] == legacy_run_id
+    assert reused["status"] == "completed"

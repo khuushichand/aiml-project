@@ -755,6 +755,54 @@ def test_browse_provider_sources_returns_zotero_collection_rows(connectors_clien
 
 
 @pytest.mark.integration
+def test_browse_provider_sources_backfills_blank_zotero_provider_user_id(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+
+        def authorize_url(self, *a, **kw):
+            return ""
+
+        async def exchange_code(self, *a, **kw):
+            return {}
+
+        async def list_collections(self, account, *, cursor=None, page_size=100):
+            assert account["provider_user_id"] == "123456"
+            return ([], None)
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        assert account_id == 15
+        return {"access_token": "api-key", "provider_user_id": "123456"}
+
+    async def _fake_get_account_email(db, user_id, account_id):
+        return None
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {
+            "id": account_id,
+            "user_id": user_id,
+            "provider": "zotero",
+            "provider_user_id": "",
+        }
+
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+    monkeypatch.setattr(ep, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(ep, "get_account_email", _fake_get_account_email)
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    response = client.get(
+        "/api/v1/connectors/providers/zotero/sources/browse",
+        params={"account_id": 15, "page_size": 25},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.integration
 def test_browse_provider_sources_rejects_account_provider_mismatch(connectors_client, monkeypatch):
     client, headers = connectors_client
 
