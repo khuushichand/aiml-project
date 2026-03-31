@@ -138,7 +138,10 @@ async def test_worker_reference_manager_sync_uses_merged_account_loader_and_pers
     created_media_db = _FakeMDB()
 
     monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
-    monkeypatch.setattr(orgs, "list_memberships_for_user", lambda user_id: [])
+    async def _fake_list_memberships_for_user(user_id: int):
+        return []
+
+    monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
     monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: _FakeZoteroConnector())
     monkeypatch.setattr(svc, "get_source_by_id", _fake_get_source_by_id)
     monkeypatch.setattr(svc, "get_account_for_user", _fake_get_account_for_user, raising=False)

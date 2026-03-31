@@ -177,10 +177,42 @@ def _normalize_reference_item_row(row: Any) -> dict[str, Any] | None:
     return data
 
 
+def _protect_oauth_state_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not metadata:
+        return None
+    try:
+        from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+        envelope = encrypt_json_blob(dict(metadata))
+        if envelope:
+            return envelope
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+        pass
+    return dict(metadata)
+
+
+def _unprotect_oauth_state_metadata(metadata: Any) -> dict[str, Any]:
+    parsed_metadata = _json_loads(metadata, {})
+    if not isinstance(parsed_metadata, dict):
+        return {}
+    if parsed_metadata.get("_enc") != "aesgcm:v1":
+        return parsed_metadata
+    try:
+        from tldw_Server_API.app.core.Security.crypto import decrypt_json_blob
+
+        decrypted = decrypt_json_blob(parsed_metadata)
+        if isinstance(decrypted, dict):
+            return decrypted
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+        pass
+    return {}
+
+
 def _normalize_oauth_state_row(row: Any) -> dict[str, Any] | None:
     if not row:
         return None
     data = _row_to_dict(row)
+    data["metadata"] = _unprotect_oauth_state_metadata(data.get("metadata"))
     _merge_provider_metadata(data, data.get("metadata"))
     return data
 
@@ -813,7 +845,7 @@ async def create_oauth_state(
 ) -> None:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
-    metadata_value = metadata or None
+    metadata_value = _protect_oauth_state_metadata(metadata)
     if is_pg:
         await db.execute(
             """
