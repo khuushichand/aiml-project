@@ -1,4 +1,5 @@
 import asyncio
+import aiosqlite
 import base64
 import json
 import os
@@ -37,6 +38,80 @@ def test_policy_fail_closed_on_error():
     ok, reason = evaluate_policy_constraints({"enabled_providers": [_BadProvider()]}, provider="drive")
     assert ok is False
     assert reason == "Policy evaluation failed"
+
+
+@pytest.mark.unit
+def test_default_connector_policy_enables_zotero_by_default(monkeypatch):
+    from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
+
+    monkeypatch.delenv("ORG_CONNECTORS_ENABLED_PROVIDERS", raising=False)
+    monkeypatch.delenv("EMAIL_GMAIL_CONNECTOR_ENABLED", raising=False)
+
+    policy = get_default_policy_from_env(org_id=7)
+
+    assert policy["org_id"] == 7
+    assert policy["enabled_providers"] == ["drive", "notion", "zotero"]
+
+
+@pytest.mark.unit
+def test_connector_policy_schema_defaults_include_zotero():
+    from tldw_Server_API.app.api.v1.schemas.connectors import ConnectorPolicy
+
+    policy = ConnectorPolicy(org_id=9)
+
+    assert policy.enabled_providers == ["drive", "notion", "zotero"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_finish_source_sync_job_clears_failure_and_rescan_flags_on_success(tmp_path: Path):
+    import tldw_Server_API.app.core.External_Sources.connectors_service as svc
+
+    db = await aiosqlite.connect(tmp_path / "connectors-sync.sqlite3")
+    db.row_factory = aiosqlite.Row
+    db._is_sqlite = True
+    try:
+        account = await svc.create_account(
+            db,
+            user_id=1,
+            provider="drive",
+            display_name="Drive",
+            email="owner@example.com",
+            tokens={"access_token": "tok"},
+        )
+        source = await svc.create_source(
+            db,
+            account_id=account["id"],
+            provider="drive",
+            remote_id="root",
+            type_="folder",
+            path="/",
+            options={"recursive": True},
+        )
+        await svc.upsert_source_sync_state(
+            db,
+            source_id=source["id"],
+            sync_mode="hybrid",
+            last_sync_failed_at="2026-03-01 00:00:00",
+            last_error="cursor invalid",
+            retry_backoff_count=2,
+            needs_full_rescan=True,
+        )
+        await svc.start_source_sync_job(db, source_id=source["id"], job_id="job-1")
+
+        state = await svc.finish_source_sync_job(
+            db,
+            source_id=source["id"],
+            job_id="job-1",
+            outcome="success",
+        )
+
+        assert state["last_sync_failed_at"] is None
+        assert state["last_error"] is None
+        assert state["retry_backoff_count"] == 0
+        assert state["needs_full_rescan"] is False
+    finally:
+        await db.close()
 
 
 @pytest.mark.unit
