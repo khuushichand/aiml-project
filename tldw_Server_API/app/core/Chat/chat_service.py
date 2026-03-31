@@ -70,7 +70,10 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
 from tldw_Server_API.app.core.Chat.chat_loop_engine import is_chat_loop_mode_enabled
-from tldw_Server_API.app.core.Chat.run_first_presentation import present_chat_tools
+from tldw_Server_API.app.core.Chat.run_first_presentation import (
+    present_chat_tools,
+    tool_names_from_definitions,
+)
 from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.config import (
@@ -643,38 +646,6 @@ def should_auto_continue_tools_once() -> bool:
     return CHAT_TOOL_AUTO_CONTINUE_ONCE
 
 
-def _tool_names_from_definitions(tools: Any) -> list[str]:
-    """Extract tool names from provider-facing tool definitions."""
-    if not isinstance(tools, list):
-        return []
-
-    names: list[str] = []
-    seen: set[str] = set()
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        if isinstance(tool.get("function"), dict):
-            raw_name = tool["function"].get("name")
-            if isinstance(raw_name, str):
-                name = raw_name.strip() or None
-                if name and name not in seen:
-                    seen.add(name)
-                    names.append(name)
-        elif isinstance(tool.get("function_declarations"), list):
-            decls = tool.get("function_declarations") or []
-            for declaration in decls:
-                if not isinstance(declaration, dict):
-                    continue
-                raw_name = declaration.get("name")
-                if not isinstance(raw_name, str):
-                    continue
-                name = raw_name.strip() or None
-                if name and name not in seen:
-                    seen.add(name)
-                    names.append(name)
-    return names
-
-
 def _resolve_chat_effective_tool_names(cleaned_args: dict[str, Any] | None) -> list[str]:
     """Return the resolved effective tool names for a chat call."""
     if not isinstance(cleaned_args, dict):
@@ -684,7 +655,19 @@ def _resolve_chat_effective_tool_names(cleaned_args: dict[str, Any] | None) -> l
     if isinstance(names, list) and all(isinstance(name, str) and name.strip() for name in names):
         return [name.strip() for name in names]
 
-    return _tool_names_from_definitions(cleaned_args.get("tools"))
+    tools = cleaned_args.get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for tool in tools:
+        for name in tool_names_from_definitions(tool):
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 def _resolve_chat_autoexec_allow_catalog(cleaned_args: dict[str, Any] | None) -> list[str]:
@@ -695,7 +678,7 @@ def _resolve_chat_autoexec_allow_catalog(cleaned_args: dict[str, Any] | None) ->
     if "_chat_effective_tool_names" in cleaned_args:
         return _resolve_chat_effective_tool_names(cleaned_args)
 
-    derived_names = _tool_names_from_definitions(cleaned_args.get("tools"))
+    derived_names = _resolve_chat_effective_tool_names(cleaned_args)
     if derived_names:
         return derived_names
 
@@ -1617,7 +1600,7 @@ def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[st
         "slash_command_injection_mode",
     }
     for key, value in chat_args.items():
-        if key in skip_keys or value is None:
+        if key in skip_keys or key.startswith("_chat_") or value is None:
             continue
         if key not in request:
             request[key] = value
@@ -1810,7 +1793,7 @@ def build_call_params_from_request(
     call_params["_chat_run_first_presentation_variant"] = run_first_presentation.presentation_variant
     rollout_token = str(rollout_mode or "").strip().lower()
     call_params["_chat_run_first_cohort"] = (
-        "gated" if rollout_token in {"gated", "on", "enabled", "true", "1"} else "control"
+        "gated" if rollout_token == "gated" else "control"  # nosec B105 - rollout label, not a secret
     )
     if run_first_presentation.prompt_fragment:
         if final_system_message and final_system_message.strip():

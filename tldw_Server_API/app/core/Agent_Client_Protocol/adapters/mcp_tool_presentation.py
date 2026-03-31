@@ -105,7 +105,7 @@ def present_acp_tools(
 
     normalized_tools, effective_tool_names = _normalize_tools(tools)
     rollout_token = str(rollout_mode or "").strip().lower()
-    rollout_enabled = rollout_token in {"gated", "on", "enabled", "true", "1"}
+    rollout_enabled = rollout_token == "gated"  # nosec B105 - rollout label, not a secret
     run_present = _RUN_TOOL_NAME in effective_tool_names
     provider_allowed = _matches_provider_allowlist(provider_key, provider_allowlist)
     eligible = rollout_enabled and run_present and provider_allowed

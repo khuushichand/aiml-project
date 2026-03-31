@@ -132,7 +132,7 @@ class MCPAdapter(ProtocolAdapter):
                     "presentation_variant": presented_tools.presentation_variant,
                     "cohort": (
                         "gated"
-                        if rollout_token in {"gated", "on", "enabled", "true", "1"}
+                        if rollout_token == "gated"  # nosec B105 - rollout label, not a secret
                         else "control"
                     ),
                     "provider": provider or "unknown",

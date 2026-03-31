@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from typing import Any
 
 from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
@@ -286,34 +285,58 @@ class LLMDrivenRunner:
     def _record_run_first_rollout(self) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_rollout(**self._run_first_metrics_context)
+        except Exception as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for rollout on session {}: {}",
+                self._session_id,
+                exc,
+            )
 
     def _record_run_first_first_tool(self, first_tool: str) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_first_tool(
                 **self._run_first_metrics_context,
                 first_tool=first_tool,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for first_tool on session {}: {}",
+                self._session_id,
+                exc,
             )
 
     def _record_run_first_fallback_after_run(self, fallback_tool: str) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_fallback_after_run(
                 **self._run_first_metrics_context,
                 fallback_tool=fallback_tool,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for fallback_after_run on session {}: {}",
+                self._session_id,
+                exc,
             )
 
     def _record_run_first_completion_proxy(self, outcome: str) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_completion_proxy(
                 **self._run_first_metrics_context,
                 outcome=outcome,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for completion_proxy on session {}: {}",
+                self._session_id,
+                exc,
             )
 
     # -- public API --
