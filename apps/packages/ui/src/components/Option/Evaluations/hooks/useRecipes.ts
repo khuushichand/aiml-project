@@ -1,0 +1,134 @@
+/**
+ * useRecipes hook
+ * Handles recipe registry, validation, launch, and report queries.
+ */
+
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { useTranslation } from "react-i18next"
+import { useAntdNotification } from "@/hooks/useAntdNotification"
+import {
+  createRecipeRun,
+  getRecipeLaunchReadiness,
+  getRecipeRunReport,
+  listRecipeManifests,
+  validateRecipeDataset,
+  type DatasetSample
+} from "@/services/evaluations"
+
+const ensureOk = <T,>(resp: any): T => {
+  if (!resp?.ok) {
+    const err = new Error(resp?.error || `HTTP ${resp?.status}`)
+    ;(err as any).resp = resp
+    throw err
+  }
+  return resp as T
+}
+
+export const getRecipeRunUserErrorMessage = (error: unknown): string => {
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : (error as any)?.resp?.error || (error as any)?.message || ""
+
+  if (String(rawMessage).includes("recipe_run_enqueue_failed")) {
+    return "Recipe runs are unavailable because the recipe worker is not running on this server. Enable the evaluations recipe worker and try again."
+  }
+
+  return rawMessage || "Failed to start recipe run."
+}
+
+export function useRecipeManifests() {
+  return useQuery({
+    queryKey: ["evaluations", "recipes", "manifests"],
+    queryFn: async () => ensureOk(await listRecipeManifests())
+  })
+}
+
+export function useValidateRecipeDataset() {
+  const { t } = useTranslation(["evaluations", "common"])
+  const notification = useAntdNotification()
+
+  return useMutation({
+    mutationFn: async (params: {
+      recipeId: string
+      datasetId?: string
+      dataset?: DatasetSample[]
+      runConfig?: Record<string, any>
+    }) =>
+      ensureOk(
+        await validateRecipeDataset(params.recipeId, {
+          dataset_id: params.datasetId,
+          dataset: params.dataset,
+          run_config: params.runConfig
+        })
+      ),
+    onError: (error: any) => {
+      notification.error({
+        message: t("evaluations:recipeValidateErrorTitle", {
+          defaultValue: "Failed to validate dataset"
+        }),
+        description: error?.message
+      })
+    }
+  })
+}
+
+export function useRecipeLaunchReadiness(recipeId: string | null) {
+  return useQuery({
+    queryKey: ["evaluations", "recipes", "launch-readiness", recipeId],
+    queryFn: async () => ensureOk(await getRecipeLaunchReadiness(recipeId as string)),
+    enabled: !!recipeId
+  })
+}
+
+export function useCreateRecipeRun() {
+  const { t } = useTranslation(["evaluations", "common"])
+  const notification = useAntdNotification()
+
+  return useMutation({
+    mutationFn: async (params: {
+      recipeId: string
+      datasetId?: string
+      dataset?: DatasetSample[]
+      runConfig: Record<string, any>
+      forceRerun?: boolean
+    }) =>
+      ensureOk(
+        await createRecipeRun(params.recipeId, {
+          dataset_id: params.datasetId,
+          dataset: params.dataset,
+          run_config: params.runConfig,
+          force_rerun: params.forceRerun
+        })
+      ),
+    onSuccess: () => {
+      notification.success({
+        message: t("evaluations:recipeRunCreateSuccessTitle", {
+          defaultValue: "Recipe run started"
+        })
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("evaluations:recipeRunCreateErrorTitle", {
+          defaultValue: "Failed to start recipe run"
+        }),
+        description: getRecipeRunUserErrorMessage(error)
+      })
+    }
+  })
+}
+
+export function useRecipeRunReport(runId: string | null) {
+  return useQuery({
+    queryKey: ["evaluations", "recipes", "report", runId],
+    queryFn: async () => ensureOk(await getRecipeRunReport(runId as string)),
+    enabled: !!runId,
+    refetchInterval: (query) => {
+      const status = String((query.state.data as any)?.data?.run?.status || "").toLowerCase()
+      return ["pending", "running"].includes(status) ? 3000 : false
+    }
+  })
+}

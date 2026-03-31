@@ -14,7 +14,6 @@ import {
   getRun,
   listBenchmarks,
   listRuns,
-  listRunsGlobal,
   runBenchmark,
   type CreateRunPayload,
   type EvaluationRunDetail
@@ -90,17 +89,6 @@ export function useRunsList(evalId: string | null, params?: { limit?: number }) 
     queryKey: ["evaluations", "runs", evalId, params || { limit: 20 }],
     queryFn: () => listRuns(evalId as string, params || { limit: 20 }),
     enabled: !!evalId
-  })
-}
-
-export function useRunsListGlobal(params?: {
-  limit?: number
-  eval_id?: string
-  status?: string
-}) {
-  return useQuery({
-    queryKey: ["evaluations", "runs", "global", params],
-    queryFn: () => listRunsGlobal(params)
   })
 }
 

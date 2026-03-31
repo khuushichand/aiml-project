@@ -2802,6 +2802,26 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Admin maintenance rotation Jobs worker: {e}")
 
+    # Evaluations recipe-run Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Evaluation recipe-run Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+                start_recipe_run_jobs_worker,
+            )
+
+            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
+            if recipe_run_jobs_task:
+                logger.info("Evaluation recipe-run Jobs worker started")
+            else:
+                logger.info(
+                    "Evaluation recipe-run Jobs worker disabled "
+                    "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start evaluation recipe-run Jobs worker: {e}")
+
     # Jobs notifications bridge worker
     try:
         if _sidecar_mode:
@@ -3813,6 +3833,16 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_notifications_bridge_task.cancel()
+        if "recipe_run_jobs_task" in locals() and recipe_run_jobs_task:
+            try:
+                recipe_run_jobs_task.cancel()
+                await _asyncio.wait_for(recipe_run_jobs_task, timeout=5.0)
+                logger.info("Evaluation recipe-run Jobs worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    recipe_run_jobs_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:

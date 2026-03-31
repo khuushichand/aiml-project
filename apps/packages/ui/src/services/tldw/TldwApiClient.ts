@@ -1476,7 +1476,7 @@ export class TldwApiClient {
   }
 
   private getPlaceholderApiKeyMessage(): string {
-    return "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings → tldw server before continuing."
+    return "tldw server API key is still set to a placeholder value. Replace it with your real API key in Settings → tldw server before continuing."
   }
 
   async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {

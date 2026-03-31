@@ -30,13 +30,18 @@ export function useFetchHistory() {
 
   return useMutation({
     mutationFn: async (filters: EvaluationHistoryFilters) =>
-      ensureOk<{ data: { data?: EvaluationHistoryItem[] } }>(
+      ensureOk<{
+        data: {
+          total_count: number
+          items?: EvaluationHistoryItem[]
+        }
+      }>(
         await getHistory(filters)
       ),
     onSuccess: (resp) => {
       const list =
-        resp?.data?.data ||
-        (Array.isArray(resp?.data) ? resp?.data : (resp?.data as any)?.items) ||
+        resp?.data?.items ||
+        (Array.isArray(resp?.data) ? resp?.data : (resp?.data as any)?.data) ||
         []
       setHistoryResults(list as EvaluationHistoryItem[])
     },
@@ -53,13 +58,9 @@ export function useFetchHistory() {
 
 // History filter presets
 export const historyTypePresets = [
-  { value: "evaluation.created", label: "evaluation.created" },
-  { value: "evaluation.started", label: "evaluation.started" },
-  { value: "evaluation.completed", label: "evaluation.completed" },
-  { value: "evaluation.failed", label: "evaluation.failed" },
-  { value: "evaluation.cancelled", label: "evaluation.cancelled" },
-  { value: "run.created", label: "run.created" },
-  { value: "run.started", label: "run.started" },
-  { value: "run.completed", label: "run.completed" },
-  { value: "run.failed", label: "run.failed" }
+  { value: "model_graded", label: "model_graded" },
+  { value: "rag", label: "rag" },
+  { value: "response_quality", label: "response_quality" },
+  { value: "proposition_extraction", label: "proposition_extraction" },
+  { value: "ocr", label: "ocr" }
 ]

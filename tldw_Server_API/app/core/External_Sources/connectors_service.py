@@ -880,21 +880,44 @@ async def consume_oauth_state(
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
     cutoff_dt, cutoff_str = _oauth_state_cutoff(max_age_minutes)
+    row = await _fetch_oauth_state_row(
+        db,
+        is_pg=is_pg,
+        state=state,
+        user_id=user_id,
+        provider=provider,
+        cutoff_dt=cutoff_dt,
+        cutoff_str=cutoff_str,
+    )
+    if not row:
+        return False
+    await _delete_oauth_state_row(
+        db,
+        is_pg=is_pg,
+        state=state,
+        user_id=user_id,
+    )
+    return _normalize_oauth_state_row(row) or True
+
+
+async def _fetch_oauth_state_row(
+    db,
+    *,
+    is_pg: bool,
+    state: str,
+    user_id: int,
+    provider: str,
+    cutoff_dt: datetime,
+    cutoff_str: str,
+):
     if is_pg:
-        row = await db.fetchrow(
+        return await db.fetchrow(
             """
             SELECT state, provider, metadata, created_at FROM external_oauth_state
             WHERE state = $1 AND user_id = $2 AND provider = $3 AND created_at >= $4
             """,
             state, user_id, provider, cutoff_dt,
         )
-        if not row:
-            return False
-        await db.execute(
-            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
-            state, user_id,
-        )
-        return _normalize_oauth_state_row(row) or True
     cur = await db.execute(
         """
         SELECT state, provider, metadata, created_at FROM external_oauth_state
@@ -902,15 +925,27 @@ async def consume_oauth_state(
         """,
         (state, user_id, provider, cutoff_str),
     )
-    row = await cur.fetchone()
-    if not row:
-        return False
+    return await cur.fetchone()
+
+
+async def _delete_oauth_state_row(
+    db,
+    *,
+    is_pg: bool,
+    state: str,
+    user_id: int,
+) -> None:
+    if is_pg:
+        await db.execute(
+            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
+            state, user_id,
+        )
+        return
     await db.execute(
         "DELETE FROM external_oauth_state WHERE state = ? AND user_id = ?",
         (state, user_id),
     )
     await getattr(db, "commit", lambda: None)()
-    return _normalize_oauth_state_row(row) or True
 
 
 async def create_account(db, user_id: int, provider: str, display_name: str, email: str | None, tokens: dict[str, Any]) -> dict[str, Any]:
