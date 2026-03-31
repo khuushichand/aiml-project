@@ -802,7 +802,12 @@ def test_browse_provider_sources_returns_zotero_collection_rows(connectors_clien
     async def _fake_get_account_email(db, user_id, account_id):
         return None
 
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        assert account_id == 15
+        return {"id": account_id, "user_id": user_id, "provider": "zotero"}
+
     monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
     monkeypatch.setattr(ep, "get_account_tokens", _fake_get_account_tokens)
     monkeypatch.setattr(ep, "get_account_email", _fake_get_account_email)
 

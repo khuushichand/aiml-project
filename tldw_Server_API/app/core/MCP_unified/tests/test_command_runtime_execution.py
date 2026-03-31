@@ -20,7 +20,13 @@ class _FakeBackend:
         self.handlers = handlers
         self.calls: list[tuple[list[str], str]] = []
 
-    async def execute(self, argv: list[str], stdin: str) -> CommandStepResult:
+    async def execute(
+        self,
+        argv: list[str],
+        stdin: str,
+        handler_context=None,  # noqa: ANN001
+    ) -> CommandStepResult:
+        del handler_context
         self.calls.append((list(argv), stdin))
         handler = self.handlers[argv[0]]
         return handler(argv, stdin)
@@ -318,7 +324,7 @@ async def test_execution_counts_newline_terminated_spill_lines_correctly(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_execution_reuses_matching_spill_file_for_identical_payloads(tmp_path):
+async def test_execution_uses_unique_spill_files_for_identical_payloads(tmp_path):
     big_output = "reuse" * 32
     backend = _FakeBackend(
         {
@@ -337,8 +343,9 @@ async def test_execution_reuses_matching_spill_file_for_identical_payloads(tmp_p
 
     assert first.stdout_spill is not None
     assert second.stdout_spill is not None
-    assert first.stdout_spill.path == second.stdout_spill.path
+    assert first.stdout_spill.path != second.stdout_spill.path
     assert Path(first.stdout_spill.path).read_text(encoding="utf-8") == big_output
+    assert Path(second.stdout_spill.path).read_text(encoding="utf-8") == big_output
 
 
 @pytest.mark.asyncio
@@ -575,7 +582,8 @@ async def test_execution_keeps_recently_reused_default_root_from_being_pruned(tm
 
     reused = await first.execute(parse_command("big"))
     assert reused.stdout_spill is not None
-    assert Path(reused.stdout_spill.path) == first_spill
+    assert Path(reused.stdout_spill.path) != first_spill
+    assert Path(reused.stdout_spill.path).parent == first_root
 
     second = CommandRuntimeExecutor(
         backend=backend,
@@ -586,3 +594,4 @@ async def test_execution_keeps_recently_reused_default_root_from_being_pruned(tm
 
     assert first_root.exists()
     assert first_spill.exists()
+    assert Path(reused.stdout_spill.path).exists()

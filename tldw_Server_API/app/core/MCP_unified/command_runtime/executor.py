@@ -29,12 +29,27 @@ _DEFAULT_SPILL_ROOT_PRUNE_INTERVAL_SECONDS = 300.0
 class CommandBackend(Protocol):
     """Backend contract used by the raw runtime executor."""
 
-    async def execute(self, argv: list[str], stdin: Any) -> CommandStepResult:
+    async def execute(
+        self,
+        argv: list[str],
+        stdin: Any,
+        handler_context: Any | None = None,
+    ) -> CommandStepResult:
         """Execute one command and return its raw stdout/stderr and exit code.
 
         Backends may receive raw text/bytes or a CommandSpillReference when a
         previous pipeline stage spilled oversized stdin to disk.
         """
+
+
+@dataclass(frozen=True, slots=True)
+class HandlerInvocationContext:
+    """Execution metadata for one lexical command step."""
+
+    runtime_context: Any | None = None
+    segment_index: int = 0
+    command_index: int = 0
+    lexical_step_index: int = 0
 
 
 @dataclass(slots=True)
@@ -54,6 +69,7 @@ class CommandRuntimeExecutor:
         """Run a parsed command chain and preserve raw stream semantics."""
 
         start = time.perf_counter()
+        step_indices = self._build_step_indices(chain)
         last_exit_code = 0
         last_stdout: Any = ""
         last_stderr: Any = ""
@@ -90,7 +106,15 @@ class CommandRuntimeExecutor:
             for command_index, command in enumerate(segment.commands):
                 step_started = time.perf_counter()
                 step_stdin = pipeline_stdin
-                step_result = await self.backend.execute(list(command.argv), step_stdin)
+                step_result = await self.backend.execute(
+                    list(command.argv),
+                    step_stdin,
+                    HandlerInvocationContext(
+                        segment_index=segment_index,
+                        command_index=command_index,
+                        lexical_step_index=step_indices[(segment_index, command_index)],
+                    ),
+                )
                 step_stdout, step_stdout_binary = self._classify_stream(step_result.stdout)
                 step_stderr, step_stderr_binary = self._classify_stream(step_result.stderr)
                 step_stderr_contains_binary = step_stderr_binary
@@ -185,6 +209,16 @@ class CommandRuntimeExecutor:
             stderr_contains_binary=aggregate_stderr_binary,
         )
 
+    @staticmethod
+    def _build_step_indices(chain: CommandChain) -> dict[tuple[int, int], int]:
+        indices: dict[tuple[int, int], int] = {}
+        step_index = 0
+        for segment_index, segment in enumerate(chain.segments):
+            for command_index, _command in enumerate(segment.commands):
+                indices[(segment_index, command_index)] = step_index
+                step_index += 1
+        return indices
+
     async def _spill_payload_async(
         self,
         value: Any,
@@ -257,13 +291,7 @@ class CommandRuntimeExecutor:
         spill_root = self._resolve_spill_root()
         self._prune_stale_spills(spill_root)
         digest = hashlib.sha256(payload).hexdigest()[:16]
-        path = self._ensure_spill_file(
-            spill_root / f"mcp-command-{kind}-{digest}.txt",
-            payload,
-            spill_root=spill_root,
-            kind=kind,
-            digest=digest,
-        )
+        path = self._write_unique_spill(payload, spill_root=spill_root, kind=kind, digest=digest)
         try:
             os.utime(path, None)
         except OSError:

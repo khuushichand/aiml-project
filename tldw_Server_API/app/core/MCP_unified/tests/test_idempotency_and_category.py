@@ -349,3 +349,37 @@ async def test_protocol_idempotency_key_is_forwarded_to_run_nested_steps(monkeyp
         ["write", "notes.txt", "hi"],
         0,
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_tool_call_accepts_run_idempotency_key_inside_arguments(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_DISABLE_WRITE_TOOLS", "false")
+    monkeypatch.setenv("MCP_AUDIT_LOG_FILE", str(tmp_path / "audit.log"))
+    try:
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    registry = get_module_registry()
+    await registry.register_module(
+        "run_nested_argument_idempotency",
+        RunCommandModule,
+        ModuleConfig(name="run_nested_argument_idempotency"),
+    )
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+    ctx = RequestContext(request_id="run-idem-args", user_id="u1", client_id="c1")
+
+    prepared = await proto.prepare_tool_call(
+        params={
+            "name": "run",
+            "arguments": {
+                "command": "write notes.txt hi",
+                "idempotencyKey": "demo-args-1",
+            },
+        },
+        context=ctx,
+    )
+
+    assert prepared.normalized_idempotency_key == "demo-args-1"

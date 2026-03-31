@@ -489,6 +489,7 @@ class ZoteroConnector(BaseConnector, ReferenceManagerAdapter):
         account: dict[str, Any],
         collection_key: str,
         *,
+        collection_name: str | None = None,
         cursor: str | None = None,
         page_size: int = 100,
     ) -> tuple[list[NormalizedReferenceItem], str | None]:
@@ -516,6 +517,7 @@ class ZoteroConnector(BaseConnector, ReferenceManagerAdapter):
                 raw_item,
                 [],
                 collection_key=collection_key,
+                collection_name=collection_name,
                 provider_library_id=self._provider_user_id_from_account(account),
             )
             items.append(normalized_item)
