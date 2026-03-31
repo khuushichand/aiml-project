@@ -1,50 +1,50 @@
-import React, { useState } from “react”
+import React, { useState } from "react"
 
 import {
   useConnectionActions,
   useConnectionState,
   useConnectionUxState
-} from “@/hooks/useConnectionState”
-import { useFocusComposerOnConnect } from “@/hooks/useComposerFocus”
-import { OnboardingWizard } from “@/components/Option/Onboarding/OnboardingWizard”
-import OptionLayout from “@web/components/layout/WebLayout”
-import { Playground } from “~/components/Option/Playground/Playground”
-import { useDemoMode } from “@/context/demo-mode”
+} from "@/hooks/useConnectionState"
+import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
+import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
+import OptionLayout from "@web/components/layout/WebLayout"
+import { Playground } from "~/components/Option/Playground/Playground"
+import { useDemoMode } from "@/context/demo-mode"
 
 /**
  * Extension-specific intro screen shown before the standard onboarding wizard.
- * Explains what tldw_server is and offers demo mode for users who don’t have one yet.
+ * Explains what tldw_server is and offers demo mode for users who don't have one yet.
  */
 const ExtensionIntro: React.FC<{
   onContinue: () => void
   onDemo: () => void
 }> = ({ onContinue, onDemo }) => (
-  <div className=”mx-auto flex max-w-md flex-col items-center gap-6 px-4 py-12 text-center”>
-    <h1 className=”text-2xl font-semibold”>Welcome to tldw</h1>
-    <p className=”text-sm text-text-subtle”>
+  <div className="mx-auto flex max-w-md flex-col items-center gap-6 px-4 py-12 text-center">
+    <h1 className="text-2xl font-semibold">Welcome to tldw</h1>
+    <p className="text-sm text-text-subtle">
       tldw is a research assistant that helps you ingest, analyze, and search
       media. This extension connects to a <strong>tldw server</strong> running
       on your computer or network.
     </p>
-    <div className=”flex flex-col gap-3 w-full”>
+    <div className="flex flex-col gap-3 w-full">
       <button
         onClick={onContinue}
-        className=”w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90”
+        className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
       >
-        I have a tldw server — connect now
+        I have a tldw server &mdash; connect now
       </button>
       <button
         onClick={onDemo}
-        className=”w-full rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-text-subtle transition-colors hover:bg-surface-hover”
+        className="w-full rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-text-subtle transition-colors hover:bg-surface-hover"
       >
         Try demo mode (no server needed)
       </button>
     </div>
     <a
-      href=”https://github.com/rmusser01/tldw_server”
-      target=”_blank”
-      rel=”noopener noreferrer”
-      className=”text-xs text-text-subtle underline hover:text-text”
+      href="https://github.com/rmusser01/tldw_server"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-xs text-text-subtle underline hover:text-text"
     >
       Learn how to set up a tldw server
     </a>

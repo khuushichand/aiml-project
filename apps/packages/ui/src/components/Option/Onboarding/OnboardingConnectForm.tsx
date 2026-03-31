@@ -410,6 +410,16 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     setAuthTouched(false)
   }, [authMode, loginMethod])
 
+  // Derive a health-check URL from the user-entered server URL
+  const healthCheckUrl = useMemo(() => {
+    try {
+      const parsed = new URL(serverUrl.trim())
+      return `${parsed.origin}/health`
+    } catch {
+      return "http://localhost:8000/health"
+    }
+  }, [serverUrl])
+
   // Derive error messages from errorKind
   const errorHint = useMemo(() => {
     switch (errorKind) {
@@ -421,17 +431,17 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       case "refused":
         return t(
           "settings:onboarding.errors.refused",
-          "The server isn\u2019t accepting connections. Is it running? Try: curl http://localhost:8000/health"
+          `The server is not accepting connections. Is it running? Try: curl ${healthCheckUrl}`
         )
       case "timeout":
         return t(
           "settings:onboarding.errors.timeout",
-          "The server didn\u2019t respond in time. If using Docker, check containers are running: docker ps"
+          "The server did not respond in time. If using Docker, check containers are running: docker ps"
         )
       case "cors_blocked":
         return t(
           "settings:onboarding.errors.cors",
-          "Cross-origin request blocked. If running the WebUI separately from the API, add your browser\u2019s origin to ALLOWED_ORIGINS in .env"
+          "Cross-origin request blocked. If running the WebUI separately from the API, add your browser's origin to ALLOWED_ORIGINS in .env"
         )
       case "ssl_error":
         return t(
@@ -451,7 +461,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       default:
         return null
     }
-  }, [errorKind, t])
+  }, [errorKind, healthCheckUrl, t])
 
   const handleSendMagicLink = useCallback(async () => {
     if (!magicEmail.trim()) {

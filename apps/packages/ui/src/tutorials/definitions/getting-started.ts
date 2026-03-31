@@ -1,7 +1,7 @@
 /**
  * Getting Started Tutorial
  * Shown on the home page after first onboarding completion.
- * Guides the user through the three main actions: Chat, Knowledge, and Settings.
+ * Guides the user through the three main actions: Chat, Knowledge, and Analysis.
  */
 
 import { Rocket } from "lucide-react"

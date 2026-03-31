@@ -164,6 +164,7 @@ verify:
 	@curl -sf http://localhost:8000/health > /dev/null && echo "[verify] Health check PASSED" || (echo "[verify] Health check FAILED - is the server running?" && exit 1)
 
 show-api-key:
+	@echo "[show-api-key] WARNING: This prints a secret to stdout. Do not use in CI or shared terminals." >&2
 	@if [ -f "$(TLDW_ENV_FILE)" ]; then \
 		grep '^SINGLE_USER_API_KEY=' "$(TLDW_ENV_FILE)" | cut -d= -f2-; \
 	elif command -v docker >/dev/null 2>&1; then \
