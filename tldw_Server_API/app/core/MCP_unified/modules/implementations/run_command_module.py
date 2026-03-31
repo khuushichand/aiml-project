@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import time
+from pathlib import Path
 from typing import Any, Mapping
 
 from loguru import logger
@@ -107,6 +109,10 @@ class RunCommandModule(BaseModule):
             )
 
         protocol = await self._resolve_protocol()
+        spill_dir = await self._resolve_spill_dir(context)
+        spill_threshold_bytes = self._setting_int("spill_threshold_bytes", default=65_536)
+        preview_line_limit = self._setting_int("preview_line_limit", default=200)
+        preview_byte_limit = self._setting_int("preview_byte_limit", default=51_200)
         adapter_context = AdapterContext(
             protocol=protocol,
             request_context=context,
@@ -114,7 +120,12 @@ class RunCommandModule(BaseModule):
             parent_idempotency_key=self._parent_idempotency_key(context, arguments),
         )
         adapters = PhaseOneCommandAdapters(adapter_context)
-        executor = CommandRuntimeExecutor(backend=_AdapterBackend(adapters))
+        executor = CommandRuntimeExecutor(
+            backend=_AdapterBackend(adapters),
+            spill_dir=spill_dir,
+            spill_threshold_bytes=spill_threshold_bytes,
+            preview_bytes=preview_byte_limit,
+        )
         try:
             if adapters.requires_whole_chain_preflight(chain):
                 await adapters.preflight_chain(chain)
@@ -133,7 +144,12 @@ class RunCommandModule(BaseModule):
                 exit_code=2,
                 duration_ms=max(0.0, (time.perf_counter() - start) * 1000.0),
             )
-        return present_command_execution_result(result)
+        return present_command_execution_result(
+            result,
+            spill_dir=spill_dir,
+            byte_limit=preview_byte_limit,
+            line_limit=preview_line_limit,
+        )
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
         if tool_name != "run":
@@ -207,7 +223,8 @@ class RunCommandModule(BaseModule):
 
         try:
             return get_mcp_server().protocol
-        except Exception:
+        except Exception as exc:
+            logger.warning("Falling back to a standalone MCPProtocol for run module: {}", exc)
             return MCPProtocol()
 
     async def _visible_commands_for_context(self, context: Any | None) -> Mapping[str, CommandDescriptor]:
@@ -240,8 +257,10 @@ class RunCommandModule(BaseModule):
             effective_policy = await resolve_policy(context)
         else:
             effective_policy = None
-        context_filter = getattr(protocol, "_is_tool_allowed_by_context", None)
-        policy_filter = getattr(protocol, "_is_tool_allowed_by_effective_policy", None)
+        allowed_patterns = self._allowed_patterns_for_context(protocol, context)
+        denied_patterns = self._policy_patterns(effective_policy, "denied_tools")
+        policy_allowed_patterns = self._policy_patterns(effective_policy, "allowed_tools")
+        resolution_error = str((effective_policy or {}).get("resolution_error") or "").strip()
 
         filtered_tools: list[dict[str, Any]] = []
         for tool in tools:
@@ -250,13 +269,137 @@ class RunCommandModule(BaseModule):
             name = tool.get("name")
             if not isinstance(name, str) or not name.strip():
                 continue
-            tool_args = {}
-            if callable(context_filter) and not context_filter(name, tool_args, context):
+            if allowed_patterns and not self._tool_name_matches_patterns(name, allowed_patterns):
                 continue
-            if callable(policy_filter) and not policy_filter(name, tool_args, effective_policy):
+            if resolution_error:
+                continue
+            if self._tool_name_matches_exact_patterns(name, denied_patterns):
+                continue
+            if policy_allowed_patterns and not self._tool_name_matches_patterns(name, policy_allowed_patterns):
                 continue
             filtered_tools.append(tool)
         return {"tools": filtered_tools}
+
+    def _setting_int(self, key: str, *, default: int) -> int:
+        raw_value = self.config.settings.get(key, default)
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return default
+
+    async def _resolve_spill_dir(self, context: Any | None) -> Path | None:
+        raw_value = self.config.settings.get("spill_dir")
+        if raw_value is None:
+            return None
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        candidate = Path(text).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        workspace_root = await self._resolve_workspace_root(context)
+        if workspace_root is not None:
+            return workspace_root / candidate
+        return Path.cwd() / candidate
+
+    async def _resolve_workspace_root(self, context: Any | None) -> Path | None:
+        if context is None:
+            return None
+        resolver = self.config.settings.get("workspace_root_resolver")
+        if resolver is None:
+            from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
+                McpHubWorkspaceRootResolver,
+            )
+
+            resolver = McpHubWorkspaceRootResolver()
+            self.config.settings["workspace_root_resolver"] = resolver
+
+        metadata = getattr(context, "metadata", None)
+        metadata_map = dict(metadata) if isinstance(metadata, dict) else {}
+        try:
+            resolution = await resolver.resolve_for_context(
+                session_id=self._first_nonempty(getattr(context, "session_id", None), metadata_map.get("session_id")),
+                user_id=self._first_nonempty(getattr(context, "user_id", None), metadata_map.get("user_id")),
+                workspace_id=self._first_nonempty(metadata_map.get("workspace_id")),
+                workspace_trust_source=self._first_nonempty(
+                    metadata_map.get("workspace_trust_source"),
+                    metadata_map.get("selected_workspace_trust_source"),
+                ),
+                owner_scope_type=self._first_nonempty(
+                    metadata_map.get("owner_scope_type"),
+                    metadata_map.get("selected_workspace_scope_type"),
+                ),
+                owner_scope_id=metadata_map.get("owner_scope_id", metadata_map.get("selected_workspace_scope_id")),
+            )
+        except Exception as exc:
+            logger.debug("Failed to resolve workspace root for run spill dir: {}", exc)
+            return None
+
+        workspace_root_raw = str(resolution.get("workspace_root") or "").strip()
+        if not workspace_root_raw:
+            return None
+        return Path(workspace_root_raw).expanduser().resolve(strict=False)
+
+    @staticmethod
+    def _first_nonempty(*values: Any) -> str | None:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
+
+    def _allowed_patterns_for_context(self, protocol: Any, context: Any) -> list[str]:
+        extract_allowed = getattr(protocol, "_extract_allowed_tools", None)
+        if callable(extract_allowed):
+            try:
+                extracted = extract_allowed(context)
+            except Exception:
+                extracted = None
+            if isinstance(extracted, list):
+                return [str(pattern).strip() for pattern in extracted if str(pattern).strip()]
+
+        metadata = getattr(context, "metadata", None)
+        if not isinstance(metadata, dict):
+            return []
+        allowed = metadata.get("allowed_tools")
+        if isinstance(allowed, list):
+            return [str(pattern).strip() for pattern in allowed if str(pattern).strip()]
+        return []
+
+    @staticmethod
+    def _policy_patterns(policy: dict[str, Any] | None, key: str) -> list[str]:
+        if not isinstance(policy, dict):
+            return []
+        return [str(pattern).strip() for pattern in (policy.get(key) or []) if str(pattern).strip()]
+
+    @staticmethod
+    def _tool_name_matches_patterns(tool_name: str, patterns: list[str]) -> bool:
+        for pattern in patterns:
+            base_name = RunCommandModule._pattern_base_name(pattern)
+            if base_name == tool_name:
+                return True
+        return False
+
+    @staticmethod
+    def _tool_name_matches_exact_patterns(tool_name: str, patterns: list[str]) -> bool:
+        for pattern in patterns:
+            normalized = str(pattern or "").strip()
+            if normalized and "(" not in normalized and normalized == tool_name:
+                return True
+        return False
+
+    @staticmethod
+    def _pattern_base_name(pattern: str) -> str | None:
+        normalized = str(pattern or "").strip()
+        if not normalized:
+            return None
+        if "(" not in normalized:
+            return normalized
+        if not normalized.endswith(")"):
+            return None
+        base_name, _ = normalized.split("(", 1)
+        base_name = base_name.strip()
+        return base_name or None
 
     @staticmethod
     def _parent_idempotency_key(context: Any | None, arguments: dict[str, Any]) -> str | None:

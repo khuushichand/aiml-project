@@ -5,6 +5,7 @@ Implements JSON-RPC 2.0 with enhanced error handling and request routing.
 """
 
 import asyncio
+import hashlib
 import hmac
 import json
 import secrets
@@ -219,6 +220,7 @@ class PreparedToolCall:
     normalized_idempotency_key: Optional[str]
     idempotency_cache_key: Optional[str]
     arguments_hash: Optional[str]
+    context_fingerprint: str
     integrity_tag: str
     context: RequestContext
 
@@ -800,6 +802,7 @@ class MCPProtocol:
         is_write: Optional[bool],
         idempotency_cache_key: Optional[str],
         arguments_hash: Optional[str],
+        context_fingerprint: str,
     ) -> bytes:
         payload = {
             "tool_name": str(tool_name),
@@ -807,6 +810,7 @@ class MCPProtocol:
             "is_write": bool(is_write),
             "idempotency_cache_key": str(idempotency_cache_key or ""),
             "arguments_hash": str(arguments_hash or ""),
+            "context_fingerprint": str(context_fingerprint or ""),
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -818,6 +822,7 @@ class MCPProtocol:
         is_write: Optional[bool],
         idempotency_cache_key: Optional[str],
         arguments_hash: Optional[str],
+        context_fingerprint: str,
     ) -> str:
         payload = self._prepared_tool_call_payload(
             tool_name=tool_name,
@@ -825,6 +830,7 @@ class MCPProtocol:
             is_write=is_write,
             idempotency_cache_key=idempotency_cache_key,
             arguments_hash=arguments_hash,
+            context_fingerprint=context_fingerprint,
         )
         return hmac.new(self._prepared_call_secret, payload, digestmod="sha256").hexdigest()
 
@@ -838,6 +844,10 @@ class MCPProtocol:
         expected_hash = self._hash_arguments(prepared.tool_args if isinstance(prepared.tool_args, dict) else {})
         if expected_hash != prepared.arguments_hash:
             raise InvalidParamsException("Prepared tool call integrity check failed: argument fingerprint mismatch")
+
+        expected_context_fingerprint = self._fingerprint_request_context(prepared.context)
+        if expected_context_fingerprint != prepared.context_fingerprint:
+            raise InvalidParamsException("Prepared tool call integrity check failed: context fingerprint mismatch")
 
         expected_write = self._resolve_write_classification(
             prepared.module,
@@ -855,9 +865,35 @@ class MCPProtocol:
             is_write=prepared.is_write,
             idempotency_cache_key=prepared.idempotency_cache_key,
             arguments_hash=prepared.arguments_hash,
+            context_fingerprint=prepared.context_fingerprint,
         )
         if not hmac.compare_digest(prepared.integrity_tag, expected_tag):
             raise InvalidParamsException("Prepared tool call integrity check failed: signature mismatch")
+
+    def _fingerprint_request_context(self, context: RequestContext) -> str:
+        payload = {
+            "request_id": str(context.request_id or ""),
+            "user_id": str(context.user_id or ""),
+            "client_id": str(context.client_id or ""),
+            "session_id": str(context.session_id or ""),
+            "metadata": self._context_json_safe(getattr(context, "metadata", {})),
+            "db_paths": self._context_json_safe(getattr(context, "db_paths", {})),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _context_json_safe(self, value: Any) -> Any:
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {str(key): self._context_json_safe(item) for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))}
+        if isinstance(value, (list, tuple, set)):
+            return [self._context_json_safe(item) for item in value]
+        if is_dataclass(value):
+            return self._context_json_safe(asdict(value))
+        return str(value)
 
     @staticmethod
     def _normalize_idempotency_key(
@@ -2324,12 +2360,14 @@ class MCPProtocol:
             tool_def=tool_def if isinstance(tool_def, dict) else None,
             context=context,
         )
+        context_fingerprint = self._fingerprint_request_context(context)
         integrity_tag = self._build_prepared_tool_call_integrity_tag(
             tool_name=tool_name,
             module_id=module_id,
             is_write=is_write,
             idempotency_cache_key=idempotency_cache_key,
             arguments_hash=args_hash,
+            context_fingerprint=context_fingerprint,
         )
 
         return PreparedToolCall(
@@ -2342,6 +2380,7 @@ class MCPProtocol:
             normalized_idempotency_key=normalized_idempotency_key,
             idempotency_cache_key=idempotency_cache_key,
             arguments_hash=args_hash,
+            context_fingerprint=context_fingerprint,
             integrity_tag=integrity_tag,
             context=context,
         )

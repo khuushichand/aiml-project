@@ -164,6 +164,7 @@ def test_presentation_spill_guidance_uses_cli_surface():
 
     rendered = present_command_execution_result(result, preview_limit=4)
 
+    assert "If workspace-accessible:" in rendered
     assert "cat /tmp/spill-output.txt | grep <pattern>" in rendered
     assert "cat /tmp/spill-output.txt | tail 100" in rendered
 
@@ -176,6 +177,7 @@ def test_presentation_creates_spill_guidance_for_truncated_stdout_without_spill_
     match = re.search(r"Full stdout spilled to (.+)", rendered)
     assert match is not None
     spill_path = match.group(1)
+    assert "If workspace-accessible:" in rendered
     assert f"cat {spill_path} | grep <pattern>" in rendered
     assert f"cat {spill_path} | tail 100" in rendered
     assert "grep <pattern>" in rendered
@@ -191,6 +193,7 @@ def test_presentation_creates_spill_guidance_for_truncated_stderr_without_spill_
     assert "stderr" in rendered.lower()
     assert "--- stderr truncated (" in rendered
     assert "Full stderr spilled to " in rendered
+    assert "If workspace-accessible:" in rendered
     assert "grep <pattern>" in rendered
     assert "tail 100" in rendered
 
@@ -449,3 +452,25 @@ def test_presentation_rejects_non_private_existing_spill_dir(tmp_path):
 
     with pytest.raises(PermissionError, match="non-private permissions"):
         present_command_execution_result(result, preview_limit=4, spill_dir=spill_dir)
+
+
+def test_presentation_tolerates_raced_spill_root_creation(tmp_path, monkeypatch):
+    spill_dir = tmp_path / "spill"
+    original_mkdir = Path.mkdir
+    injected_race = False
+    result = CommandExecutionResult(stdout="line\n" * 8, stderr="", exit_code=0, duration_ms=1.0)
+
+    def racing_mkdir(self: Path, *args, **kwargs):
+        nonlocal injected_race
+        if self == spill_dir and not injected_race:
+            injected_race = True
+            original_mkdir(self, *args, **kwargs)
+            raise FileExistsError()
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", racing_mkdir)
+
+    rendered = present_command_execution_result(result, preview_limit=4, spill_dir=spill_dir)
+
+    assert injected_race is True
+    assert f"Full stdout spilled to {spill_dir}" in rendered

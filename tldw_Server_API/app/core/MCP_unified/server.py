@@ -7,6 +7,8 @@ Handles WebSocket and HTTP connections with production-ready features.
 import asyncio
 import ipaddress
 import json
+import os
+import re
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -65,6 +67,8 @@ _MCP_SERVER_NONCRITICAL_EXCEPTIONS = (
     RateLimitExceeded,
 )
 
+_ENV_PLACEHOLDER_RE = re.compile(r"^\$\{(?P<name>[A-Z0-9_]+)(?::-(?P<default>.*))?\}$")
+
 
 def _is_authnz_access_token(token: str) -> bool:
     """Return True when the token verifies as an AuthNZ access token."""
@@ -78,6 +82,22 @@ def _is_authnz_access_token(token: str) -> bool:
         return False
     except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
         return False
+
+
+def _resolve_env_placeholders(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _resolve_env_placeholders(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_env_placeholders(item) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    match = _ENV_PLACEHOLDER_RE.match(value.strip())
+    if not match:
+        return value
+    env_name = match.group("name")
+    default = match.group("default")
+    return os.getenv(env_name, default if default is not None else "")
 
 
 def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
@@ -368,7 +388,6 @@ class MCPServer:
         # Autoload modules from YAML config and/or MCP_MODULES env var
         try:
             import importlib
-            import os
             # Lazy import yaml to avoid hard dependency during tests if not installed
             try:
                 import yaml  # type: ignore
@@ -512,7 +531,7 @@ class MCPServer:
                         max_concurrent=m.get("max_concurrent", 20),
                         circuit_breaker_backoff_factor=m.get("circuit_breaker_backoff_factor", 2.0),
                         circuit_breaker_max_timeout=m.get("circuit_breaker_max_timeout", 300),
-                        settings=m.get("settings", {}),
+                        settings=_resolve_env_placeholders(m.get("settings", {})),
                     )
                     await self.module_registry.register_module(module_id, cls, mc)
                     logger.info(f"Registered MCP module: {module_id} ({class_ref})")

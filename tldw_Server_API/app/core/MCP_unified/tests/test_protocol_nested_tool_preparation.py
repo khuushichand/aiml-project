@@ -198,3 +198,39 @@ async def test_execute_prepared_tool_call_rejects_mutated_prepared_arguments():
         match="Prepared tool call integrity check failed",
     ):
         await proto.execute_prepared_tool_call(prepared)
+
+
+@pytest.mark.asyncio
+async def test_execute_prepared_tool_call_rejects_mutated_request_context() -> None:
+    registry = get_module_registry()
+    await registry.register_module(
+        "dynamic_mode_context_mutation_prepare",
+        DynamicModeToolModule,
+        ModuleConfig(name="dynamic_mode_context_mutation_prepare"),
+    )
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+    ctx = RequestContext(
+        request_id="np5",
+        user_id="u5",
+        client_id="c5",
+        session_id="sess-1",
+        metadata={"workspace_id": "workspace-1"},
+    )
+
+    prepared = await proto.prepare_tool_call(
+        params={
+            "name": DynamicModeToolModule.TOOL_NAME,
+            "arguments": {"mode": "read", "target": "epsilon"},
+        },
+        context=ctx,
+    )
+
+    prepared.context.metadata["workspace_id"] = "workspace-2"
+
+    with pytest.raises(
+        InvalidParamsException,
+        match="Prepared tool call integrity check failed",
+    ):
+        await proto.execute_prepared_tool_call(prepared)

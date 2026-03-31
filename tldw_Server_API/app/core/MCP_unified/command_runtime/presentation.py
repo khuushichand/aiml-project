@@ -162,8 +162,9 @@ def _overflow_notice(stream_name: str, spill: CommandSpillReference) -> str:
         [
             f"--- {stream_name} truncated ({line_count} lines, {spill.bytes_written} bytes) ---",
             f"Full {stream_name} spilled to {spill.path}",
-            f"Explore: cat {quoted_path} | grep <pattern>",
-            f"         cat {quoted_path} | tail 100",
+            "If workspace-accessible:",
+            f"  cat {quoted_path} | grep <pattern>",
+            f"  cat {quoted_path} | tail 100",
         ]
     )
 
@@ -289,7 +290,13 @@ def _resolve_spill_root(spill_dir: Path | str | None) -> Path:
         _validate_spill_root_permissions(spill_root)
         return spill_root
 
-    spill_root.mkdir(parents=True, mode=0o700)
+    try:
+        spill_root.mkdir(parents=True, mode=0o700)
+    except FileExistsError:
+        if spill_root.is_symlink():
+            raise PermissionError(f"Refusing to use symlink spill directory: {spill_root}")
+        if not spill_root.is_dir():
+            raise PermissionError(f"Refusing to use non-directory spill path: {spill_root}")
     _validate_spill_root_permissions(spill_root)
     return spill_root
 

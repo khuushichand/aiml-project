@@ -10,6 +10,7 @@ Exposes:
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,12 @@ class FilesystemModule(BaseModule):
 
         if tool_name == "fs.list":
             target = self._resolve_workspace_path(workspace_root, str(args.get("path") or "."))
-            return await asyncio.to_thread(self._list_directory, workspace_root, target)
+            return await asyncio.to_thread(
+                self._list_directory,
+                workspace_root,
+                target,
+                self._list_entry_limit(),
+            )
 
         if tool_name == "fs.read_text":
             target = self._resolve_workspace_path(workspace_root, str(args.get("path")))
@@ -140,6 +146,14 @@ class FilesystemModule(BaseModule):
             }
 
         raise ValueError(f"Unknown tool: {tool_name}")
+
+    def _list_entry_limit(self) -> int:
+        raw_limit = self.config.settings.get("list_entry_limit", 1000)
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = 1000
+        return max(1, limit)
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
         if tool_name == "fs.list":
@@ -209,33 +223,44 @@ class FilesystemModule(BaseModule):
         return resolved
 
     @staticmethod
-    def _list_directory(workspace_root: Path, target: Path) -> dict[str, Any]:
+    def _list_directory(workspace_root: Path, target: Path, entry_limit: int) -> dict[str, Any]:
         if not target.exists():
             raise FileNotFoundError(f"path not found: {target}")
         if not target.is_dir():
             raise NotADirectoryError(f"path is not a directory: {target}")
 
         entries: list[dict[str, Any]] = []
-        for entry in sorted(target.iterdir(), key=lambda item: item.name.lower()):
-            if entry.is_symlink():
-                entry_type = "symlink"
-            elif entry.is_dir():
-                entry_type = "directory"
-            else:
-                entry_type = "file"
-            entry_record = {
-                "name": entry.name,
-                "path": FilesystemModule._to_workspace_relative_path(workspace_root, entry),
-                "type": entry_type,
-            }
-            if entry_type == "file":
-                with suppress(OSError):
-                    entry_record["size"] = entry.stat().st_size
-            if entry_type == "symlink":
-                with suppress(OSError):
-                    entry_record["size"] = entry.lstat().st_size
-            entries.append(entry_record)
-        return {"path": FilesystemModule._to_workspace_relative_path(workspace_root, target), "entries": entries}
+        remaining_count = 0
+        with os.scandir(target) as iterator:
+            for entry in iterator:
+                if len(entries) >= entry_limit:
+                    remaining_count += 1
+                    continue
+                if entry.is_symlink():
+                    entry_type = "symlink"
+                elif entry.is_dir():
+                    entry_type = "directory"
+                else:
+                    entry_type = "file"
+                entry_record = {
+                    "name": entry.name,
+                    "path": FilesystemModule._to_workspace_relative_path(workspace_root, Path(entry.path)),
+                    "type": entry_type,
+                }
+                if entry_type == "file":
+                    with suppress(OSError):
+                        entry_record["size"] = entry.stat().st_size
+                if entry_type == "symlink":
+                    with suppress(OSError):
+                        entry_record["size"] = entry.stat(follow_symlinks=False).st_size
+                entries.append(entry_record)
+        entries.sort(key=lambda item: str(item.get("name") or "").lower())
+        return {
+            "path": FilesystemModule._to_workspace_relative_path(workspace_root, target),
+            "entries": entries,
+            "truncated": remaining_count > 0,
+            "remaining_count": remaining_count,
+        }
 
     @staticmethod
     def _to_workspace_relative_path(workspace_root: Path, candidate: Path) -> str:

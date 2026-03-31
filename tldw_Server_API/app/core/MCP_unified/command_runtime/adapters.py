@@ -101,7 +101,7 @@ def visible_command_registry(
 class PhaseOneCommandAdapters:
     """Adapter layer that separates pure transforms from governed MCP tool calls."""
 
-    def __init__(self, context: AdapterContext):
+    def __init__(self, context: AdapterContext) -> None:
         self.context = context
         self._preflighted: dict[str, deque[_PreparedStep]] = {}
         self._next_step_index = 0
@@ -372,7 +372,7 @@ class PhaseOneCommandAdapters:
 
         path = argv[1]
         current: Any = payload
-        for part in [piece for piece in path.strip().lstrip(".").split(".") if piece]:
+        for part in self._split_json_path(path):
             if isinstance(current, dict) and part in current:
                 current = current[part]
                 continue
@@ -386,6 +386,35 @@ class PhaseOneCommandAdapters:
         if isinstance(current, str):
             return CommandStepResult(stdout=current, stderr="", exit_code=0)
         return CommandStepResult(stdout=json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True), stderr="", exit_code=0)
+
+    @staticmethod
+    def _split_json_path(path: str) -> list[str]:
+        normalized = path.strip().lstrip(".")
+        if not normalized:
+            return []
+
+        parts: list[str] = []
+        current: list[str] = []
+        escaped = False
+        for char in normalized:
+            if escaped:
+                current.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == ".":
+                if current:
+                    parts.append("".join(current))
+                    current = []
+                continue
+            current.append(char)
+        if escaped:
+            current.append("\\")
+        if current:
+            parts.append("".join(current))
+        return parts
 
     @staticmethod
     def _slice_head(text: str, count: int) -> str:
@@ -469,6 +498,12 @@ class PhaseOneCommandAdapters:
             if str(entry.get("type") or "").lower() == "directory":
                 name = f"{name}/"
             lines.append(name)
+        if decoded.get("truncated") is True:
+            remaining = decoded.get("remaining_count")
+            if isinstance(remaining, int) and remaining > 0:
+                lines.append(f"... truncated ({remaining} more entries)")
+            else:
+                lines.append("... truncated")
         return "\n".join(lines)
 
     def _render_cat(self, payload: Any) -> str:

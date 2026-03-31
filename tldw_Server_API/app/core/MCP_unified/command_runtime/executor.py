@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import shutil
@@ -92,7 +93,11 @@ class CommandRuntimeExecutor:
                 preserved_binary_stderr_spill: CommandSpillReference | None = None
                 if step_stdout_binary and command_index < len(segment.commands) - 1:
                     if step_stderr_binary and self._has_content(step_stderr):
-                        preserved_binary_stderr_spill = self._spill_payload(step_stderr, kind="stderr", force=True)
+                        preserved_binary_stderr_spill = await self._spill_payload_async(
+                            step_stderr,
+                            kind="stderr",
+                            force=True,
+                        )
                         step_stderr = self._binary_pipe_error("")
                     else:
                         step_stderr = self._binary_pipe_error(step_stderr)
@@ -107,14 +112,14 @@ class CommandRuntimeExecutor:
                 segment_stdout_binary = step_stdout_binary
                 segment_stderr_binary = step_stderr_binary
                 segment_terminal_stdout = step_stdout
-                segment_stdout_spill = self._spill_payload(
+                segment_stdout_spill = await self._spill_payload_async(
                     step_stdout,
                     kind="stdout",
                 )
                 stored_stdout = self._empty_like(step_stdout) if segment_stdout_spill is not None else step_stdout
                 pipeline_stdin = segment_stdout_spill if segment_stdout_spill is not None else step_stdout
 
-                segment_stderr_spill = self._spill_payload(
+                segment_stderr_spill = await self._spill_payload_async(
                     step_stderr,
                     kind="stderr",
                 )
@@ -175,6 +180,15 @@ class CommandRuntimeExecutor:
             stderr_is_binary=last_stderr_binary,
             stderr_contains_binary=aggregate_stderr_binary,
         )
+
+    async def _spill_payload_async(
+        self,
+        value: Any,
+        *,
+        kind: str,
+        force: bool = False,
+    ) -> CommandSpillReference | None:
+        return await asyncio.to_thread(self._spill_payload, value, kind=kind, force=force)
 
     def _binary_pipe_error(self, existing_stderr: Any) -> str:
         parts: list[str] = []

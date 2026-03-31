@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import tempfile
@@ -438,6 +439,32 @@ async def test_execution_tolerates_raced_spill_root_creation(tmp_path, monkeypat
     assert injected_race is True
     assert result.stdout_spill is not None
     assert Path(result.stdout_spill.path).parent == spill_dir
+
+
+@pytest.mark.asyncio
+async def test_execution_offloads_spill_io_to_worker_threads(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    async def _recording_to_thread(func, *args, **kwargs):  # noqa: ANN001
+        calls.append(getattr(func, "__name__", "callable"))
+        return func(*args, **kwargs)
+
+    backend = _FakeBackend(
+        {
+            "big": lambda argv, stdin: CommandStepResult(stdout="x" * 128, stderr="", exit_code=0),
+        }
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _recording_to_thread)
+    executor = CommandRuntimeExecutor(
+        backend=backend,
+        spill_dir=tmp_path,
+        spill_threshold_bytes=16,
+    )
+
+    result = await executor.execute(parse_command("big"))
+
+    assert result.stdout_spill is not None
+    assert "_spill_payload" in calls
 
 
 def test_execution_uses_unique_private_default_spill_roots(tmp_path, monkeypatch):

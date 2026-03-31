@@ -263,3 +263,76 @@ async def test_filesystem_write_text_rejects_path_escape(tmp_path: Path) -> None
             {"path": "../escape.txt", "content": "forbidden"},
             context=context,
         )
+
+
+@pytest.mark.asyncio
+async def test_filesystem_list_caps_large_directories(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    docs_dir = workspace_root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(12):
+        (docs_dir / f"file-{index:02d}.txt").write_text("x", encoding="utf-8")
+
+    resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": str(workspace_root),
+            "workspace_id": "workspace-1",
+            "source": "sandbox_workspace_lookup",
+            "reason": None,
+        }
+    )
+    mod = FilesystemModule(
+        ModuleConfig(name="filesystem", settings={"list_entry_limit": 5}),
+        workspace_root_resolver=resolver,
+    )
+    context = RequestContext(
+        request_id="req-filesystem-list-cap",
+        user_id="7",
+        session_id="sess-1",
+        metadata={"workspace_id": "workspace-1"},
+    )
+
+    listed = await mod.execute_tool("fs.list", {"path": "docs"}, context=context)
+
+    assert listed["truncated"] is True
+    assert listed["remaining_count"] == 7
+    assert len(listed["entries"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_server_resolves_env_placeholders_in_module_settings(monkeypatch, tmp_path: Path) -> None:
+    from tldw_Server_API.app.core.MCP_unified.server import MCPServer
+
+    config_path = tmp_path / "mcp_modules.yaml"
+    config_path.write_text(
+        """
+modules:
+  - id: run_command
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.run_command_module:RunCommandModule
+    enabled: true
+    name: Run Command
+    version: "0.1.0"
+    department: system
+    settings:
+      spill_dir: ${MCP_RUN_COMMAND_SPILL_DIR:-.mcp/spills}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    server = MCPServer()
+    captured_settings: dict[str, Any] = {}
+
+    async def _capture_registration(module_id, module_type, config):  # noqa: ANN001, ARG001
+        if str(module_id) == "run_command":
+            captured_settings.update(dict(config.settings or {}))
+
+    monkeypatch.setattr(server.module_registry, "register_module", _capture_registration)
+    monkeypatch.setenv("MCP_MODULES_CONFIG", str(config_path))
+    monkeypatch.setenv("MCP_MODULES", "")
+    monkeypatch.setenv("MCP_ENABLE_MEDIA_MODULE", "0")
+    monkeypatch.setenv("MCP_ENABLE_FILESYSTEM_MODULE", "0")
+    monkeypatch.setenv("MCP_RUN_COMMAND_SPILL_DIR", ".workspace-spills")
+
+    await server._register_default_modules()
+
+    assert captured_settings["spill_dir"] == ".workspace-spills"

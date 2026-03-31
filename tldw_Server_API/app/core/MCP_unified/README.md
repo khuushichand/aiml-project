@@ -374,7 +374,7 @@ Phase-1 command families:
 
 Default `run_command` runtime settings in module inventory:
 
-- `spill_dir: /tmp/mcp-run-command`
+- `spill_dir: ${MCP_RUN_COMMAND_SPILL_DIR:-.mcp/spills}`
 - `spill_threshold_bytes: 65536`
 - `preview_line_limit: 200`
 - `preview_byte_limit: 51200`
@@ -382,7 +382,7 @@ Default `run_command` runtime settings in module inventory:
 Targeted validation commands for this phase:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest \
+source .venv/bin/activate && python -m pytest \
   tldw_Server_API/app/core/MCP_unified/tests/test_protocol_nested_tool_preparation.py \
   tldw_Server_API/app/core/MCP_unified/tests/test_filesystem_module.py \
   tldw_Server_API/app/core/MCP_unified/tests/test_command_runtime_parser.py \
@@ -398,7 +398,7 @@ source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && py
 ```
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/MCP_unified -f json -o /tmp/bandit_mcp_virtual_cli_phase1.json
+source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/MCP_unified -f json -o /tmp/bandit_mcp_virtual_cli_phase1.json
 ```
 
 ## 🚢 Production Deployment

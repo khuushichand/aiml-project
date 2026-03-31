@@ -90,7 +90,7 @@ modules:
     department: system
     max_concurrent: 16
     settings:
-      spill_dir: /tmp/mcp-run-command
+      spill_dir: ${MCP_RUN_COMMAND_SPILL_DIR:-.mcp/spills}
       spill_threshold_bytes: 65536
       preview_line_limit: 200
       preview_byte_limit: 51200
