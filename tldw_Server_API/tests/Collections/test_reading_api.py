@@ -94,6 +94,44 @@ def test_reading_save_get_search_delete(reading_app):
         assert r.status_code == 404
 
 
+def test_reading_tts_requires_explicit_model(reading_app):
+    async def override_user():
+        return User(id=902, username="reading-tts", email=None, is_active=True)
+
+    reading_app.dependency_overrides[get_request_user] = override_user
+
+    class FakeTTSService:
+        async def generate_speech(self, *_args, **_kwargs):
+            yield b"audiodata"
+
+    async def fake_get_tts_service():
+        return FakeTTSService()
+
+    from tldw_Server_API.app.api.v1.endpoints import reading as reading_endpoint
+
+    with TestClient(reading_app) as client:
+        payload = {
+            "url": "https://example.org/tts-required",
+            "title": "TTS Required",
+            "content": "Content for TTS validation.",
+        }
+        r = client.post("/api/v1/reading/save", json=payload)
+        assert r.status_code == 200, r.text
+        item_id = r.json()["id"]
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(reading_endpoint, "get_tts_service_v2", fake_get_tts_service)
+        try:
+            r = client.post(
+                f"/api/v1/reading/items/{item_id}/tts",
+                json={"stream": False},
+            )
+        finally:
+            monkeypatch.undo()
+
+        assert r.status_code == 422, r.text
+
+
 def test_reading_save_returns_archive_requested_field(reading_app):
     async def override_user():
         return User(id=901, username="archive", email=None, is_active=True)
@@ -532,7 +570,7 @@ def test_reading_summarize_and_tts(reading_app, monkeypatch):
 
         r = client.post(
             f"/api/v1/reading/items/{item_id}/tts",
-            json={"stream": False},
+            json={"model": "KittenML/kitten-tts-nano-0.8", "voice": "Bella", "stream": False},
         )
         assert r.status_code == 200, r.text
         assert r.content == b"audiodata"

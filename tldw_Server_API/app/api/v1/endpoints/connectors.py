@@ -75,21 +75,34 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
+def _extract_request_base(request: Request | None) -> str:
+    if request is None:
+        return ""
+    try:
+        return str(request.base_url).rstrip("/")
+    except (AttributeError, TypeError, ValueError) as e:
+        logger.debug(f"Failed to resolve base_url from request: {e}")
+        return ""
+
+
 def _resolve_redirect_base(request: Request | None, conn) -> str:
     """Resolve connector redirect base, allowing request to be optional for tests.
 
-    Priority: CONNECTOR_REDIRECT_BASE_URL env var > request.base_url > connector.redirect_base.
+    Priority: CONNECTOR_REDIRECT_BASE_URL env var > trusted local request.base_url > connector.redirect_base.
     Returns empty string only in test scenarios where the OAuth flow is mocked.
     """
     base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
     if base:
         return base.rstrip("/")
-    if request is not None:
-        try:
-            return str(request.base_url).rstrip("/")
-        except (AttributeError, TypeError, ValueError) as e:
-            logger.debug(f"Failed to resolve base_url from request: {e}")
+    request_base = _extract_request_base(request)
+    if request_base and _is_local_callback_base(request_base):
+        return request_base
     resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
+    if request_base and resolved and request_base != resolved:
+        logger.warning(
+            "Ignoring untrusted request base_url for connector OAuth redirect base: {}",
+            request_base,
+        )
     if not resolved and request is not None:
         logger.warning(
             "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
@@ -625,7 +638,7 @@ async def browse_provider_sources(
     email = await get_account_email(db, user_id, account_id)
     conn = get_connector_by_name(provider)
     account_payload = {**acct, "tokens": tokens, "email": email}
-    if provider == "zotero" and "provider_user_id" not in account_payload:
+    if provider == "zotero" and not str(account_payload.get("provider_user_id") or "").strip():
         provider_user_id = str(tokens.get("provider_user_id") or tokens.get("userID") or tokens.get("user_id") or "").strip()
         if provider_user_id:
             account_payload["provider_user_id"] = provider_user_id

@@ -35,7 +35,7 @@ export function useDatasetsList(params?: { limit?: number; offset?: number }) {
 
 export function useDatasetDetail(
   datasetId: string | null,
-  params?: { limit?: number; offset?: number; include_samples?: boolean }
+  params?: { include_samples?: boolean; limit?: number; offset?: number }
 ) {
   return useQuery({
     queryKey: ["evaluations", "dataset", datasetId, params],
@@ -136,25 +136,23 @@ export function useLoadDatasetSamples() {
     setViewingDataset,
     setDatasetSamples,
     setDatasetSamplesPage,
-    setDatasetSamplesTotal,
-    datasetSamplesPageSize
+    setDatasetSamplesTotal
   } = useEvaluationsStore((s) => ({
     setViewingDataset: s.setViewingDataset,
     setDatasetSamples: s.setDatasetSamples,
     setDatasetSamplesPage: s.setDatasetSamplesPage,
-    setDatasetSamplesTotal: s.setDatasetSamplesTotal,
-    datasetSamplesPageSize: s.datasetSamplesPageSize
+    setDatasetSamplesTotal: s.setDatasetSamplesTotal
   }))
 
   return useMutation({
-    mutationFn: async (args: { datasetId: string; page?: number }) => {
-      const page = args.page || 1
-      const offset = (page - 1) * datasetSamplesPageSize
+    mutationFn: async (args: { datasetId: string; page?: number; pageSize?: number }) => {
+      const page = Math.max(1, args.page || 1)
+      const pageSize = Math.max(1, args.pageSize || 5)
       return ensureOk<{ data: DatasetResponse }>(
         await getDataset(args.datasetId, {
-          limit: datasetSamplesPageSize,
-          offset,
-          include_samples: true
+          include_samples: true,
+          limit: pageSize,
+          offset: (page - 1) * pageSize
         })
       )
     },
@@ -162,7 +160,7 @@ export function useLoadDatasetSamples() {
       const data = resp?.data || null
       setViewingDataset(data)
       setDatasetSamples(data?.samples || [])
-      setDatasetSamplesPage(variables?.page || 1)
+      setDatasetSamplesPage(Math.max(1, variables.page || 1))
       setDatasetSamplesTotal(
         typeof data?.sample_count === "number" ? data.sample_count : null
       )

@@ -60,6 +60,9 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.TTS.tts_exceptions import TTSError
+from tldw_Server_API.app.core.TTS.tts_request_resolution import (
+    resolve_tts_request_defaults,
+)
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType,
@@ -219,6 +222,7 @@ async def _authenticate_websocket(
 async def _generate_tts_audio(
     text: str,
     provider: Optional[str] = None,
+    model: Optional[str] = None,
     voice: Optional[str] = None,
     response_format: str = "mp3",
 ) -> tuple[bytes, str]:
@@ -233,11 +237,16 @@ async def _generate_tts_audio(
         from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 
         tts_service = await get_tts_service_v2()
+        resolved = resolve_tts_request_defaults(
+            provider=provider,
+            model=model,
+            voice=voice,
+        )
 
         request = OpenAISpeechRequest(
-            model=provider or "kokoro",
+            model=resolved.model,
             input=text,
-            voice=voice or "af_heart",
+            voice=resolved.voice,
             response_format=response_format,
             stream=False,
         )
@@ -246,7 +255,7 @@ async def _generate_tts_audio(
         audio_chunks = []
         async for chunk in tts_service.generate_speech(
             request=request,
-            provider=provider or "kokoro",
+            provider=resolved.provider,
             fallback=True,
         ):
             if chunk:
@@ -324,6 +333,7 @@ async def process_voice_command(
         audio_bytes, mime_type = await _generate_tts_audio(
             text=result.response_text,
             provider=request.tts_provider,
+            model=request.tts_model,
             voice=request.tts_voice,
             response_format=request.tts_format,
         )
@@ -1032,11 +1042,20 @@ async def websocket_voice_assistant(
                     config = {
                         "stt_model": message.get("stt_model", "parakeet"),
                         "stt_language": message.get("stt_language"),
-                        "tts_provider": message.get("tts_provider", "kokoro"),
-                        "tts_voice": message.get("tts_voice", "af_heart"),
+                        "tts_provider": None,
+                        "tts_model": None,
+                        "tts_voice": None,
                         "tts_format": message.get("tts_format", "mp3"),
                         "sample_rate": message.get("sample_rate", 16000),
                     }
+                    resolved_tts = resolve_tts_request_defaults(
+                        provider=message.get("tts_provider"),
+                        model=message.get("tts_model"),
+                        voice=message.get("tts_voice"),
+                    )
+                    config["tts_provider"] = resolved_tts.provider
+                    config["tts_model"] = resolved_tts.model
+                    config["tts_voice"] = resolved_tts.voice
 
                     # Resume existing session if provided
                     if message.get("session_id"):
@@ -1050,6 +1069,7 @@ async def websocket_voice_assistant(
                             session_id=session_id,
                             stt_model=config["stt_model"],
                             tts_provider=config["tts_provider"],
+                            tts_model=config["tts_model"],
                         ).model_dump()
                     )
 
@@ -1363,11 +1383,16 @@ async def _stream_tts_response(
 
         tts_service = await get_tts_service_v2()
         tts_format = config.get("tts_format", "mp3")
+        resolved = resolve_tts_request_defaults(
+            provider=config.get("tts_provider"),
+            model=config.get("tts_model"),
+            voice=config.get("tts_voice"),
+        )
 
         request = OpenAISpeechRequest(
-            model=config.get("tts_provider", "kokoro"),
+            model=resolved.model,
             input=text,
-            voice=config.get("tts_voice", "af_heart"),
+            voice=resolved.voice,
             response_format=tts_format,
             stream=True,
         )
@@ -1377,7 +1402,7 @@ async def _stream_tts_response(
 
         async for chunk in tts_service.generate_speech(
             request=request,
-            provider=config.get("tts_provider", "kokoro"),
+            provider=resolved.provider,
             fallback=True,
         ):
             if chunk:

@@ -43,6 +43,35 @@ from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 
+
+def _serialize_result_document(doc: Any) -> dict[str, Any]:
+    """Serialize a pipeline document into the response-compatible document shape."""
+    if isinstance(doc, dict):
+        return dict(doc)
+
+    metadata = dict(getattr(doc, "metadata", {}) or {})
+    try:
+        source = getattr(doc, "source", None)
+        if source is not None:
+            metadata.setdefault(
+                "source",
+                source.value if hasattr(source, "value") else str(source),
+            )
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    doc_id = getattr(doc, "id", None)
+    if doc_id is not None:
+        metadata.setdefault("chunk_id", str(doc_id))
+
+    return {
+        "id": doc_id,
+        "content": getattr(doc, "content", None),
+        "score": getattr(doc, "score", 0.0),
+        "metadata": metadata,
+    }
+
+
 # Optional dependency placeholders (typed as Any to keep mypy tolerant for missing deps).
 _get_telemetry_manager: Any = None
 _spell_check_query: Any = None
@@ -4323,6 +4352,11 @@ async def unified_rag_pipeline(
                         sentinel_margin=rerank_sentinel_margin,
                     )
                     try:
+                        if debug_mode and isinstance(result.metadata, dict):
+                            result.metadata["pre_rerank_documents"] = [
+                                _serialize_result_document(doc)
+                                for doc in (result.documents or [])
+                            ]
                         reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
                         reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
                     except Exception as rerank_exc:
@@ -4353,6 +4387,11 @@ async def unified_rag_pipeline(
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
                         result.documents = reranked[:(rerank_top_k or top_k)]
+                    if debug_mode and isinstance(result.metadata, dict):
+                        result.metadata["reranked_documents"] = [
+                            _serialize_result_document(doc)
+                            for doc in (result.documents or [])
+                        ]
 
                     result.timings["reranking"] = time.time() - rerank_start
                     try:
@@ -6348,20 +6387,7 @@ async def unified_rag_pipeline(
     # Convert to Pydantic response
     try:
         from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
-        doc_dicts: list[dict[str, Any]] = []
-        for d in result.documents or []:
-            md = dict(d.metadata or {})
-            try:
-                if getattr(d, 'source', None) is not None:
-                    md.setdefault('source', d.source.value)
-            except (AttributeError, TypeError, ValueError):
-                pass
-            doc_dicts.append({
-                "id": d.id,
-                "content": d.content,
-                "score": getattr(d, 'score', 0.0),
-                "metadata": md
-            })
+        doc_dicts = [_serialize_result_document(d) for d in (result.documents or [])]
         return UnifiedRAGResponse(
             documents=doc_dicts,
             query=result.query,
@@ -6382,10 +6408,7 @@ async def unified_rag_pipeline(
     except (ImportError, TypeError, ValueError):
         # Fallback: return a minimal dict if Pydantic is not available
         return {
-            "documents": [
-                {"id": getattr(d, 'id', None), "content": getattr(d, 'content', None), "metadata": getattr(d, 'metadata', {})}
-                for d in (result.documents or [])
-            ],
+            "documents": [_serialize_result_document(d) for d in (result.documents or [])],
             "query": result.query,
             "expanded_queries": result.expanded_queries,
             "metadata": result.metadata,
