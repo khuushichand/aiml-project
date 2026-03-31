@@ -416,37 +416,37 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       case "dns_failed":
         return t(
           "settings:onboarding.errors.dns",
-          "Could not find server. Check the URL hostname."
+          "Could not find server. Check the URL for typos and make sure the hostname is correct."
         )
       case "refused":
         return t(
           "settings:onboarding.errors.refused",
-          "Connection refused. Is the server running?"
+          "The server isn\u2019t accepting connections. Is it running? Try: curl http://localhost:8000/health"
         )
       case "timeout":
         return t(
           "settings:onboarding.errors.timeout",
-          "Connection timed out. The server may be slow or unreachable."
+          "The server didn\u2019t respond in time. If using Docker, check containers are running: docker ps"
         )
       case "cors_blocked":
         return t(
           "settings:onboarding.errors.cors",
-          "Browser could not complete the request (CORS or network). Verify the server URL is reachable from this browser and add this app origin to ALLOWED_ORIGINS."
+          "Cross-origin request blocked. If running the WebUI separately from the API, add your browser\u2019s origin to ALLOWED_ORIGINS in .env"
         )
       case "ssl_error":
         return t(
           "settings:onboarding.errors.ssl",
-          "SSL certificate error. Check your server's HTTPS configuration."
+          "SSL certificate error. For local development, try http:// instead of https://"
         )
       case "auth_invalid":
         return t(
           "settings:onboarding.errors.auth",
-          "Invalid credentials. Check your API key or login details."
+          "API key not accepted. Check your key. Docker users: run make show-api-key in terminal"
         )
       case "server_error":
         return t(
           "settings:onboarding.errors.server",
-          "Server error (500). Check the server logs for details."
+          "The server returned an error. Check server logs for details: docker compose logs --tail=50"
         )
       default:
         return null
@@ -1391,7 +1391,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               <p className="mt-1 text-xs text-text-subtle">
                 {t(
                   "settings:onboarding.apiKeyHelp",
-                  "Find your API key in tldw_server Settings"
+                  "Using Docker quickstart? The WebUI connects automatically \u2014 no key needed. For API or extension access, run: make show-api-key"
                 )}
               </p>
             )}

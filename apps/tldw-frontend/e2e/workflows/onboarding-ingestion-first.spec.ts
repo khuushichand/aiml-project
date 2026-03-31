@@ -216,7 +216,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
     ensureEvidenceDirectory()
     await authedPage.addInitScript((cfg) => {
       try {
-        localStorage.setItem("ff_newOnboarding", JSON.stringify(true))
+        // ff_newOnboarding flag removed — new onboarding is always active
       } catch {}
       try {
         localStorage.setItem(
