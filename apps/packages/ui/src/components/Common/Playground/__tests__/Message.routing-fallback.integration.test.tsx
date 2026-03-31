@@ -56,6 +56,16 @@ vi.mock("@plasmohq/storage/hook", () => ({
   ]
 }))
 
+vi.mock("@/hooks/useChatMoodBadgePreference", () => ({
+  useChatMoodBadgePreference: () => [
+    storageOverrides.has("chatShowMoodBadge")
+      ? Boolean(storageOverrides.get("chatShowMoodBadge"))
+      : false,
+    vi.fn(),
+    { isLoading: false, setRenderValue: vi.fn() }
+  ]
+}))
+
 vi.mock("@/components/Common/Markdown", () => ({
   default: ({ message }: { message: string }) => (
     <div data-testid="mock-markdown">{message}</div>
@@ -350,6 +360,12 @@ describe("PlaygroundMessage routing fallback integration", () => {
     expect(screen.queryByTestId("message-mood-indicator")).toBeNull()
   })
 
+  it("hides mood badge by default", () => {
+    render(<PlaygroundMessage {...baseProps} />)
+
+    expect(screen.queryByTestId("message-mood-indicator")).toBeNull()
+  })
+
   it("shows mood badge when chat mood visibility is enabled", () => {
     storageOverrides.set("chatShowMoodBadge", true)
 
@@ -360,6 +376,8 @@ describe("PlaygroundMessage routing fallback integration", () => {
   })
 
   it("defaults mood confidence to off for non-character chats", () => {
+    storageOverrides.set("chatShowMoodBadge", true)
+
     render(
       <PlaygroundMessage
         {...baseProps}

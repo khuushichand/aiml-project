@@ -109,6 +109,7 @@ Track A is the next planning target and should stay narrowly scoped.
 - persist and serve a canonical resolved buddy profile
 - store and normalize overlay preferences when present
 - expose backend read contracts required for later rendering work through a dedicated persona buddy sub-resource
+- ship Track A storage and migration behavior for both SQLite and PostgreSQL persona backends
 
 ### Out Of Scope
 
@@ -147,6 +148,7 @@ Implementation constraint:
 The facet should distinguish between:
 
 - `derived_core`
+- `derivation_version`
 - `overlay_preferences`
 - `resolved_profile`
 
@@ -173,6 +175,8 @@ Day-one derivation inputs should prefer stable persona signals, such as:
 Day-one derivation should not use highly mutable fields such as freeform `system_prompt`, setup progress, or live-tuned voice defaults as primary identity inputs. Those fields may inform future presentation refinements, but they should not cause the persona's core buddy identity to churn during normal editing.
 
 The exact derivation heuristic is an implementation detail, but the contract is not: identical persona inputs should produce a stable derived core unless the derivation version changes intentionally.
+
+Track A should persist `derivation_version` as buddy-owned metadata so the system can detect stale buddy facets after derivation logic changes without coupling that behavior to the main persona profile version.
 
 #### Overlay Preferences
 
@@ -207,6 +211,7 @@ The resolved profile should also expose compatibility metadata so the UI can exp
 
 Track A's required resolved-profile contract should stay limited to identity and compatibility fields needed for consistent rendering:
 
+- `derivation_version`
 - `species_id`
 - `silhouette_id`
 - `palette_id`
@@ -256,6 +261,18 @@ If Track A needs write-on-read behavior for buddy creation, that write should oc
 When persona state changes in a way that affects the buddy, the buddy re-derives automatically.
 
 This must be deterministic from persona state plus derivation version. The system should not leave stale buddy identity in place after relevant persona changes.
+
+#### Delete And Restore
+
+Buddy lifecycle should follow persona soft-delete and restore semantics.
+
+- when a persona is soft-deleted, its buddy facet should be hidden with it
+- buddy data should not be discarded solely because the persona was soft-deleted
+- if a persona is restored, its buddy should be restored intact
+
+Restore should not itself invent a newly derived buddy. If later buddy requests detect that the restored facet is stale relative to `derivation_version`, that re-derivation should happen through the normal buddy-staleness path rather than as a side effect of restore.
+
+If a future hard-delete path is introduced for persona cleanup, buddy cleanup should follow the persona-owned data model and be removed with the persona.
 
 #### Overlay Preservation
 
@@ -328,6 +345,13 @@ Behavior:
 - animation intensity scales by tier
 - offline or degraded states should fall back to a static or low-motion representation, not disappearance
 - non-persona chat should not automatically receive buddy presence unless a real persona context is active
+
+Track B must also avoid per-surface N+1 hydration for list-heavy persona surfaces. Before Track B implementation, the plan should explicitly choose one of:
+
+- batch buddy hydration for persona lists and selectors
+- persona-summary payload projection that includes compact buddy summary fields
+
+Track B should not assume repeated one-request-per-persona buddy fetches for cards, selectors, or headers.
 
 #### Coexistence With Existing Avatar Paths
 
@@ -439,6 +463,9 @@ Write tests for:
 5. compatible stored overlays are preserved across re-derivation
 6. incompatible stored overlays fall back to supported defaults
 7. resolved profile payloads are identical across fetches for the same persona state
+8. soft-deleted personas hide buddy access without discarding buddy state
+9. restored personas regain the same buddy facet intact
+10. SQLite and PostgreSQL buddy persistence stay contract-compatible
 
 ### Track B
 

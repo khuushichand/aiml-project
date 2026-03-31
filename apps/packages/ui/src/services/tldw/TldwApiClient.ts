@@ -13,6 +13,7 @@ import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 import { toTrimmedStringArray } from "@/services/tldw/client-utils"
+import { getTldwTTSModel, getTldwTTSVoice } from "@/services/tts"
 import {
   DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
   normalizeDefaultCharacterPreferenceId
@@ -6779,17 +6780,20 @@ export class TldwApiClient {
 
   async generateReadingItemTts(
     itemId: string,
-    options?: { voice?: string }
+    options?: { model?: string; voice?: string }
   ): Promise<{ audio_url: string }> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/tts` as const
+    const model = options?.model || (await getTldwTTSModel())
+    const voice = options?.voice || (await getTldwTTSVoice())
     const data = await bgRequest<ArrayBuffer>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: {
+        model,
+        voice,
         response_format: "mp3",
         stream: false,
-        ...(options || {})
       },
       responseType: "arrayBuffer"
     })

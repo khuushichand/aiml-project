@@ -40,3 +40,17 @@ export const useDemoMode = (): DemoModeContextValue => {
   }
   return ctx
 }
+
+const DEMO_MODE_FALLBACK: DemoModeContextValue = {
+  demoEnabled: false,
+  setDemoEnabled: () => {}
+}
+
+/**
+ * Safe variant of useDemoMode that returns a no-op fallback when
+ * DemoModeProvider is not in the component tree (e.g., sidepanel surface).
+ */
+export const useSafeDemoMode = (): DemoModeContextValue => {
+  const ctx = React.useContext(DemoModeContext)
+  return ctx ?? DEMO_MODE_FALLBACK
+}

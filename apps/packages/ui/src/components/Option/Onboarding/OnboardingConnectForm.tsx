@@ -410,48 +410,58 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     setAuthTouched(false)
   }, [authMode, loginMethod])
 
+  // Derive a health-check URL from the user-entered server URL
+  const healthCheckUrl = useMemo(() => {
+    try {
+      const parsed = new URL(serverUrl.trim())
+      return `${parsed.origin}/health`
+    } catch {
+      return "http://localhost:8000/health"
+    }
+  }, [serverUrl])
+
   // Derive error messages from errorKind
   const errorHint = useMemo(() => {
     switch (errorKind) {
       case "dns_failed":
         return t(
           "settings:onboarding.errors.dns",
-          "Could not find server. Check the URL hostname."
+          "Could not find server. Check the URL for typos and make sure the hostname is correct."
         )
       case "refused":
         return t(
           "settings:onboarding.errors.refused",
-          "Connection refused. Is the server running?"
+          `The server is not accepting connections. Is it running? Try: curl ${healthCheckUrl}`
         )
       case "timeout":
         return t(
           "settings:onboarding.errors.timeout",
-          "Connection timed out. The server may be slow or unreachable."
+          "The server did not respond in time. If using Docker, check containers are running: docker ps"
         )
       case "cors_blocked":
         return t(
           "settings:onboarding.errors.cors",
-          "Browser could not complete the request (CORS or network). Verify the server URL is reachable from this browser and add this app origin to ALLOWED_ORIGINS."
+          "Cross-origin request blocked. If running the WebUI separately from the API, add your browser's origin to ALLOWED_ORIGINS in .env"
         )
       case "ssl_error":
         return t(
           "settings:onboarding.errors.ssl",
-          "SSL certificate error. Check your server's HTTPS configuration."
+          "SSL certificate error. For local development, try http:// instead of https://"
         )
       case "auth_invalid":
         return t(
           "settings:onboarding.errors.auth",
-          "Invalid credentials. Check your API key or login details."
+          "API key not accepted. Check your key. Docker users: run make show-api-key in terminal"
         )
       case "server_error":
         return t(
           "settings:onboarding.errors.server",
-          "Server error (500). Check the server logs for details."
+          "The server returned an error. Check server logs for details: docker compose logs --tail=50"
         )
       default:
         return null
     }
-  }, [errorKind, t])
+  }, [errorKind, healthCheckUrl, t])
 
   const handleSendMagicLink = useCallback(async () => {
     if (!magicEmail.trim()) {
@@ -1391,7 +1401,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               <p className="mt-1 text-xs text-text-subtle">
                 {t(
                   "settings:onboarding.apiKeyHelp",
-                  "Find your API key in tldw_server Settings"
+                  "Docker quickstart? The WebUI connects automatically. For API/extension access, run: make show-api-key. Local install? Check your .env file for SINGLE_USER_API_KEY."
                 )}
               </p>
             )}

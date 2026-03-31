@@ -1437,10 +1437,13 @@ async def lifespan(app: FastAPI):
     # Fail fast if the assembled app contains duplicate method+path route registrations.
     _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
     # Run environmental preflight checks before heavy initialization.
+    # Executed in a worker thread because some checks (e.g. database
+    # connectivity) perform blocking network I/O.
     try:
+        import asyncio as _preflight_asyncio
         from tldw_Server_API.app.core.startup_preflight import run_preflight_checks
 
-        preflight = run_preflight_checks()
+        preflight = await _preflight_asyncio.to_thread(run_preflight_checks)
         logger.info(
             "Preflight: {} checks, {} warnings, {} failures",
             len(preflight.checks),

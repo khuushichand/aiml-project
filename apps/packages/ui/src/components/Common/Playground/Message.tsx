@@ -12,6 +12,7 @@ import {
 import { EditMessageForm } from "./EditMessageForm"
 import { useTranslation } from "react-i18next"
 import { useTTS, type TtsClipMeta } from "@/hooks/useTTS"
+import { useChatMoodBadgePreference } from "@/hooks/useChatMoodBadgePreference"
 import { tagColors } from "@/utils/color"
 import { removeModelSuffix } from "@/db/dexie/models"
 import { parseReasoning } from "@/libs/reasoning"
@@ -292,7 +293,7 @@ export const PlaygroundMessage = (props: Props) => {
   const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
   const [showCharacterPortraits] = useStorage("chatShowCharacterPortraits", true)
-  const [showMoodBadge] = useStorage("chatShowMoodBadge", true)
+  const [showMoodBadge] = useChatMoodBadgePreference()
   const moodConfidenceDefault =
     Boolean(props.characterIdentityEnabled) && Boolean(props.characterIdentity?.id)
   const [showMoodConfidence] = useStorage(
@@ -1049,12 +1050,15 @@ export const PlaygroundMessage = (props: Props) => {
     setSavingKnowledge(makeFlashcard ? "flashcard" : "note")
     try {
       await tldwClient.initialize().catch(() => null)
-      await tldwClient.saveChatKnowledge({
-        conversation_id: props.serverChatId,
-        message_id: props.serverMessageId,
-        snippet,
-        make_flashcard: makeFlashcard
-      })
+      await tldwClient.saveChatKnowledge(
+        {
+          conversation_id: props.serverChatId,
+          message_id: props.serverMessageId,
+          snippet,
+          make_flashcard: makeFlashcard
+        },
+        props.scope ? { scope: props.scope } : undefined
+      )
       message.success(
         makeFlashcard
           ? t("savedToFlashcards", "Saved to Flashcards")

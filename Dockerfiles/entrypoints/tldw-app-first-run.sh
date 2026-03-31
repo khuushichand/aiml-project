@@ -103,6 +103,19 @@ if [ "$AUTH_MODE" = "single_user" ]; then
   upsert_env "SINGLE_USER_API_KEY" "$current_key"
 fi
 
+# Auto-generate MCP secrets if missing or placeholder (min 32 chars each)
+for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT; do
+  eval current_val="\${$mcp_var:-}"
+  case "$current_val" in
+    ""|CHANGE_ME*)
+      new_val="$(generate_key)"
+      eval export "$mcp_var=$new_val"
+      upsert_env "$mcp_var" "$new_val"
+      echo "[entrypoint] Generated $mcp_var."
+      ;;
+  esac
+done
+
 should_run_auth_init=0
 case "$*" in
   *uvicorn*|*tldw_Server_API.app.main:app*)
@@ -114,7 +127,12 @@ if [ "$AUTH_MODE" = "single_user" ] && [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [
   mkdir -p "$AUTH_MARKER_DIR"
   if [ ! -f "$AUTH_MARKER_FILE" ]; then
     echo "[entrypoint] Running first-use auth initialization..."
-    python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+    # Note: `if !` suppresses set -e for this command; the explicit exit 1
+    # below is load-bearing — do not remove it.
+    if ! python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive; then
+      echo "[entrypoint] ERROR: Auth initialization failed. Fix configuration and restart." >&2
+      exit 1
+    fi
     touch "$AUTH_MARKER_FILE"
     echo "[entrypoint] Auth initialization complete."
   fi

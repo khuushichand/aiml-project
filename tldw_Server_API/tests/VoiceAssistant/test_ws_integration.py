@@ -222,7 +222,7 @@ def mock_ws_dependencies(monkeypatch: pytest.MonkeyPatch) -> tuple:
     )
 
     # Mock TTS generation
-    async def _generate_tts(text, provider=None, voice=None, response_format="mp3"):
+    async def _generate_tts(text, provider=None, model=None, voice=None, response_format="mp3"):
         return b"audio-data", "audio/mpeg"
 
     monkeypatch.setattr(voice_assistant, "_generate_tts_audio", _generate_tts)
