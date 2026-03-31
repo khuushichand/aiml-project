@@ -488,6 +488,39 @@ def test_execution_uses_unique_private_default_spill_roots(tmp_path, monkeypatch
         assert stat.S_IMODE(second_root.stat().st_mode) == 0o700
 
 
+def test_execution_throttles_default_spill_root_pruning_across_executors(tmp_path, monkeypatch):
+    backend = _FakeBackend(
+        {
+            "big": lambda argv, stdin: CommandStepResult(stdout="x" * 128, stderr="", exit_code=0),
+        }
+    )
+    prune_calls: list[Path] = []
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        CommandRuntimeExecutor,
+        "_default_spill_root_last_prune_by_parent",
+        {},
+    )
+
+    def _record_prune(self, temp_parent: Path) -> None:  # noqa: ANN001
+        prune_calls.append(temp_parent)
+
+    monkeypatch.setattr(
+        CommandRuntimeExecutor,
+        "_prune_stale_default_spill_roots",
+        _record_prune,
+    )
+
+    first = CommandRuntimeExecutor(backend=backend, spill_threshold_bytes=16)
+    second = CommandRuntimeExecutor(backend=backend, spill_threshold_bytes=16)
+
+    first._resolve_spill_root()
+    second._resolve_spill_root()
+
+    assert prune_calls == [tmp_path]
+
+
 @pytest.mark.asyncio
 async def test_execution_prunes_stale_default_spill_roots_across_executor_instances(tmp_path, monkeypatch):
     stale_root = tmp_path / "mcp-command-execution-stale"

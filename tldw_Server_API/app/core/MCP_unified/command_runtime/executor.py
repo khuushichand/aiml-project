@@ -8,10 +8,11 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 from .models import (
     CommandChain,
@@ -22,6 +23,7 @@ from .models import (
 )
 
 _DEFAULT_SPILL_ROOT_PREFIX = "mcp-command-execution-"
+_DEFAULT_SPILL_ROOT_PRUNE_INTERVAL_SECONDS = 300.0
 
 
 class CommandBackend(Protocol):
@@ -44,6 +46,8 @@ class CommandRuntimeExecutor:
     spill_threshold_bytes: int = 65_536
     preview_bytes: int = 4_096
     spill_retention_seconds: int = 3_600
+    _default_spill_root_last_prune_by_parent: ClassVar[dict[str, float]] = {}
+    _default_spill_root_prune_lock: ClassVar[threading.Lock] = threading.Lock()
     _default_spill_root: Path | None = field(init=False, default=None, repr=False)
 
     async def execute(self, chain: CommandChain) -> CommandExecutionResult:
@@ -280,7 +284,7 @@ class CommandRuntimeExecutor:
         else:
             if self._default_spill_root is None or not self._default_spill_root.exists():
                 temp_parent = Path(tempfile.gettempdir())
-                self._prune_stale_default_spill_roots(temp_parent)
+                self._maybe_prune_stale_default_spill_roots(temp_parent)
                 self._default_spill_root = Path(
                     tempfile.mkdtemp(
                         prefix=_DEFAULT_SPILL_ROOT_PREFIX,
@@ -398,6 +402,23 @@ class CommandRuntimeExecutor:
                 shutil.rmtree(candidate)
             except OSError:
                 continue
+
+    def _maybe_prune_stale_default_spill_roots(self, temp_parent: Path) -> None:
+        if self.spill_retention_seconds <= 0:
+            return
+
+        now = time.monotonic()
+        temp_parent_key = os.fspath(temp_parent)
+
+        with self._default_spill_root_prune_lock:
+            last_prune = self._default_spill_root_last_prune_by_parent.get(temp_parent_key)
+            if (
+                last_prune is not None
+                and now - last_prune < _DEFAULT_SPILL_ROOT_PRUNE_INTERVAL_SECONDS
+            ):
+                return
+            self._prune_stale_default_spill_roots(temp_parent)
+            self._default_spill_root_last_prune_by_parent[temp_parent_key] = now
 
     def _touch_spill_root(self, spill_root: Path) -> None:
         try:
