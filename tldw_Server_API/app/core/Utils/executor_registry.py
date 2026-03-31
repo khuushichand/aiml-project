@@ -36,6 +36,11 @@ def _snapshot() -> Iterable[tuple[str, Executor]]:
         return list(_executors.items())
 
 
+def snapshot_registered_executors() -> tuple[tuple[str, Executor], ...]:
+    """Expose a stable snapshot of registered executors for shutdown coordination."""
+    return tuple(_snapshot())
+
+
 def _shutdown_executor_blocking(name: str, executor: Executor, wait: bool, cancel_futures: bool) -> None:
     """Shutdown helper that runs in a worker thread when awaited."""
     try:
@@ -62,9 +67,16 @@ async def shutdown_executor(name: str, wait: bool = True, cancel_futures: bool =
 
 
 async def shutdown_all_registered_executors(wait: bool = True, cancel_futures: bool = True) -> None:
-    """Shutdown all registered executors, awaiting completion for each."""
-    for name, executor in _snapshot():
-        await asyncio.to_thread(_shutdown_executor_blocking, name, executor, wait, cancel_futures)
+    """Shutdown all registered executors concurrently."""
+    snapshot = list(_snapshot())
+    if not snapshot:
+        return
+    await asyncio.gather(
+        *(
+            asyncio.to_thread(_shutdown_executor_blocking, name, executor, wait, cancel_futures)
+            for name, executor in snapshot
+        )
+    )
 
 
 def shutdown_executor_sync(name: str, wait: bool = True, cancel_futures: bool = True) -> None:

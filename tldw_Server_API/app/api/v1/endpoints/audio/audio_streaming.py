@@ -85,6 +85,7 @@ from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils import normalize_model_and_variant
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
@@ -324,6 +325,40 @@ def _audio_ws_quota_error_payload(
     if _audio_ws_compat_error_type_enabled():
         payload["quota"] = quota
     return payload
+
+
+async def _guard_audio_ws_work_start(
+    websocket: WebSocket,
+    *,
+    kind: str,
+    outer_stream: Any = None,
+    request_id: Optional[str] = None,
+) -> bool:
+    app = getattr(websocket, "app", None)
+    if app is None:
+        return True
+    try:
+        assert_may_start_work(app, kind)
+        return True
+    except HTTPException:
+        payload = _audio_ws_error_payload(
+            code="service_unavailable",
+            message="Shutdown in progress",
+            request_id=request_id,
+            data={"kind": kind},
+        )
+        try:
+            if outer_stream:
+                await outer_stream.send_json(payload)
+            else:
+                await websocket.send_json(payload)
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            await websocket.close(code=1013, reason="shutdown_draining")
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            pass
+        return False
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -828,6 +863,13 @@ async def websocket_transcribe(
     )
     if not auth_ok:
         return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.stream.transcribe",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
+        return
 
     try:
         # Default configuration prefers explicit streaming model selection from
@@ -1322,6 +1364,13 @@ async def websocket_audio_chat_stream(
         ws_path="/api/v1/audio/chat/stream",
     )
     if not auth_ok:
+        return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.chat.stream",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
         return
 
     # Determine quota user id
@@ -2574,6 +2623,13 @@ async def websocket_tts(
     )
     if not auth_ok:
         return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.stream.tts",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
+        return
 
     # Determine quota user id
     if is_multi_user_mode() and jwt_user_id is not None:
@@ -2839,6 +2895,13 @@ async def websocket_tts_realtime(
         ws_path="/api/v1/audio/stream/tts/realtime",
     )
     if not auth_ok:
+        return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.stream.tts.realtime",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
         return
 
     if is_multi_user_mode() and jwt_user_id is not None:

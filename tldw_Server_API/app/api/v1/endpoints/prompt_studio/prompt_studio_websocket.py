@@ -14,12 +14,13 @@ Key responsibilities
 """
 
 import asyncio
+import contextlib
 import json
 import os
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 # Create router
@@ -66,6 +67,10 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter impor
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import env_flag_enabled
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
+from tldw_Server_API.app.services.shutdown_transport_registry import (
+    register_shutdown_transport_family,
+)
 
 ########################################################################################################################
 # Error Handling Utilities
@@ -194,19 +199,22 @@ class ConnectionManager:
             client_id: Client identifier
             message: Message to broadcast
         """
-        if client_id in self.active_connections:
-            disconnected = []
+        sockets = list(self.active_connections.get(client_id, ()))
+        if not sockets:
+            return
 
-            for websocket in self.active_connections[client_id]:
-                try:
-                    await websocket.send_text(message)
-                except _WS_SEND_EXCEPTIONS as e:
-                    logger.error(f"Failed to send to WebSocket: {e}")
-                    disconnected.append(websocket)
+        disconnected = []
 
-            # Clean up disconnected sockets
-            for ws in disconnected:
-                self.disconnect(ws)
+        for websocket in sockets:
+            try:
+                await websocket.send_text(message)
+            except _WS_SEND_EXCEPTIONS as e:
+                logger.error(f"Failed to send to WebSocket: {e}")
+                disconnected.append(websocket)
+
+        # Clean up disconnected sockets
+        for ws in disconnected:
+            self.disconnect(ws)
 
     async def broadcast_to_all(self, message: str):
         """
@@ -215,7 +223,7 @@ class ConnectionManager:
         Args:
             message: Message to broadcast
         """
-        for client_id in self.active_connections:
+        for client_id in list(self.active_connections):
             await self.broadcast_to_client(client_id, message)
 
     def get_connection_count(self) -> int:
@@ -225,6 +233,17 @@ class ConnectionManager:
     def get_client_count(self) -> int:
         """Get number of unique clients connected."""
         return len(self.active_connections)
+
+    async def close_all(self, timeout_s: float | None = None) -> None:
+        """Close all active Prompt Studio sockets and clear tracking state."""
+        sockets = [socket for sockets in self.active_connections.values() for socket in sockets]
+        if sockets:
+            await asyncio.gather(
+                *(socket.close(code=1001, reason="Server shutdown") for socket in sockets),
+                return_exceptions=True,
+            )
+        self.active_connections.clear()
+        self.connection_metadata.clear()
 
 # NOTE: A single, shared connection manager is defined later as
 # `connection_manager` and imported by the job processor for broadcasts.
@@ -238,9 +257,6 @@ class ConnectionManager:
 
 ########################################################################################################################
 # SSE (Server-Sent Events) Fallback
-
-
-import contextlib
 
 from fastapi.responses import StreamingResponse
 
@@ -394,6 +410,23 @@ async def sse_endpoint_route(
 
 # Initialize connection manager
 connection_manager = ConnectionManager()
+register_shutdown_transport_family(
+    "prompt_studio.websocket",
+    active_count=connection_manager.get_connection_count,
+    drain=connection_manager.close_all,
+)
+
+
+async def _guard_prompt_studio_websocket_start(websocket: WebSocket, kind: str) -> bool:
+    app = getattr(websocket, "app", None)
+    if app is None:
+        return True
+    try:
+        assert_may_start_work(app, kind)
+        return True
+    except HTTPException:
+        await websocket.close(code=1013, reason="shutdown_draining")
+        return False
 
 @router.websocket("")
 async def websocket_endpoint_base(websocket: WebSocket):
@@ -411,6 +444,8 @@ async def websocket_endpoint_base(websocket: WebSocket):
         close_on_done=False,
         labels={"component": "prompt_studio", "endpoint": "ps_ws_base"},
     )
+    if not await _guard_prompt_studio_websocket_start(websocket, "prompt_studio.websocket"):
+        return
     # Accept via manager first to avoid double-accept issues
     await connection_manager.connect(websocket, "global")
     await stream.start()
@@ -467,6 +502,8 @@ async def websocket_endpoint(
         close_on_done=False,
         labels={"component": "prompt_studio", "endpoint": "ps_ws_project"},
     )
+    if not await _guard_prompt_studio_websocket_start(websocket, "prompt_studio.websocket"):
+        return
     await connection_manager.connect(websocket, str(project_id))
     await stream.start()
 
