@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from pathlib import Path
@@ -137,19 +138,24 @@ class RunCommandModule(BaseModule):
                 exit_code=exc.result.exit_code,
                 duration_ms=max(0.0, (time.perf_counter() - start) * 1000.0),
             )
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
+            if self._is_passthrough_runtime_exception(exc):
+                raise
             result = CommandExecutionResult(
                 stdout="",
                 stderr=str(exc),
-                exit_code=2,
+                exit_code=2 if isinstance(exc, ValueError) else 1,
                 duration_ms=max(0.0, (time.perf_counter() - start) * 1000.0),
             )
-        return present_command_execution_result(
-            result,
-            spill_dir=spill_dir,
-            byte_limit=preview_byte_limit,
-            line_limit=preview_line_limit,
-        )
+        try:
+            return present_command_execution_result(
+                result,
+                spill_dir=spill_dir,
+                byte_limit=preview_byte_limit,
+                line_limit=preview_line_limit,
+            )
+        finally:
+            await self._cleanup_spill_artifacts(result)
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
         if tool_name != "run":
@@ -221,11 +227,10 @@ class RunCommandModule(BaseModule):
         from ...protocol import MCPProtocol
         from ...server import get_mcp_server
 
-        try:
-            return get_mcp_server().protocol
-        except Exception as exc:
-            logger.warning("Falling back to a standalone MCPProtocol for run module: {}", exc)
+        protocol = get_mcp_server().protocol
+        if protocol is None:
             return MCPProtocol()
+        return protocol
 
     async def _visible_commands_for_context(self, context: Any | None) -> Mapping[str, CommandDescriptor]:
         protocol = await self._resolve_protocol()
@@ -414,3 +419,41 @@ class RunCommandModule(BaseModule):
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    @staticmethod
+    async def _cleanup_spill_artifacts(result: CommandExecutionResult) -> None:
+        spill_paths: set[Path] = set()
+
+        def _record(spill: Any) -> None:
+            path_value = getattr(spill, "path", None)
+            if isinstance(path_value, str) and path_value.strip():
+                spill_paths.add(Path(path_value))
+
+        _record(result.stdout_spill)
+        _record(result.stderr_spill)
+        for spill in result.stderr_spills:
+            _record(spill)
+        for step in result.steps:
+            _record(step.stdout_spill)
+            _record(step.stderr_spill)
+
+        if not spill_paths:
+            return
+
+        await asyncio.to_thread(RunCommandModule._unlink_spills, spill_paths)
+
+    @staticmethod
+    def _unlink_spills(spill_paths: set[Path]) -> None:
+        for spill_path in spill_paths:
+            try:
+                spill_path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+    @staticmethod
+    def _is_passthrough_runtime_exception(exc: BaseException) -> bool:
+        try:
+            from ...protocol import ApprovalRequiredError, GovernanceDeniedError
+        except ImportError:
+            return False
+        return isinstance(exc, (ApprovalRequiredError, GovernanceDeniedError))

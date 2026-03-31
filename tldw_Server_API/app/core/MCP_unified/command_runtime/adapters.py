@@ -5,8 +5,10 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+from collections.abc import Iterator
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .models import CommandChain, CommandSpillReference, CommandStepResult
@@ -101,6 +103,8 @@ def visible_command_registry(
 class PhaseOneCommandAdapters:
     """Adapter layer that separates pure transforms from governed MCP tool calls."""
 
+    _PURE_GREP_MAX_OUTPUT_BYTES = 1_000_000
+
     def __init__(self, context: AdapterContext) -> None:
         self.context = context
         self._preflighted: dict[str, deque[_PreparedStep]] = {}
@@ -121,6 +125,7 @@ class PhaseOneCommandAdapters:
     async def preflight_chain(self, chain: CommandChain) -> None:
         """Prepare all governed steps before execution starts."""
 
+        handled_exceptions = self._handled_governed_exceptions()
         step_index = 0
         for segment in chain.segments:
             for invocation in segment.commands:
@@ -141,15 +146,20 @@ class PhaseOneCommandAdapters:
                     raise PreflightCommandError(
                         CommandStepResult(stderr=plan_or_error.message, exit_code=plan_or_error.exit_code)
                     )
-                prepared = await self.context.protocol.prepare_tool_call(
-                    params={"name": plan_or_error.tool_name, "arguments": dict(plan_or_error.arguments)},
-                    context=self.context.request_context,
-                    idempotency_key=derive_step_idempotency_key(
-                        self.context.parent_idempotency_key,
-                        argv,
-                        step_index,
-                    ),
-                )
+                try:
+                    prepared = await self.context.protocol.prepare_tool_call(
+                        params={"name": plan_or_error.tool_name, "arguments": dict(plan_or_error.arguments)},
+                        context=self.context.request_context,
+                        idempotency_key=derive_step_idempotency_key(
+                            self.context.parent_idempotency_key,
+                            argv,
+                            step_index,
+                        ),
+                    )
+                except handled_exceptions as exc:
+                    if self._is_passthrough_governed_exception(exc):
+                        raise
+                    raise PreflightCommandError(self._governed_error_result(exc)) from exc
                 signature = normalize_step_content(argv)
                 bucket = self._preflighted.setdefault(signature, deque())
                 bucket.append(_PreparedStep(prepared=prepared, plan=plan_or_error))
@@ -175,25 +185,32 @@ class PhaseOneCommandAdapters:
     async def _execute_governed(self, argv: list[str], step_index: int) -> CommandStepResult:
         signature = normalize_step_content(argv)
         bucket = self._preflighted.get(signature)
-        if bucket:
-            prepared_step = bucket.popleft()
-        else:
-            plan_or_error = self._governed_plan(argv)
-            if isinstance(plan_or_error, _UsageError):
-                return CommandStepResult(stderr=plan_or_error.message, exit_code=plan_or_error.exit_code)
-            prepared = await self.context.protocol.prepare_tool_call(
-                params={"name": plan_or_error.tool_name, "arguments": dict(plan_or_error.arguments)},
-                context=self.context.request_context,
-                idempotency_key=derive_step_idempotency_key(
-                    self.context.parent_idempotency_key,
-                    argv,
-                    step_index,
-                ),
-            )
-            prepared_step = _PreparedStep(prepared=prepared, plan=plan_or_error)
+        handled_exceptions = self._handled_governed_exceptions()
+        try:
+            if bucket:
+                prepared_step = bucket.popleft()
+            else:
+                plan_or_error = self._governed_plan(argv)
+                if isinstance(plan_or_error, _UsageError):
+                    return CommandStepResult(stderr=plan_or_error.message, exit_code=plan_or_error.exit_code)
+                prepared = await self.context.protocol.prepare_tool_call(
+                    params={"name": plan_or_error.tool_name, "arguments": dict(plan_or_error.arguments)},
+                    context=self.context.request_context,
+                    idempotency_key=derive_step_idempotency_key(
+                        self.context.parent_idempotency_key,
+                        argv,
+                        step_index,
+                    ),
+                )
+                prepared_step = _PreparedStep(prepared=prepared, plan=plan_or_error)
 
-        payload = await self.context.protocol.execute_prepared_tool_call(prepared_step.prepared)
-        rendered = prepared_step.plan.renderer(payload)
+            payload = await self.context.protocol.execute_prepared_tool_call(prepared_step.prepared)
+            rendered = prepared_step.plan.renderer(payload)
+        except handled_exceptions as exc:
+            if self._is_passthrough_governed_exception(exc):
+                raise
+            return self._governed_error_result(exc)
+
         return CommandStepResult(stdout=rendered, stderr="", exit_code=0)
 
     def _execute_pure_transform(self, argv: list[str], stdin: Any) -> CommandStepResult:
@@ -328,18 +345,25 @@ class PhaseOneCommandAdapters:
         if unsupported_flags:
             return CommandStepResult(stderr="usage: grep <pattern> [-i|--ignore-case]", exit_code=2)
 
-        text = self._stdin_text(stdin)
-        lines = text.splitlines()
         ignore_case = "-i" in flags or "--ignore-case" in flags
         needle = pattern.lower() if ignore_case else pattern
         matched: list[str] = []
-        for line in lines:
+        matched_byte_count = 0
+        for line in self._iter_stdin_lines(stdin):
             haystack = line.lower() if ignore_case else line
             if needle in haystack:
+                encoded = line.encode("utf-8")
+                if matched_byte_count + len(encoded) > self._PURE_GREP_MAX_OUTPUT_BYTES:
+                    return CommandStepResult(
+                        stderr=(
+                            "grep: matched output exceeds "
+                            f"{self._PURE_GREP_MAX_OUTPUT_BYTES} bytes; refine the pattern or narrow the pipeline"
+                        ),
+                        exit_code=2,
+                    )
                 matched.append(line)
-        output = "\n".join(matched)
-        if matched and text.endswith("\n"):
-            output += "\n"
+                matched_byte_count += len(encoded)
+        output = "".join(matched)
         return CommandStepResult(stdout=output, stderr="", exit_code=0 if matched else 1)
 
     def _pure_head(self, argv: list[str], stdin: Any) -> CommandStepResult:
@@ -467,6 +491,20 @@ class PhaseOneCommandAdapters:
         return str(stdin)
 
     @staticmethod
+    def _iter_stdin_lines(stdin: Any) -> Iterator[str]:
+        if isinstance(stdin, CommandSpillReference):
+            try:
+                with Path(stdin.path).open("r", encoding=stdin.encoding) as handle:
+                    yield from handle
+            except OSError:
+                return
+            return
+        text = PhaseOneCommandAdapters._stdin_text(stdin)
+        if not text:
+            return
+        yield from text.splitlines(keepends=True)
+
+    @staticmethod
     def _extract_json_content(payload: Any) -> Any:
         if not isinstance(payload, dict):
             return payload
@@ -510,6 +548,8 @@ class PhaseOneCommandAdapters:
         decoded = self._extract_json_content(payload)
         if isinstance(decoded, dict):
             text = decoded.get("text")
+            if text is None:
+                text = decoded.get("content")
             return str(text or "")
         return str(decoded or "")
 
@@ -532,6 +572,41 @@ class PhaseOneCommandAdapters:
             return json.dumps(decoded, ensure_ascii=False, indent=2, sort_keys=True)
         except TypeError:
             return str(decoded)
+
+    @staticmethod
+    def _handled_governed_exceptions() -> tuple[type[BaseException], ...]:
+        exceptions: list[type[BaseException]] = [OSError, ValueError]
+        try:
+            from ..protocol import InvalidParamsException
+        except ImportError:
+            InvalidParamsException = None
+        if InvalidParamsException is not None:
+            exceptions.append(InvalidParamsException)
+        return tuple(exceptions)
+
+    @classmethod
+    def _governed_error_result(cls, exc: BaseException) -> CommandStepResult:
+        exit_code = 2 if cls._is_usage_like_exception(exc) else 1
+        message = str(exc).strip() or exc.__class__.__name__
+        return CommandStepResult(stderr=message, exit_code=exit_code)
+
+    @staticmethod
+    def _is_usage_like_exception(exc: BaseException) -> bool:
+        if isinstance(exc, ValueError):
+            return True
+        try:
+            from ..protocol import InvalidParamsException
+        except ImportError:
+            InvalidParamsException = None
+        return InvalidParamsException is not None and isinstance(exc, InvalidParamsException)
+
+    @staticmethod
+    def _is_passthrough_governed_exception(exc: BaseException) -> bool:
+        try:
+            from ..protocol import ApprovalRequiredError, GovernanceDeniedError
+        except ImportError:
+            return False
+        return isinstance(exc, (ApprovalRequiredError, GovernanceDeniedError))
 
     def _unknown_command_result(self, command: str) -> CommandStepResult:
         return CommandStepResult(stderr=self._unknown_command_message(command), exit_code=127)

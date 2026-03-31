@@ -238,6 +238,40 @@ async def test_filesystem_read_text_rejects_binary_payload(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_filesystem_read_text_rejects_files_over_size_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    large_path = workspace_root / "large.txt"
+    large_path.write_text("x" * 32, encoding="utf-8")
+
+    resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": str(workspace_root),
+            "workspace_id": "workspace-1",
+            "source": "sandbox_workspace_lookup",
+            "reason": None,
+        }
+    )
+    mod = FilesystemModule(
+        ModuleConfig(name="filesystem", settings={"max_read_bytes": 8}),
+        workspace_root_resolver=resolver,
+    )
+    context = RequestContext(
+        request_id="req-filesystem-large-read",
+        user_id="7",
+        metadata={"workspace_id": "workspace-1"},
+    )
+
+    def _fail_read_bytes(self):  # noqa: ANN001
+        raise AssertionError("unexpected full file read")
+
+    monkeypatch.setattr(Path, "read_bytes", _fail_read_bytes)
+
+    with pytest.raises(ValueError, match="exceeds fs.read_text limit"):
+        await mod.execute_tool("fs.read_text", {"path": "large.txt"}, context=context)
+
+
+@pytest.mark.asyncio
 async def test_filesystem_write_text_rejects_path_escape(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True, exist_ok=True)

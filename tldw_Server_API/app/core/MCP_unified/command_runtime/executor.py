@@ -257,13 +257,7 @@ class CommandRuntimeExecutor:
         spill_root = self._resolve_spill_root()
         self._prune_stale_spills(spill_root)
         digest = hashlib.sha256(payload).hexdigest()[:16]
-        path = self._ensure_spill_file(
-            spill_root / f"mcp-command-{kind}-{digest}.txt",
-            payload,
-            spill_root=spill_root,
-            kind=kind,
-            digest=digest,
-        )
+        path = self._write_unique_spill(payload, spill_root=spill_root, kind=kind, digest=digest)
         try:
             os.utime(path, None)
         except OSError:

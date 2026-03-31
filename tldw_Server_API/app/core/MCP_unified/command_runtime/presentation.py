@@ -85,14 +85,16 @@ def _render_stdout(
     active_spill = spill
     if active_spill is not None:
         preview, truncated = _preview_spill_text(active_spill, byte_limit=byte_limit, line_limit=line_limit, fallback=stdout_text)
+        line_count = active_spill.line_count
+        byte_count = active_spill.bytes_written
     else:
         preview, truncated = _truncate_text(stdout_text, byte_limit=byte_limit, line_limit=line_limit)
-    if truncated and active_spill is None:
-        active_spill = _materialize_spill_reference(stdout_text, "stdout", spill_dir=spill_dir)
-    if active_spill is not None and truncated:
+        line_count = _count_lines(stdout_text)
+        byte_count = len(stdout_text.encode("utf-8"))
+    if truncated:
         if preview:
-            return "\n".join([preview, "", _overflow_notice("stdout", active_spill)])
-        return _overflow_notice("stdout", active_spill)
+            return "\n".join([preview, "", _overflow_notice("stdout", line_count=line_count, byte_count=byte_count)])
+        return _overflow_notice("stdout", line_count=line_count, byte_count=byte_count)
     return preview
 
 
@@ -106,6 +108,8 @@ def _render_stderr(
     active_spills = list(spills)
     if stderr_text:
         preview, truncated = _truncate_text(stderr_text, byte_limit=byte_limit, line_limit=line_limit)
+        line_count = _count_lines(stderr_text)
+        byte_count = len(stderr_text.encode("utf-8"))
     elif active_spills:
         preview, truncated = _preview_spill_text(
             active_spills[0],
@@ -113,20 +117,23 @@ def _render_stderr(
             line_limit=line_limit,
             fallback=active_spills[0].preview,
         )
+        line_count = active_spills[0].line_count
+        byte_count = active_spills[0].bytes_written
     else:
         preview, truncated = "", False
-    if truncated and stderr_text:
-        inline_spill = _materialize_spill_reference(stderr_text, "stderr", spill_dir=spill_dir)
-        if all(spill.path != inline_spill.path for spill in active_spills):
-            active_spills.append(inline_spill)
+        line_count = 0
+        byte_count = 0
     show_overflow = truncated or len(active_spills) > 1 or bool(stderr_text and active_spills)
     if active_spills and show_overflow:
         lines = [preview] if preview else []
-        for spill in active_spills:
-            if lines:
-                lines.append("")
-            lines.append(_overflow_notice("stderr", spill))
+        if lines:
+            lines.append("")
+        lines.append(_overflow_notice("stderr", line_count=line_count, byte_count=byte_count))
         return "\n".join(lines)
+    if truncated:
+        if preview:
+            return "\n".join([preview, "", _overflow_notice("stderr", line_count=line_count, byte_count=byte_count)])
+        return _overflow_notice("stderr", line_count=line_count, byte_count=byte_count)
     return preview
 
 
@@ -155,16 +162,12 @@ def _render_stderr_block(
     return lines
 
 
-def _overflow_notice(stream_name: str, spill: CommandSpillReference) -> str:
-    line_count = spill.line_count
-    quoted_path = shlex.quote(spill.path)
+def _overflow_notice(stream_name: str, *, line_count: int, byte_count: int) -> str:
     return "\n".join(
         [
-            f"--- {stream_name} truncated ({line_count} lines, {spill.bytes_written} bytes) ---",
-            f"Full {stream_name} spilled to {spill.path}",
-            "If workspace-accessible:",
-            f"  cat {quoted_path} | grep <pattern>",
-            f"  cat {quoted_path} | tail 100",
+            f"--- {stream_name} truncated ({line_count} lines, {byte_count} bytes) ---",
+            f"Full {stream_name} was stored internally because it exceeded the preview limit.",
+            "Refine and rerun with: | grep <pattern>, | head <n>, or | tail <n>",
         ]
     )
 
@@ -173,7 +176,7 @@ def _binary_spill_notice(stream_name: str, spill: CommandSpillReference) -> str:
     return "\n".join(
         [
             f"--- binary {stream_name} omitted ({spill.bytes_written} bytes) ---",
-            f"Binary {stream_name} spill: {spill.path}",
+            f"Binary {stream_name} was stored internally.",
             "Use a binary-safe inspection command or text-rendering subcommand.",
         ]
     )

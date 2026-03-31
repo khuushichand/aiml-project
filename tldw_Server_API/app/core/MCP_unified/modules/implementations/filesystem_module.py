@@ -35,6 +35,8 @@ def _first_nonempty(*values: Any) -> str | None:
 class FilesystemModule(BaseModule):
     """Workspace-scoped text filesystem primitives."""
 
+    _DEFAULT_MAX_READ_BYTES = 1_000_000
+
     def __init__(
         self,
         config: ModuleConfig,
@@ -130,7 +132,7 @@ class FilesystemModule(BaseModule):
 
         if tool_name == "fs.read_text":
             target = self._resolve_workspace_path(workspace_root, str(args.get("path")))
-            read_result = await asyncio.to_thread(self._read_text_file, target)
+            read_result = await asyncio.to_thread(self._read_text_file, target, self._max_read_bytes())
             return {
                 "path": self._to_workspace_relative_path(workspace_root, target),
                 "text": read_result["text"],
@@ -153,6 +155,14 @@ class FilesystemModule(BaseModule):
             limit = int(raw_limit)
         except (TypeError, ValueError):
             limit = 1000
+        return max(1, limit)
+
+    def _max_read_bytes(self) -> int:
+        raw_limit = self.config.settings.get("max_read_bytes", self._DEFAULT_MAX_READ_BYTES)
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = self._DEFAULT_MAX_READ_BYTES
         return max(1, limit)
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
@@ -272,11 +282,17 @@ class FilesystemModule(BaseModule):
         return rel_text if rel_text not in {"", "."} else "."
 
     @staticmethod
-    def _read_text_file(target: Path) -> dict[str, Any]:
+    def _read_text_file(target: Path, max_read_bytes: int) -> dict[str, Any]:
         if not target.exists():
             raise FileNotFoundError(f"path not found: {target}")
         if not target.is_file():
             raise ValueError(f"path is not a file: {target}")
+
+        file_size = target.stat().st_size
+        if file_size > max_read_bytes:
+            raise ValueError(
+                f"file exceeds fs.read_text limit ({file_size} bytes > {max_read_bytes} bytes)"
+            )
 
         payload = target.read_bytes()
         if b"\x00" in payload:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import re
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -14,7 +14,11 @@ from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.run_command_module import (
     RunCommandModule,
 )
-from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+from tldw_Server_API.app.core.MCP_unified.protocol import (
+    ApprovalRequiredError,
+    MCPProtocol,
+    RequestContext,
+)
 
 
 @dataclass
@@ -28,9 +32,12 @@ class _ProtocolStub:
         self.prepare_calls: list[_PreparedCall] = []
         self.execute_calls: list[_PreparedCall] = []
         self.tools_list_calls = 0
-        self.raise_on_prepare_for_tool: str | None = None
+        self.prepare_errors: dict[str, BaseException] = {}
+        self.execute_errors: dict[str, BaseException] = {}
+        self.read_text_content = "hello"
 
     async def _handle_tools_list(self, params: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        del params, context
         self.tools_list_calls += 1
         return {
             "tools": [
@@ -47,15 +54,21 @@ class _ProtocolStub:
         context: RequestContext,
         idempotency_key: str | None = None,
     ) -> _PreparedCall:
+        del context
         prepared = _PreparedCall(params=dict(params), idempotency_key=idempotency_key)
         self.prepare_calls.append(prepared)
-        if self.raise_on_prepare_for_tool and params.get("name") == self.raise_on_prepare_for_tool:
-            raise PermissionError("blocked by policy")
+        tool_name = str(params.get("name") or "")
+        error = self.prepare_errors.get(tool_name)
+        if error is not None:
+            raise error
         return prepared
 
     async def execute_prepared_tool_call(self, prepared: _PreparedCall) -> dict[str, Any]:
         self.execute_calls.append(prepared)
-        tool_name = prepared.params.get("name")
+        tool_name = str(prepared.params.get("name") or "")
+        error = self.execute_errors.get(tool_name)
+        if error is not None:
+            raise error
         if tool_name == "fs.list":
             return {
                 "content": [
@@ -79,7 +92,7 @@ class _ProtocolStub:
             }
         if tool_name == "fs.read_text":
             return {
-                "content": [{"type": "json", "json": {"path": "notes.txt", "text": "hello"}}],
+                "content": [{"type": "json", "json": {"path": "notes.txt", "text": self.read_text_content}}],
                 "tool": tool_name,
             }
         raise AssertionError(f"Unexpected tool execution: {tool_name}")
@@ -142,13 +155,14 @@ async def test_run_cat_without_path_returns_usage() -> None:
 @pytest.mark.asyncio
 async def test_run_preflights_write_chain_before_executing_first_step() -> None:
     protocol = _ProtocolStub()
-    protocol.raise_on_prepare_for_tool = "fs.write_text"
+    protocol.prepare_errors["fs.write_text"] = PermissionError("blocked by policy")
     module = _build_module(protocol)
     context = RequestContext(request_id="run-preflight", user_id="1", client_id="unit")
 
-    with pytest.raises(PermissionError, match="blocked by policy"):
-        await module.execute_tool("run", {"command": "ls ; write notes.txt hello"}, context=context)
+    rendered = await module.execute_tool("run", {"command": "ls ; write notes.txt hello"}, context=context)
 
+    assert "blocked by policy" in rendered
+    assert "[exit:1 |" in rendered
     assert [call.params["name"] for call in protocol.prepare_calls] == ["fs.list", "fs.write_text"]
     assert protocol.execute_calls == []
 
@@ -183,9 +197,37 @@ async def test_run_derives_step_idempotency_from_parent_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_converts_governed_file_errors_into_cli_result() -> None:
+    protocol = _ProtocolStub()
+    protocol.execute_errors["fs.read_text"] = FileNotFoundError("Path not found: notes.txt")
+    module = _build_module(protocol)
+    context = RequestContext(request_id="run-cat-missing", user_id="1", client_id="unit")
+
+    rendered = await module.execute_tool("run", {"command": "cat notes.txt"}, context=context)
+
+    assert "Path not found: notes.txt" in rendered
+    assert "[exit:1 |" in rendered
+
+
+@pytest.mark.asyncio
+async def test_run_preserves_approval_required_errors() -> None:
+    protocol = _ProtocolStub()
+    protocol.prepare_errors["fs.write_text"] = ApprovalRequiredError(
+        "approval required",
+        approval={"reason": "path_outside_current_folder_scope"},
+    )
+    module = _build_module(protocol)
+    context = RequestContext(request_id="run-approval", user_id="1", client_id="unit")
+
+    with pytest.raises(ApprovalRequiredError, match="approval required"):
+        await module.execute_tool("run", {"command": "write notes.txt hello"}, context=context)
+
+
+@pytest.mark.asyncio
 async def test_run_help_keeps_argument_sensitive_allowed_commands_visible() -> None:
     class _PatternProtocolStub:
         async def _handle_tools_list(self, params: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+            del params, context
             return {
                 "tools": [
                     {"name": "sandbox.run", "module": "sandbox", "canExecute": True},
@@ -193,9 +235,11 @@ async def test_run_help_keeps_argument_sensitive_allowed_commands_visible() -> N
             }
 
         def _extract_allowed_tools(self, context: RequestContext) -> list[str]:
+            del context
             return ["sandbox.run(ls *)"]
 
         async def _resolve_effective_tool_policy(self, context: RequestContext) -> dict[str, Any]:
+            del context
             return {
                 "enabled": True,
                 "allowed_tools": ["sandbox.run(ls *)"],
@@ -203,6 +247,7 @@ async def test_run_help_keeps_argument_sensitive_allowed_commands_visible() -> N
             }
 
         def _is_tool_allowed_by_context(self, tool_name: str, tool_args: dict[str, Any], context: RequestContext) -> bool:
+            del tool_name, tool_args, context
             return False
 
         def _is_tool_allowed_by_effective_policy(
@@ -211,6 +256,7 @@ async def test_run_help_keeps_argument_sensitive_allowed_commands_visible() -> N
             tool_args: dict[str, Any],
             policy: dict[str, Any],
         ) -> bool:
+            del tool_name, tool_args, policy
             return False
 
     module = RunCommandModule(
@@ -230,25 +276,10 @@ async def test_run_help_keeps_argument_sensitive_allowed_commands_visible() -> N
 
 @pytest.mark.asyncio
 async def test_run_uses_configured_spill_settings_and_workspace_relative_spill_dir(tmp_path: Path) -> None:
-    class _SpillProtocolStub(_ProtocolStub):
-        async def execute_prepared_tool_call(self, prepared: _PreparedCall) -> dict[str, Any]:
-            self.execute_calls.append(prepared)
-            return {
-                "content": [
-                    {
-                        "type": "json",
-                        "json": {
-                            "path": "notes.txt",
-                            "text": "line one\nline two\nline three\n",
-                        },
-                    }
-                ],
-                "tool": prepared.params.get("name"),
-            }
-
+    protocol = _ProtocolStub()
+    protocol.read_text_content = "line one\nline two\nline three\n"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    protocol = _SpillProtocolStub()
     resolver = _WorkspaceRootResolverStub(workspace_root)
     module = RunCommandModule(
         ModuleConfig(
@@ -272,13 +303,39 @@ async def test_run_uses_configured_spill_settings_and_workspace_relative_spill_d
 
     rendered = await module.execute_tool("run", {"command": "cat notes.txt"}, context=context)
 
-    match = re.search(r"Full stdout spilled to (.+)", rendered)
-    assert match is not None
-    spill_path = Path(match.group(1))
-    assert spill_path.parent == workspace_root / ".mcp" / "spills"
+    spill_root = workspace_root / ".mcp" / "spills"
+    assert spill_root.exists()
+    assert list(spill_root.iterdir()) == []
     assert "line one" in rendered
     assert "line two" not in rendered
+    assert "stored internally" in rendered
+    assert str(spill_root) not in rendered
     assert resolver.calls
+
+
+@pytest.mark.asyncio
+async def test_run_cleans_up_internal_spill_files_after_rendering(tmp_path: Path) -> None:
+    protocol = _ProtocolStub()
+    protocol.read_text_content = "line\n" * 500
+    spill_root = tmp_path / "spills"
+    module = RunCommandModule(
+        ModuleConfig(
+            name="run",
+            settings={
+                "protocol": protocol,
+                "spill_dir": spill_root,
+                "spill_threshold_bytes": 32,
+            },
+        )
+    )
+    context = RequestContext(request_id="run-spill-cleanup", user_id="1", client_id="unit")
+
+    rendered = await module.execute_tool("run", {"command": "cat notes.txt"}, context=context)
+
+    assert "--- stdout truncated" in rendered
+    assert "stored internally" in rendered
+    assert spill_root.exists()
+    assert list(spill_root.iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -314,25 +371,15 @@ async def test_run_supports_json_paths_with_escaped_dots() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_resolve_protocol_logs_before_falling_back(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_resolve_protocol_uses_standalone_protocol_when_server_protocol_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from tldw_Server_API.app.core.MCP_unified import server as server_module
-    from tldw_Server_API.app.core.MCP_unified.modules.implementations import run_command_module as run_module_impl
 
-    warnings: list[str] = []
-
-    def _boom() -> Any:
-        raise RuntimeError("missing server")
-
-    monkeypatch.setattr(server_module, "get_mcp_server", _boom)
-    monkeypatch.setattr(
-        run_module_impl.logger,
-        "warning",
-        lambda message, *args: warnings.append(str(message).format(*args)),
-    )
+    monkeypatch.setattr(server_module, "get_mcp_server", lambda: SimpleNamespace(protocol=None))
 
     module = RunCommandModule(ModuleConfig(name="run"))
 
     protocol = await module._resolve_protocol()
 
     assert isinstance(protocol, MCPProtocol)
-    assert warnings
