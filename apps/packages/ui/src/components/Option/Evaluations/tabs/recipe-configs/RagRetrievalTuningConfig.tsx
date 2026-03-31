@@ -1,6 +1,8 @@
 import React from "react"
 import { Alert, Button, Card, Checkbox, Input, Typography } from "antd"
 import type { DatasetSample } from "@/services/evaluations"
+import { useTranslation } from "react-i18next"
+import { useGenerateSyntheticEvalDrafts } from "../../hooks/useSyntheticEval"
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -16,6 +18,30 @@ type SpanItem = {
   start: number
   end: number
   grade: number
+}
+
+type RetrievalQueryIntent = "lookup" | "comparison" | "synthesis" | "ambiguous"
+
+type RetrievalDifficulty =
+  | "straightforward"
+  | "distractor-heavy"
+  | "multi-source"
+  | "abstention-worthy"
+
+type SyntheticExampleRow = {
+  source_kind: "media_db" | "notes"
+  query: string
+  query_intent: RetrievalQueryIntent
+  difficulty: RetrievalDifficulty
+  media_target_id: string
+  media_target_grade: number
+  note_target_id: string
+  note_target_grade: number
+}
+
+type SyntheticGenerationSummary = {
+  batchId: string
+  sampleCount: number
 }
 
 type Props = {
@@ -44,6 +70,17 @@ const DEFAULT_RETRIEVAL_CONFIG = {
 
 const DEFAULT_INDEXING_CONFIG = {
   chunking_preset: "baseline"
+}
+
+const DEFAULT_SYNTHETIC_EXAMPLE_ROW: SyntheticExampleRow = {
+  source_kind: "media_db",
+  query: "",
+  query_intent: "lookup",
+  difficulty: "straightforward",
+  media_target_id: "",
+  media_target_grade: 1,
+  note_target_id: "",
+  note_target_grade: 1
 }
 
 const splitCsv = (value: string): string[] =>
@@ -159,7 +196,7 @@ const formatSpanText = (items: unknown): string =>
     : ""
 
 const normalizeDataset = (dataset: DatasetSample[]): DatasetSample[] => {
-  const baseSamples = Array.isArray(dataset) && dataset.length > 0 ? dataset : [{}]
+  const baseSamples = Array.isArray(dataset) ? dataset : []
   return baseSamples.map((sample, index) => {
     const sampleRecord = sample && typeof sample === "object" ? sample : {}
     const sampleId =
@@ -184,6 +221,27 @@ const normalizeDataset = (dataset: DatasetSample[]): DatasetSample[] => {
     const normalized: Record<string, any> = {
       sample_id: sampleId,
       query
+    }
+    if (
+      (sampleRecord as Record<string, any>).source_kind === "media_db" ||
+      (sampleRecord as Record<string, any>).source_kind === "notes"
+    ) {
+      normalized.source_kind = (sampleRecord as Record<string, any>).source_kind
+    }
+    if (typeof (sampleRecord as Record<string, any>).query_intent === "string") {
+      normalized.query_intent = (sampleRecord as Record<string, any>).query_intent
+    }
+    if (typeof (sampleRecord as Record<string, any>).difficulty === "string") {
+      normalized.difficulty = (sampleRecord as Record<string, any>).difficulty
+    }
+    if (
+      (sampleRecord as Record<string, any>).metadata &&
+      typeof (sampleRecord as Record<string, any>).metadata === "object" &&
+      !Array.isArray((sampleRecord as Record<string, any>).metadata)
+    ) {
+      normalized.metadata = {
+        ...((sampleRecord as Record<string, any>).metadata as Record<string, any>)
+      }
     }
     if (targets && Object.keys(targets).length > 0) {
       normalized.targets = targets
@@ -254,6 +312,107 @@ const normalizeRunConfig = (runConfig: Record<string, any>) => {
   }
 }
 
+const normalizeTargetItems = (items: unknown): TargetItem[] =>
+  Array.isArray(items)
+    ? items
+        .map((item) => {
+          if (!item || typeof item !== "object") return null
+          const record = item as Record<string, any>
+          const id = String(record.id ?? record.record_id ?? "").trim()
+          if (!id) return null
+          return {
+            id,
+            grade: Math.max(0, Math.min(3, parseInteger(record.grade, 1)))
+          } satisfies TargetItem
+        })
+        .filter((item): item is TargetItem => item !== null)
+    : []
+
+const inferRetrievalExampleSource = (
+  record: Record<string, any>,
+  relevantMediaIds: TargetItem[],
+  relevantNoteIds: TargetItem[],
+  relevantSpans: SpanItem[]
+): "media_db" | "notes" => {
+  if (record.source_kind === "notes" || record.source === "notes") return "notes"
+  if (record.source_kind === "media_db" || record.source === "media_db") return "media_db"
+  if (relevantMediaIds.length > 0) return "media_db"
+  if (relevantNoteIds.length > 0) return "notes"
+  if (relevantSpans.some((span) => span.source === "notes")) return "notes"
+  return "media_db"
+}
+
+const normalizeRetrievalExamples = (dataset: DatasetSample[]): Record<string, any>[] =>
+  dataset
+    .map((sample, index) => {
+      const record = sample && typeof sample === "object" ? (sample as Record<string, any>) : {}
+      const query = String(record.query ?? record.input ?? "").trim()
+      const sampleId = String(record.sample_id ?? record.query_id ?? `sample-${index + 1}`).trim()
+      const targets = record.targets && typeof record.targets === "object" && !Array.isArray(record.targets)
+        ? (record.targets as Record<string, any>)
+        : {}
+
+      const relevantMediaIds = normalizeTargetItems(targets.relevant_media_ids)
+      const relevantNoteIds = normalizeTargetItems(targets.relevant_note_ids)
+      const relevantChunkIds = normalizeTargetItems(targets.relevant_chunk_ids)
+      const relevantSpans = Array.isArray(targets.relevant_spans)
+        ? (targets.relevant_spans as SpanItem[])
+        : []
+
+      const samplePayload: Record<string, any> = { query }
+      if (relevantMediaIds.length > 0) samplePayload.relevant_media_ids = relevantMediaIds
+      if (relevantNoteIds.length > 0) samplePayload.relevant_note_ids = relevantNoteIds
+      if (relevantChunkIds.length > 0) samplePayload.relevant_chunk_ids = relevantChunkIds
+      if (relevantSpans.length > 0) samplePayload.relevant_spans = relevantSpans
+
+      const example: Record<string, any> = {
+        sample_id: sampleId,
+        source_kind: inferRetrievalExampleSource(record, relevantMediaIds, relevantNoteIds, relevantSpans),
+        query_intent:
+          typeof record.query_intent === "string" && record.query_intent.trim()
+            ? record.query_intent.trim()
+            : "lookup",
+        difficulty:
+          typeof record.difficulty === "string" && record.difficulty.trim()
+            ? record.difficulty.trim()
+            : "straightforward",
+        sample_payload: samplePayload
+      }
+
+      return query ? example : null
+    })
+    .filter((item): item is Record<string, any> => item !== null)
+
+const serializeSyntheticExample = (row: SyntheticExampleRow): Record<string, any> | null => {
+  const query = row.query.trim()
+  if (!query) return null
+  const samplePayload: Record<string, any> = { query }
+  const mediaTargetId = row.media_target_id.trim()
+  const noteTargetId = row.note_target_id.trim()
+  if (mediaTargetId) {
+    samplePayload.relevant_media_ids = [
+      {
+        id: mediaTargetId,
+        grade: Math.max(0, Math.min(3, parseInteger(row.media_target_grade, 1)))
+      }
+    ]
+  }
+  if (noteTargetId) {
+    samplePayload.relevant_note_ids = [
+      {
+        id: noteTargetId,
+        grade: Math.max(0, Math.min(3, parseInteger(row.note_target_grade, 1)))
+      }
+    ]
+  }
+  return {
+    source_kind: row.source_kind,
+    query_intent: row.query_intent,
+    difficulty: row.difficulty,
+    sample_payload: samplePayload
+  }
+}
+
 const updateSampleTargets = (
   dataset: DatasetSample[],
   sampleIndex: number,
@@ -289,18 +448,43 @@ export const RagRetrievalTuningConfig: React.FC<Props> = ({
   onDatasetChange,
   onRunConfigChange
 }) => {
+  const { t } = useTranslation(["evaluations", "common"])
   const normalizedDataset = React.useMemo(() => normalizeDataset(dataset), [dataset])
+  const editableDataset = React.useMemo<DatasetSample[]>(
+    () =>
+      normalizedDataset.length > 0
+        ? normalizedDataset
+        : ([{ sample_id: "sample-1", query: "" }] as DatasetSample[]),
+    [normalizedDataset]
+  )
   const normalizedRunConfig = React.useMemo(() => normalizeRunConfig(runConfig), [runConfig])
   const corpusScope = normalizedRunConfig.corpus_scope
   const weakBudget = normalizedRunConfig.weak_supervision_budget
   const isManualMode = normalizedRunConfig.candidate_creation_mode === "manual"
+  const hasValidRetrievalCorpusScope =
+    corpusScope.media_ids.length > 0 || corpusScope.note_ids.length > 0
+  const generateSyntheticDraftsMutation = useGenerateSyntheticEvalDrafts()
+  const [generationTargetCount, setGenerationTargetCount] = React.useState(
+    String(weakBudget.synthetic_query_limit ?? DEFAULT_WEAK_SUPERVISION_BUDGET.synthetic_query_limit)
+  )
+  const [realExamples, setRealExamples] = React.useState<SyntheticExampleRow[]>([
+    { ...DEFAULT_SYNTHETIC_EXAMPLE_ROW }
+  ])
+  const [seedExamples, setSeedExamples] = React.useState<SyntheticExampleRow[]>([
+    { ...DEFAULT_SYNTHETIC_EXAMPLE_ROW }
+  ])
+  const [generationSummary, setGenerationSummary] =
+    React.useState<SyntheticGenerationSummary | null>(null)
+  const [generationError, setGenerationError] = React.useState<string | null>(null)
 
   const applyRunConfig = (updater: (current: Record<string, any>) => Record<string, any>) => {
     onRunConfigChange(updater(normalizeRunConfig(runConfig)))
   }
 
   const applyDataset = (updater: (current: DatasetSample[]) => DatasetSample[]) => {
-    onDatasetChange(updater(normalizeDataset(dataset)))
+    onDatasetChange(
+      updater(datasetSource === "inline" ? editableDataset : normalizedDataset)
+    )
   }
 
   const toggleSource = (source: "media_db" | "notes", checked: boolean) => {
@@ -317,6 +501,81 @@ export const RagRetrievalTuningConfig: React.FC<Props> = ({
         }
       }
     })
+  }
+
+  const addRealExample = () => {
+    setRealExamples((current) => [...current, { ...DEFAULT_SYNTHETIC_EXAMPLE_ROW }])
+  }
+
+  const updateRealExample = (
+    index: number,
+    updater: (current: SyntheticExampleRow) => SyntheticExampleRow
+  ) => {
+    setRealExamples((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? updater({ ...row }) : row))
+    )
+  }
+
+  const removeRealExample = (index: number) => {
+    setRealExamples((current) =>
+      current.length <= 1 ? current : current.filter((_, rowIndex) => rowIndex !== index)
+    )
+  }
+
+  const addSeedExample = () => {
+    setSeedExamples((current) => [...current, { ...DEFAULT_SYNTHETIC_EXAMPLE_ROW }])
+  }
+
+  const updateSeedExample = (
+    index: number,
+    updater: (current: SyntheticExampleRow) => SyntheticExampleRow
+  ) => {
+    setSeedExamples((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? updater({ ...row }) : row))
+    )
+  }
+
+  const removeSeedExample = (index: number) => {
+    setSeedExamples((current) => (current.length <= 1 ? current : current.filter((_, rowIndex) => rowIndex !== index)))
+  }
+
+  const handleGenerateSyntheticDrafts = async () => {
+    if (!hasValidRetrievalCorpusScope) return
+    setGenerationError(null)
+    try {
+      const response = await generateSyntheticDraftsMutation.mutateAsync({
+        recipe_kind: "rag_retrieval_tuning",
+        corpus_scope: {
+          ...corpusScope,
+          media_ids: [...corpusScope.media_ids],
+          note_ids: [...corpusScope.note_ids],
+          indexing_fixed: Boolean(corpusScope.indexing_fixed)
+        },
+        real_examples:
+          datasetSource === "saved"
+            ? normalizeRetrievalExamples(normalizedDataset)
+            : realExamples
+                .map((row) => serializeSyntheticExample(row))
+                .filter((item): item is Record<string, any> => item !== null),
+        seed_examples: seedExamples
+          .map((row) => serializeSyntheticExample(row))
+          .filter((item): item is Record<string, any> => item !== null),
+        target_sample_count: Math.max(parseInteger(generationTargetCount, weakBudget.synthetic_query_limit), 1)
+      })
+
+      setGenerationSummary({
+        batchId: String(response?.data?.generation_batch_id || ""),
+        sampleCount: Array.isArray(response?.data?.samples) ? response.data.samples.length : 0
+      })
+    } catch (error: any) {
+      setGenerationSummary(null)
+      setGenerationError(
+        error?.message ||
+          t("evaluations:syntheticGenerationInlineErrorDescription", {
+            defaultValue: "Unable to generate synthetic drafts right now."
+          })
+      )
+    }
   }
 
   return (
@@ -395,10 +654,541 @@ export const RagRetrievalTuningConfig: React.FC<Props> = ({
         </div>
       </div>
 
+      <Card
+        size="small"
+        title={t("evaluations:syntheticRetrievalGenerationTitle", {
+          defaultValue: "Synthetic generation"
+        })}
+      >
+        <div className="space-y-4">
+          {generationSummary && (
+            <Alert
+              type="success"
+              showIcon
+              title={t("evaluations:syntheticGenerationSuccessInlineTitle", {
+                defaultValue: "Synthetic drafts created"
+              })}
+              description={t("evaluations:syntheticGenerationSuccessInlineDescription", {
+                defaultValue:
+                  "Batch {{batchId}} created {{count}} drafts and is ready for review.",
+                batchId: generationSummary.batchId,
+                count: generationSummary.sampleCount
+              })}
+            />
+          )}
+          {generationError && (
+            <Alert
+              type="error"
+              showIcon
+              title={t("evaluations:syntheticGenerationErrorTitle", {
+                defaultValue: "Failed to generate synthetic drafts"
+              })}
+              description={generationError}
+            />
+          )}
+
+          <div className="space-y-2">
+            <Text strong>
+              {t("evaluations:syntheticRetrievalTotalCountLabel", {
+                defaultValue: "Total draft set size"
+              })}
+            </Text>
+            <Input
+              aria-label={t("evaluations:syntheticRetrievalTotalCountLabel", {
+                defaultValue: "Total draft set size"
+              })}
+              className="mt-2"
+              inputMode="numeric"
+              value={generationTargetCount}
+              onChange={(event) => setGenerationTargetCount(event.target.value)}
+            />
+            <div className="text-xs text-text-muted">
+              {t("evaluations:syntheticRetrievalTotalCountHelp", {
+                defaultValue:
+                  "This is the total draft set size, including preferred real examples and synthetic fill."
+              })}
+            </div>
+          </div>
+
+          <Alert
+            type="info"
+            showIcon
+            title={t("evaluations:syntheticRetrievalCorpusSummaryLabel", {
+              defaultValue: "Current corpus scope"
+            })}
+            description={t("evaluations:syntheticRetrievalCorpusSummaryDescription", {
+              defaultValue:
+                "{{mediaCount}} media IDs, {{noteCount}} note IDs, indexing fixed: {{indexingFixed}}",
+              mediaCount: corpusScope.media_ids.length,
+              noteCount: corpusScope.note_ids.length,
+              indexingFixed: corpusScope.indexing_fixed ? "yes" : "no"
+            })}
+          />
+
+          <div className="space-y-2">
+            <Text strong>
+              {t("evaluations:syntheticRetrievalRealExamplesLabel", {
+                defaultValue: "Current dataset samples used as real examples"
+              })}
+            </Text>
+            {datasetSource === "saved" ? (
+              <div className="space-y-2">
+                {normalizedDataset.length > 0 ? (
+                  normalizedDataset.map((sample, index) => {
+                    const record = sample as Record<string, any>
+                    const targets = (record.targets as Record<string, any> | undefined) || {}
+                    return (
+                      <Card
+                        key={`retrieval-real-example-${index}`}
+                        size="small"
+                        title={t("evaluations:syntheticRetrievalRealExampleTitle", {
+                          defaultValue: "Real example {{index}}",
+                          index: index + 1
+                        })}
+                      >
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div>
+                            <Text strong>{t("evaluations:syntheticRetrievalQueryLabel", { defaultValue: "Query" })}</Text>
+                            <div className="text-sm text-text-muted">{String(record.query || "") || "No query text"}</div>
+                          </div>
+                          <div>
+                            <Text strong>{t("evaluations:syntheticRetrievalMediaTargetsLabel", { defaultValue: "Relevant media IDs" })}</Text>
+                            <div className="text-sm text-text-muted">
+                              {formatTargetText(targets.relevant_media_ids) || "None"}
+                            </div>
+                          </div>
+                          <div>
+                            <Text strong>{t("evaluations:syntheticRetrievalNoteTargetsLabel", { defaultValue: "Relevant note IDs" })}</Text>
+                            <div className="text-sm text-text-muted">
+                              {formatTargetText(targets.relevant_note_ids) || "None"}
+                            </div>
+                          </div>
+                          <div>
+                            <Text strong>{t("evaluations:syntheticRetrievalChunkTargetsLabel", { defaultValue: "Relevant chunk IDs" })}</Text>
+                            <div className="text-sm text-text-muted">
+                              {formatTargetText(targets.relevant_chunk_ids) || "None"}
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+                    )
+                  })
+                ) : (
+                  <div className="text-sm text-text-muted">
+                    {t("evaluations:syntheticRetrievalNoRealExamples", {
+                      defaultValue: "No dataset samples are available yet."
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <Text strong>
+                    {t("evaluations:syntheticRetrievalInlineRealExamplesLabel", {
+                      defaultValue: "Real examples"
+                    })}
+                  </Text>
+                  <Button size="small" onClick={addRealExample}>
+                    {t("evaluations:syntheticRetrievalAddRealExampleCta", {
+                      defaultValue: "Add real example"
+                    })}
+                  </Button>
+                </div>
+                {realExamples.map((row, index) => (
+                  <Card
+                    key={`retrieval-inline-real-example-${index}`}
+                    size="small"
+                    title={t("evaluations:syntheticRetrievalRealExampleTitle", {
+                      defaultValue: "Real example {{index}}",
+                      index: index + 1
+                    })}
+                    extra={
+                      <Button
+                        size="small"
+                        onClick={() => removeRealExample(index)}
+                        disabled={realExamples.length <= 1}
+                      >
+                        {t("evaluations:syntheticRetrievalRemoveSeedExampleCta", {
+                          defaultValue: "Remove"
+                        })}
+                      </Button>
+                    }
+                  >
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="md:col-span-2">
+                        <Text strong>{t("evaluations:syntheticRetrievalQueryLabel", { defaultValue: "Query" })} {index + 1}</Text>
+                        <Input
+                          aria-label={`Real example ${index + 1} query`}
+                          className="mt-2"
+                          value={row.query}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              query: event.target.value
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalSourceLabel", { defaultValue: "Source" })} {index + 1}</Text>
+                        <select
+                          aria-label={`Real example ${index + 1} source`}
+                          className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                          value={row.source_kind}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              source_kind: event.target.value === "notes" ? "notes" : "media_db"
+                            }))
+                          }
+                        >
+                          <option value="media_db">media_db</option>
+                          <option value="notes">notes</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalQueryIntentLabel", { defaultValue: "Query intent" })} {index + 1}</Text>
+                        <select
+                          aria-label={`Real example ${index + 1} query intent`}
+                          className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                          value={row.query_intent}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              query_intent: event.target.value as RetrievalQueryIntent
+                            }))
+                          }
+                        >
+                          <option value="lookup">lookup</option>
+                          <option value="comparison">comparison</option>
+                          <option value="synthesis">synthesis</option>
+                          <option value="ambiguous">ambiguous</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalDifficultyLabel", { defaultValue: "Difficulty" })} {index + 1}</Text>
+                        <select
+                          aria-label={`Real example ${index + 1} difficulty`}
+                          className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                          value={row.difficulty}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              difficulty: event.target.value as RetrievalDifficulty
+                            }))
+                          }
+                        >
+                          <option value="straightforward">straightforward</option>
+                          <option value="distractor-heavy">distractor-heavy</option>
+                          <option value="multi-source">multi-source</option>
+                          <option value="abstention-worthy">abstention-worthy</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalMediaTargetIdLabel", { defaultValue: "Relevant media ID" })} {index + 1}</Text>
+                        <Input
+                          aria-label={`Real example ${index + 1} relevant media ID`}
+                          className="mt-2"
+                          value={row.media_target_id}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              media_target_id: event.target.value
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalMediaTargetGradeLabel", { defaultValue: "Media grade" })} {index + 1}</Text>
+                        <Input
+                          aria-label={`Real example ${index + 1} media grade`}
+                          className="mt-2"
+                          inputMode="numeric"
+                          value={String(row.media_target_grade)}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              media_target_grade: Math.max(0, Math.min(3, parseInteger(event.target.value, 1)))
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalNoteTargetIdLabel", { defaultValue: "Relevant note ID" })} {index + 1}</Text>
+                        <Input
+                          aria-label={`Real example ${index + 1} relevant note ID`}
+                          className="mt-2"
+                          value={row.note_target_id}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              note_target_id: event.target.value
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Text strong>{t("evaluations:syntheticRetrievalNoteTargetGradeLabel", { defaultValue: "Note grade" })} {index + 1}</Text>
+                        <Input
+                          aria-label={`Real example ${index + 1} note grade`}
+                          className="mt-2"
+                          inputMode="numeric"
+                          value={String(row.note_target_grade)}
+                          onChange={(event) =>
+                            updateRealExample(index, (current) => ({
+                              ...current,
+                              note_target_grade: Math.max(0, Math.min(3, parseInteger(event.target.value, 1)))
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <Text strong>
+                {t("evaluations:syntheticRetrievalSeedExamplesLabel", {
+                  defaultValue: "Seed examples"
+                })}
+              </Text>
+              <Button size="small" onClick={addSeedExample}>
+                {t("evaluations:syntheticRetrievalAddSeedExampleCta", {
+                  defaultValue: "Add seed example"
+                })}
+              </Button>
+            </div>
+            {seedExamples.map((row, index) => (
+              <Card
+                key={`retrieval-seed-example-${index}`}
+                size="small"
+                title={t("evaluations:syntheticRetrievalSeedExampleTitle", {
+                  defaultValue: "Seed example {{index}}",
+                  index: index + 1
+                })}
+                extra={
+                  <Button
+                    size="small"
+                    onClick={() => removeSeedExample(index)}
+                    disabled={seedExamples.length <= 1}
+                  >
+                    {t("evaluations:syntheticRetrievalRemoveSeedExampleCta", {
+                      defaultValue: "Remove"
+                    })}
+                  </Button>
+                }
+              >
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="md:col-span-2">
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalQueryLabel", { defaultValue: "Query" })}{" "}
+                      {index + 1}
+                    </Text>
+                    <Input
+                      aria-label={`Seed example ${index + 1} query`}
+                      className="mt-2"
+                      value={row.query}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          query: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalSourceLabel", {
+                        defaultValue: "Source"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <select
+                      aria-label={`Seed example ${index + 1} source`}
+                      className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      value={row.source_kind}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          source_kind:
+                            event.target.value === "notes" ? "notes" : "media_db"
+                        }))
+                      }
+                    >
+                      <option value="media_db">media_db</option>
+                      <option value="notes">notes</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalQueryIntentLabel", {
+                        defaultValue: "Query intent"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <select
+                      aria-label={`Seed example ${index + 1} query intent`}
+                      className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      value={row.query_intent}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          query_intent: event.target.value as RetrievalQueryIntent
+                        }))
+                      }
+                    >
+                      <option value="lookup">lookup</option>
+                      <option value="comparison">comparison</option>
+                      <option value="synthesis">synthesis</option>
+                      <option value="ambiguous">ambiguous</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalDifficultyLabel", {
+                        defaultValue: "Difficulty"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <select
+                      aria-label={`Seed example ${index + 1} difficulty`}
+                      className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      value={row.difficulty}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          difficulty: event.target.value as RetrievalDifficulty
+                        }))
+                      }
+                    >
+                      <option value="straightforward">straightforward</option>
+                      <option value="distractor-heavy">distractor-heavy</option>
+                      <option value="multi-source">multi-source</option>
+                      <option value="abstention-worthy">abstention-worthy</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalMediaTargetIdLabel", {
+                        defaultValue: "Relevant media ID"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <Input
+                      aria-label={`Seed example ${index + 1} relevant media ID`}
+                      className="mt-2"
+                      value={row.media_target_id}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          media_target_id: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalMediaTargetGradeLabel", {
+                        defaultValue: "Media grade"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <Input
+                      aria-label={`Seed example ${index + 1} media grade`}
+                      className="mt-2"
+                      inputMode="numeric"
+                      value={String(row.media_target_grade)}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          media_target_grade: Math.max(
+                            0,
+                            Math.min(3, parseInteger(event.target.value, 1))
+                          )
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalNoteTargetIdLabel", {
+                        defaultValue: "Relevant note ID"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <Input
+                      aria-label={`Seed example ${index + 1} relevant note ID`}
+                      className="mt-2"
+                      value={row.note_target_id}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          note_target_id: event.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Text strong>
+                      {t("evaluations:syntheticRetrievalNoteTargetGradeLabel", {
+                        defaultValue: "Note grade"
+                      })}{" "}
+                      {index + 1}
+                    </Text>
+                    <Input
+                      aria-label={`Seed example ${index + 1} note grade`}
+                      className="mt-2"
+                      inputMode="numeric"
+                      value={String(row.note_target_grade)}
+                      onChange={(event) =>
+                        updateSeedExample(index, (current) => ({
+                          ...current,
+                          note_target_grade: Math.max(
+                            0,
+                            Math.min(3, parseInteger(event.target.value, 1))
+                          )
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-text-muted">
+              {hasValidRetrievalCorpusScope
+                ? t("evaluations:syntheticRetrievalReadyHint", {
+                    defaultValue: "Generation is ready once you have filled the preferred examples."
+                  })
+                : t("evaluations:syntheticRetrievalReadyMissingScope", {
+                    defaultValue: "Add at least one media ID or note ID before generating drafts."
+                  })}
+            </div>
+            <Button
+              type="primary"
+              onClick={() => void handleGenerateSyntheticDrafts()}
+              disabled={!hasValidRetrievalCorpusScope || generateSyntheticDraftsMutation.isPending}
+              loading={generateSyntheticDraftsMutation.isPending}
+            >
+              {t("evaluations:syntheticRetrievalGenerateCta", {
+                defaultValue: "Generate synthetic drafts"
+              })}
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       {datasetSource === "inline" && (
         <div className="space-y-3">
           <Text strong>Dataset samples</Text>
-          {normalizedDataset.map((sample, index) => {
+          {editableDataset.map((sample, index) => {
             const targets = ((sample as Record<string, any>).targets as Record<string, any> | undefined) || {}
             return (
               <Card
@@ -413,7 +1203,7 @@ export const RagRetrievalTuningConfig: React.FC<Props> = ({
                         current.filter((_, datasetIndex) => datasetIndex !== index)
                       )
                     }
-                    disabled={normalizedDataset.length <= 1}
+                    disabled={editableDataset.length <= 1}
                   >
                     Remove
                   </Button>

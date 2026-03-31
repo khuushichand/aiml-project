@@ -120,6 +120,21 @@ const datasetsState = {
   isError: false
 }
 
+const renderRecipesTab = () => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false }
+    }
+  })
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RecipesTab />
+    </QueryClientProvider>
+  )
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -526,7 +541,7 @@ describe("RecipesTab recipe launch flow", () => {
   })
 
   it("validates, launches, and renders the current recipe report", async () => {
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     expect(screen.getAllByText("Summarization Quality").length).toBeGreaterThan(0)
     expect(screen.getByText("Embeddings Model Selection")).toBeInTheDocument()
@@ -562,7 +577,7 @@ describe("RecipesTab recipe launch flow", () => {
   })
 
   it("serializes guided summarization inputs into dataset and run config payloads", async () => {
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.change(screen.getByLabelText("Source text 1"), {
       target: { value: "Meeting transcript covering alpha and beta decisions." }
@@ -631,7 +646,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     })
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use RAG Answer Quality" }))
     fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
@@ -650,7 +665,7 @@ describe("RecipesTab recipe launch flow", () => {
   })
 
   it("serializes guided embeddings inputs into runnable retrieval payloads", async () => {
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use Embeddings Model Selection" }))
     fireEvent.change(screen.getByLabelText("Query ID 1"), {
@@ -717,7 +732,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
     fireEvent.change(screen.getByLabelText("Media IDs"), {
@@ -841,7 +856,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use RAG Answer Quality" }))
     fireEvent.change(screen.getByLabelText("Context snapshot reference"), {
@@ -955,7 +970,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
 
@@ -988,7 +1003,7 @@ describe("RecipesTab recipe launch flow", () => {
   })
 
   it("keeps raw JSON behind an advanced section while reflecting guided edits", async () => {
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     expect(screen.queryByText("Inline dataset JSON")).not.toBeInTheDocument()
     expect(screen.queryByText("Run config JSON")).not.toBeInTheDocument()
@@ -1013,7 +1028,7 @@ describe("RecipesTab recipe launch flow", () => {
       "Add or update your API key in Settings -> tldw server, then try again."
     )
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     expect(screen.getByText("Unable to load recipes")).toBeInTheDocument()
     expect(
@@ -1029,7 +1044,7 @@ describe("RecipesTab recipe launch flow", () => {
   it("maps recipe enqueue failures to recovery guidance", async () => {
     createSpy.mockRejectedValue(new Error("recipe_run_enqueue_failed"))
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use Summarization Quality" }))
     fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
@@ -1059,7 +1074,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     expect(
       screen.getByText(
@@ -1123,7 +1138,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     expect(
       screen.getByText(
@@ -1149,7 +1164,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Validate dataset" }))
 
@@ -1169,7 +1184,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     expect(screen.getByRole("button", { name: "Saved dataset" })).toBeDisabled()
     expect(
@@ -1191,7 +1206,7 @@ describe("RecipesTab recipe launch flow", () => {
       }
     }
 
-    render(<RecipesTab />)
+    renderRecipesTab()
 
     fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
     fireEvent.click(
