@@ -147,6 +147,7 @@ class SyntheticEvalRepository:
         recipe_kind: str | None = None,
         review_state: str | SyntheticEvalReviewState | None = None,
         source_kind: str | None = None,
+        generation_batch_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -168,8 +169,7 @@ class SyntheticEvalRepository:
         if source_kind:
             query += " AND source_kind = ?"
             params.append(source_kind)
-        query += " ORDER BY created_at DESC, sample_id DESC LIMIT ? OFFSET ?"
-        params.extend([max(1, int(limit)), max(0, int(offset))])
+        query += " ORDER BY created_at DESC, sample_id DESC"
 
         with self._db.get_connection() as conn:
             cursor = conn.cursor()
@@ -183,6 +183,17 @@ class SyntheticEvalRepository:
             payload["sample_metadata"] = _json_load(payload.pop("sample_metadata_json", None)) or {}
             payload.pop("review_summary_json", None)
             results.append(payload)
+
+        if generation_batch_id:
+            results = [
+                sample
+                for sample in results
+                if str((sample.get("sample_metadata") or {}).get("generation_batch_id") or "") == generation_batch_id
+            ]
+
+        start = max(0, int(offset))
+        end = start + max(1, int(limit))
+        results = results[start:end]
         return results
 
     def get_draft_samples(self, sample_ids: list[str]) -> list[dict[str, Any]]:

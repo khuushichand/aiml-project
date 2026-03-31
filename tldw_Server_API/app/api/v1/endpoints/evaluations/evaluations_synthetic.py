@@ -49,6 +49,10 @@ async def generate_synthetic_drafts(
         result = service.generate_draft_batch(
             recipe_kind=payload.recipe_kind,
             corpus_scope=payload.corpus_scope,
+            generation_metadata=payload.generation_metadata,
+            context_snapshot_ref=payload.context_snapshot_ref,
+            retrieval_baseline_ref=payload.retrieval_baseline_ref,
+            reference_answer=payload.reference_answer,
             real_examples=payload.real_examples,
             seed_examples=payload.seed_examples,
             target_sample_count=payload.target_sample_count,
@@ -61,15 +65,12 @@ async def generate_synthetic_drafts(
 
     corpus_scope = result.corpus_scope
     return SyntheticEvalGenerationResponse(
+        generation_batch_id=result.generation_batch_id,
         samples=result.samples,
         source_breakdown=result.source_breakdown,
         coverage=result.coverage,
         missing_coverage=result.missing_coverage,
-        corpus_scope={
-            "sources": list(corpus_scope.sources) if corpus_scope else [],
-            "recipe_kind": corpus_scope.recipe_kind if corpus_scope else None,
-            "corpus_name": corpus_scope.corpus_name if corpus_scope else None,
-        },
+        corpus_scope=corpus_scope.to_metadata_dict() if corpus_scope else {},
     )
 
 
@@ -82,6 +83,7 @@ async def list_synthetic_queue(
     recipe_kind: str | None = Query(default=None),
     review_state: str | None = Query(default=None),
     source_kind: str | None = Query(default=None),
+    generation_batch_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user_ctx: str = Depends(verify_api_key),
@@ -93,6 +95,7 @@ async def list_synthetic_queue(
         recipe_kind=recipe_kind,
         review_state=review_state,
         source_kind=source_kind,
+        generation_batch_id=generation_batch_id,
         limit=limit,
         offset=offset,
     )

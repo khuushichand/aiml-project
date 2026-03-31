@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -34,6 +35,7 @@ from tldw_Server_API.app.core.Evaluations.synthetic_eval_repository import (
 class SyntheticEvalGenerationResult:
     """Structured result for a draft generation batch."""
 
+    generation_batch_id: str | None = None
     samples: list[dict[str, Any]] = field(default_factory=list)
     source_breakdown: dict[str, int] = field(default_factory=dict)
     coverage: dict[str, list[str]] = field(default_factory=dict)
@@ -69,6 +71,10 @@ class SyntheticEvalGenerationService:
         *,
         recipe_kind: str,
         corpus_scope: SyntheticEvalCorpusScope | Sequence[str] | None = None,
+        generation_metadata: dict[str, Any] | None = None,
+        context_snapshot_ref: str | None = None,
+        retrieval_baseline_ref: str | None = None,
+        reference_answer: str | None = None,
         real_examples: Sequence[dict[str, Any]] | None = None,
         seed_examples: Sequence[dict[str, Any]] | None = None,
         target_sample_count: int = 0,
@@ -78,6 +84,33 @@ class SyntheticEvalGenerationService:
         """Generate a mixed batch using real, seed, and synthetic examples."""
 
         resolved_scope = resolve_corpus_scope(corpus_scope)
+        generation_batch_id = f"synth_gen_{uuid.uuid4().hex[:12]}"
+        resolved_generation_metadata = dict(generation_metadata or {})
+        context_snapshot_ref = self._resolve_generation_field(
+            explicit_value=context_snapshot_ref,
+            metadata=resolved_generation_metadata,
+            metadata_key="context_snapshot_ref",
+        )
+        retrieval_baseline_ref = self._resolve_generation_field(
+            explicit_value=retrieval_baseline_ref,
+            metadata=resolved_generation_metadata,
+            metadata_key="retrieval_baseline_ref",
+        )
+        reference_answer = self._resolve_generation_field(
+            explicit_value=reference_answer,
+            metadata=resolved_generation_metadata,
+            metadata_key="reference_answer",
+        )
+        anchor_fields: dict[str, Any] = {}
+        if context_snapshot_ref is not None:
+            resolved_generation_metadata.setdefault("context_snapshot_ref", context_snapshot_ref)
+            anchor_fields["context_snapshot_ref"] = context_snapshot_ref
+        if retrieval_baseline_ref is not None:
+            resolved_generation_metadata.setdefault("retrieval_baseline_ref", retrieval_baseline_ref)
+            anchor_fields["retrieval_baseline_ref"] = retrieval_baseline_ref
+        if reference_answer is not None:
+            resolved_generation_metadata.setdefault("reference_answer", reference_answer)
+            anchor_fields["reference_answer"] = reference_answer
         plan: SyntheticEvalGenerationPlan = ingest_examples(
             real_examples=real_examples,
             seed_examples=seed_examples,
@@ -100,22 +133,32 @@ class SyntheticEvalGenerationService:
         synthetic_samples = convert_structured_tuples_to_draft_samples(
             recipe_kind=recipe_kind,
             structured_tuples=structured_tuples,
+            corpus_scope=resolved_scope,
+            generation_batch_id=generation_batch_id,
+            generation_metadata=resolved_generation_metadata,
+            sample_payload_overrides=anchor_fields,
         )
 
         persisted_samples: list[dict[str, Any]] = []
         for example in self._ordered_examples(plan.examples) + synthetic_samples:
             provenance = self._normalize_provenance(example.get("provenance"))
             sample_id = str(example.get("sample_id") or self._build_sample_id(recipe_kind, provenance, len(persisted_samples) + 1))
+            sample_payload = dict(example.get("sample_payload") or {})
+            for field_name, field_value in anchor_fields.items():
+                sample_payload.setdefault(field_name, field_value)
             draft_row = self.repository.create_draft_sample(
                 sample_id=sample_id,
                 recipe_kind=example.get("recipe_kind") or recipe_kind,
-                sample_payload=dict(example.get("sample_payload") or {}),
+                sample_payload=sample_payload,
                 provenance=provenance,
                 review_state=example.get("review_state") or SyntheticEvalReviewState.DRAFT.value,
                 sample_metadata=self._build_sample_metadata(
                     example=example,
                     recipe_kind=recipe_kind,
                     created_by=created_by,
+                    corpus_scope=resolved_scope,
+                    generation_batch_id=generation_batch_id,
+                    generation_metadata=resolved_generation_metadata,
                 ),
                 source_kind=example.get("source_kind"),
                 created_by=created_by,
@@ -125,6 +168,7 @@ class SyntheticEvalGenerationService:
         coverage = summarize_coverage(persisted_samples)
         source_breakdown = self._build_source_breakdown(persisted_samples)
         return SyntheticEvalGenerationResult(
+            generation_batch_id=generation_batch_id,
             samples=persisted_samples,
             source_breakdown=source_breakdown,
             coverage={
@@ -166,6 +210,9 @@ class SyntheticEvalGenerationService:
         example: dict[str, Any],
         recipe_kind: str,
         created_by: str | None,
+        corpus_scope: SyntheticEvalCorpusScope,
+        generation_batch_id: str,
+        generation_metadata: dict[str, Any],
     ) -> dict[str, Any]:
         metadata = dict(example.get("sample_metadata") or {})
         metadata.setdefault("recipe_kind", recipe_kind)
@@ -174,6 +221,9 @@ class SyntheticEvalGenerationService:
         metadata.setdefault("difficulty", example.get("difficulty"))
         metadata.setdefault("created_by", created_by)
         metadata.setdefault("generation_stage", "generation_service")
+        metadata.setdefault("generation_batch_id", generation_batch_id)
+        metadata.setdefault("corpus_scope", corpus_scope.to_metadata_dict())
+        metadata.setdefault("generation_metadata", dict(generation_metadata))
         return metadata
 
     def _build_sample_id(self, recipe_kind: str, provenance: str, index: int) -> str:
@@ -189,6 +239,27 @@ class SyntheticEvalGenerationService:
         if provenance == "seed_examples":
             return SyntheticEvalProvenance.SYNTHETIC_FROM_SEED_EXAMPLES.value
         return str(provenance or SyntheticEvalProvenance.SYNTHETIC_FROM_CORPUS.value)
+
+    def _resolve_generation_field(
+        self,
+        *,
+        explicit_value: Any,
+        metadata: dict[str, Any],
+        metadata_key: str,
+    ) -> Any:
+        """Resolve a field from explicit input or request metadata."""
+
+        if explicit_value is not None:
+            if isinstance(explicit_value, str) and not explicit_value.strip():
+                pass
+            else:
+                return explicit_value
+        value = metadata.get(metadata_key)
+        if value is not None:
+            if isinstance(value, str) and not value.strip():
+                return None
+            return value
+        return None
 
 
 class SyntheticEvalWorkflowService:
@@ -222,6 +293,7 @@ class SyntheticEvalWorkflowService:
         recipe_kind: str | None = None,
         review_state: str | None = None,
         source_kind: str | None = None,
+        generation_batch_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -231,6 +303,7 @@ class SyntheticEvalWorkflowService:
             recipe_kind=recipe_kind,
             review_state=review_state,
             source_kind=source_kind,
+            generation_batch_id=generation_batch_id,
             limit=limit,
             offset=offset,
         )

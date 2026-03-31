@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.Evaluations.synthetic_eval_generation import (
 from tldw_Server_API.app.core.Evaluations.synthetic_eval_repository import SyntheticEvalRepository
 from tldw_Server_API.app.core.Evaluations.synthetic_eval_service import (
     SyntheticEvalGenerationService,
+    SyntheticEvalWorkflowService,
 )
 
 
@@ -27,6 +28,12 @@ def _service(tmp_path) -> SyntheticEvalGenerationService:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
     repository = SyntheticEvalRepository(db)
     return SyntheticEvalGenerationService(repository=repository)
+
+
+def _workflow_service(tmp_path) -> SyntheticEvalWorkflowService:
+    db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
+    repository = SyntheticEvalRepository(db)
+    return SyntheticEvalWorkflowService(db=db, repository=repository)
 
 
 def test_evaluations_sqlite_connections_enable_foreign_keys(tmp_path) -> None:
@@ -191,6 +198,56 @@ def test_repository_preserves_real_edited_provenance_after_edit_and_approve(tmp_
     assert row["review_state"] == "approved"  # nosec B101
 
 
+def test_repository_filters_draft_samples_by_generation_batch_id(tmp_path) -> None:
+    repository = _repository(tmp_path)
+
+    repository.create_draft_sample(
+        sample_id="sample-batch-a",
+        recipe_kind="rag_retrieval_tuning",
+        sample_payload={"query": "Batch A"},
+        provenance=SyntheticEvalProvenance.SYNTHETIC_FROM_CORPUS.value,
+        review_state=SyntheticEvalReviewState.DRAFT.value,
+        sample_metadata={"generation_batch_id": "batch-a"},
+    )
+    repository.create_draft_sample(
+        sample_id="sample-batch-b",
+        recipe_kind="rag_retrieval_tuning",
+        sample_payload={"query": "Batch B"},
+        provenance=SyntheticEvalProvenance.SYNTHETIC_FROM_CORPUS.value,
+        review_state=SyntheticEvalReviewState.DRAFT.value,
+        sample_metadata={"generation_batch_id": "batch-b"},
+    )
+
+    rows = repository.list_draft_samples(generation_batch_id="batch-a")
+
+    assert [row["sample_id"] for row in rows] == ["sample-batch-a"]  # nosec B101
+
+
+def test_service_filters_queue_by_generation_batch_id(tmp_path) -> None:
+    service = _workflow_service(tmp_path)
+
+    service.repository.create_draft_sample(
+        sample_id="sample-service-a",
+        recipe_kind="rag_retrieval_tuning",
+        sample_payload={"query": "Batch A"},
+        provenance=SyntheticEvalProvenance.SYNTHETIC_FROM_CORPUS.value,
+        review_state=SyntheticEvalReviewState.DRAFT.value,
+        sample_metadata={"generation_batch_id": "batch-a"},
+    )
+    service.repository.create_draft_sample(
+        sample_id="sample-service-b",
+        recipe_kind="rag_retrieval_tuning",
+        sample_payload={"query": "Batch B"},
+        provenance=SyntheticEvalProvenance.SYNTHETIC_FROM_CORPUS.value,
+        review_state=SyntheticEvalReviewState.DRAFT.value,
+        sample_metadata={"generation_batch_id": "batch-b"},
+    )
+
+    queue = service.list_queue(generation_batch_id="batch-a")
+
+    assert [row["sample_id"] for row in queue["data"]] == ["sample-service-a"]  # nosec B101
+
+
 def test_generation_prefers_real_examples_before_seed_and_synthetic_fill(tmp_path) -> None:
     service = _service(tmp_path)
     generation_calls: list[dict[str, object]] = []
@@ -252,6 +309,75 @@ def test_generation_prefers_real_examples_before_seed_and_synthetic_fill(tmp_pat
         "synthetic_from_seed_examples",
         "synthetic_from_corpus",
     ]
+
+
+def test_generation_batch_response_preserves_generation_batch_id_and_scope_metadata(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    result = service.generate_draft_batch(
+        recipe_kind="rag_retrieval_tuning",
+        corpus_scope={
+            "sources": ["media_db"],
+            "media_ids": [10],
+            "note_ids": ["note-7"],
+            "indexing_fixed": True,
+        },
+        target_sample_count=1,
+        tuple_generator=lambda **kwargs: [
+            SyntheticEvalStructuredTuple(
+                source_kind="media_db",
+                query_intent="lookup",
+                difficulty="straightforward",
+                query="What does the policy say?",
+                failure_mode="missing_relevant_span",
+                target_payload={"relevant_media_ids": [10]},
+                provenance_hint="synthetic_from_corpus",
+            )
+        ],
+    )
+
+    sample_metadata = result.samples[0]["sample_metadata"]
+
+    assert result.generation_batch_id  # nosec B101
+    assert sample_metadata["generation_batch_id"] == result.generation_batch_id  # nosec B101
+    assert sample_metadata["corpus_scope"]["media_ids"] == [10]  # nosec B101
+    assert sample_metadata["corpus_scope"]["note_ids"] == ["note-7"]  # nosec B101
+    assert sample_metadata["corpus_scope"]["indexing_fixed"] is True  # nosec B101
+
+
+def test_generation_batch_response_preserves_answer_quality_anchor_metadata(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    result = service.generate_draft_batch(
+        recipe_kind="rag_answer_quality",
+        corpus_scope={"sources": ["notes"]},
+        context_snapshot_ref="context-1",
+        retrieval_baseline_ref="baseline-1",
+        reference_answer="The answer should hedge because context is insufficient.",
+        target_sample_count=1,
+        tuple_generator=lambda **kwargs: [
+            SyntheticEvalStructuredTuple(
+                source_kind="notes",
+                query_intent="comparison",
+                difficulty="distractor-heavy",
+                query="Should this answer hedge?",
+                failure_mode="comparison_confusion",
+                target_payload={"expected_behavior": "hedge"},
+                provenance_hint="synthetic_from_corpus",
+            )
+        ],
+    )
+
+    sample_metadata = result.samples[0]["sample_metadata"]
+    sample_payload = result.samples[0]["sample_payload"]
+
+    assert result.generation_batch_id  # nosec B101
+    assert sample_metadata["generation_batch_id"] == result.generation_batch_id  # nosec B101
+    assert sample_metadata["generation_metadata"]["context_snapshot_ref"] == "context-1"  # nosec B101
+    assert sample_metadata["generation_metadata"]["retrieval_baseline_ref"] == "baseline-1"  # nosec B101
+    assert sample_payload["context_snapshot_ref"] == "context-1"  # nosec B101
+    assert sample_payload["retrieval_baseline_ref"] == "baseline-1"  # nosec B101
+    assert sample_payload["reference_answer"] == "The answer should hedge because context is insufficient."  # nosec B101
 
 
 def test_generation_treats_seed_examples_as_seed_provenance_by_default(tmp_path) -> None:

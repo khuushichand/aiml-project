@@ -137,6 +137,10 @@ class SyntheticEvalGenerationRequest(BaseModel):
 
     recipe_kind: str
     corpus_scope: dict[str, Any] | list[str] | None = None
+    generation_metadata: dict[str, Any] = Field(default_factory=dict)
+    context_snapshot_ref: str | None = None
+    retrieval_baseline_ref: str | None = None
+    reference_answer: str | None = None
     real_examples: list[dict[str, Any]] = Field(default_factory=list)
     seed_examples: list[dict[str, Any]] = Field(default_factory=list)
     target_sample_count: int = Field(default=0, ge=0, le=500)
@@ -147,6 +151,7 @@ class SyntheticEvalGenerationResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    generation_batch_id: str | None = None
     samples: list[SyntheticEvalDraftSampleRecord] = Field(default_factory=list)
     source_breakdown: dict[str, int] = Field(default_factory=dict)
     coverage: dict[str, list[str]] = Field(default_factory=dict)

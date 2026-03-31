@@ -28,6 +28,9 @@ def _answer_quality_generation_payload() -> dict:
     return {
         "recipe_kind": "rag_answer_quality",
         "corpus_scope": {"sources": ["media_db", "notes"]},
+        "context_snapshot_ref": "context-1",
+        "retrieval_baseline_ref": "baseline-1",
+        "reference_answer": "The rollout finished on Friday, but beta access remained limited.",
         "real_examples": [
             {
                 "sample_id": "real-aq-1",
@@ -112,3 +115,53 @@ async def test_synthetic_review_and_promotion_flow(async_api_client, auth_header
     assert body["dataset_snapshot_ref"]
     assert len(body["promotion_ids"]) == 1
     assert body["sample_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_synthetic_queue_filters_by_generation_batch_id(async_api_client, auth_headers) -> None:
+    retrieval_response = await async_api_client.post(
+        "/api/v1/evaluations/synthetic/drafts/generate",
+        json=_retrieval_generation_payload(),
+        headers=auth_headers,
+    )
+    assert retrieval_response.status_code == 200
+    generation_batch_id = retrieval_response.json()["generation_batch_id"]
+
+    other_response = await async_api_client.post(
+        "/api/v1/evaluations/synthetic/drafts/generate",
+        json=_answer_quality_generation_payload(),
+        headers=auth_headers,
+    )
+    assert other_response.status_code == 200
+
+    response = await async_api_client.get(
+        "/api/v1/evaluations/synthetic/queue",
+        params={"generation_batch_id": generation_batch_id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]
+    assert all(
+        item["sample_metadata"]["generation_batch_id"] == generation_batch_id
+        for item in body["data"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_endpoint_returns_batch_id_and_anchor_metadata(async_api_client, auth_headers) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/synthetic/drafts/generate",
+        json=_answer_quality_generation_payload(),
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_batch_id"]
+    assert body["samples"][0]["sample_metadata"]["generation_batch_id"] == body["generation_batch_id"]
+    assert body["samples"][0]["sample_metadata"]["generation_metadata"]["retrieval_baseline_ref"] == "baseline-1"
+    assert body["samples"][0]["sample_payload"]["context_snapshot_ref"] == "context-1"
+    assert body["samples"][0]["sample_payload"]["retrieval_baseline_ref"] == "baseline-1"
+    assert body["samples"][0]["sample_payload"]["reference_answer"] == "The rollout finished on Friday, but beta access remained limited."

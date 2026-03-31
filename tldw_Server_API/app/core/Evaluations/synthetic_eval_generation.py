@@ -32,6 +32,21 @@ class SyntheticEvalCorpusScope:
     sources: tuple[str, ...] = _DEFAULT_SOURCES
     recipe_kind: str | None = None
     corpus_name: str | None = None
+    media_ids: tuple[int, ...] = ()
+    note_ids: tuple[str, ...] = ()
+    indexing_fixed: bool | None = None
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe corpus scope representation."""
+
+        return {
+            "sources": list(self.sources),
+            "recipe_kind": self.recipe_kind,
+            "corpus_name": self.corpus_name,
+            "media_ids": list(self.media_ids),
+            "note_ids": list(self.note_ids),
+            "indexing_fixed": self.indexing_fixed,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +95,9 @@ def resolve_corpus_scope(
             sources=_dedupe_tuple(corpus_scope.sources) or _DEFAULT_SOURCES,
             recipe_kind=corpus_scope.recipe_kind,
             corpus_name=corpus_scope.corpus_name,
+            media_ids=_dedupe_int_tuple(corpus_scope.media_ids),
+            note_ids=_dedupe_tuple(corpus_scope.note_ids),
+            indexing_fixed=corpus_scope.indexing_fixed,
         )
     if isinstance(corpus_scope, Mapping):
         sources = corpus_scope.get("sources")
@@ -103,6 +121,9 @@ def resolve_corpus_scope(
                 if corpus_scope.get("corpus_name") is not None
                 else None
             ),
+            media_ids=_normalize_int_tuple(corpus_scope.get("media_ids")),
+            note_ids=_normalize_note_id_tuple(corpus_scope.get("note_ids")),
+            indexing_fixed=_coerce_optional_bool(corpus_scope.get("indexing_fixed")),
         )
     normalized_sources = _dedupe_tuple(tuple(str(source).strip() for source in corpus_scope if str(source).strip()))
     return SyntheticEvalCorpusScope(sources=normalized_sources or _DEFAULT_SOURCES)
@@ -211,9 +232,18 @@ def convert_structured_tuples_to_draft_samples(
     *,
     recipe_kind: str,
     structured_tuples: Sequence[SyntheticEvalStructuredTuple],
+    corpus_scope: SyntheticEvalCorpusScope | Mapping[str, Any] | Sequence[str] | None = None,
+    generation_batch_id: str | None = None,
+    generation_metadata: dict[str, Any] | None = None,
+    sample_payload_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert structured tuples into repository-ready draft sample payloads."""
 
+    resolved_scope = resolve_corpus_scope(corpus_scope)
+    resolved_generation_metadata = dict(generation_metadata or {})
+    resolved_payload_overrides = {
+        key: value for key, value in (sample_payload_overrides or {}).items() if value is not None
+    }
     draft_samples: list[dict[str, Any]] = []
     for index, structured_tuple in enumerate(structured_tuples):
         sample_payload = {
@@ -224,6 +254,7 @@ def convert_structured_tuples_to_draft_samples(
             "failure_mode": structured_tuple.failure_mode,
         }
         sample_payload.update(structured_tuple.target_payload)
+        sample_payload.update(resolved_payload_overrides)
         draft_samples.append(
             {
                 "sample_id": f"{recipe_kind}-synthetic-{index + 1}",
@@ -231,10 +262,13 @@ def convert_structured_tuples_to_draft_samples(
                 "sample_payload": sample_payload,
                 "sample_metadata": {
                     "generation_stage": "structured_tuple_conversion",
+                    "generation_batch_id": generation_batch_id,
                     "query_intent": structured_tuple.query_intent,
                     "difficulty": structured_tuple.difficulty,
                     "failure_mode": structured_tuple.failure_mode,
                     "source_kind": structured_tuple.source_kind,
+                    "corpus_scope": resolved_scope.to_metadata_dict(),
+                    "generation_metadata": resolved_generation_metadata,
                 },
                 "provenance": structured_tuple.provenance_hint,
                 "review_state": "draft",
@@ -387,6 +421,52 @@ def _extract_example_field(example: dict[str, Any], *field_names: str) -> str:
 
 def _dedupe_tuple(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(_stable_unique(value for value in values if value))
+
+
+def _dedupe_int_tuple(values: Sequence[int] | Sequence[Any]) -> tuple[int, ...]:
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for value in values:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return tuple(ordered)
+
+
+def _normalize_int_tuple(values: Any) -> tuple[int, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        values = (values,)
+    return _dedupe_int_tuple(values)
+
+
+def _normalize_note_id_tuple(values: Any) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        values = (values,)
+    return _dedupe_tuple(tuple(str(value).strip() for value in values if str(value).strip()))
+
+
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "n", "off"}:
+            return False
+        return None
+    return bool(value)
 
 
 def _stable_unique(values: Sequence[str] | Sequence[Any]) -> list[str]:
