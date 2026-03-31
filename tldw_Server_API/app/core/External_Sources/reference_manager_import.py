@@ -590,8 +590,11 @@ async def sync_reference_manager_source(
                 exc,
             )
 
-    if failed == 0 and page_cursor not in (None, ""):
-        next_cursor = page_cursor
+    if failed == 0:
+        if page_cursor in (None, ""):
+            next_cursor = None
+        else:
+            next_cursor = str(page_cursor).strip() or None
 
     return {
         "processed": processed,

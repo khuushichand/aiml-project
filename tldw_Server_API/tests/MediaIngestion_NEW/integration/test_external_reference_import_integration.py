@@ -379,6 +379,138 @@ async def test_reference_manager_sync_imports_new_items_merges_duplicate_metadat
 
 
 @pytest.mark.asyncio
+async def test_reference_manager_terminal_page_clears_stored_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    import tldw_Server_API.app.core.DB_Management.db_path_utils as db_paths_mod
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    connectors_db = await aiosqlite.connect(tmp_path / "connectors-terminal.sqlite3")
+    connectors_db.row_factory = aiosqlite.Row
+    connectors_db._is_sqlite = True
+
+    try:
+        media_root = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(media_root))
+        monkeypatch.setitem(db_paths_mod.settings, "USER_DB_BASE_DIR", str(media_root))
+        _media_db_path = db_paths_mod.DatabasePaths.get_media_db_path(1)
+
+        fake_conn = _FakeZoteroConnector(
+            pages={
+                "cursor-0": (
+                    [
+                        _reference_item(
+                            provider_item_key="ITEM-NEW",
+                            doi="10.1000/new",
+                            title="Attention Is All You Need",
+                            authors="Ashish Vaswani, Noam Shazeer",
+                            year="2017",
+                            journal="NeurIPS",
+                            abstract="Transformer paper.",
+                            provider_version="1",
+                        )
+                    ],
+                    "cursor-1",
+                ),
+                "cursor-1": ([], None),
+            },
+            attachments={
+                "ITEM-NEW": [_attachment(provider_item_key="ITEM-NEW", attachment_key="ATT-NEW")],
+            },
+            downloads={
+                "ATT-NEW": b"Imported attachment body",
+            },
+        )
+
+        pool = _SqlitePool(connectors_db)
+
+        async def _fake_get_db_pool():
+            return pool
+
+        async def _fake_list_memberships_for_user(_user_id: int):
+            return []
+
+        async def _fake_convert_document_bytes_to_text(raw, name, effective_mime):
+            return raw.decode("utf-8")
+
+        monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+        monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
+        monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: fake_conn)
+        monkeypatch.setattr(
+            worker,
+            "_convert_document_bytes_to_text",
+            _fake_convert_document_bytes_to_text,
+            raising=False,
+        )
+
+        account = await svc.create_account(
+            connectors_db,
+            user_id=1,
+            provider="zotero",
+            display_name="Zotero",
+            email="researcher@example.com",
+            tokens={
+                "access_token": "tok",
+                "provider_user_id": "123456",
+                "username": "researcher",
+            },
+        )
+        source = await svc.create_source(
+            connectors_db,
+            account_id=int(account["id"]),
+            provider="zotero",
+            remote_id="COLL1234",
+            type_="collection",
+            path=None,
+            options={},
+        )
+        await svc.upsert_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+            sync_mode="poll",
+            cursor="cursor-0",
+        )
+
+        first_jm = _FakeJM()
+        await worker._process_import_job(
+            first_jm,
+            jid=9301,
+            lease_id="lease-reference-1",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+        second_jm = _FakeJM()
+        await worker._process_import_job(
+            second_jm,
+            jid=9302,
+            lease_id="lease-reference-2",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        sync_state = await svc.get_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+        )
+
+        assert first_jm.completed is not None
+        assert first_jm.completed["result"]["imported"] == 1
+        assert second_jm.completed is not None
+        assert second_jm.completed["result"]["processed"] == 0
+        assert fake_conn.list_collection_calls == ["cursor-0", "cursor-1"]
+        assert sync_state is not None
+        assert sync_state["cursor"] is None
+    finally:
+        await connectors_db.close()
+
+
+@pytest.mark.asyncio
 async def test_reference_manager_repeat_sync_keeps_existing_media_non_destructive(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

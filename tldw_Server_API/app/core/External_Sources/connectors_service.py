@@ -1172,7 +1172,7 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
     existing = await get_source_sync_state(db, source_id=source_id) or {}
     data = {"source_id": source_id, "sync_mode": "manual", **existing}
     for field in _SYNC_STATE_FIELDS:
-        if field in updates and updates[field] is not None:
+        if field in updates:
             data[field] = updates[field]
 
     is_pg = _is_postgres_connection(db)

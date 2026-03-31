@@ -20,10 +20,10 @@ from tldw_Server_API.app.core.exceptions import ReferenceImportError
 
 class _ReferenceManagerStub:
     async def list_collections(self, account, *, cursor=None, page_size=100):  # pragma: no cover - contract stub
-        return []
+        return [], None
 
     async def list_collection_items(self, account, collection_key, *, cursor=None, page_size=100):  # pragma: no cover - contract stub
-        return []
+        return [], None
 
     async def list_item_attachments(self, account, provider_item_key):  # pragma: no cover - contract stub
         return []
@@ -48,9 +48,20 @@ async def sqlite_db(tmp_path: Path):
         await db.close()
 
 
+@pytest.mark.asyncio
 @pytest.mark.unit
-def test_reference_manager_adapter_protocol_accepts_collection_item_attachment_and_download_methods() -> None:
-    assert isinstance(_ReferenceManagerStub(), ReferenceManagerAdapter)
+async def test_reference_manager_adapter_protocol_accepts_collection_item_attachment_and_download_methods() -> None:
+    stub = _ReferenceManagerStub()
+
+    assert isinstance(stub, ReferenceManagerAdapter)
+
+    collections, collections_cursor = await stub.list_collections({})
+    items, items_cursor = await stub.list_collection_items({}, "COLL1234")
+
+    assert collections == []
+    assert items == []
+    assert collections_cursor is None
+    assert items_cursor is None
 
 
 @pytest.mark.unit
