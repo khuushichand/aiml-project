@@ -392,8 +392,7 @@ class AuthnzUsersRepo:
                         (int(user_id),),
                     )
                     # sqlite transaction shims may require explicit commit
-                    with contextlib.suppress(Exception):
-                        await conn.commit()
+                    await conn.commit()
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsersRepo.ensure_single_user_admin_user failed: {exc}")
             raise
@@ -437,8 +436,7 @@ class AuthnzUsersRepo:
                     "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
                     (int(user_id), role_id),
                 )
-                with contextlib.suppress(Exception):
-                    await conn.commit()
+                await conn.commit()
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsersRepo.assign_role_if_missing failed: {exc}")
             raise

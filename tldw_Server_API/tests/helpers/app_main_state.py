@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import importlib
+import sys
+from types import ModuleType
+
+
+APP_PACKAGE_NAME = "tldw_Server_API.app"
+APP_MAIN_MODULE_NAME = "tldw_Server_API.app.main"
+
+
+def _get_app_package():
+    return importlib.import_module(APP_PACKAGE_NAME)
+
+
+def snapshot_app_main() -> ModuleType | None:
+    module = sys.modules.get(APP_MAIN_MODULE_NAME)
+    return module if isinstance(module, ModuleType) else None
+
+
+def clear_app_main() -> None:
+    sys.modules.pop(APP_MAIN_MODULE_NAME, None)
+    package = sys.modules.get(APP_PACKAGE_NAME)
+    if package is None:
+        return
+    if getattr(package, "main", None) is not None:
+        try:
+            delattr(package, "main")
+        except AttributeError:
+            return
+
+
+def set_app_main(module: ModuleType) -> ModuleType:
+    sys.modules[APP_MAIN_MODULE_NAME] = module
+    try:
+        setattr(_get_app_package(), "main", module)
+    except Exception:
+        pass
+    return module
+
+
+def restore_app_main(module: ModuleType | None) -> None:
+    clear_app_main()
+    if module is not None:
+        set_app_main(module)
+
+
+def import_app_main() -> ModuleType:
+    current = snapshot_app_main()
+    package = sys.modules.get(APP_PACKAGE_NAME)
+    package_attr = getattr(package, "main", None) if package is not None else None
+
+    if current is None:
+        if isinstance(package_attr, ModuleType):
+            try:
+                delattr(package, "main")
+            except AttributeError:
+                pass
+        imported = importlib.import_module(APP_MAIN_MODULE_NAME)
+        return set_app_main(imported)
+
+    if isinstance(package_attr, ModuleType) and package_attr is not current:
+        try:
+            setattr(package, "main", current)
+        except Exception:
+            pass
+
+    return current
+
+
+def reload_app_main() -> ModuleType:
+    module = import_app_main()
+    reloaded = importlib.reload(module)
+    return set_app_main(reloaded)

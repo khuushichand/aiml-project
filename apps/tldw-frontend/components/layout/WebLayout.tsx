@@ -119,6 +119,14 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { fatalBackendRecoveryActive } = useBackendRecoveryUi()
   const [backendUnavailableDetail, setBackendUnavailableDetail] =
     useState<BackendUnreachableDetail | null>(null)
+  const suppressBackendUnavailableModal = React.useMemo(() => {
+    if (typeof window === "undefined") return false
+    try {
+      return window.localStorage.getItem("__tldw_test_bypass") === "true"
+    } catch {
+      return false
+    }
+  }, [])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
   const isViewportConstrainedRoute = (VIEWPORT_CONSTRAINED_PATHS as readonly string[]).includes(location.pathname)
@@ -171,6 +179,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const onBackendUnreachable = (event: Event) => {
+      if (suppressBackendUnavailableModal) return
       const detail = (event as CustomEvent<BackendUnreachableDetail | undefined>)
         ?.detail
       if (!detail || typeof detail !== "object") return
@@ -188,7 +197,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         onBackendUnreachable as EventListener
       )
     }
-  }, [checkOnce])
+  }, [checkOnce, suppressBackendUnavailableModal])
 
   React.useEffect(() => {
     if (isConnected && phase === ConnectionPhase.CONNECTED) {

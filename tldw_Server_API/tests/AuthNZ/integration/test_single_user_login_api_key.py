@@ -1,7 +1,5 @@
 """Single-user login should return the configured API key for auth."""
 
-import importlib
-
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -14,6 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
 from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
 from tldw_Server_API.app.services.registration_service import reset_registration_service
+from tldw_Server_API.tests.helpers.app_main_state import reload_app_main
 
 
 pytestmark = pytest.mark.integration
@@ -54,8 +53,7 @@ async def single_user_client(tmp_path, monkeypatch):
                 (password_hash, settings.SINGLE_USER_FIXED_ID),
             )
 
-    import tldw_Server_API.app.main as _main
-    app = importlib.reload(_main).app
+    app = reload_app_main().app
 
     with TestClient(app) as client:
         yield client, password, settings.SINGLE_USER_API_KEY

@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,78 @@ def test_queue_estimate_sanitizes_base64_payload():
 
     assert helper_est == sanitized_est
     assert sanitized_est < raw_est
+
+
+def test_build_test_mode_chat_response_returns_mermaid_for_mind_map_prompt():
+    content = chat_endpoint._build_test_mode_chat_response(
+        [
+            {
+                "role": "system",
+                "content": "You are a mind map generator. Return ONLY Mermaid mindmap syntax.",
+            },
+            {
+                "role": "user",
+                "content": "Sources:\nProgram Alpha briefing\nGovernance and evidence review.",
+            },
+        ]
+    )
+
+    assert content.startswith("mindmap")
+    assert "Governance" in content
+    assert "Evidence Review" in content
+
+
+def test_build_test_mode_chat_response_returns_markdown_table_for_data_table_prompt():
+    content = chat_endpoint._build_test_mode_chat_response(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are a data table generator. Return ONLY a markdown table "
+                    "with pipe delimiters, a header row, and a separator row."
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Sources:\nProgram Alpha briefing\nProgram Beta briefing",
+            },
+        ]
+    )
+
+    assert content.startswith("| Topic |")
+    assert "| --- | --- | --- |" in content
+    assert "Program Alpha" in content
+
+
+def test_build_test_mode_chat_response_supports_message_objects():
+    content = chat_endpoint._build_test_mode_chat_response(
+        [
+            SimpleNamespace(
+                role="system",
+                content="You are a mind map generator. Return ONLY Mermaid mindmap syntax.",
+            ),
+            SimpleNamespace(
+                role="user",
+                content="Sources:\nProgram Alpha briefing\nGovernance and evidence review.",
+            ),
+        ]
+    )
+
+    assert content.startswith("mindmap")
+
+
+def test_build_test_mode_chat_response_uses_explicit_system_message():
+    content = chat_endpoint._build_test_mode_chat_response(
+        [
+            {
+                "role": "user",
+                "content": "Sources:\nProgram Alpha briefing\nGovernance and evidence review.",
+            },
+        ],
+        system_message="You are a mind map generator. Return ONLY Mermaid mindmap syntax.",
+    )
+
+    assert content.startswith("mindmap")
 
 
 @pytest.mark.asyncio

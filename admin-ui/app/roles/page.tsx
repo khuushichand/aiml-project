@@ -482,11 +482,18 @@ export default function RolesPage() {
                 <p className="text-sm text-muted-foreground mb-4">
                   For advanced role-permission mapping and bulk assignment, use the permission matrix view.
                 </p>
-                <Link href="/roles/matrix">
-                  <Button variant="outline">
-                    Open Permission Matrix
-                  </Button>
-                </Link>
+                <div className="flex gap-2">
+                  <Link href="/roles/matrix">
+                    <Button variant="outline">
+                      Open Permission Matrix
+                    </Button>
+                  </Link>
+                  <Link href="/roles/compare">
+                    <Button variant="outline">
+                      Compare Roles
+                    </Button>
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           </div>

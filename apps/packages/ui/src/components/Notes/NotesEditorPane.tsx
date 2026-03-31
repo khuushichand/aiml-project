@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import NotesEditorHeader from '@/components/Notes/NotesEditorHeader'
+import NotesStudioView from '@/components/Notes/NotesStudioView'
 import type { ActiveWikilinkQuery, WikilinkCandidate } from '@/components/Notes/wikilinks'
 import type {
   SaveIndicatorState,
@@ -26,6 +27,7 @@ import type {
   MarkdownToolbarAction,
 } from './notes-manager-types'
 import type { SingleNoteCopyMode, SingleNoteExportFormat } from './export-utils'
+import type { NoteStudioState, NotesStudioPaperSize } from './notes-studio-types'
 import type { NotesTitleSuggestStrategy } from '@/services/settings/ui-settings'
 import {
   NOTES_EDITOR_REGION_ID,
@@ -107,6 +109,13 @@ export interface NotesEditorPaneProps {
   canSwitchTitleStrategy: boolean
   effectiveTitleSuggestStrategy: NotesTitleSuggestStrategy
   titleStrategyOptions: Array<{ label: string; value: string }>
+  studioBadgeLabel?: string | null
+  showStudioMarkdownOnlyNotice?: boolean
+  selectedStudioState?: NoteStudioState | null
+  studioPaperSize?: NotesStudioPaperSize
+  onStudioPaperSizeChange?: (paperSize: NotesStudioPaperSize) => void
+  onRegenerateStudioView?: () => void
+  studioRegenerating?: boolean
 
   // Title strategy state setter
   setTitleSuggestStrategy: (strategy: NotesTitleSuggestStrategy) => void
@@ -171,6 +180,7 @@ export interface NotesEditorPaneProps {
   toggleNotePinned: (id: string | number) => Promise<void>
   copySelected: (mode: SingleNoteCopyMode) => Promise<void>
   handleGenerateFlashcardsFromNote: () => void
+  handleOpenNotesStudio: () => void
   exportSelected: (format: SingleNoteExportFormat) => void
   saveNote: () => Promise<void>
   deleteNote: () => Promise<void>
@@ -188,6 +198,8 @@ export interface NotesEditorPaneProps {
   openAttachmentPicker: () => void
   handleAttachmentInputChange: (event: React.ChangeEvent<HTMLInputElement>) => void
   runAssistAction: (action: NotesAssistAction) => Promise<void>
+  switchStudioNoticeToMarkdown: () => void
+  dismissStudioMarkdownOnlyNotice: () => void
   handleTocJump: (entry: NotesTocEntry) => void
   handlePreviewLinkClick: (event: React.MouseEvent<HTMLDivElement>) => void
   handleWysiwygInput: (event: React.FormEvent<HTMLDivElement>) => void
@@ -239,6 +251,13 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   canSwitchTitleStrategy,
   effectiveTitleSuggestStrategy,
   titleStrategyOptions,
+  studioBadgeLabel = null,
+  showStudioMarkdownOnlyNotice = false,
+  selectedStudioState = null,
+  studioPaperSize = 'A4',
+  onStudioPaperSizeChange = () => {},
+  onRegenerateStudioView = () => {},
+  studioRegenerating = false,
   setTitleSuggestStrategy,
   manualLinkTargetId,
   setManualLinkTargetId,
@@ -281,6 +300,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   toggleNotePinned,
   copySelected,
   handleGenerateFlashcardsFromNote,
+  handleOpenNotesStudio,
   exportSelected,
   saveNote,
   deleteNote,
@@ -295,6 +315,8 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   openAttachmentPicker,
   handleAttachmentInputChange,
   runAssistAction,
+  switchStudioNoticeToMarkdown,
+  dismissStudioMarkdownOnlyNotice,
   handleTocJump,
   handlePreviewLinkClick,
   handleWysiwygInput,
@@ -366,6 +388,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
           (title.trim().length > 0 || content.trim().length > 0)
         }
         canGenerateFlashcards={!editorDisabled && content.trim().length > 0}
+        canOpenNotesStudio={!editorDisabled && selectedId != null && content.trim().length > 0}
         canExport={Boolean(title || content)}
         canDuplicate={!editorDisabled && (title.trim().length > 0 || content.trim().length > 0)}
         canPin={!editorDisabled && selectedId != null}
@@ -402,6 +425,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
           void copySelected(mode)
         }}
         onGenerateFlashcards={handleGenerateFlashcardsFromNote}
+        onOpenNotesStudio={handleOpenNotesStudio}
         onExport={(format) => {
           exportSelected(format)
         }}
@@ -411,8 +435,28 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         onDelete={() => {
           void deleteNote()
         }}
+        studioBadgeLabel={studioBadgeLabel}
       />
       <div className="flex-1 flex flex-col px-4 py-3 overflow-auto">
+        {showStudioMarkdownOnlyNotice ? (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+            <span>
+              {t('option:notesSearch.notesStudioMarkdownOnlyNotice', {
+                defaultValue: 'Notes Studio works from Markdown selections only.'
+              })}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button size="small" onClick={switchStudioNoticeToMarkdown}>
+                {t('option:notesSearch.notesStudioSwitchToMarkdown', {
+                  defaultValue: 'Switch to Markdown'
+                })}
+              </Button>
+              <Button size="small" type="text" onClick={dismissStudioMarkdownOnlyNotice}>
+                {t('common:close', { defaultValue: 'Close' })}
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {loadingDetail && (
           <div
             className="mb-3 inline-flex w-fit items-center gap-2 rounded border border-border bg-surface2 px-3 py-1.5 text-[12px] text-text-muted"
@@ -428,6 +472,23 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             </span>
           </div>
         )}
+        {selectedStudioState && editorMode !== 'edit' ? (
+          <NotesStudioView
+            note={selectedStudioState.note}
+            studioDocument={selectedStudioState.studio_document}
+            isStale={selectedStudioState.is_stale}
+            staleReason={selectedStudioState.stale_reason}
+            paperSize={studioPaperSize}
+            onPaperSizeChange={onStudioPaperSizeChange}
+            onRegenerate={onRegenerateStudioView}
+            regenerating={studioRegenerating}
+            onContinueEditingPlainNote={() => {
+              handleEditorInputModeChange('markdown')
+              setEditorMode('edit')
+            }}
+          />
+        ) : (
+          <>
         <div className="flex items-center gap-2">
           <Input
             placeholder={t('option:notesSearch.titlePlaceholder', {
@@ -1328,6 +1389,8 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             </div>
           )}
         </div>
+          </>
+        )}
         <div className="mt-2 border-t border-border pt-2">
           <Typography.Text
             type="secondary"

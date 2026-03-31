@@ -20,6 +20,7 @@ import { api } from '@/lib/api-client';
 import { getDeprecatedModelNotice } from '@/lib/deprecated-models';
 import { buildProviderTokenTrendMap, buildSparklinePoints } from '@/lib/provider-token-trends';
 import { LLMProvider, LLMProviderOverride, User as UserType, Organization } from '@/types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 interface ByokKey {
   id?: string;
@@ -1095,7 +1096,7 @@ export default function ProvidersPage() {
                       )}
                     </div>
                     {loading ? (
-                      <div className="text-center text-muted-foreground py-8">Loading...</div>
+                      <CardSkeleton />
                     ) : providers.length === 0 ? (
                       <div className="text-center text-muted-foreground py-8">
                         <Cpu className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -1438,7 +1439,7 @@ export default function ProvidersPage() {
                           <p>Select a user to manage their BYOK keys</p>
                         </div>
                       ) : byokState.isLoading ? (
-                        <div className="text-center text-muted-foreground py-8">Loading...</div>
+                        <CardSkeleton />
                       ) : byokState.userKeys.length === 0 ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -1527,7 +1528,7 @@ export default function ProvidersPage() {
                           <p>Select an organization to manage BYOK keys</p>
                         </div>
                       ) : byokState.isLoading ? (
-                        <div className="text-center text-muted-foreground py-8">Loading...</div>
+                        <CardSkeleton />
                       ) : byokState.orgKeys.length === 0 ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />

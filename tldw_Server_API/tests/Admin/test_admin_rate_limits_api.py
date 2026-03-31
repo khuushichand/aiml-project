@@ -5,6 +5,8 @@ from typing import Any
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints.admin import admin_rate_limits
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services import admin_rate_limits_service
 
 
 class _CursorStub:
@@ -90,6 +92,18 @@ class _PostgresDbStub:
         raise AssertionError(f"Unexpected query: {query!r}")
 
 
+def _platform_admin_principal() -> AuthPrincipal:
+    return AuthPrincipal(
+        kind="user",
+        user_id=1,
+        roles=["admin"],
+        permissions=[],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_list_admin_rate_limits_reads_sqlite_tables(
@@ -160,3 +174,60 @@ async def test_list_admin_rate_limits_reads_postgres_tables(
         },
     ]
     assert len(db.fetch_calls) == 2  # nosec B101
+
+
+class _FetchDbStub:
+    def __init__(self) -> None:
+        self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.fetch_calls.append((str(query), tuple(args)))
+        normalized = str(query).lower()
+        if "from rbac_user_rate_limits" in normalized:
+            return [
+                {
+                    "resource": "/api/v1/rag/search",
+                    "limit_per_min": 5,
+                    "burst": 1,
+                }
+            ]
+        if "from rbac_role_rate_limits" in normalized:
+            return [
+                {
+                    "resource": "/api/v1",
+                    "limit_per_min": 20,
+                    "burst": 4,
+                    "role_name": "moderator",
+                }
+            ]
+        raise AssertionError(f"Unexpected query: {query!r}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_simulate_rate_limit_uses_fetch_and_prefers_matching_user_limit() -> None:
+    db = _FetchDbStub()
+
+    response = await admin_rate_limits.simulate_rate_limit(
+        payload=admin_rate_limits.RateLimitSimRequest(
+            user_id=11,
+            endpoint="/api/v1/rag/search/query",
+        ),
+        principal=_platform_admin_principal(),
+        db=db,
+    )
+
+    assert response.limit_source == "user"  # nosec B101
+    assert response.effective_limit_per_min == 5  # nosec B101
+    assert response.effective_burst == 1  # nosec B101
+    assert response.would_allow is True  # nosec B101
+    assert len(db.fetch_calls) == 2  # nosec B101
+
+
+def test_matches_endpoint_requires_exact_or_path_boundary_match() -> None:
+    row = {"resource": "/api/v1/users"}
+
+    assert admin_rate_limits_service._matches_endpoint(row, "/api/v1/users") is True  # nosec B101
+    assert admin_rate_limits_service._matches_endpoint(row, "/api/v1/users/123") is True  # nosec B101
+    assert admin_rate_limits_service._matches_endpoint(row, "/api/v1/users-export") is False  # nosec B101
+    assert admin_rate_limits_service._matches_endpoint({"resource": ""}, "/api/v1/users") is False  # nosec B101

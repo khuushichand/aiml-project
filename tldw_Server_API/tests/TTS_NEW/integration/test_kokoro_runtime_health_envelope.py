@@ -192,3 +192,48 @@ async def test_openai_health_marks_known_auth_failure_as_unhealthy(monkeypatch):
     assert openai_detail["auth_reason"] == "authentication_failed"
     assert health["providers"]["available"] == 1
     assert health["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_kokoro_health_redacts_absolute_path_details(monkeypatch):
+    kokoro_adapter = SimpleNamespace(
+        use_onnx=True,
+        device="cpu",
+        model_path="/Users/private/models/kokoro/model.onnx",
+        voices_json="/Users/private/models/kokoro/voices.json",
+    )
+
+    async def _fake_get_tts_factory():
+        return _FakeFactory(kokoro_adapter)
+
+    def _fake_find_spec(_name):
+        return object()
+
+    def _fake_exists(path):
+        return str(path).endswith("libespeak-ng.so.1")
+
+    monkeypatch.setattr(adapter_registry, "get_tts_factory", _fake_get_tts_factory)
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+    monkeypatch.setattr(
+        audio_health,
+        "_discover_kokoro_espeak_library",
+        lambda _adapter: "/Users/private/lib/libespeak-ng.so.1",
+    )
+    monkeypatch.setattr(audio_health.os.path, "exists", _fake_exists)
+    monkeypatch.setenv(
+        "PHONEMIZER_ESPEAK_LIBRARY",
+        "/Users/private/lib/libespeak-ng.so.1",
+    )
+
+    health = await audio_health.get_tts_health(
+        request=MagicMock(),
+        tts_service=_FakeTTSService(),
+    )
+
+    kokoro_info = health["providers"]["kokoro"]
+
+    assert kokoro_info["model_path"] == "model.onnx"
+    assert kokoro_info["voices_json"] == "voices.json"
+    assert kokoro_info["espeak_lib_env"] == "libespeak-ng.so.1"
+    assert kokoro_info["espeak_lib_path"] == "libespeak-ng.so.1"
+    assert "/Users/private" not in str(kokoro_info)

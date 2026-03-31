@@ -1432,6 +1432,9 @@ describe("StudioPane Stage 2 workflows", () => {
             content: expect.stringContaining("DSPy Prompting Talk")
           })
         ]
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
       })
     )
     expect(mockRagSearch).not.toHaveBeenCalled()
@@ -1499,8 +1502,118 @@ describe("StudioPane Stage 2 workflows", () => {
     expect(mockCreateChatCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "gpt-4o-mini"
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
       })
     )
+  })
+
+  it("retries mind map generation when the first completion is not Mermaid syntax", async () => {
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "DSPy helps optimize prompting workflows and compound AI pipelines."
+      }
+    })
+    let resolveRepairResponse: ((response: Response) => void) | undefined
+    const repairResponsePromise = new Promise<Response>((resolve) => {
+      resolveRepairResponse = resolve
+    })
+    mockCreateChatCompletion
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    "Central topic: Workspace Research\n- Prompting workflows\n- Compound AI pipelines"
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+      .mockImplementationOnce(() => repairResponsePromise)
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Mind Map" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockUpdateArtifactStatus).not.toHaveBeenCalledWith(
+      expect.any(String),
+      "failed",
+      expect.anything()
+    )
+    expect(mockUpdateArtifactStatus).not.toHaveBeenCalledWith(
+      expect.any(String),
+      "completed",
+      expect.anything()
+    )
+    expect(mockMessageError).not.toHaveBeenCalled()
+
+    expect(mockCreateChatCompletion).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        model: "gpt-4o-mini",
+        messages: [
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("convert notes and outlines")
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining(
+              "The previous answer was not valid Mermaid mindmap syntax"
+            )
+          })
+        ]
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
+      })
+    )
+
+    resolveRepairResponse?.(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "```mermaid\nmindmap\n  root((Workspace Research))\n    Prompting workflows\n    Compound AI pipelines\n```"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    )
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        expect.stringMatching(/^artifact-/),
+        "completed",
+        expect.objectContaining({
+          content: expect.stringContaining("mindmap"),
+          data: expect.objectContaining({
+            mermaid: expect.stringContaining("mindmap")
+          })
+        })
+      )
+    })
   })
 
   it("generates data table output from selected source content via chat completion", async () => {

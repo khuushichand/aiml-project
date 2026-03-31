@@ -71,6 +71,7 @@ beforeEach(() => {
         key: 'checkout.redesign',
         scope: 'global',
         enabled: true,
+        description: 'Checkout redesign rollout',
         rollout_percent: 37,
         target_user_ids: [11, 42],
         variant_value: 'variant_a',
@@ -160,6 +161,29 @@ describe('FlagsPage Stage 4', () => {
           rollout_percent: 65,
           target_user_ids: [1, 3],
           variant_value: 'variant_b',
+        })
+      );
+    });
+  });
+
+  it('preserves existing flag configuration when toggling enabled state', async () => {
+    const user = userEvent.setup();
+    render(<FlagsPage />);
+
+    const toggleButton = await screen.findByRole('button', { name: 'Enabled' });
+    expect(toggleButton.getAttribute('aria-pressed')).toBe('true');
+    await user.click(toggleButton);
+
+    await waitFor(() => {
+      expect(apiMock.upsertFeatureFlag).toHaveBeenCalledWith(
+        'checkout.redesign',
+        expect.objectContaining({
+          scope: 'global',
+          enabled: false,
+          description: 'Checkout redesign rollout',
+          target_user_ids: [11, 42],
+          rollout_percent: 37,
+          variant_value: 'variant_a',
         })
       );
     });

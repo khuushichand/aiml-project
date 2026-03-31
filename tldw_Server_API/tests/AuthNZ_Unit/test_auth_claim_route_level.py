@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -10,7 +11,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_roles,
     require_service_principal,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 app = FastAPI()
@@ -218,6 +221,51 @@ async def test_require_roles_http_200_for_admin_claim_even_without_role(monkeypa
     resp = local_client.get("/role-protected")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_require_roles_allows_claimless_request_user_override_in_single_user_test_mode(
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    reset_settings()
+
+    local_client = TestClient(app)
+    local_client.app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    try:
+        resp = local_client.get("/role-protected")
+    finally:
+        local_client.app.dependency_overrides.clear()
+        reset_settings()
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def test_require_roles_does_not_promote_explicit_non_admin_request_user_override(
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    reset_settings()
+
+    local_client = TestClient(app)
+    local_client.app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(
+        id=2,
+        roles=["user"],
+        permissions=[],
+        is_admin=False,
+    )
+
+    try:
+        resp = local_client.get("/role-protected")
+    finally:
+        local_client.app.dependency_overrides.clear()
+        reset_settings()
+
+    assert resp.status_code == 403
+    assert "admin" in resp.json().get("detail", "")
 
 
 @pytest.mark.asyncio

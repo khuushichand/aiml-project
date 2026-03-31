@@ -77,11 +77,13 @@ import { evaluationsTutorials } from "./definitions/evaluations"
 import { notesTutorials } from "./definitions/notes"
 import { flashcardsTutorials } from "./definitions/flashcards"
 import { worldBooksTutorials } from "./definitions/world-books"
+import { gettingStartedTutorials } from "./definitions/getting-started"
 
 /**
  * Central registry of all available tutorials
  */
 export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
+  ...gettingStartedTutorials,
   ...playgroundTutorials,
   ...workspacePlaygroundTutorials,
   ...mediaTutorials,

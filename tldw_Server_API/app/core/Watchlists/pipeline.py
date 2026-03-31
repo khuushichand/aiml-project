@@ -634,7 +634,7 @@ async def run_watchlist_job(
         companion_activity_db: PersonalizationDB | None = None
         companion_capture_enabled = False
         if capture_companion_activity and companion_route and is_personalization_enabled():
-            companion_activity_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+            companion_activity_db = PersonalizationDB.for_user(user_id)
             companion_profile = companion_activity_db.get_or_create_profile(normalized_user_id)
             companion_capture_enabled = bool(companion_profile.get("enabled", 0))
 

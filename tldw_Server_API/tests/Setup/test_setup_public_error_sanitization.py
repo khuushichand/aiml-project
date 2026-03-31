@@ -9,7 +9,8 @@ from fastapi import HTTPException
 import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 
 
-def test_execute_audio_bundle_provision_hides_internal_validation_details(mocker):
+@pytest.mark.asyncio
+async def test_execute_audio_bundle_provision_hides_internal_validation_details(mocker):
     mocker.patch.object(setup_endpoint, "_ensure_audio_installer_available", return_value=None)
     mocker.patch.object(
         setup_endpoint.install_manager,
@@ -18,7 +19,7 @@ def test_execute_audio_bundle_provision_hides_internal_validation_details(mocker
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        setup_endpoint._execute_audio_bundle_provision(
+        await setup_endpoint._execute_audio_bundle_provision(
             setup_endpoint.AudioBundleProvisionRequest(
                 bundle_id="cpu_local",
                 resource_profile="balanced",
@@ -67,7 +68,17 @@ async def test_export_audio_pack_hides_internal_manifest_errors(mocker):
     mocker.patch.object(
         setup_endpoint.audio_profile_service,
         "detect_machine_profile",
-        return_value=SimpleNamespace(model_dump=lambda: {"platform": "linux"}),
+        return_value=SimpleNamespace(
+            platform="linux",
+            arch="x86_64",
+            apple_silicon=False,
+            cuda_available=False,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=64.0,
+            network_available_for_downloads=True,
+            model_dump=lambda: {"platform": "linux"},
+        ),
     )
     mocker.patch.object(
         setup_endpoint.audio_pack_service,
@@ -87,3 +98,48 @@ async def test_export_audio_pack_hides_internal_manifest_errors(mocker):
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == setup_endpoint.INVALID_AUDIO_PACK_EXPORT_REQUEST_DETAIL
     assert excinfo.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_name",
+    ["verify_audio_bundle", "verify_admin_audio_bundle"],
+)
+async def test_verify_audio_routes_sanitize_runtime_health_payloads(mocker, route_name):
+    mocker.patch.object(
+        setup_endpoint,
+        "_execute_audio_bundle_verification",
+        AsyncMock(
+            return_value={
+                "bundle_id": "cpu_local",
+                "status": "partial",
+                "stt_health": {
+                    "message": "Traceback: /Users/private/model.bin\nRuntimeError: boom",
+                    "details": "/Users/private/model.bin",
+                },
+                "tts_health": {
+                    "providers": {
+                        "kokoro": {
+                            "stack_trace": "Traceback: /Users/private/voices.json",
+                            "message": "/Users/private/voices.json",
+                        }
+                    }
+                },
+            }
+        ),
+    )
+
+    route = getattr(setup_endpoint, route_name)
+    result = await route(
+        setup_endpoint.AudioBundleVerificationRequest(
+            bundle_id="cpu_local",
+            resource_profile="balanced",
+        ),
+        _guard=None,
+    )
+
+    assert result["stt_health"]["message"] == "Internal setup diagnostics were suppressed."
+    assert "details" not in result["stt_health"]
+    kokoro = result["tts_health"]["providers"]["kokoro"]
+    assert kokoro["message"] == "Internal setup diagnostics were suppressed."
+    assert "stack_trace" not in kokoro

@@ -517,6 +517,9 @@ For this task, treat pipe handoff semantically rather than as a required in-memo
 Execute operators with strict semantics:
 
 - `|` passes prior stdout into the next command's stdin, inline or through the spill-backed text-stream carrier
+Execute operators with strict semantics:
+
+- `|` passes prior stdout into the next command's stdin
 - `&&` skips the next pipeline when the previous exit code is non-zero
 - `||` skips the next pipeline when the previous exit code is zero
 - `;` always continues

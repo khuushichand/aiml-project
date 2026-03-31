@@ -13,6 +13,8 @@ const flashcardsClient = createResourceClient({
   basePath: "/api/v1/flashcards" as AllowedPath
 })
 
+export const FLASHCARD_GENERATION_TIMEOUT_MS = 120000
+
 export type DeckSchedulerSettings = {
   new_steps_minutes: number[]
   relearn_steps_minutes: number[]
@@ -559,7 +561,8 @@ export async function generateFlashcards(
     path: "/api/v1/flashcards/generate",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: input
+    body: input,
+    timeoutMs: FLASHCARD_GENERATION_TIMEOUT_MS
   })
 }
 

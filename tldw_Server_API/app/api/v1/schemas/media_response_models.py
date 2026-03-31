@@ -146,7 +146,9 @@ class MediaDetailResponse(BaseModel):
                     "prompt": "Summarize the main topics discussed.",
                     "analysis": "The podcast covers new AI advancements and their implications.",
                     "model": "deepdml/faster-distil-whisper-large-v3.5",
-                    "timestamp_option": True
+                    "timestamp_option": True,
+                    "chunking_status": "completed",
+                    "vector_processing_status": 1,
                 },
                 "content": {
                     "metadata": {"episode": 5, "guests": ["Alice", "Bob"]},

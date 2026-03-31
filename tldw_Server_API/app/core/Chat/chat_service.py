@@ -316,8 +316,9 @@ async def _resolve_assistant_context_for_chat(
 ) -> tuple[dict[str, Any] | None, int | None, dict[str, Any] | None, dict[str, Any]]:
     """Resolve character or persona context for ordinary chat."""
     existing_conversation: dict[str, Any] | None = None
-    if conversation_id:
-        existing_conversation = await loop.run_in_executor(None, chat_db.get_conversation_by_id, conversation_id)
+    get_conversation_by_id = getattr(chat_db, "get_conversation_by_id", None)
+    if conversation_id and callable(get_conversation_by_id):
+        existing_conversation = await loop.run_in_executor(None, get_conversation_by_id, conversation_id)
 
     assistant_context = _normalize_conversation_assistant_context(existing_conversation)
     assistant_kind = assistant_context.get("assistant_kind")

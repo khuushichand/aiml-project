@@ -165,7 +165,8 @@ def test_rag_search_natural_language_media_fallback(
         docs = data.get("documents", [])
 
         assert docs, data
-        assert any(doc.get("id") == str(media_id) for doc in docs)
+        assert any(doc.get("metadata", {}).get("media_id") == str(media_id) for doc in docs)
+        assert any(doc.get("metadata", {}).get("retrieval_mode") == "late_chunk" for doc in docs)
         assert any("weakness frieza saiyans" in (doc.get("content") or "").lower() for doc in docs)
         assert all(doc.get("metadata", {}).get("source") == "media_db" for doc in docs)
     finally:

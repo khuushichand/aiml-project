@@ -1,9 +1,16 @@
 import type { WorkspaceSlice } from './types'
-import type { WorkspaceState, WorkspaceChatSession, WorkspaceUndoSnapshot } from '../workspace'
+import type {
+  WorkspaceState,
+  WorkspaceChatSession,
+  WorkspaceSourceTransferExecutionResult,
+  WorkspaceSourceTransferRequest,
+  WorkspaceUndoSnapshot
+} from '../workspace'
 import type {
   SavedWorkspace,
   WorkspaceCollection,
-  WorkspaceConfig
+  WorkspaceConfig,
+  WorkspaceSourceTransferSnapshot
 } from '@/types/workspace'
 import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from '@/types/workspace'
 import type { WorkspaceExportBundle } from '@/store/workspace-bundle'
@@ -17,6 +24,7 @@ import {
   extractWorkspaceIdFromChatSessionKey,
   isWorkspaceChatSessionKeyForWorkspace
 } from '@/store/workspace-chat-session-key'
+import { applyWorkspaceSourceTransfer } from '../workspace-source-transfer'
 
 // TODO: These helpers need to be exported from workspace.ts
 import {
@@ -75,6 +83,7 @@ type WorkspaceListSliceActions = Pick<
   | 'switchWorkspace'
   | 'createNewWorkspace'
   | 'duplicateWorkspace'
+  | 'transferSourcesBetweenWorkspaces'
   | 'archiveWorkspace'
   | 'restoreArchivedWorkspace'
   | 'deleteWorkspace'
@@ -95,6 +104,56 @@ type WorkspaceListSliceActions = Pick<
 
 // TODO: initialState needs to be exported from workspace.ts
 import { initialState } from '../workspace'
+
+type WorkspaceSnapshotRecord = WorkspaceState['workspaceSnapshots'][string]
+
+const toTransferSnapshot = (
+  snapshot: WorkspaceSnapshotRecord
+): WorkspaceSourceTransferSnapshot => ({
+  workspaceId: snapshot.workspaceId,
+  sources: snapshot.sources.map((source) => ({ ...source })),
+  sourceFolders: snapshot.sourceFolders.map((folder) => ({ ...folder })),
+  sourceFolderMemberships: snapshot.sourceFolderMemberships.map((membership) => ({
+    ...membership
+  }))
+})
+
+const reconcileSelectedSourceIds = (
+  selectedSourceIds: string[],
+  sources: WorkspaceSnapshotRecord['sources']
+): string[] => {
+  const sourceIdSet = new Set(sources.map((source) => source.id))
+  return selectedSourceIds.filter((sourceId) => sourceIdSet.has(sourceId))
+}
+
+const mergeTransferredSnapshot = (
+  snapshot: WorkspaceSnapshotRecord,
+  transferSnapshot: WorkspaceSourceTransferSnapshot,
+  nextSelectedSourceIds: string[]
+): WorkspaceSnapshotRecord => {
+  const sourceFolders = transferSnapshot.sourceFolders.map((folder) => ({ ...folder }))
+  const folderIdSet = new Set(sourceFolders.map((folder) => folder.id))
+
+  return {
+    ...snapshot,
+    sources: transferSnapshot.sources.map((source) => ({ ...source })),
+    selectedSourceIds: reconcileSelectedSourceIds(
+      nextSelectedSourceIds,
+      transferSnapshot.sources
+    ),
+    sourceFolders,
+    sourceFolderMemberships: transferSnapshot.sourceFolderMemberships.map(
+      (membership) => ({ ...membership })
+    ),
+    selectedSourceFolderIds: snapshot.selectedSourceFolderIds.filter((folderId) =>
+      folderIdSet.has(folderId)
+    ),
+    activeFolderId:
+      snapshot.activeFolderId && folderIdSet.has(snapshot.activeFolderId)
+        ? snapshot.activeFolderId
+        : null
+  }
+}
 
 export const createWorkspaceListSlice: WorkspaceSlice<WorkspaceListSliceActions> = (set, get) => ({
   // ─────────────────────────────────────────────────────────────────────────
@@ -675,6 +734,140 @@ export const createWorkspaceListSlice: WorkspaceSlice<WorkspaceListSliceActions>
     } as Partial<WorkspaceState>)
 
     return duplicatedSnapshot.workspaceId
+  },
+
+  transferSourcesBetweenWorkspaces: (
+    request
+  ): WorkspaceSourceTransferExecutionResult | null => {
+    const state = get()
+    if (!state.workspaceId) {
+      return null
+    }
+
+    const originSnapshot = buildWorkspaceSnapshot(state)
+    const originWorkspaceId = originSnapshot.workspaceId
+    const now = new Date()
+    const originCollectionId = getSavedWorkspaceCollectionId(
+      state.savedWorkspaces,
+      state.archivedWorkspaces,
+      originWorkspaceId
+    )
+
+    let destinationSnapshot: WorkspaceSnapshotRecord
+    let destinationWorkspaceId: string
+    let destinationCollectionId: string | null
+    let destinationWasCreated = false
+
+    if (request.destination.kind === 'existing') {
+      destinationWorkspaceId = request.destination.workspaceId.trim()
+      if (!destinationWorkspaceId || destinationWorkspaceId === originWorkspaceId) {
+        throw new Error('The transfer destination must be a different workspace.')
+      }
+
+      const archivedWorkspace = state.archivedWorkspaces.find(
+        (workspace) => workspace.id === destinationWorkspaceId
+      )
+      if (archivedWorkspace) {
+        throw new Error('Archived workspaces cannot be transfer targets in v1.')
+      }
+
+      const savedWorkspace = state.savedWorkspaces.find(
+        (workspace) => workspace.id === destinationWorkspaceId
+      )
+      if (!savedWorkspace) {
+        throw new Error(
+          `Cannot transfer sources into missing workspace "${destinationWorkspaceId}".`
+        )
+      }
+
+      destinationSnapshot =
+        state.workspaceSnapshots[destinationWorkspaceId] ||
+        createEmptyWorkspaceSnapshot({
+          id: savedWorkspace.id,
+          name: savedWorkspace.name,
+          tag: savedWorkspace.tag,
+          createdAt: savedWorkspace.createdAt
+        })
+      destinationCollectionId = savedWorkspace.collectionId ?? null
+    } else {
+      const destinationName = request.destination.name.trim() || 'New Research'
+      destinationWorkspaceId = generateWorkspaceId()
+      const destinationSlug =
+        createSlug(destinationName) || destinationWorkspaceId.slice(0, 8)
+      destinationSnapshot = createEmptyWorkspaceSnapshot({
+        id: destinationWorkspaceId,
+        name: destinationName,
+        tag: `workspace:${destinationSlug}`,
+        createdAt: now
+      })
+      destinationCollectionId = originCollectionId
+      destinationWasCreated = true
+    }
+
+    const transferResult = applyWorkspaceSourceTransfer({
+      mode: request.mode,
+      originSnapshot: toTransferSnapshot(originSnapshot),
+      destinationSnapshot: toTransferSnapshot(destinationSnapshot),
+      selectedSourceIds: request.selectedSourceIds,
+      conflictResolutions: request.conflictResolutions || {},
+      emptyFolderPolicy: request.emptyFolderPolicy || 'keep',
+      sourceFolderFallbackName: request.sourceFolderFallbackName || 'Untitled Folder',
+      generateId: () => generateWorkspaceId()
+    })
+
+    const nextOriginSnapshot = mergeTransferredSnapshot(
+      originSnapshot,
+      transferResult.originSnapshot,
+      originSnapshot.selectedSourceIds.filter(
+        (sourceId) => !transferResult.removedOriginSourceIds.includes(sourceId)
+      )
+    )
+    const nextDestinationSnapshot = mergeTransferredSnapshot(
+      destinationSnapshot,
+      transferResult.destinationSnapshot,
+      destinationWasCreated
+        ? transferResult.transferredDestinationSourceIds
+        : destinationSnapshot.selectedSourceIds
+    )
+
+    let nextSavedWorkspaces = upsertSavedWorkspace(
+      state.savedWorkspaces,
+      createSavedWorkspaceEntry(nextOriginSnapshot, now, originCollectionId)
+    )
+    nextSavedWorkspaces = upsertSavedWorkspace(
+      nextSavedWorkspaces,
+      createSavedWorkspaceEntry(
+        nextDestinationSnapshot,
+        now,
+        destinationCollectionId
+      )
+    )
+
+    const nextArchivedWorkspaces = state.archivedWorkspaces.filter(
+      (workspace) => workspace.id !== destinationWorkspaceId
+    )
+    const nextWorkspaceSnapshots = {
+      ...state.workspaceSnapshots,
+      [originWorkspaceId]: nextOriginSnapshot,
+      [destinationWorkspaceId]: nextDestinationSnapshot
+    }
+    const activeSnapshot = request.switchToDestinationOnComplete
+      ? nextDestinationSnapshot
+      : nextOriginSnapshot
+
+    set({
+      ...applyWorkspaceSnapshot(activeSnapshot),
+      savedWorkspaces: nextSavedWorkspaces,
+      archivedWorkspaces: nextArchivedWorkspaces,
+      workspaceSnapshots: nextWorkspaceSnapshots
+    } as Partial<WorkspaceState>)
+
+    return {
+      ...transferResult,
+      originWorkspaceId,
+      destinationWorkspaceId,
+      destinationWasCreated
+    }
   },
 
   archiveWorkspace: (id) => {

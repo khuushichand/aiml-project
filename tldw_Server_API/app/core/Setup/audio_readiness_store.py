@@ -184,7 +184,26 @@ class AudioReadinessStore:
             return data
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.path.parent,
+                prefix=f"{self.path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                json.dump(data, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+                tmp_path = handle.name
+            os.replace(tmp_path, self.path)
+        except Exception:
+            if tmp_path:
+                with contextlib.suppress(FileNotFoundError):
+                    Path(tmp_path).unlink()
+            raise
         return data
 
     def update(self, **fields: Any) -> dict[str, Any]:

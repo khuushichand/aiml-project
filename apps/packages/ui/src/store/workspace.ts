@@ -47,6 +47,10 @@ import type {
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
+  WorkspaceSourceTransferConflictResolution,
+  WorkspaceSourceTransferEmptyFolderPolicy,
+  WorkspaceSourceTransferMode,
+  WorkspaceSourceTransferResult,
   WorkspaceSourceFolder,
   WorkspaceSourceFolderMembership,
   WorkspaceSourceStatus,
@@ -1962,6 +1966,36 @@ interface CaptureToNoteInput {
   mode?: CaptureNoteMode
 }
 
+export type WorkspaceSourceTransferDestination =
+  | {
+      kind: "existing"
+      workspaceId: string
+    }
+  | {
+      kind: "new"
+      name: string
+    }
+
+export interface WorkspaceSourceTransferRequest {
+  mode: WorkspaceSourceTransferMode
+  destination: WorkspaceSourceTransferDestination
+  selectedSourceIds: string[]
+  conflictResolutions?: Record<
+    number,
+    WorkspaceSourceTransferConflictResolution
+  >
+  emptyFolderPolicy?: WorkspaceSourceTransferEmptyFolderPolicy
+  sourceFolderFallbackName?: string
+  switchToDestinationOnComplete?: boolean
+}
+
+export interface WorkspaceSourceTransferExecutionResult
+  extends WorkspaceSourceTransferResult {
+  originWorkspaceId: string
+  destinationWorkspaceId: string
+  destinationWasCreated: boolean
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Action Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2104,6 +2138,10 @@ interface WorkspaceListActions {
   createNewWorkspace: (name?: string) => void
   /** Duplicate a workspace (defaults to current) and switch to the duplicate */
   duplicateWorkspace: (id?: string) => string | null
+  /** Transfer selected sources from the current workspace into another workspace */
+  transferSourcesBetweenWorkspaces: (
+    request: WorkspaceSourceTransferRequest
+  ) => WorkspaceSourceTransferExecutionResult | null
   /** Archive a workspace from active saved list */
   archiveWorkspace: (id: string) => void
   /** Restore a workspace from archive back into saved list */

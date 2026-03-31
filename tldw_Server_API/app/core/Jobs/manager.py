@@ -81,13 +81,37 @@ _JOB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
 
 # Module-level fair-share scheduler instance (lazy singleton)
 _fair_share: FairShareScheduler | None = None
+_fair_share_limits: tuple[int, int] | None = None
+
+
+def _fair_share_enabled() -> bool:
+    """Return whether fair-share admission/priority logic is explicitly enabled."""
+    return any(
+        os.getenv(name) is not None
+        for name in ("JOBS_MAX_PER_USER", "JOBS_MAX_PER_ORG")
+    )
+
+
+def _get_fair_share_limits() -> tuple[int, int]:
+    """Return the effective env-backed fair-share limits."""
+    return (
+        int(os.getenv("JOBS_MAX_PER_USER", "5") or "5"),
+        int(os.getenv("JOBS_MAX_PER_ORG", "20") or "20"),
+    )
 
 
 def _get_fair_share() -> FairShareScheduler:
-    """Return the module-level FairShareScheduler, creating it on first use."""
+    """Return the module-level FairShareScheduler, refreshing when limits change."""
     global _fair_share
-    if _fair_share is None:
-        _fair_share = FairShareScheduler()
+    global _fair_share_limits
+
+    limits = _get_fair_share_limits()
+    if _fair_share is None or _fair_share_limits != limits:
+        _fair_share = FairShareScheduler(
+            max_per_user=limits[0],
+            max_per_org=limits[1],
+        )
+        _fair_share_limits = limits
     return _fair_share
 
 
@@ -1098,7 +1122,7 @@ class JobManager:
             raise ValueError(f"Queue '{queue}' not allowed for domain '{domain}'. Allowed: {allowed_queues}")  # noqa: TRY003
 
         # Fair-share scheduling: enforce per-user concurrency limits and adjust priority
-        if owner_user_id:
+        if owner_user_id and _fair_share_enabled():
             try:
                 scheduler = _get_fair_share()
                 active_count = self._count_active_jobs_for_user(owner_user_id)

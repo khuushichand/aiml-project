@@ -8,10 +8,20 @@ export interface IncidentWorkflowState {
   assignedToLabel?: string;
   rootCause: string;
   impact: string;
+  runbookUrl?: string;
   actionItems: IncidentActionItem[];
 }
 
 export type IncidentWorkflowMap = Record<string, IncidentWorkflowState>;
+
+const emptyIncidentWorkflowState = (): IncidentWorkflowState => ({
+  assignedTo: undefined,
+  assignedToLabel: undefined,
+  rootCause: '',
+  impact: '',
+  runbookUrl: '',
+  actionItems: [],
+});
 
 const cloneActionItems = (items: IncidentActionItem[] | undefined | null): IncidentActionItem[] =>
   Array.isArray(items)
@@ -32,6 +42,7 @@ export const incidentWorkflowStateFromIncident = (
   assignedToLabel: incident.assigned_to_label ?? undefined,
   rootCause: incident.root_cause ?? '',
   impact: incident.impact ?? '',
+  runbookUrl: incident.runbook_url ?? '',
   actionItems: cloneActionItems(incident.action_items),
 });
 
@@ -63,13 +74,7 @@ export const upsertIncidentWorkflowState = (
   incidentId: string,
   nextState: Partial<IncidentWorkflowState>
 ): IncidentWorkflowMap => {
-  const current = map[incidentId] ?? {
-    assignedTo: undefined,
-    assignedToLabel: undefined,
-    rootCause: '',
-    impact: '',
-    actionItems: [],
-  };
+  const current = map[incidentId] ?? emptyIncidentWorkflowState();
   return {
     ...map,
     [incidentId]: {
@@ -84,13 +89,7 @@ export const addIncidentActionItem = (
   map: IncidentWorkflowMap,
   incidentId: string
 ): IncidentWorkflowMap => {
-  const current = map[incidentId] ?? {
-    assignedTo: undefined,
-    assignedToLabel: undefined,
-    rootCause: '',
-    impact: '',
-    actionItems: [],
-  };
+  const current = map[incidentId] ?? emptyIncidentWorkflowState();
   return upsertIncidentWorkflowState(map, incidentId, {
     actionItems: [
       ...cloneActionItems(current.actionItems),

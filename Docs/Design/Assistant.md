@@ -45,6 +45,7 @@ https://github.com/Open-LLM-VTuber/Open-LLM-VTuber
 https://github.com/moeru-ai/airi
 https://github.com/HeavyNotFat/Agentic-AI-Desktop-Pet
 
+https://cameronrwolfe.substack.com/p/stats-llm-evals?utm_medium=email
 
 https://github.com/zeroentropy-ai/zcookbook/blob/main/guides/search_tool_for_voice_agents/search_tool_for_voice_agents.ipynb?short_path=c18b7d2
 https://github.com/augmentedstartups/Roomey_AI_Voice_Agent

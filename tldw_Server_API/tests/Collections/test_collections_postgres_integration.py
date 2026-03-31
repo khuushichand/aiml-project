@@ -84,3 +84,55 @@ def test_collections_postgres_round_trip(request: pytest.FixtureRequest, monkeyp
 
     purged = db.purge_expired_outputs()
     assert purged >= 1
+
+
+def test_collections_postgres_backfills_notification_delivery_columns(
+    request: pytest.FixtureRequest,
+    monkeypatch,
+    tmp_path,
+):
+    _client, db_name = request.getfixturevalue("isolated_test_environment")  # type: ignore[assignment]
+    monkeypatch.setenv("USER_DB_BASE_DIR", str((tmp_path / "user_dbs").resolve()))
+
+    backend = _pg_backend(db_name)
+    backend.execute(
+        """
+        CREATE TABLE user_notifications (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            source_task_id TEXT,
+            source_task_run_id BIGINT,
+            source_job_id TEXT,
+            source_domain TEXT,
+            source_job_type TEXT,
+            link_type TEXT,
+            link_id TEXT,
+            link_url TEXT,
+            dedupe_key TEXT,
+            retention_until TEXT,
+            archived_at TEXT,
+            created_at TEXT NOT NULL,
+            read_at TEXT,
+            dismissed_at TEXT
+        )
+        """,
+        (),
+    )
+
+    db = CollectionsDatabase.from_backend(user_id="1", backend=backend)
+
+    columns = {row["name"] for row in backend.get_table_info("user_notifications")}
+    assert "delivery_status" in columns
+    assert "delivered_at" in columns
+
+    notification = db.create_user_notification(
+        kind="job_completed",
+        title="Backfilled notification",
+        message="Backfill should preserve defaults",
+        severity="info",
+    )
+    assert notification.delivery_status == "pending"

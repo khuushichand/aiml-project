@@ -361,6 +361,30 @@ describe("ExportDialog accessibility", () => {
     ).toBeInTheDocument()
   })
 
+  it("keeps the active share link visible even when clipboard copy fails", async () => {
+    const writeTextMock = vi.fn().mockRejectedValue(new Error("clipboard denied"))
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
+    render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create share link" }))
+
+    await waitFor(() => expect(createShareLinkMock).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.getByText(/Active link expires/i)).toBeInTheDocument()
+    )
+    expect(screen.getByRole("button", { name: "Revoke link" })).toBeEnabled()
+    expect(messageOpenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        content: "Unable to copy share link, but the link remains active.",
+      })
+    )
+  })
+
   it("saves the active conversation to Notes from workflow actions", async () => {
     state.results = [
       {

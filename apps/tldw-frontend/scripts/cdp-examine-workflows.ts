@@ -22,6 +22,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { execSync } from "child_process"
 import * as http from "http"
+import * as https from "https"
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -77,6 +78,55 @@ interface Summary {
   completedAt: string
   targets: Target[]
   results: WorkflowResult[]
+}
+
+const BLOCKED_PROXY_HEADERS = new Set([
+  "connection",
+  "forwarded",
+  "host",
+  "proxy-authorization",
+  "proxy-authenticate",
+  "proxy-connection",
+  "transfer-encoding",
+  "upgrade",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-port",
+  "x-forwarded-proto",
+])
+
+function sanitizeProxyHeaders(
+  headers: http.IncomingHttpHeaders
+): http.OutgoingHttpHeaders {
+  const sanitized: http.OutgoingHttpHeaders = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (BLOCKED_PROXY_HEADERS.has(key.toLowerCase()) || value === undefined) {
+      continue
+    }
+    sanitized[key] = value
+  }
+  return sanitized
+}
+
+export function buildApiProxyRequestOptions(
+  requestUrl: string | undefined,
+  serverUrl: string,
+  method: string | undefined,
+  headers: http.IncomingHttpHeaders
+): http.RequestOptions {
+  const parsedRequestUrl = new URL(requestUrl || "/", "http://localhost")
+  if (!parsedRequestUrl.pathname.startsWith("/api/")) {
+    throw new Error("Only /api/* requests may be proxied")
+  }
+  const backendOrigin = new URL(serverUrl)
+  return {
+    protocol: backendOrigin.protocol,
+    hostname: backendOrigin.hostname,
+    port: backendOrigin.port,
+    method: method || "GET",
+    path: `${parsedRequestUrl.pathname}${parsedRequestUrl.search}`,
+    headers: sanitizeProxyHeaders(headers),
+  }
 }
 
 // ─── Benign Patterns ──────────────────────────────────────────────────────────
@@ -1157,10 +1207,16 @@ async function startExtensionServer(
 
       // Proxy API requests
       if (url.pathname.startsWith("/api/")) {
-        const target = new URL(req.url || "/", CONFIG.serverUrl)
-        const proxyReq = http.request(
-          target,
-          { method: req.method, headers: req.headers },
+        const proxyOptions = buildApiProxyRequestOptions(
+          req.url,
+          CONFIG.serverUrl,
+          req.method,
+          req.headers
+        )
+        const requestImpl =
+          proxyOptions.protocol === "https:" ? https : http
+        const proxyReq = requestImpl.request(
+          proxyOptions,
           (proxyRes) => {
             res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
             proxyRes.pipe(res)
@@ -1607,7 +1663,9 @@ async function main(): Promise<void> {
   console.log(`  Artifacts: ${CONFIG.artifactsDir}`)
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err)
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error("Fatal error:", err)
+    process.exit(1)
+  })
+}

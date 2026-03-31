@@ -19,6 +19,7 @@ import { shallow } from "zustand/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import NotesEditorPane from "@/components/Notes/NotesEditorPane"
+import NotesStudioCreateModal from "@/components/Notes/NotesStudioCreateModal"
 import NotesSidebar from "@/components/Notes/NotesSidebar"
 import {
   useNotesKeywords,
@@ -31,6 +32,7 @@ import {
 import type { NoteListItem } from "@/components/Notes/notes-manager-types"
 import { clearSetting, getSetting } from "@/services/settings/registry"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { deriveNoteStudio, getNoteStudioState, regenerateNoteStudio } from "@/services/notes-studio"
 import { useMobile } from "@/hooks/useMediaQuery"
 import {
   LAST_NOTE_ID_SETTING,
@@ -43,6 +45,13 @@ import type {
   NotesTocEntry,
   KeywordPickerSortMode,
 } from './notes-manager-types'
+import type {
+  NoteStudioState,
+  NotesStudioHandwritingMode,
+  NotesStudioPaperSize,
+  NotesStudioTemplateType,
+} from './notes-studio-types'
+import { getDefaultStudioPaperSizeFromLocale } from './export-utils'
 import {
   normalizeConversationId,
   toConversationLabel,
@@ -236,6 +245,23 @@ const NotesManagerPage: React.FC = () => {
     editorDisabled,
   })
 
+  const [notesStudioCreateOpen, setNotesStudioCreateOpen] = React.useState(false)
+  const [notesStudioCreateLoading, setNotesStudioCreateLoading] = React.useState(false)
+  const [notesStudioMarkdownOnlyNoticeOpen, setNotesStudioMarkdownOnlyNoticeOpen] = React.useState(false)
+  const [notesStudioExcerptText, setNotesStudioExcerptText] = React.useState('')
+  const [notesStudioTemplateType, setNotesStudioTemplateType] =
+    React.useState<NotesStudioTemplateType>('lined')
+  const [notesStudioHandwritingMode, setNotesStudioHandwritingMode] =
+    React.useState<NotesStudioHandwritingMode>('accented')
+  const [selectedStudioState, setSelectedStudioState] = React.useState<NoteStudioState | null>(null)
+  const [notesStudioRegenerating, setNotesStudioRegenerating] = React.useState(false)
+  const defaultStudioPaperSize = React.useMemo(
+    () => getDefaultStudioPaperSizeFromLocale(typeof navigator !== 'undefined' ? navigator.language : ''),
+    []
+  )
+  const [selectedStudioPaperSize, setSelectedStudioPaperSize] =
+    React.useState<NotesStudioPaperSize>(defaultStudioPaperSize)
+
   // Wire the keyword hook's cross-cutting refs now that editor is available
   setIsDirtyRef.current = ed.setIsDirty
   setSaveIndicatorRef.current = ed.setSaveIndicator
@@ -255,6 +281,57 @@ const NotesManagerPage: React.FC = () => {
     () => visibleNotes.map((note) => String(note.id)),
     [visibleNotes]
   )
+
+  const selectedStudioSummaryNoteId = ed.selectedStudioSummary?.note_id ?? null
+  const currentNoteStudioSummary =
+    ed.selectedId != null &&
+    selectedStudioSummaryNoteId != null &&
+    String(selectedStudioSummaryNoteId) === String(ed.selectedId)
+      ? ed.selectedStudioSummary
+      : null
+
+  React.useEffect(() => {
+    if (ed.selectedId == null || !currentNoteStudioSummary?.note_id) {
+      setSelectedStudioState(null)
+      return
+    }
+
+    let cancelled = false
+    void getNoteStudioState(String(ed.selectedId))
+      .then((studioState) => {
+        if (cancelled) return
+        setSelectedStudioState(studioState)
+        ed.setEditorMode('preview')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setSelectedStudioState(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentNoteStudioSummary?.note_id, ed.selectedId])
+
+  const effectiveStudioState = React.useMemo(() => {
+    if (!selectedStudioState || ed.selectedId == null) return null
+    if (String(selectedStudioState.note.id) !== String(ed.selectedId)) {
+      return null
+    }
+    if (String(ed.content || '') === String(selectedStudioState.note.content || '')) {
+      return selectedStudioState
+    }
+    return {
+      ...selectedStudioState,
+      is_stale: true,
+      stale_reason: selectedStudioState.stale_reason || 'companion_content_hash_mismatch'
+    }
+  }, [ed.content, ed.selectedId, selectedStudioState])
+
+  React.useEffect(() => {
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    setSelectedStudioPaperSize(defaultStudioPaperSize)
+  }, [defaultStudioPaperSize, ed.selectedId])
 
   // ---- Note graph neighbors ----
   const {
@@ -458,6 +535,8 @@ const NotesManagerPage: React.FC = () => {
     title: ed.title,
     content: ed.content,
     editorKeywords: kw.editorKeywords,
+    selectedStudioState: effectiveStudioState,
+    studioPaperSize: selectedStudioPaperSize,
   })
 
   // ---- Import hook ----
@@ -1271,6 +1350,7 @@ const NotesManagerPage: React.FC = () => {
     (nextMode: NotesInputMode) => {
       if (nextMode === ed.editorInputMode) return
       if (nextMode === 'wysiwyg') { enterWysiwygMode(); return }
+      setNotesStudioMarkdownOnlyNoticeOpen(false)
       exitWysiwygMode()
       window.requestAnimationFrame(() => {
         const textarea = ed.contentTextareaRef.current
@@ -1361,6 +1441,117 @@ const NotesManagerPage: React.FC = () => {
     },
     [ed]
   )
+
+  const closeNotesStudioCreateModal = React.useCallback(() => {
+    setNotesStudioCreateOpen(false)
+    setNotesStudioExcerptText('')
+    setNotesStudioTemplateType('lined')
+    setNotesStudioHandwritingMode('accented')
+  }, [])
+
+  const handleOpenNotesStudio = React.useCallback(() => {
+    if (editorDisabled || ed.selectedId == null) return
+    if (ed.isDirty) {
+      message.warning(t('option:notesSearch.notesStudioSaveFirstWarning', {
+        defaultValue: 'Save this note before opening Notes Studio.'
+      }))
+      return
+    }
+    if (ed.editorInputMode !== 'markdown') {
+      setNotesStudioMarkdownOnlyNoticeOpen(true)
+      return
+    }
+    const textarea = ed.contentTextareaRef.current
+    if (!textarea) {
+      message.warning(t('option:notesSearch.notesStudioSelectionRequired', {
+        defaultValue: 'Select Markdown text before opening Notes Studio.'
+      }))
+      return
+    }
+    const start = textarea.selectionStart ?? 0
+    const end = textarea.selectionEnd ?? start
+    const excerptText = ed.content.slice(start, end)
+    if (excerptText.trim().length === 0) {
+      message.warning(t('option:notesSearch.notesStudioSelectionRequired', {
+        defaultValue: 'Select Markdown text before opening Notes Studio.'
+      }))
+      return
+    }
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    setNotesStudioExcerptText(excerptText)
+    setNotesStudioTemplateType('lined')
+    setNotesStudioHandwritingMode('accented')
+    setNotesStudioCreateOpen(true)
+  }, [ed, editorDisabled, message, t])
+
+  const switchNotesStudioToMarkdown = React.useCallback(() => {
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    handleEditorInputModeChange('markdown')
+  }, [handleEditorInputModeChange])
+
+  const handleCreateNotesStudio = React.useCallback(async () => {
+    if (ed.selectedId == null || !notesStudioExcerptText.trim()) return
+    setNotesStudioCreateLoading(true)
+    try {
+      const studioState = await deriveNoteStudio({
+        source_note_id: String(ed.selectedId),
+        excerpt_text: notesStudioExcerptText,
+        template_type: notesStudioTemplateType,
+        handwriting_mode: notesStudioHandwritingMode,
+      })
+      closeNotesStudioCreateModal()
+      await list.refetch()
+      const opened = await ed.handleSelectNote(studioState.note.id)
+      if (!opened) return
+      setSelectedStudioState(studioState)
+      ed.setEditorMode('preview')
+    } catch (error: any) {
+      message.error(
+        error?.message || t('option:notesSearch.notesStudioCreateError', {
+          defaultValue: 'Failed to create Notes Studio note.'
+        })
+      )
+    } finally {
+      setNotesStudioCreateLoading(false)
+    }
+  }, [
+    closeNotesStudioCreateModal,
+    ed,
+    list,
+    message,
+    notesStudioExcerptText,
+    notesStudioHandwritingMode,
+    notesStudioTemplateType,
+    t,
+  ])
+
+  const handleRegenerateStudioView = React.useCallback(async () => {
+    if (ed.selectedId == null) return
+    setNotesStudioRegenerating(true)
+    try {
+      const selectedNoteId = String(ed.selectedId)
+      const refreshed = await regenerateNoteStudio(String(ed.selectedId), {
+        current_markdown: String(ed.content || ''),
+      })
+      const detailReloaded = await ed.loadDetail(selectedNoteId)
+      if (!detailReloaded) {
+        ed.setTitle(String(refreshed.note.title || ''))
+        ed.setContent(String(refreshed.note.content || ''))
+        ed.setWysiwygHtml(markdownToWysiwygHtml(String(refreshed.note.content || '')))
+        ed.setIsDirty(false)
+      }
+      setSelectedStudioState(refreshed)
+      ed.setEditorMode('preview')
+    } catch (error: any) {
+      message.error(
+        error?.message || t('option:notesSearch.notesStudioRegenerateError', {
+          defaultValue: 'Failed to regenerate Notes Studio view.'
+        })
+      )
+    } finally {
+      setNotesStudioRegenerating(false)
+    }
+  }, [ed, message, t])
 
   // Flashcards
   const handleGenerateFlashcardsFromNote = React.useCallback(() => {
@@ -1805,6 +1996,17 @@ const NotesManagerPage: React.FC = () => {
         canSwitchTitleStrategy={ed.canSwitchTitleStrategy}
         effectiveTitleSuggestStrategy={ed.effectiveTitleSuggestStrategy}
         titleStrategyOptions={ed.titleStrategyOptions}
+        studioBadgeLabel={effectiveStudioState || currentNoteStudioSummary ? t('option:notesSearch.notesStudioAction', {
+          defaultValue: 'Notes Studio'
+        }) : null}
+        showStudioMarkdownOnlyNotice={notesStudioMarkdownOnlyNoticeOpen}
+        selectedStudioState={effectiveStudioState}
+        studioPaperSize={selectedStudioPaperSize}
+        onStudioPaperSizeChange={setSelectedStudioPaperSize}
+        onRegenerateStudioView={() => {
+          void handleRegenerateStudioView()
+        }}
+        studioRegenerating={notesStudioRegenerating}
         setTitleSuggestStrategy={ed.setTitleSuggestStrategy}
         manualLinkTargetId={ed.manualLinkTargetId}
         setManualLinkTargetId={ed.setManualLinkTargetId}
@@ -1847,6 +2049,7 @@ const NotesManagerPage: React.FC = () => {
         toggleNotePinned={ed.toggleNotePinned}
         copySelected={exp.copySelected}
         handleGenerateFlashcardsFromNote={handleGenerateFlashcardsFromNote}
+        handleOpenNotesStudio={handleOpenNotesStudio}
         exportSelected={exp.exportSelected}
         saveNote={ed.saveNote}
         deleteNote={deleteNote}
@@ -1861,6 +2064,8 @@ const NotesManagerPage: React.FC = () => {
         openAttachmentPicker={openAttachmentPicker}
         handleAttachmentInputChange={handleAttachmentInputChange}
         runAssistAction={ed.runAssistAction}
+        switchStudioNoticeToMarkdown={switchNotesStudioToMarkdown}
+        dismissStudioMarkdownOnlyNotice={() => setNotesStudioMarkdownOnlyNoticeOpen(false)}
         handleTocJump={handleTocJump}
         handlePreviewLinkClick={handlePreviewLinkClick}
         handleWysiwygInput={handleWysiwygInput}
@@ -1869,6 +2074,19 @@ const NotesManagerPage: React.FC = () => {
         handleEditorKeyDown={wl.handleEditorKeyDown}
         handleEditorSelectionUpdate={handleEditorSelectionUpdate}
         applyWikilinkSuggestion={wl.applyWikilinkSuggestion}
+      />
+      <NotesStudioCreateModal
+        open={notesStudioCreateOpen}
+        excerptText={notesStudioExcerptText}
+        templateType={notesStudioTemplateType}
+        handwritingMode={notesStudioHandwritingMode}
+        loading={notesStudioCreateLoading}
+        onClose={closeNotesStudioCreateModal}
+        onTemplateChange={setNotesStudioTemplateType}
+        onHandwritingChange={setNotesStudioHandwritingMode}
+        onSubmit={() => {
+          void handleCreateNotesStudio()
+        }}
       />
       <input ref={imp.importInputRef} type="file" multiple accept=".json,.md,.markdown,application/json,text/markdown,text/plain" className="hidden" data-testid="notes-import-input" onChange={(event) => { void imp.handleImportInputChange(event) }} />
       {hasDeferredOverlayOpen && (

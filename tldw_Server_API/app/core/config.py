@@ -3042,6 +3042,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "mcp-catalogs",
             "tools",
             "jobs",
+            "scheduled-tasks",
             "personalization",
             "orgs",
             "org-invites",

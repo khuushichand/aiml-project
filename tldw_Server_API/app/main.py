@@ -824,7 +824,10 @@ try:
             _dict_config_wrapper._tldw_original = getattr(_logcfg, "_tldw_original_dictConfig", None)
             _logcfg._tldw_dict_config_wrapped = True  # type: ignore[attr-defined]
 except _LOGGING_SETUP_EXCEPTIONS as _log_wrap_err:
-    logger.debug(f"Failed to wrap logging.config.dictConfig for interception: {_log_wrap_err}")
+    logger.debug(
+        "Failed to wrap logging.config.dictConfig for interception: {}",
+        _log_wrap_err,
+    )
 
 # Apply once now as well
 _reinstall_intercept_handlers()
@@ -1169,7 +1172,14 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
-    from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
+    except _IMPORT_EXCEPTIONS as _setup_min_import_err:
+        logger.debug(
+            "Skipping setup router import in minimal test app: {}",
+            _setup_min_import_err,
+        )
+        setup_router = None  # type: ignore[assignment]
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -6028,7 +6038,7 @@ elif _MINIMAL_TEST_APP:
     try:
         app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     except _IMPORT_EXCEPTIONS as _setup_min_err:
-        logger.debug(f"Skipping setup router in minimal test app: {_setup_min_err}")
+        logger.debug("Skipping setup router in minimal test app: {}", _setup_min_err)
     try:
         from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
 
@@ -6542,7 +6552,11 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Notifications endpoint not available: {_e}")
     _reading_import_enabled = True
-    if _EXPLICIT_PYTEST_RUNTIME and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING"):
+    if (
+        _EXPLICIT_PYTEST_RUNTIME
+        and _MINIMAL_TEST_APP
+        and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING")
+    ):
         _reading_import_enabled = False
         logger.info("Skipping reading endpoint imports in pytest startup (set MINIMAL_TEST_INCLUDE_READING=1 to enable)")
     if _reading_import_enabled:

@@ -36,11 +36,13 @@ from tldw_Server_API.app.core.DB_Management.media_db.api import (
     fetch_keywords_for_media_batch,
     get_paginated_files,
     get_paginated_trash_files,
-    permanently_delete_item,
     search_media,
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+from .....core.DB_Management.media_db.legacy_maintenance import (
+    permanently_delete_item,
+)
 
 router = APIRouter(tags=["Media Management"])
 

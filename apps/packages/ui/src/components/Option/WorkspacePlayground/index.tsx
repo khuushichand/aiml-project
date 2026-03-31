@@ -38,7 +38,15 @@ import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
 import { SharedWorkspaceProvider } from "./SharedWorkspaceContext"
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { ChatPane } from "./ChatPane"
+import {
+  TransferSourcesModal,
+  type TransferSourcesModalLaunchRequest
+} from "./TransferSourcesModal"
 import { useSourceListViewState } from "./use-source-list-view-state"
+import {
+  filterSources as applyAdvancedSourceFilters,
+  sortSources as applySourceSort
+} from "./SourcesPane/source-list-view"
 import {
   PaneResizer,
   DEFAULT_LEFT_WIDTH,
@@ -55,6 +63,10 @@ import {
   type WorkspaceGlobalSearchNoteDocument,
   type WorkspaceGlobalSearchResult
 } from "./workspace-global-search"
+import {
+  collectDescendantSourceIds,
+  createWorkspaceOrganizationIndex
+} from "@/store/workspace-organization"
 
 const SourcesPane = React.lazy(() =>
   import("./SourcesPane").then((module) => ({ default: module.SourcesPane }))
@@ -102,6 +114,31 @@ const WORKSPACE_CONFLICT_FIELD_LABELS: Record<string, string> = {
   currentNote: "quick note",
   workspaceChatSessions: "chat history",
   audioSettings: "audio settings"
+}
+
+const normalizeVectorProcessingStatus = (
+  value: unknown
+): "completed" | "pending" | "failed" | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value >= 1) return "completed"
+    if (value < 0) return "failed"
+    return "pending"
+  }
+  if (typeof value !== "string") {
+    return null
+  }
+  const lowered = value.trim().toLowerCase()
+  if (!lowered) return null
+  if (["1", "true", "complete", "completed", "done", "success"].includes(lowered)) {
+    return "completed"
+  }
+  if (["-1", "false", "failed", "error"].includes(lowered)) {
+    return "failed"
+  }
+  if (["0", "pending", "queued", "in_progress", "in-progress"].includes(lowered)) {
+    return "pending"
+  }
+  return null
 }
 
 type WorkspaceTabKey = "sources" | "chat" | "studio"
@@ -468,6 +505,27 @@ const isMediaLikelyReadyForRag = (detail: unknown): boolean => {
   const candidate = detail as Record<string, unknown>
   const content = candidate.content as Record<string, unknown> | undefined
   const processing = candidate.processing as Record<string, unknown> | undefined
+  const vectorStatusCandidates = [
+    candidate.vector_processing,
+    candidate.vector_processing_status,
+    processing?.vector_processing,
+    processing?.vector_processing_status
+  ]
+  let sawIncompleteVectorStatus = false
+
+  for (const statusCandidate of vectorStatusCandidates) {
+    const normalizedStatus = normalizeVectorProcessingStatus(statusCandidate)
+    if (normalizedStatus === "completed") {
+      return true
+    }
+    if (normalizedStatus === "pending" || normalizedStatus === "failed") {
+      sawIncompleteVectorStatus = true
+    }
+  }
+
+  if (sawIncompleteVectorStatus) {
+    return false
+  }
 
   const contentText =
     typeof content?.text === "string" ? content.text.trim() : ""
@@ -749,6 +807,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const [globalSearchOpen, setGlobalSearchOpen] = React.useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = React.useState("")
   const [activeSearchResultIndex, setActiveSearchResultIndex] = React.useState(0)
+  const [transferSourcesRequest, setTransferSourcesRequest] =
+    React.useState<TransferSourcesModalLaunchRequest | null>(null)
   const [workspaceSearchNotes, setWorkspaceSearchNotes] = React.useState<
     WorkspaceGlobalSearchNoteDocument[]
   >([])
@@ -837,12 +897,21 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const loadNote = useWorkspaceStore((s) => s.loadNote)
   const duplicateWorkspace = useWorkspaceStore((s) => s.duplicateWorkspace)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  )
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const leftPaneCollapsed = useWorkspaceStore((s) => s.leftPaneCollapsed)
   const rightPaneCollapsed = useWorkspaceStore((s) => s.rightPaneCollapsed)
   const setLeftPaneCollapsed = useWorkspaceStore((s) => s.setLeftPaneCollapsed)
   const setRightPaneCollapsed = useWorkspaceStore((s) => s.setRightPaneCollapsed)
   const sources = useWorkspaceStore((s) => s.sources)
+  const sourceFolders = useWorkspaceStore((s) => s.sourceFolders)
+  const sourceFolderMemberships = useWorkspaceStore(
+    (s) => s.sourceFolderMemberships
+  )
+  const activeFolderId = useWorkspaceStore((s) => s.activeFolderId)
+  const sourceSearchQuery = useWorkspaceStore((s) => s.sourceSearchQuery)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
   const currentNote = useWorkspaceStore((s) => s.currentNote)
@@ -862,6 +931,91 @@ const WorkspacePlaygroundBody: React.FC = () => {
     patchSourceListViewState,
     resetAdvancedSourceFilters
   } = useSourceListViewState()
+  const organizationIndex = React.useMemo(
+    () =>
+      createWorkspaceOrganizationIndex({
+        sources,
+        sourceFolders: sourceFolders || [],
+        sourceFolderMemberships: sourceFolderMemberships || []
+      }),
+    [sourceFolderMemberships, sourceFolders, sources]
+  )
+  const activeFolderSourceIds = React.useMemo(
+    () =>
+      activeFolderId
+        ? new Set(collectDescendantSourceIds(organizationIndex, activeFolderId))
+        : null,
+    [activeFolderId, organizationIndex]
+  )
+  const searchedSources = React.useMemo(() => {
+    const scopedSources = activeFolderSourceIds
+      ? sources.filter((source) => activeFolderSourceIds.has(source.id))
+      : sources
+    if (!sourceSearchQuery?.trim()) return scopedSources
+    const query = sourceSearchQuery.toLowerCase()
+    return scopedSources.filter((source) =>
+      source.title.toLowerCase().includes(query)
+    )
+  }, [activeFolderSourceIds, sourceSearchQuery, sources])
+  const filteredSources = React.useMemo(
+    () =>
+      applySourceSort(
+        applyAdvancedSourceFilters(searchedSources, sourceListViewState),
+        sourceListViewState.sort
+      ),
+    [searchedSources, sourceListViewState]
+  )
+  const effectiveSelectedSourceEntries = React.useMemo(() => {
+    const selectedSourceIdSet = new Set(selectedSourceIds || [])
+    const selectedFolderIdSet = new Set(selectedSourceFolderIds || [])
+    const effectiveSelectedIds = new Set<string>()
+
+    for (const source of sources) {
+      if (selectedSourceIdSet.has(source.id)) {
+        effectiveSelectedIds.add(source.id)
+      }
+    }
+
+    for (const folderId of selectedFolderIdSet) {
+      for (const sourceId of collectDescendantSourceIds(organizationIndex, folderId)) {
+        effectiveSelectedIds.add(sourceId)
+      }
+    }
+
+    return sources.filter((source) => effectiveSelectedIds.has(source.id))
+  }, [
+    organizationIndex,
+    selectedSourceFolderIds,
+    selectedSourceIds,
+    sources
+  ])
+  const readyEffectiveSelectedSourceEntries = React.useMemo(
+    () =>
+      effectiveSelectedSourceEntries.filter((source) =>
+        organizationIndex.readySourceIds.has(source.id)
+      ),
+    [effectiveSelectedSourceEntries, organizationIndex.readySourceIds]
+  )
+  const readyEffectiveSelectedSourceIdSet = React.useMemo(
+    () => new Set(readyEffectiveSelectedSourceEntries.map((source) => source.id)),
+    [readyEffectiveSelectedSourceEntries]
+  )
+  const visibleReadySelectedCount = React.useMemo(
+    () =>
+      filteredSources.filter((source) =>
+        readyEffectiveSelectedSourceIdSet.has(source.id)
+      ).length,
+    [filteredSources, readyEffectiveSelectedSourceIdSet]
+  )
+  const hiddenSelectedCount = Math.max(
+    0,
+    readyEffectiveSelectedSourceEntries.length - visibleReadySelectedCount
+  )
+  const ineligibleSelectedCount = Math.max(
+    0,
+    effectiveSelectedSourceEntries.length -
+      readyEffectiveSelectedSourceEntries.length
+  )
 
   const [leftPaneWidth, setLeftPaneWidth] = React.useState(DEFAULT_LEFT_WIDTH)
   const [rightPaneWidth, setRightPaneWidth] = React.useState(DEFAULT_RIGHT_WIDTH)
@@ -1039,6 +1193,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
     setActiveSearchResultIndex(0)
   }, [])
 
+  const openTransferSourcesModal = React.useCallback(
+    (request: TransferSourcesModalLaunchRequest) => {
+      setTransferSourcesRequest(request)
+    },
+    []
+  )
+
+  const closeTransferSourcesModal = React.useCallback(() => {
+    setTransferSourcesRequest(null)
+  }, [])
+
   const dismissOnboardingOverlay = React.useCallback(() => {
     if (typeof window === "undefined") return
 
@@ -1192,6 +1357,39 @@ const WorkspacePlaygroundBody: React.FC = () => {
     },
     [isMobile, setLeftPaneCollapsed, setRightPaneCollapsed]
   )
+
+  const handleOpenSplitWorkspace = React.useCallback(() => {
+    if (readyEffectiveSelectedSourceEntries.length === 0) {
+      focusWorkspacePane("sources")
+      messageApi.info(
+        t(
+          "playground:workspace.splitNoSelection",
+          "Select at least one source before splitting this workspace."
+        )
+      )
+      return
+    }
+
+    openTransferSourcesModal({
+      entryPoint: "header",
+      selectedSourceIds: effectiveSelectedSourceEntries.map((source) => source.id),
+      eligibleSelectedSourceIds: readyEffectiveSelectedSourceEntries.map(
+        (source) => source.id
+      ),
+      totalSelectedCount: effectiveSelectedSourceEntries.length,
+      hiddenSelectedCount,
+      ineligibleSelectedCount
+    })
+  }, [
+    effectiveSelectedSourceEntries,
+    focusWorkspacePane,
+    hiddenSelectedCount,
+    ineligibleSelectedCount,
+    messageApi,
+    openTransferSourcesModal,
+    readyEffectiveSelectedSourceEntries,
+    t
+  ])
 
   const focusNewNoteTitle = React.useCallback(() => {
     focusWorkspacePane("studio")
@@ -1912,6 +2110,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       >
         <SourcesPane
           onHide={options?.onHide}
+          onOpenTransferSources={openTransferSourcesModal}
           sourceListViewState={sourceListViewState}
           onPatchSourceListViewState={patchSourceListViewState}
           onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
@@ -2073,6 +2272,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             rightPaneOpen={false}
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
+            onOpenSplitWorkspace={handleOpenSplitWorkspace}
             hideToggles
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
@@ -2115,6 +2315,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             rightPaneOpen={!!rightPaneOpen}
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
+            onOpenSplitWorkspace={handleOpenSplitWorkspace}
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
             storageOriginUsedBytes={workspaceStorageUsage.originUsedBytes ?? undefined}
@@ -2378,6 +2579,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <TransferSourcesModal
+        open={transferSourcesRequest !== null}
+        request={transferSourcesRequest}
+        onCancel={closeTransferSourcesModal}
+      />
 
       {showWorkspaceTransitionCue && (
         <div

@@ -221,6 +221,7 @@ export type QuizRemediationGenerateRequest = {
   difficulty?: "easy" | "medium" | "hard" | "mixed"
   focus_topics?: string[]
   model?: string
+  api_provider?: string
   workspace_tag?: string | null
 }
 
@@ -569,6 +570,7 @@ export async function generateRemediationQuiz(
       difficulty: request.difficulty,
       focus_topics: request.focus_topics,
       model: request.model,
+      api_provider: request.api_provider,
       workspace_tag: request.workspace_tag,
       sources: buildQuizAttemptQuestionSources(request.attemptId, request.questionIds)
     },

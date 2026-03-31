@@ -712,6 +712,7 @@ export function useGenerateRemediationQuizMutation() {
     difficulty?: "easy" | "medium" | "hard" | "mixed"
     focusTopics?: string[]
     model?: string
+    apiProvider?: string
     workspaceTag?: string | null
     signal?: AbortSignal
   }
@@ -728,6 +729,7 @@ export function useGenerateRemediationQuizMutation() {
       if (params.difficulty !== undefined) request.difficulty = params.difficulty
       if (params.focusTopics !== undefined) request.focus_topics = params.focusTopics
       if (params.model !== undefined) request.model = params.model
+      if (params.apiProvider !== undefined) request.api_provider = params.apiProvider
       if (params.workspaceTag !== undefined) request.workspace_tag = params.workspaceTag
 
       return params.signal

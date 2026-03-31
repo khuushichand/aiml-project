@@ -932,8 +932,19 @@ class PostgreSQLBackend(DatabaseBackend):
             " SELECT FROM information_schema.tables"
             " WHERE table_schema = 'public' AND table_name = %s)"
         )
-        result = self.execute(query, (table_name,), connection)
-        return result.scalar
+        result = self.execute(query, (table_name,), connection=connection)
+        if result.scalar:
+            return True
+
+        folded_name = table_name.lower()
+        if folded_name == table_name:
+            return False
+
+        # PostgreSQL folds unquoted identifiers to lowercase. Allow mixed-case
+        # callers like "MediaFiles" to resolve those tables without losing the
+        # ability to distinguish deliberately quoted mixed-case tables.
+        folded_result = self.execute(query, (folded_name,), connection=connection)
+        return bool(folded_result.scalar)
 
     def get_table_info(
         self,

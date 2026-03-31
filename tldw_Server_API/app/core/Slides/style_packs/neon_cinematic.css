@@ -1,0 +1,11 @@
+.reveal[data-style-pack="neon_cinematic"] {
+  background-color: var(--surface, #020617);
+  color: var(--text, #f8fafc);
+  font-family: "Neue Haas Grotesk", "Helvetica Neue", sans-serif;
+}
+
+.reveal[data-style-pack="neon_cinematic"] .slides section {
+  border: 1px solid rgba(103, 232, 249, 0.24);
+  box-shadow: 0 0 28px rgba(103, 232, 249, 0.22), 0 0 56px rgba(249, 115, 22, 0.12);
+  text-shadow: 0 0 18px rgba(103, 232, 249, 0.2);
+}

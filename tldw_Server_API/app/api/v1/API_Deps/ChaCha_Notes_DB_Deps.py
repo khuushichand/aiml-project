@@ -29,9 +29,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     SchemaError,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
-    configure_sqlite_connection,
-)
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 
 #
 #######################################################################################################################
@@ -180,6 +178,8 @@ _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES
 logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
 
 _chacha_db_lock = threading.Lock()
+_chacha_db_init_events: dict[str, threading.Event] = {}
+_chacha_db_init_errors: dict[str, Exception] = {}
 _chacha_default_char_tasks: set[asyncio.Task] = set()
 _chacha_default_char_futures: set[asyncio.Future] = set()
 _chacha_default_char_futures_lock = threading.Lock()
@@ -212,7 +212,7 @@ def _apply_sqlite_tuning(db_instance: CharactersRAGDB) -> None:
         return
     try:
         conn = db_instance.get_connection()
-        configure_sqlite_connection(
+        sqlite_policy.configure_sqlite_connection(
             conn,
             use_wal=True,
             synchronous="NORMAL",
@@ -227,7 +227,7 @@ def _apply_sqlite_tuning(db_instance: CharactersRAGDB) -> None:
 def _health_check_instance(db_instance: CharactersRAGDB) -> bool:
     try:
         conn = db_instance.get_connection()
-        configure_sqlite_connection(
+        sqlite_policy.configure_sqlite_connection(
             conn,
             use_wal=False,
             synchronous=None,
@@ -268,7 +268,16 @@ async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id:
     except asyncio.TimeoutError:
         _record_default_character(False)
         logger.warning(f"Timed out ensuring default character for user {user_id}; will retry on next access.")
-    except (CharactersRAGDBError, SchemaError, InputError, ConflictError, OSError, RuntimeError, ValueError) as e:
+    except (
+        CharactersRAGDBError,
+        SchemaError,
+        InputError,
+        ConflictError,
+        sqlite3.Error,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as e:
         _record_default_character(False)
         logger.warning(
             f"Error ensuring default character for user {user_id}: {e}. Continuing; will retry on next access.",
@@ -361,6 +370,53 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
             if _chacha_db_instances.get(cache_key) is db_instance:
                 _chacha_db_instances.pop(cache_key, None)
 
+    wait_for_existing_init = False
+    with _chacha_db_lock:
+        cached_instance = _chacha_db_instances.get(cache_key)
+        if cached_instance is not None:
+            _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
+            return cached_instance
+        init_event = _chacha_db_init_events.get(cache_key)
+        if init_event is None:
+            init_event = threading.Event()
+            _chacha_db_init_events[cache_key] = init_event
+        else:
+            wait_for_existing_init = True
+
+    if wait_for_existing_init:
+        wait_timeout = max(_CHACHA_WATCHDOG_SECS * 3, 5)
+        try:
+            completed = await asyncio.wait_for(
+                asyncio.to_thread(init_event.wait),
+                timeout=wait_timeout,
+            )
+        except asyncio.TimeoutError as e:
+            _record_init(wait_timeout * 1000, False, e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ChaChaNotes initialization timed out",
+            ) from e
+        if not completed:
+            _record_init(wait_timeout * 1000, False)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ChaChaNotes initialization timed out",
+            )
+        with _chacha_db_lock:
+            cached_instance = _chacha_db_instances.get(cache_key)
+            init_error = _chacha_db_init_errors.get(cache_key)
+        if cached_instance is not None:
+            return cached_instance
+        if init_error is not None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Could not initialize character & notes database for user: {init_error}",
+            ) from init_error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not initialize character & notes database for user: unknown error",
+        )
+
     loop = asyncio.get_running_loop()
     start = time.perf_counter()
     try:
@@ -382,15 +438,23 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
     except (CharactersRAGDBError, sqlite3.Error, OSError, RuntimeError, ValueError, TypeError) as e:
         duration_ms = (time.perf_counter() - start) * 1000
         _record_init(duration_ms, False, e)
+        with _chacha_db_lock:
+            _chacha_db_init_errors[cache_key] = e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not initialize character & notes database for user: {e}",
         ) from e
-
-    with _chacha_db_lock:
-        _chacha_db_instances[cache_key] = db_instance
-        _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
-    return db_instance
+    else:
+        with _chacha_db_lock:
+            _chacha_db_instances[cache_key] = db_instance
+            _chacha_db_init_errors.pop(cache_key, None)
+            _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
+        return db_instance
+    finally:
+        with _chacha_db_lock:
+            init_event = _chacha_db_init_events.pop(cache_key, None)
+        if init_event is not None:
+            init_event.set()
 
 
 async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) -> None:
@@ -499,6 +563,7 @@ def close_all_chacha_db_instances():
             except (CharactersRAGDBError, OSError, RuntimeError, ValueError, TypeError) as e:
                 logger.error(f"Error closing ChaChaNotesDB instance for user {user_id}: {e}", exc_info=True)
         _chacha_db_instances.clear()
+        _chacha_db_init_errors.clear()
         logger.info("All ChaChaNotesDB instances closed and cache cleared.")
 
 

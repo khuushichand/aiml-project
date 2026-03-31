@@ -34,6 +34,7 @@ interface NotesEditorHeaderProps {
   hasContent: boolean
   canSave: boolean
   canGenerateFlashcards: boolean
+  canOpenNotesStudio?: boolean
   canExport: boolean
   canDuplicate?: boolean
   canPin?: boolean
@@ -52,9 +53,11 @@ interface NotesEditorHeaderProps {
   onChangeEditorMode: (mode: 'edit' | 'split' | 'preview') => void
   onCopy: (mode: 'content' | 'markdown') => void
   onGenerateFlashcards: () => void
+  onOpenNotesStudio?: () => void
   onExport: (format: 'md' | 'json' | 'print') => void
   onSave: () => void
   onDelete: () => void
+  studioBadgeLabel?: string | null
 }
 
 const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
@@ -70,6 +73,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   hasContent,
   canSave,
   canGenerateFlashcards,
+  canOpenNotesStudio = false,
   canExport,
   canDuplicate = false,
   canPin = false,
@@ -88,9 +92,11 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   onChangeEditorMode,
   onCopy,
   onGenerateFlashcards,
+  onOpenNotesStudio,
   onExport,
   onSave,
-  onDelete
+  onDelete,
+  studioBadgeLabel = null,
 }) => {
   const { t } = useTranslation(['option', 'common'])
   const isMobileViewport = useMobile()
@@ -191,6 +197,14 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         label: t('option:notesSearch.overflowGroupAI', { defaultValue: 'AI' }),
         children: [
           {
+            key: 'notes-studio',
+            label: t('option:notesSearch.notesStudioAction', {
+              defaultValue: 'Notes Studio'
+            }),
+            icon: (<SparklesIcon className="w-4 h-4" />),
+            disabled: !canOpenNotesStudio
+          },
+          {
             key: 'flashcards',
             label: t('option:notesSearch.generateFlashcardsAction', {
               defaultValue: 'Generate flashcards'
@@ -273,6 +287,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
     canDuplicate,
     canPin,
     isPinned,
+    canOpenNotesStudio,
     canGenerateFlashcards,
     canExport,
     canDelete,
@@ -298,6 +313,9 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         break
       case 'flashcards':
         onGenerateFlashcards()
+        break
+      case 'notes-studio':
+        onOpenNotesStudio?.()
         break
       case 'copy-content':
         onCopy('content')
@@ -332,6 +350,11 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           <Typography.Title level={5} className="!mb-0 truncate !text-text">
             {displayTitle}
           </Typography.Title>
+          {studioBadgeLabel ? (
+            <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+              {studioBadgeLabel}
+            </span>
+          ) : null}
           <NotesSaveStatus
             state={isDirty ? 'dirty' : saveIndicator}
             lastSavedAt={lastSavedAt}

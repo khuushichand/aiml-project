@@ -51,6 +51,13 @@ describe('incident workflow state helpers', () => {
     expect(map['inc-1'].actionItems[0].done).toBe(true);
   });
 
+  it('preserves a default runbook url in fallback workflow state', () => {
+    const map = addIncidentActionItem({}, 'inc-1');
+
+    expect(map['inc-1'].runbookUrl).toBe('');
+    expect(map['inc-1'].actionItems).toHaveLength(1);
+  });
+
   it('builds a post-mortem timeline summary message', () => {
     const message = buildPostmortemTimelineMessage({
       assignedTo: '2',

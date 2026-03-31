@@ -87,6 +87,44 @@ def test_api_dockerfile_avoids_expensive_copy_and_recursive_chown_layers():
     _require("RUN mkdir -p /app/Databases" in text, "Expected Dockerfile.prod to create /app/Databases")
 
 
+def test_api_dockerfile_uses_runtime_env_for_uvicorn_workers_and_log_level():
+    """The API Dockerfile should let compose override uvicorn worker and log settings."""
+    text = _read_text("Dockerfiles/Dockerfile.prod")
+
+    _require(
+        "ARG UVICORN_WORKERS=4" in text,
+        "Expected Dockerfile.prod to define a build arg for UVICORN_WORKERS",
+    )
+    _require(
+        "ARG LOG_LEVEL=info" in text,
+        "Expected Dockerfile.prod to define a build arg for LOG_LEVEL",
+    )
+    _require(
+        "UVICORN_WORKERS=${UVICORN_WORKERS}" in text,
+        "Expected Dockerfile.prod to export UVICORN_WORKERS from the build/runtime value",
+    )
+    _require(
+        "LOG_LEVEL=${LOG_LEVEL}" in text,
+        "Expected Dockerfile.prod to export LOG_LEVEL from the build/runtime value",
+    )
+    _require(
+        '"$UVICORN_WORKERS"' in text or "${UVICORN_WORKERS}" in text,
+        "Expected uvicorn startup command to reference UVICORN_WORKERS from the environment",
+    )
+    _require(
+        '"$LOG_LEVEL"' in text or "${LOG_LEVEL}" in text,
+        "Expected uvicorn startup command to reference LOG_LEVEL from the environment",
+    )
+    _require(
+        '--workers", "4"' not in text,
+        "Expected Dockerfile.prod to avoid hardcoded uvicorn worker count",
+    )
+    _require(
+        '--log-level", "info"' not in text,
+        "Expected Dockerfile.prod to avoid hardcoded uvicorn log level",
+    )
+
+
 def test_webui_dockerfile_uses_copy_chown_instead_of_recursive_chown():
     """The WebUI Dockerfile should use targeted --chown copies."""
     text = _read_text("Dockerfiles/Dockerfile.webui")
@@ -127,7 +165,7 @@ def test_webui_dockerfile_installs_only_frontend_and_ui_workspaces():
         "Expected Dockerfile.webui to rewrite the workspace manifest down to the frontend and shared ui workspaces",
     )
     _require(
-        "RUN bun install --cwd /app/apps" in text,
+        "RUN bun install --frozen-lockfile --cwd /app/apps" in text,
         "Expected Dockerfile.webui to install the narrowed Bun workspace set",
     )
 

@@ -437,9 +437,11 @@ class TTSServiceV2:
         prepared = False
         try:
             self._apply_token_defaults(tts_request)
+            # Run a generic validation pass first so provider-specific requirements
+            # can be satisfied by stored custom voice enrichment before the final check.
             validate_tts_request(
                 tts_request,
-                provider=provider_hint,
+                provider=None,
                 config=self._get_validation_config(),
             )
             await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)

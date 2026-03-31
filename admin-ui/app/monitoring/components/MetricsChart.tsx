@@ -100,7 +100,11 @@ export default function MetricsChart({
             Enable at least one metric series to render the chart.
           </div>
         ) : (
-          <div className="h-64">
+          <div
+            className="h-64"
+            role="img"
+            aria-label={`System metrics chart showing ${metricsHistory.length} data points for ${visibleSeries.map((series) => series.label).join(', ')}`}
+          >
             <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
               <LineChart data={metricsHistory}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />

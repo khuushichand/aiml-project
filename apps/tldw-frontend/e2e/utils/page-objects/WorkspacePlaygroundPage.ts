@@ -8,6 +8,7 @@ type WorkspaceSeedSource = {
   mediaId: number
   title: string
   type?: "pdf" | "video" | "audio" | "website" | "document" | "text"
+  status?: "processing" | "ready" | "error"
   url?: string
 }
 
@@ -180,7 +181,10 @@ export class WorkspacePlaygroundPage {
   async openGlobalSearchWithShortcut(): Promise<void> {
     await this.page.locator("body").click()
     await this.page.keyboard.press("Control+k")
-    if (!(await this.globalSearchModal.isVisible().catch(() => false))) {
+    if (!(await this.globalSearchInput.isVisible().catch(() => false))) {
+      await expect(this.globalSearchModal).toBeVisible({ timeout: 2_000 }).catch(() => {})
+    }
+    if (!(await this.globalSearchInput.isVisible().catch(() => false))) {
       await this.page.keyboard.press("Meta+k")
     }
     await expect(this.globalSearchModal).toBeVisible({ timeout: 10_000 })
@@ -272,7 +276,7 @@ export class WorkspacePlaygroundPage {
                     | "document"
                     | "text"
                   url: string
-                  status: "ready"
+                  status: "processing" | "ready" | "error"
                 }>
               ) => void
             }
@@ -291,7 +295,7 @@ export class WorkspacePlaygroundPage {
           title: source.title,
           type: source.type || "document",
           url: source.url || `https://example.com/source-${source.mediaId}`,
-          status: "ready"
+          status: source.status || "ready"
         }))
       )
     }, sources)

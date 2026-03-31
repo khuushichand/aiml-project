@@ -591,7 +591,7 @@ async def run_vector_search_and_score(
     """
     from tldw_Server_API.app.core.config import settings as app_settings
     embedding_config = _resolve_abtest_embedding_config(app_settings)
-    manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
+    manager: ChromaDBManager | None = None
 
     # Embed queries per arm
     # Ensure DB has queries and align IDs
@@ -666,6 +666,11 @@ async def run_vector_search_and_score(
                     continue
             else:
                 qvec = qvecs[q_idx]
+                if manager is None:
+                    manager = ChromaDBManager(
+                        user_id=str(user_id),
+                        user_embedding_config=embedding_config,
+                    )
                 collection = manager.get_or_create_collection(collection_name)
                 ranked: list[str] = []
                 try:

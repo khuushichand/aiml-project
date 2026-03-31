@@ -1075,8 +1075,8 @@ def search_conversations_by_title_query(
     try:
         return db.search_conversations_by_title(
             title_query,
-            character_id,
-            limit,
+            character_id=character_id,
+            limit=limit,
             client_id=client_id,
         )
     except CharactersRAGDBError as exc:

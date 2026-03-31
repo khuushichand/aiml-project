@@ -108,4 +108,16 @@ describe('PermissionMatrixPage', () => {
 
     expect(await screen.findByText('Saved 2 permission changes.')).toBeInTheDocument();
   });
+
+  it('exposes the differences-only toggle state to assistive tech', async () => {
+    const user = userEvent.setup();
+    render(<PermissionMatrixPage />);
+
+    const toggle = await screen.findByRole('button', { name: 'Differences only' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    await user.click(toggle);
+
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+  });
 });

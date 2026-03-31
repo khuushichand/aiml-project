@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   apiPost: vi.fn(),
   buildAuthHeaders: vi.fn(),
   getApiBaseUrl: vi.fn(),
+  shouldIncludeBrowserCredentials: vi.fn(),
   streamStructuredSSE: vi.fn(),
   bgRequest: vi.fn(),
   bgStream: vi.fn()
@@ -18,7 +19,9 @@ vi.mock("@web/lib/api", () => ({
     post: (...args: unknown[]) => mocks.apiPost(...args)
   },
   buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
-  getApiBaseUrl: (...args: unknown[]) => mocks.getApiBaseUrl(...args)
+  getApiBaseUrl: (...args: unknown[]) => mocks.getApiBaseUrl(...args),
+  shouldIncludeBrowserCredentials: (...args: unknown[]) =>
+    mocks.shouldIncludeBrowserCredentials(...args)
 }))
 
 vi.mock("@web/lib/sse", () => ({
@@ -47,6 +50,7 @@ describe("web notifications adapter", () => {
       "X-CSRF-Token": "csrf-token"
     })
     mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
+    mocks.shouldIncludeBrowserCredentials.mockReturnValue(false)
     mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
     mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
     mocks.streamStructuredSSE.mockImplementation(async (_url, _options, onEvent) => {
@@ -106,7 +110,7 @@ describe("web notifications adapter", () => {
       "http://example.test/api/v1/notifications/stream?after=42",
       expect.objectContaining({
         method: "GET",
-        credentials: "include",
+        credentials: "same-origin",
         signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           Authorization: "Bearer web-token",
@@ -135,6 +139,27 @@ describe("web notifications adapter", () => {
     await Promise.resolve()
 
     expect(mocks.streamStructuredSSE).toHaveBeenCalledTimes(1)
+
+    unsubscribe()
+  })
+
+  it("uses credentialed SSE requests when browser session cookies are needed", async () => {
+    mocks.shouldIncludeBrowserCredentials.mockReturnValue(true)
+
+    const unsubscribe = subscribeNotificationsStream({
+      after: 7,
+      onEvent: vi.fn()
+    })
+
+    await Promise.resolve()
+
+    expect(mocks.streamStructuredSSE).toHaveBeenCalledWith(
+      "http://example.test/api/v1/notifications/stream?after=7",
+      expect.objectContaining({
+        credentials: "include"
+      }),
+      expect.any(Function)
+    )
 
     unsubscribe()
   })

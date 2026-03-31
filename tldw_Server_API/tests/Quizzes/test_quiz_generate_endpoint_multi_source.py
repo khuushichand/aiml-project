@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints import quizzes as quizzes_endpoint
 from tldw_Server_API.app.api.v1.schemas.quizzes import QuizGenerateRequest
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.services.quiz_generator import QuizProvenanceValidationError
 
 
@@ -46,6 +47,30 @@ async def test_generate_quiz_forwards_sources_array(monkeypatch):
 
     assert captured["sources"] == [{"source_type": "note", "source_id": "note-1"}]
     assert captured["workspace_id"] == "ws-2"
+
+
+@pytest.mark.asyncio
+async def test_generate_quiz_forwards_model_and_api_provider(monkeypatch):
+    captured: dict = {}
+
+    async def fake_generate_quiz_from_sources(**kwargs):
+        captured.update(kwargs)
+        return {"quiz": {"id": 1}, "questions": []}
+
+    monkeypatch.setattr(quizzes_endpoint, "generate_quiz_from_sources", fake_generate_quiz_from_sources)
+
+    request = QuizGenerateRequest.model_validate(
+        {
+            "media_id": 42,
+            "num_questions": 3,
+            "model": "gpt-4o-mini",
+            "api_provider": "openai",
+        }
+    )
+    await quizzes_endpoint.generate_quiz(request=request, db=Mock(), media_db=Mock())
+
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["api_provider"] == "openai"
 
 
 @pytest.mark.asyncio

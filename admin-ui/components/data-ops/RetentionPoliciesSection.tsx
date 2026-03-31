@@ -257,7 +257,7 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                 );
                 return (
                   <Fragment key={policy.key}>
-                    <TableRow key={policy.key}>
+                    <TableRow>
                       <TableCell className="font-mono text-xs">{policy.key}</TableCell>
                       <TableCell>{policy.description || '—'}</TableCell>
                       <TableCell className="w-40">
@@ -302,7 +302,12 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                     {previewCurrent && (
                       <TableRow data-testid={`retention-preview-row-${policy.key}`}>
                         <TableCell colSpan={4}>
-                          <div className="rounded-md border bg-muted/40 p-3 space-y-2">
+                          <div className={`rounded-md border p-3 space-y-2 ${(() => {
+                            const total = previewCurrent.counts.auditLogEntries + previewCurrent.counts.jobRecords + previewCurrent.counts.backupFiles;
+                            if (total > 1000) return 'bg-red-50 border-red-200';
+                            if (total > 100) return 'bg-yellow-50 border-yellow-200';
+                            return 'bg-muted/40';
+                          })()}`}>
                             <p className="text-sm" data-testid={`retention-preview-text-${policy.key}`}>
                               Changing from {previewCurrent.currentDays} to {previewCurrent.newDays} days will delete approximately{' '}
                               {previewCurrent.counts.auditLogEntries} audit log entries, {previewCurrent.counts.jobRecords}{' '}
@@ -321,7 +326,7 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                                 id={`retention-preview-ack-${policy.key}`}
                                 checked={Boolean(policyPreviewAcknowledged[policy.key])}
                                 onCheckedChange={(checked) =>
-                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked }))
+                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked === true }))
                                 }
                               />
                               <span>I understand this change can permanently delete historical data.</span>

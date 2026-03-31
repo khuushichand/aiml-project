@@ -109,7 +109,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_batch
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
-from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
@@ -201,8 +201,35 @@ def _model_cache_subdir_name(model_id: str) -> str:
         sanitized = sanitized[:80].rstrip("._-")
         if not sanitized:
             sanitized = "model"
-    digest = hashlib.sha1(model_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    digest = hashlib.sha256(model_id.encode("utf-8")).hexdigest()[:8]
     return f"{sanitized}-{digest}"
+
+
+def _synthetic_test_embedding(text: str, dims: int = 384) -> list[float]:
+    """Return a deterministic normalized embedding for in-process test flows."""
+    if dims <= 0:
+        return []
+    tokens = re.findall(r"[0-9A-Za-z_]+", str(text or "").lower())
+    if not tokens:
+        return [0.0] * dims
+    vec = [0.0] * dims
+    for token in tokens:
+        token_hash = hashlib.sha256(
+            token.encode("utf-8", errors="ignore")
+        ).digest()
+        vec[int.from_bytes(token_hash[:8], byteorder="big", signed=False) % dims] += 1.0
+    norm = float(np.linalg.norm(vec))
+    if norm <= 0.0:
+        return vec
+    return [float(val) / norm for val in vec]
+
+
+def _should_use_inprocess_test_embeddings(provider: str) -> bool:
+    return (
+        provider.strip().lower() == "huggingface"
+        and is_test_mode()
+        and env_flag_enabled("E2E_INPROCESS")
+    )
 
 
 def _log_rejected_path(
@@ -1801,7 +1828,13 @@ def create_embeddings_batch(
     try:
         embedder_instance: Any = None  # To hold HFEmbedder or ONNXEmbedder
 
-        if provider.lower() == "huggingface":
+        if _should_use_inprocess_test_embeddings(provider):
+            logger.info(
+                "Using deterministic synthetic embeddings for {} in in-process test mode",
+                model_id_to_use,
+            )
+            embeddings_list = [_synthetic_test_embedding(text) for text in texts]
+        elif provider.lower() == "huggingface":
             if not isinstance(model_spec, HFModelCfg):
                 raise ValueError(f"Model spec for {model_id_to_use} is not HFModelCfg.")
 

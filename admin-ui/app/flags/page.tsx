@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -221,6 +221,8 @@ export default function FlagsPage() {
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
   const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
+  const [togglingFlags, setTogglingFlags] = useState<Record<string, boolean>>({});
+  const togglingFlagsRef = useRef<Set<string>>(new Set());
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -401,6 +403,46 @@ export default function FlagsPage() {
     }
   };
 
+  const handleToggleFlag = async (flag: FeatureFlagItem) => {
+    const flagId = getFlagId(flag);
+    if (togglingFlagsRef.current.has(flagId)) {
+      return;
+    }
+
+    const newEnabled = !flag.enabled;
+    togglingFlagsRef.current.add(flagId);
+    setTogglingFlags((prev) => ({ ...prev, [flagId]: true }));
+    // Optimistic: update UI immediately
+    setFlags((prev) =>
+      prev.map((f) => (getFlagId(f) === getFlagId(flag) ? { ...f, enabled: newEnabled } : f))
+    );
+    try {
+      await api.upsertFeatureFlag(flag.key, {
+        scope: flag.scope,
+        enabled: newEnabled,
+        org_id: flag.org_id,
+        user_id: flag.user_id,
+        description: flag.description ?? undefined,
+        target_user_ids: flag.target_user_ids ?? [],
+        rollout_percent: flag.rollout_percent ?? 100,
+        variant_value: flag.variant_value ?? undefined,
+      });
+    } catch (err: unknown) {
+      // Rollback on failure
+      setFlags((prev) =>
+        prev.map((f) => (getFlagId(f) === getFlagId(flag) ? { ...f, enabled: flag.enabled } : f))
+      );
+      const message = err instanceof Error && err.message ? err.message : 'Failed to toggle flag';
+      showError(message);
+    } finally {
+      togglingFlagsRef.current.delete(flagId);
+      setTogglingFlags((prev) => {
+        const { [flagId]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
     const flagId = getFlagId(flag);
     if (deletingFlagId === flagId) return;
@@ -510,7 +552,9 @@ export default function FlagsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Feature Flags</CardTitle>
-              <CardDescription>Manage feature overrides by scope.</CardDescription>
+              <CardDescription>
+                Manage feature overrides by scope. This is a feature flag system, not an A/B testing platform — for experiments, use a dedicated experimentation tool.
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-3">
@@ -710,9 +754,18 @@ export default function FlagsPage() {
                           <TableCell className="font-medium">{flag.key}</TableCell>
                           <TableCell>{flag.scope}</TableCell>
                           <TableCell>
-                            <Badge variant={flag.enabled ? 'default' : 'outline'}>
-                              {flag.enabled ? 'Enabled' : 'Disabled'}
-                            </Badge>
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleFlag(flag)}
+                              className="cursor-pointer hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                              title={`Click to ${flag.enabled ? 'disable' : 'enable'}`}
+                              aria-pressed={flag.enabled}
+                              disabled={Boolean(togglingFlags[flagId])}
+                            >
+                              <Badge variant={flag.enabled ? 'default' : 'outline'}>
+                                {flag.enabled ? 'Enabled' : 'Disabled'}
+                              </Badge>
+                            </button>
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">

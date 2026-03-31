@@ -7,6 +7,7 @@ const ADD_SOURCE_TAB_USAGE_STORAGE_KEY =
   "tldw:workspace-playground:add-source-tab-usage:v1"
 
 const {
+  mockUploadMedia,
   mockAddMedia,
   mockWebSearch,
   mockSearchMedia,
@@ -14,6 +15,7 @@ const {
   mockAddSource,
   mockCloseAddSourceModal
 } = vi.hoisted(() => ({
+  mockUploadMedia: vi.fn(),
   mockAddMedia: vi.fn(),
   mockWebSearch: vi.fn(),
   mockSearchMedia: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock("@/store/workspace", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    uploadMedia: vi.fn(),
+    uploadMedia: mockUploadMedia,
     addMedia: mockAddMedia,
     webSearch: mockWebSearch,
     searchMedia: mockSearchMedia,
@@ -90,6 +92,39 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
     mockWebSearch.mockResolvedValue({ results: [] })
     mockSearchMedia.mockResolvedValue({ results: [] })
     mockListMedia.mockResolvedValue({ media: [] })
+  })
+
+  it("uploads pasted text with an explicit document media_type", async () => {
+    workspaceStoreState.addSourceModalTab = "paste"
+    mockUploadMedia.mockResolvedValueOnce({
+      results: [{ media_id: 9101, title: "Pasted Note" }]
+    })
+
+    render(<AddSourceModal />)
+
+    fireEvent.change(screen.getByPlaceholderText("Give your content a title"), {
+      target: { value: "Pasted Note" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Paste your text content here..."), {
+      target: { value: "workspace pasted content" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add Text" }))
+
+    await waitFor(() => {
+      expect(mockUploadMedia).toHaveBeenCalledWith(expect.any(File), expect.any(Object))
+    })
+
+    const uploadOptions = mockUploadMedia.mock.calls[0]?.[1]
+    expect(uploadOptions).toMatchObject({
+      title: "Pasted Note",
+      media_type: "document",
+      overwrite: "false",
+      perform_chunking: "true",
+      generate_embeddings: "true",
+      embedding_dispatch_mode: "background"
+    })
+    expect(uploadOptions).not.toHaveProperty("embedding_provider")
+    expect(uploadOptions).not.toHaveProperty("embedding_model")
   })
 
   it("orders tabs as Upload, Library, URL, Paste, Search", async () => {
@@ -172,6 +207,28 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
         })
       )
     })
+    expect(mockAddMedia).toHaveBeenNthCalledWith(
+      1,
+      "https://example.com/one",
+      expect.objectContaining({
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background"
+      })
+    )
+    expect(mockAddMedia).toHaveBeenNthCalledWith(
+      2,
+      "https://example.com/two",
+      expect.objectContaining({
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background"
+      })
+    )
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_provider")
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_model")
+    expect(mockAddMedia.mock.calls[1]?.[1]).not.toHaveProperty("embedding_provider")
+    expect(mockAddMedia.mock.calls[1]?.[1]).not.toHaveProperty("embedding_model")
 
     expect(screen.getByText("https://example.com/one")).toBeInTheDocument()
     expect(screen.getByText("https://example.com/two")).toBeInTheDocument()
@@ -216,6 +273,16 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
         })
       )
     })
+    expect(mockAddMedia).toHaveBeenCalledWith(
+      "https://example.com/doc",
+      expect.objectContaining({
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background"
+      })
+    )
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_provider")
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_model")
   })
 
   it("renders search snippets and favicon hints in web results", async () => {

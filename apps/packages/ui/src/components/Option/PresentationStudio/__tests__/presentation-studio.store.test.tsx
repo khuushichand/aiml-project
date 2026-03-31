@@ -21,6 +21,10 @@ const sampleProject = {
     id: "minimal-academic",
     scope: "builtin",
     name: "Minimal Academic",
+    category: "Educational and Explainer",
+    guide_number: 1,
+    tags: ["study", "notes"],
+    best_for: ["exam prep", "course notes"],
     appearance_defaults: { theme: "white" }
   },
   settings: null,
@@ -137,7 +141,11 @@ describe("presentation studio store", () => {
     expect(state.visualStyleSnapshot).toEqual(
       expect.objectContaining({
         id: "minimal-academic",
-        name: "Minimal Academic"
+        name: "Minimal Academic",
+        category: "Educational and Explainer",
+        guide_number: 1,
+        tags: ["study", "notes"],
+        best_for: ["exam prep", "course notes"]
       })
     )
 

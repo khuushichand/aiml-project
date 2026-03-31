@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ApiKeysPage from '../page';
 import { api } from '@/lib/api-client';
@@ -12,6 +12,16 @@ const toastErrorMock = vi.hoisted(() => vi.fn());
 const setPageMock = vi.hoisted(() => vi.fn());
 const setPageSizeMock = vi.hoisted(() => vi.fn());
 const resetPaginationMock = vi.hoisted(() => vi.fn());
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
@@ -60,6 +70,8 @@ vi.mock('@/lib/api-client', () => ({
     getUsersPage: vi.fn(),
     getUserApiKeys: vi.fn(),
     rotateApiKey: vi.fn(),
+    revokeApiKey: vi.fn(),
+    getAuditLogs: vi.fn(),
   },
 }));
 
@@ -67,6 +79,8 @@ type ApiMock = {
   getUsersPage: ReturnType<typeof vi.fn>;
   getUserApiKeys: ReturnType<typeof vi.fn>;
   rotateApiKey: ReturnType<typeof vi.fn>;
+  revokeApiKey: ReturnType<typeof vi.fn>;
+  getAuditLogs: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -109,6 +123,8 @@ beforeEach(() => {
   });
 
   apiMock.rotateApiKey.mockResolvedValue({ status: 'stored' });
+  apiMock.revokeApiKey.mockResolvedValue({ status: 'revoked' });
+  apiMock.getAuditLogs.mockResolvedValue({ items: [] });
 });
 
 afterEach(() => {
@@ -151,6 +167,43 @@ describe('ApiKeysPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Rotate Selected (0)' })).toBeDisabled();
+    });
+  });
+
+  it('disables both bulk actions while a bulk rotation is in progress', async () => {
+    const user = userEvent.setup();
+    const pendingRotations = [
+      createDeferred<{ status: string }>(),
+      createDeferred<{ status: string }>(),
+    ];
+    let rotationIndex = 0;
+    apiMock.rotateApiKey.mockImplementation(() => pendingRotations[rotationIndex++].promise);
+
+    render(<ApiKeysPage />);
+
+    expect(await screen.findByLabelText('Select key sk-alice')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Select all keys'));
+
+    const rotateButton = screen.getByRole('button', { name: 'Rotate Selected (2)' });
+    const revokeButton = screen.getByRole('button', { name: 'Revoke Selected (2)' });
+
+    await user.click(rotateButton);
+
+    await waitFor(() => {
+      expect(apiMock.rotateApiKey).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(rotateButton).toBeDisabled();
+      expect(revokeButton).toBeDisabled();
+    });
+
+    await user.click(revokeButton);
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(apiMock.revokeApiKey).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingRotations.forEach((deferred) => deferred.resolve({ status: 'stored' }));
+      await Promise.resolve();
     });
   });
 });

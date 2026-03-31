@@ -282,6 +282,7 @@ async def test_policy_resolver_applies_assignment_override_and_emits_provenance(
             "mapping_scope_type": None,
             "mapping_scope_id": None,
             "resolved_effects": {},
+            "resolution_intent": "allow",
             "effect": "blocked",
         },
     ]

@@ -670,11 +670,11 @@ class MediaDBRetriever(BaseRetriever):
             # Try to get vector store from settings
             from tldw_Server_API.app.core.config import settings
             settings_dict: dict[str, Any] = dict(settings)
-            if settings_dict.get("RAG", {}).get("vector_store_type"):
-                self.vector_store = create_from_settings_for_user(
-                    settings_dict,
-                    self.user_id
-                )
+            self.vector_store = create_from_settings_for_user(
+                settings_dict,
+                self.user_id
+            )
+            if self.vector_store is not None:
                 logger.info(f"Vector store adapter initialized for MediaDBRetriever with user_id={self.user_id}")
         except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Could not initialize vector store: {e}")
@@ -1391,6 +1391,174 @@ class MediaDBRetriever(BaseRetriever):
         """Internal method for FTS retrieval (same as retrieve)."""
         return await self.retrieve(query, media_type, **kwargs)
 
+    @staticmethod
+    def _normalize_allowed_media_ids_for_vector_filter(
+        allowed_media_ids: Any,
+    ) -> list[str]:
+        if not isinstance(allowed_media_ids, (list, tuple)):
+            return []
+
+        normalized: list[str] = []
+        for candidate in allowed_media_ids:
+            try:
+                media_id_str = str(int(candidate))
+            except (TypeError, ValueError):
+                continue
+            if media_id_str not in normalized:
+                normalized.append(media_id_str)
+        return normalized
+
+    @staticmethod
+    def _build_allowed_media_vector_filter(
+        allowed_media_ids: Any,
+    ) -> Optional[dict[str, Any]]:
+        normalized_ids = MediaDBRetriever._normalize_allowed_media_ids_for_vector_filter(
+            allowed_media_ids
+        )
+        if not normalized_ids:
+            return None
+        if len(normalized_ids) == 1:
+            return {"media_id": normalized_ids[0]}
+        return {"media_id": {"$in": normalized_ids}}
+
+    @staticmethod
+    def _merge_vector_filters(
+        base_filter: Optional[dict[str, Any]],
+        scoped_filter: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not base_filter:
+            return scoped_filter or {}
+        if not scoped_filter:
+            return base_filter
+        return {"$and": [base_filter, scoped_filter]}
+
+    @staticmethod
+    def _extract_collection_metadatas(payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        raw_metadatas = payload.get("metadatas")
+        if not isinstance(raw_metadatas, list):
+            return []
+        if raw_metadatas and isinstance(raw_metadatas[0], list):
+            flattened: list[dict[str, Any]] = []
+            for block in raw_metadatas:
+                if not isinstance(block, list):
+                    continue
+                flattened.extend(item for item in block if isinstance(item, dict))
+            return flattened
+        return [item for item in raw_metadatas if isinstance(item, dict)]
+
+    def _resolve_scoped_query_embedding_override(
+        self,
+        *,
+        collection_name: Optional[str],
+        allowed_media_ids: Any,
+    ) -> Optional[str]:
+        if not collection_name:
+            return None
+
+        scoped_filter = self._build_allowed_media_vector_filter(allowed_media_ids)
+        scoped_media_ids = set(
+            self._normalize_allowed_media_ids_for_vector_filter(allowed_media_ids)
+        )
+        if not scoped_filter or not scoped_media_ids:
+            return None
+
+        vector_store = self.vector_store
+        manager = getattr(vector_store, "manager", None) if vector_store is not None else None
+        if manager is None:
+            return None
+
+        get_collection = getattr(manager, "get_collection", None)
+        get_or_create_collection = getattr(manager, "get_or_create_collection", None)
+        if not callable(get_collection) and not callable(get_or_create_collection):
+            return None
+
+        try:
+            if callable(get_collection):
+                collection = get_collection(collection_name)
+            elif callable(get_or_create_collection):
+                collection = get_or_create_collection(collection_name)
+            else:
+                return None
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+            if not callable(get_or_create_collection):
+                logger.debug(
+                    "Unable to inspect vector collection '{}' for scoped embedding metadata: {}",
+                    collection_name,
+                    exc,
+                )
+                return None
+            try:
+                # Fresh Chroma clients can momentarily miss a just-written collection;
+                # fall back to the same access path used by vector search.
+                collection = get_or_create_collection(collection_name)
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as fallback_exc:
+                logger.debug(
+                    "Unable to inspect vector collection '{}' for scoped embedding metadata: {}",
+                    collection_name,
+                    fallback_exc,
+                )
+                return None
+
+        get_items = getattr(collection, "get", None)
+        if not callable(get_items):
+            return None
+
+        try:
+            metadata_payload = get_items(
+                where=scoped_filter,
+                include=["metadatas"],
+                limit=5,
+            )
+        except TypeError:
+            try:
+                metadata_payload = get_items(include=["metadatas"], limit=5)
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "Vector metadata lookup fallback failed for collection '{}': {}",
+                    collection_name,
+                    exc,
+                )
+                return None
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            logger.debug(
+                "Vector metadata lookup failed for collection '{}': {}",
+                collection_name,
+                exc,
+            )
+            return None
+
+        metadatas = self._extract_collection_metadatas(metadata_payload)
+        if scoped_media_ids:
+            metadatas = [
+                item
+                for item in metadatas
+                if str(item.get("media_id")) in scoped_media_ids
+            ]
+
+        model_overrides: set[str] = set()
+        for metadata in metadatas:
+            embedding_model = str(metadata.get("embedding_model") or "").strip()
+            if not embedding_model:
+                continue
+            embedding_provider = str(metadata.get("embedding_provider") or "").strip()
+            if embedding_provider:
+                model_overrides.add(f"{embedding_provider}:{embedding_model}")
+            else:
+                model_overrides.add(embedding_model)
+
+        if len(model_overrides) == 1:
+            return next(iter(model_overrides))
+
+        if len(model_overrides) > 1:
+            logger.warning(
+                "Scoped media selection spans multiple embedding models in collection '{}': {}",
+                collection_name,
+                sorted(model_overrides),
+            )
+        return None
+
     async def _retrieve_vector(
         self,
         query: str,
@@ -1424,6 +1592,24 @@ class MediaDBRetriever(BaseRetriever):
             if not vector_store._initialized:
                 await vector_store.initialize()
 
+            # Search collection selection; support multi-search via wildcard/list namespace
+            index_namespace = kwargs.get("index_namespace")
+            multi_namespace: Optional[list[str]] = None
+            collection_name: Optional[str] = None
+            if index_namespace:
+                # If a list/tuple of patterns provided, use multi_search
+                if isinstance(index_namespace, (list, tuple)):
+                    multi_namespace = [str(x) for x in index_namespace]
+                # If a single string contains a wildcard, treat as pattern
+                elif isinstance(index_namespace, str) and ("*" in index_namespace or "?" in index_namespace):
+                    multi_namespace = [index_namespace]
+                else:
+                    # Use provided namespace directly (already includes user prefix if desired)
+                    collection_name = str(index_namespace)
+            else:
+                # Default: user-specific media collection
+                collection_name = f"user_{self.user_id}_media_embeddings"
+
             # Get embedding for query (or use provided)
             if provided_vector is not None:
                 query_vector = provided_vector
@@ -1436,12 +1622,16 @@ class MediaDBRetriever(BaseRetriever):
                         get_embedding_config,
                     )
                     user_app_config = get_embedding_config()
+                    model_id_override = self._resolve_scoped_query_embedding_override(
+                        collection_name=collection_name,
+                        allowed_media_ids=kwargs.get("allowed_media_ids"),
+                    )
                     embeddings = await asyncio.get_event_loop().run_in_executor(
                         None,
                         create_embeddings_batch,
                         [query],  # texts
                         user_app_config,
-                        None,
+                        model_id_override,
                     )
 
                     if not embeddings or not embeddings[0]:
@@ -1468,24 +1658,10 @@ class MediaDBRetriever(BaseRetriever):
                     base_filter = {"$and": [base_filter, metadata_filter]}
                 else:
                     base_filter = metadata_filter
-
-            # Search collection selection; support multi-search via wildcard/list namespace
-            index_namespace = kwargs.get("index_namespace")
-            multi_namespace: Optional[list[str]] = None
-            collection_name: Optional[str] = None
-            if index_namespace:
-                # If a list/tuple of patterns provided, use multi_search
-                if isinstance(index_namespace, (list, tuple)):
-                    multi_namespace = [str(x) for x in index_namespace]
-                # If a single string contains a wildcard, treat as pattern
-                elif isinstance(index_namespace, str) and ("*" in index_namespace or "?" in index_namespace):
-                    multi_namespace = [index_namespace]
-                else:
-                    # Use provided namespace directly (already includes user prefix if desired)
-                    collection_name = str(index_namespace)
-            else:
-                # Default: user-specific media collection
-                collection_name = f"user_{self.user_id}_media_embeddings"
+            base_filter = self._merge_vector_filters(
+                base_filter if base_filter else None,
+                self._build_allowed_media_vector_filter(kwargs.get("allowed_media_ids")),
+            )
 
             # HYDE-aware retrieval and merge
             try:
@@ -2891,9 +3067,12 @@ class MultiDatabaseRetriever:
         self.retrievers: dict[DataSource, BaseRetriever] = {}
 
         # Initialize retrievers for available databases
-        if "media_db" in db_paths:
+        media_db_path = db_paths.get("media_db")
+        if media_db_path is not None or media_db is not None:
             self.retrievers[DataSource.MEDIA_DB] = MediaDBRetriever(
-                db_paths["media_db"], user_id=user_id, media_db=media_db
+                media_db_path,
+                user_id=user_id,
+                media_db=media_db,
             )
 
         if "notes_db" in db_paths:

@@ -323,11 +323,11 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
         FROM pg_indexes
         WHERE schemaname = 'public'
           AND tablename = 'mcp_workspace_set_object_members'
-          AND indexname = 'uq_mcp_workspace_set_members_object_workspace'
+          AND indexname = 'uq_mcp_workspace_set_object_members'
         """
     )
     workspace_member_index_names = {str(row["indexname"]) for row in workspace_member_index_rows}
-    assert "uq_mcp_workspace_set_members_object_workspace" in workspace_member_index_names
+    assert "uq_mcp_workspace_set_object_members" in workspace_member_index_names
 
     shared_workspace_index_rows = await test_db_pool.fetch(
         """

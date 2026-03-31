@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 import importlib.util
 import os
 import platform
+import re
 import sys
 from ctypes.util import find_library as _ctypes_find_library
 from typing import Any, Optional
@@ -32,6 +33,11 @@ router = APIRouter(
 )
 
 _AUTH_HEALTH_PROVIDERS = frozenset({"openai", "elevenlabs"})
+_SUSPICIOUS_PUBLIC_HEALTH_RE = re.compile(
+    r"traceback|stack(?:\s*trace)?|exception|\/Users\/|[A-Za-z]:\\|\.py:\d+",
+    re.IGNORECASE,
+)
+_SANITIZED_PUBLIC_HEALTH_MESSAGE = "Internal health diagnostics were suppressed."
 _PROVIDER_API_KEY_PLACEHOLDERS: dict[str, set[str]] = {
     "openai": {
         "",
@@ -66,6 +72,25 @@ def _build_internal_health_request(path: str) -> Request:
         "scheme": "http",
     }
     return Request(scope)
+
+
+def _sanitize_public_health_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return (
+            _SANITIZED_PUBLIC_HEALTH_MESSAGE
+            if _SUSPICIOUS_PUBLIC_HEALTH_RE.search(value)
+            else value
+        )
+    if isinstance(value, list):
+        return [_sanitize_public_health_payload(item) for item in value]
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"details", "exception", "traceback", "stack", "stack_trace"}:
+                continue
+            sanitized[key] = _sanitize_public_health_payload(item)
+        return sanitized
+    return value
 
 
 def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
@@ -331,7 +356,7 @@ def _evaluate_kokoro_runtime(adapter: Any) -> tuple[bool, Optional[str], dict[st
         has_backend = _module_spec_available("kokoro_onnx")
         espeak_path = _discover_kokoro_espeak_library(adapter)
         diagnostics["kokoro_onnx_available"] = has_backend
-        diagnostics["espeak_lib_path"] = espeak_path
+        diagnostics["espeak_lib_path"] = _sanitize_health_path_value(espeak_path)
         diagnostics["espeak_lib_exists"] = bool(espeak_path and os.path.exists(espeak_path))
         if not has_backend:
             return False, "kokoro_onnx_missing", diagnostics
@@ -344,6 +369,19 @@ def _evaluate_kokoro_runtime(adapter: Any) -> tuple[bool, Optional[str], dict[st
     if not has_pipeline:
         return False, "kokoro_pipeline_missing", diagnostics
     return True, None, diagnostics
+
+
+def _sanitize_health_path_value(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    expanded = os.path.expanduser(text)
+    if os.path.isabs(expanded):
+        name = os.path.basename(expanded)
+        return name or "<redacted>"
+    return text
 
 
 @router.get("/health")
@@ -473,14 +511,14 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
                 kokoro_info = {
                     "backend": backend,
                     "device": str(getattr(adapter, "device", "unknown")),
-                    "model_path": getattr(adapter, "model_path", None),
-                    "voices_json": getattr(adapter, "voices_json", None),
+                    "model_path": _sanitize_health_path_value(getattr(adapter, "model_path", None)),
+                    "voices_json": _sanitize_health_path_value(getattr(adapter, "voices_json", None)),
                     "runtime_ready": runtime_ready,
                     "runtime_reason": runtime_reason,
                 }
                 try:
                     es_env = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
-                    kokoro_info["espeak_lib_env"] = es_env
+                    kokoro_info["espeak_lib_env"] = _sanitize_health_path_value(es_env)
                     kokoro_info["espeak_lib_path"] = runtime_diagnostics.get("espeak_lib_path")
                     kokoro_info["espeak_lib_exists"] = bool(runtime_diagnostics.get("espeak_lib_exists"))
                 except Exception as exc:
@@ -521,8 +559,34 @@ async def collect_setup_tts_health() -> dict[str, Any]:
     """Collect TTS health without going through the HTTP routing layer."""
 
     request = _build_internal_health_request("/api/v1/audio/health")
-    tts_service = await get_tts_service()
-    return await get_tts_health(request, tts_service)
+    try:
+        tts_service = await get_tts_service()
+        return await get_tts_health(request, tts_service)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "TTS health check failed"
+        return {
+            "status": "error",
+            "providers": {"total": 0, "available": 0, "details": {}},
+            "message": message,
+            "error": detail,
+            "status_code": exc.status_code,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("TTS setup health collection failed")
+        request_id = ensure_request_id(request)
+        payload = _http_error_detail("TTS health check failed", request_id, exc=exc)
+        return {
+            "status": "error",
+            "providers": {"total": 0, "available": 0, "details": {}},
+            **payload,
+            "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        }
 
 
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
@@ -615,7 +679,7 @@ async def get_stt_health(
     if warm_info:
         health["warm"] = warm_info
 
-    return health
+    return _sanitize_public_health_payload(health)
 
 
 async def collect_setup_stt_health(
@@ -626,4 +690,29 @@ async def collect_setup_stt_health(
     """Collect STT health without going through the HTTP routing layer."""
 
     request = _build_internal_health_request("/api/v1/audio/transcriptions/health")
-    return await get_stt_health(request, model=model, warm=warm)
+    try:
+        return await get_stt_health(request, model=model, warm=warm)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        detail = _sanitize_public_health_payload(detail)
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "Failed to collect STT health."
+        return {
+            "provider": None,
+            "alias": model,
+            "model": model,
+            "available": False,
+            "usable": False,
+            "on_demand": False,
+            "message": message,
+            "error": (
+                detail.get("error")
+                if isinstance(detail, dict) and isinstance(detail.get("error"), str)
+                else None
+            ),
+            "status_code": exc.status_code,
+        }

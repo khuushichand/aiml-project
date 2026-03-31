@@ -268,6 +268,7 @@ export default function UserDetailPage() {
   // Permission Overrides
   const [permissionOverrides, setPermissionOverrides] = useState<PermissionOverride[]>([]);
   const [effectivePermissions, setEffectivePermissions] = useState<EffectivePermission[]>([]);
+  const [permFilter, setPermFilter] = useState('');
   const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
   const [permissionsLoading, setPermissionsLoading] = useState(false);
   const [showAddOverride, setShowAddOverride] = useState(false);
@@ -1017,8 +1018,18 @@ export default function UserDetailPage() {
                       <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                         View effective permissions ({effectivePermissions.length})
                       </summary>
-                      <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
-                        {effectivePermissions.map((perm, index) => (
+                      <div className="mt-2 mb-2">
+                        <input
+                          type="text"
+                          aria-label="Filter permissions"
+                          placeholder="Filter permissions..."
+                          value={permFilter}
+                          onChange={(e) => setPermFilter(e.target.value)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div className="max-h-48 overflow-y-auto space-y-1">
+                        {effectivePermissions.filter(p => !permFilter || p.name.toLowerCase().includes(permFilter.toLowerCase())).map((perm, index) => (
                           <div
                             key={perm.id || `perm-${index}`}
                             className="flex items-center justify-between p-2 rounded bg-muted/30"

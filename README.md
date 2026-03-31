@@ -15,7 +15,7 @@
   </p>
 
   <p>Process media with 16+ LLM providers and OpenAI-compatible APIs for Chat, Embeddings, and Evals.</p>
-  <p>Hosted SaaS and browser extension coming soon.</p>
+  <p>Browser extension support is included in-repo; hosted deployment tooling is still evolving.</p>
   <p><strong>Your local open-source platform for media analysis, knowledge work, and LLM-backed creation.</strong></p>
 </div>
 
@@ -27,17 +27,17 @@
 
 - [Overview](#overview)
 - [Current Status](#current-status)
-- [What's New (compared to Gradio)](#whats-new-compared-to-gradio)
+- [What's New (in the last few releases)](#whats-new-in-the-last-few-releases)
 - [Privacy & Security](#privacy--security)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
   - [Preflight Check (Recommended)](#preflight-check-recommended)
   - [At-a-Glance Commands](#at-a-glance-commands)
-  - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [No-Docker Path (Makefile, Development)](#no-docker-path-makefile-development)
   - [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly)
   - [Manual Setup](#manual-setup)
-  - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
+  - [Local Profile: Add the WebUI](#local-profile-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
   - [Docker Compose](#docker-compose)
   - [Supporting Services via Docker](#supporting-services-via-docker)
@@ -71,7 +71,7 @@
 ## Overview
 **tldw_server** is an open-source, API-first platform for ingesting media, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
 It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, a unified RAG pipeline, and integrations with local or hosted LLM providers.
-The primary client is the Next.js WebUI (WIP) plus an Admin UI.
+The primary clients are the Next.js WebUI and Admin UI, with browser-extension support in the repo as well.
 Long-term vision: a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
 
 Good fit for:
@@ -79,32 +79,28 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details. If your first goal is local speech, follow the hardware-specific audio guides after your base profile is healthy: [CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) or [GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md).
+## Start Here
 
-## Start Here (Self-Hosting Profiles)
+1. **Check prerequisites:** `make quickstart-prereqs` (or verify Python 3.10+, ffmpeg, and Docker manually)
+2. **Pick your setup profile:**
 
-Choose one base onboarding path.
+| Profile | Best for | Command |
+|---------|----------|---------|
+| [Docker single-user + WebUI](Docs/Getting_Started/Profile_Docker_Single_User.md) | Most users (Recommended) | `make quickstart` |
+| [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) | Teams, public deployments | See profile guide |
+| [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md) | Development, debugging | `make quickstart-install` |
 
-Recommended default:
-- Run `make quickstart` for the Docker single-user + WebUI setup most users want. The default browser path uses same-origin browser API requests through the WebUI proxy.
-- Use [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) if you are deploying for a team or exposing the app publicly.
-- Keep local setup in [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md) and the local profile docs.
+3. **Follow your profile guide** end-to-end — it covers install, run, verify, and next steps.
 
-1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
-2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
-3. [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
-
-Optional add-on:
-
+Optional add-ons (apply AFTER your base profile is healthy):
 - [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
-- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) for NVIDIA GPUs and Apple Silicon
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) now redirects to the accelerated guide
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md)
 
 
 ## Current Status
 
 Latest release:
-- 0.1.26 (2026-03-15) Beta status -  Expect rough edges;
+- 0.1.28 (2026-03-15) Beta status - expect rough edges;
   * please report issues.
 - See `CHANGELOG.md` for release history.
 

@@ -51,6 +51,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
+    get_single_user_instance,
     get_request_user,
     verify_jwt_and_fetch_user,
 )
@@ -1208,6 +1209,117 @@ def _has_legacy_request_user_override(request: Request) -> bool:
     return overrides.get(get_request_user) is not None
 
 
+def _should_promote_claimless_request_user_override(
+    user_obj: Any,
+) -> bool:
+    """Return True when a test override should mirror single-user admin claims."""
+
+    try:
+        settings = get_settings()
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        return False
+
+    if str(getattr(settings, "AUTH_MODE", "")).strip().lower() != "single_user":
+        return False
+
+    data = _mapping_from_user_like(user_obj)
+    roles = _normalize_claim_values(data.get("roles"))
+    permissions = _normalize_claim_values(data.get("permissions"))
+    legacy_role = str(data.get("role") or "").strip().lower()
+    subject = str(data.get("subject") or "").strip()
+    explicit_admin = data.get("is_admin")
+
+    return (
+        not roles
+        and not permissions
+        and legacy_role in {"", "user"}
+        and not subject
+        and explicit_admin in (None, False, 0, "0", "")
+    )
+
+
+def _build_single_user_override_payload(user_obj: Any) -> dict[str, Any]:
+    """Promote a claimless get_request_user override to single-user admin semantics."""
+
+    data = _mapping_from_user_like(user_obj)
+    single_user = get_single_user_instance()
+    permissions = list(getattr(single_user, "permissions", []) or ["*"])
+
+    user_id = data.get("id")
+    if _coerce_optional_int(user_id) is None:
+        fallback_id = data.get("user_id")
+        user_id = fallback_id if _coerce_optional_int(fallback_id) is not None else getattr(single_user, "id", 1)
+
+    promoted = dict(data)
+    promoted["id"] = user_id
+    promoted["username"] = promoted.get("username") or getattr(single_user, "username", "single_user")
+    promoted["role"] = "admin"
+    promoted["roles"] = ["admin"]
+    promoted["permissions"] = permissions
+    promoted["is_admin"] = True
+    promoted["subject"] = promoted.get("subject") or "single_user"
+    return promoted
+
+
+async def _get_legacy_request_user_override_principal(
+    request: Request,
+) -> AuthPrincipal | None:
+    """Honor explicit get_request_user overrides when get_auth_principal is requested."""
+
+    app = getattr(request, "app", None)
+    if app is None:
+        return None
+    overrides = getattr(app, "dependency_overrides", None)
+    if not isinstance(overrides, Mapping):
+        return None
+    override_fn = overrides.get(get_request_user)
+    if override_fn is None:
+        return None
+
+    try:
+        sig = inspect.signature(override_fn)
+        has_no_params = len(sig.parameters) == 0
+    except (TypeError, ValueError):
+        has_no_params = False
+
+    try:
+        result = override_fn() if has_no_params else override_fn(request)
+    except TypeError:
+        result = override_fn()
+
+    if inspect.isawaitable(result):
+        result = await result
+    if result is None:
+        return None
+
+    principal_source = (
+        _build_single_user_override_payload(result)
+        if _should_promote_claimless_request_user_override(result)
+        else result
+    )
+    principal = (
+        principal_source
+        if isinstance(principal_source, AuthPrincipal)
+        else _principal_from_legacy_active_user_override(request, principal_source)
+    )
+    ctx = _build_auth_context_from_principal(request, principal)
+    try:
+        request.state.auth = ctx
+        request.state._auth_user = principal_source
+        request.state.user_id = principal.user_id
+        request.state.api_key_id = principal.api_key_id
+        request.state.org_ids = list(principal.org_ids or [])
+        request.state.team_ids = list(principal.team_ids or [])
+        request.state.active_org_id = principal.active_org_id
+        request.state.active_team_id = principal.active_team_id
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as state_exc:
+        logger.debug(
+            "Legacy request-user override principal context attach failed: {}",
+            state_exc,
+        )
+    return principal
+
+
 async def get_auth_principal(
     request: Request,
 ) -> AuthPrincipal:
@@ -1220,6 +1332,10 @@ async def get_auth_principal(
     legacy_override_principal = await _get_legacy_active_user_override_principal(request)
     if legacy_override_principal is not None:
         return legacy_override_principal
+
+    legacy_request_user_principal = await _get_legacy_request_user_override_principal(request)
+    if legacy_request_user_principal is not None:
+        return legacy_request_user_principal
 
     principal = await _resolve_auth_principal(request)
     try:

@@ -228,6 +228,18 @@ async def test_get_system_stats_sqlite_row_objects_use_row_keys() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_debug_decode_token_reports_decoded_without_claiming_signature_validation() -> None:
+    result = await svc.debug_decode_token(
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMiLCJpc3MiOiJ0ZXN0In0.signature"
+    )
+
+    assert result["decoded"] is True
+    assert result["signature_verified"] is False
+    assert result["subject"] == "123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_get_system_stats_postgres_backend_selection_uses_fetchrow() -> None:
     db = _PostgresDbWithSqliteTraps()
 
