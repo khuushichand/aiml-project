@@ -312,6 +312,9 @@ export const RecipesTab: React.FC = () => {
   const reportCandidates = Array.isArray(reportPayload?.candidates)
     ? reportPayload?.candidates
     : []
+  const reportFailureExamples = Array.isArray(reportPayload?.failure_examples)
+    ? reportPayload.failure_examples
+    : []
   const parsedInlineDataset =
     datasetSource === "inline" ? parseJsonDatasetSafe(inlineDatasetText) : null
   const parsedRunConfig = parseJsonObjectSafe(runConfigText)
@@ -1624,7 +1627,87 @@ export const RecipesTab: React.FC = () => {
                                   {key}: {String(value)}
                                 </Tag>
                               ))}
+                              {Object.entries(candidate.failure_label_counts || {}).map(
+                                ([label, count]) => (
+                                  <Tag key={`failure-${label}`}>
+                                    {label}: {String(count)}
+                                  </Tag>
+                                )
+                              )}
                             </div>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {reportFailureExamples.length > 0 && (
+                  <div className="space-y-2">
+                    <Title level={5} className="mb-0">
+                      {t("evaluations:recipeFailureExamplesTitle", {
+                        defaultValue: "Failure examples"
+                      })}
+                    </Title>
+                    <div className="space-y-2">
+                      {reportFailureExamples.map((example: any, index: number) => (
+                        <Card
+                          key={`${example.candidate_id || "candidate"}-${example.sample_id || index}`}
+                          size="small"
+                          styles={{ body: { padding: 12 } }}
+                        >
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Text strong>{example.sample_id || `Example ${index + 1}`}</Text>
+                              {example.candidate_id ? <Tag>{example.candidate_id}</Tag> : null}
+                              {Array.isArray(example.failure_labels)
+                                ? example.failure_labels.map((label: string) => (
+                                    <Tag key={`${example.sample_id || index}-${label}`}>
+                                      {label}
+                                    </Tag>
+                                  ))
+                                : null}
+                            </div>
+                            {example.query ? (
+                              <div>
+                                <Text strong>
+                                  {t("evaluations:recipeFailureQueryLabel", {
+                                    defaultValue: "Query"
+                                  })}
+                                </Text>
+                                <Paragraph className="mb-0 mt-1">{example.query}</Paragraph>
+                              </div>
+                            ) : null}
+                            {example.expected_behavior ? (
+                              <div className="text-xs text-text-muted">
+                                {t("evaluations:recipeFailureExpectedBehaviorLabel", {
+                                  defaultValue: "Expected behavior"
+                                })}
+                                : {String(example.expected_behavior)}
+                              </div>
+                            ) : null}
+                            {example.answer ? (
+                              <div>
+                                <Text strong>
+                                  {t("evaluations:recipeFailureAnswerLabel", {
+                                    defaultValue: "Candidate answer"
+                                  })}
+                                </Text>
+                                <Paragraph className="mb-0 mt-1">{example.answer}</Paragraph>
+                              </div>
+                            ) : null}
+                            {example.reference_answer ? (
+                              <div>
+                                <Text strong>
+                                  {t("evaluations:recipeFailureReferenceLabel", {
+                                    defaultValue: "Reference answer"
+                                  })}
+                                </Text>
+                                <Paragraph className="mb-0 mt-1">
+                                  {example.reference_answer}
+                                </Paragraph>
+                              </div>
+                            ) : null}
                           </div>
                         </Card>
                       ))}

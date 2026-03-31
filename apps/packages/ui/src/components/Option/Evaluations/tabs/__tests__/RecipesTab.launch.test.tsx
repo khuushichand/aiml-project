@@ -210,6 +210,69 @@ vi.mock("../../hooks/useRecipes", () => ({
               }
             }
           }
+        : runId === "rag-answer-run-1"
+          ? {
+              data: {
+                run: {
+                  run_id: "rag-answer-run-1",
+                  recipe_id: "rag_answer_quality",
+                  recipe_version: "1",
+                  status: "completed",
+                  created_at: "2026-03-30T12:00:00Z",
+                  metadata: {
+                    recipe_report: {
+                      candidates: [
+                        {
+                          candidate_id: "fixed-best",
+                          candidate_run_id: "fixed-best",
+                          model: "gpt-4.1-mini",
+                          provider: "openai",
+                          failure_label_counts: {
+                            hallucinated: 1,
+                            bad_abstention: 1
+                          },
+                          metrics: {
+                            quality_score: 0.88,
+                            grounding: 0.91,
+                            answer_relevance: 0.86,
+                            format_style: 0.82,
+                            abstention_behavior: 0.77
+                          }
+                        }
+                      ],
+                      failure_examples: [
+                        {
+                          candidate_id: "fixed-best",
+                          sample_id: "sample-42",
+                          query: "What changed in the rollout?",
+                          expected_behavior: "hedge",
+                          failure_labels: ["hallucinated", "bad_abstention"],
+                          answer: "The rollout completed worldwide and beta access opened to everyone.",
+                          reference_answer:
+                            "The rollout completed on Friday, while beta access stayed limited."
+                        }
+                      ]
+                    }
+                  }
+                },
+                confidence_summary: {
+                  confidence: 0.79,
+                  sample_count: 4
+                },
+                recommendation_slots: {
+                  best_overall: {
+                    candidate_run_id: "fixed-best",
+                    reason_code: "highest_quality_score",
+                    explanation: "Strongest grounded answer quality overall."
+                  },
+                  best_quality: {
+                    candidate_run_id: "fixed-best",
+                    reason_code: "highest_quality_score",
+                    explanation: "Highest answer quality score."
+                  }
+                }
+              }
+            }
         : null,
     isLoading: false,
     isError: false
@@ -477,6 +540,45 @@ describe("RecipesTab recipe launch flow", () => {
           })
         })
       )
+    })
+  })
+
+  it("renders rag answer quality failure examples from the recipe report", async () => {
+    recipeLaunchReadinessState.data = {
+      data: {
+        recipe_id: "rag_answer_quality",
+        ready: true,
+        can_enqueue_runs: true,
+        can_reuse_completed_runs: true,
+        runtime_checks: {
+          recipe_run_worker_enabled: true
+        },
+        message: null
+      }
+    }
+    createSpy.mockResolvedValue({
+      data: {
+        run_id: "rag-answer-run-1",
+        recipe_id: "rag_answer_quality",
+        status: "completed"
+      }
+    })
+
+    render(<RecipesTab />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Use RAG Answer Quality" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Failure examples")).toBeInTheDocument()
+      expect(screen.getByText("What changed in the rollout?")).toBeInTheDocument()
+      expect(screen.getByText("hallucinated")).toBeInTheDocument()
+      expect(screen.getByText("bad_abstention")).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          "The rollout completed worldwide and beta access opened to everyone."
+        )
+      ).toBeInTheDocument()
     })
   })
 
