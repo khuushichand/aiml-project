@@ -13,6 +13,54 @@ const setActiveTabSpy = vi.fn()
 const setSyntheticReviewRecipeKindSpy = vi.fn()
 const setSyntheticReviewBatchIdSpy = vi.fn()
 const setSyntheticReviewSampleIdsSpy = vi.fn()
+type MockEvaluationsStoreState = {
+  activeTab: string
+  syntheticReviewRecipeKind: string | null
+  syntheticReviewBatchId: string | null
+  syntheticReviewSampleIds: string[]
+}
+const { mockEvaluationsStoreState } = vi.hoisted(() => ({
+  mockEvaluationsStoreState: {
+    activeTab: "recipes",
+    syntheticReviewRecipeKind: null as string | null,
+    syntheticReviewBatchId: null as string | null,
+    syntheticReviewSampleIds: [] as string[]
+  }
+}))
+const mockStoreListeners = new Set<() => void>()
+
+const updateMockStore = (patch: Partial<MockEvaluationsStoreState>) => {
+  Object.assign(mockEvaluationsStoreState, patch)
+  mockStoreListeners.forEach((listener) => listener())
+}
+
+const resetMockEvaluationsStore = () => {
+  updateMockStore({
+    activeTab: "recipes",
+    syntheticReviewRecipeKind: null,
+    syntheticReviewBatchId: null,
+    syntheticReviewSampleIds: []
+  })
+}
+
+const mockStoreActions = {
+  setActiveTab: (activeTab: string) => {
+    setActiveTabSpy(activeTab)
+    updateMockStore({ activeTab })
+  },
+  setSyntheticReviewRecipeKind: (syntheticReviewRecipeKind: string | null) => {
+    setSyntheticReviewRecipeKindSpy(syntheticReviewRecipeKind)
+    updateMockStore({ syntheticReviewRecipeKind })
+  },
+  setSyntheticReviewBatchId: (syntheticReviewBatchId: string | null) => {
+    setSyntheticReviewBatchIdSpy(syntheticReviewBatchId)
+    updateMockStore({ syntheticReviewBatchId })
+  },
+  setSyntheticReviewSampleIds: (syntheticReviewSampleIds: string[]) => {
+    setSyntheticReviewSampleIdsSpy(syntheticReviewSampleIds)
+    updateMockStore({ syntheticReviewSampleIds })
+  }
+}
 const recipeManifestState = {
   data: {
     data: [
@@ -153,13 +201,23 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("@/store/evaluations", () => ({
-  useEvaluationsStore: (selector: (state: any) => unknown) =>
-    selector({
-      setActiveTab: setActiveTabSpy,
-      setSyntheticReviewRecipeKind: setSyntheticReviewRecipeKindSpy,
-      setSyntheticReviewBatchId: setSyntheticReviewBatchIdSpy,
-      setSyntheticReviewSampleIds: setSyntheticReviewSampleIdsSpy
+  useEvaluationsStore: (selector: (state: any) => unknown) => {
+    const React = require("react") as typeof import("react")
+    const [, forceUpdate] = React.useReducer((value: number) => value + 1, 0)
+
+    React.useEffect(() => {
+      const listener = () => forceUpdate()
+      mockStoreListeners.add(listener)
+      return () => {
+        mockStoreListeners.delete(listener)
+      }
+    }, [])
+
+    return selector({
+      ...mockEvaluationsStoreState,
+      ...mockStoreActions
     })
+  }
 }))
 
 vi.mock("@/hooks/useAntdNotification", () => ({
@@ -376,6 +434,7 @@ describe("RecipesTab recipe launch flow", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    resetMockEvaluationsStore()
     generateSyntheticDraftsSpy.mockReset()
     recipeManifestState.data = {
       data: [
@@ -538,6 +597,29 @@ describe("RecipesTab recipe launch flow", () => {
       "draft-1",
       "draft-2"
     ])
+  })
+
+  it("switches to the shared synthetic review tab after successful draft generation", async () => {
+    generateSyntheticDraftsSpy.mockResolvedValue({
+      ok: true,
+      data: {
+        generation_batch_id: "batch-123",
+        samples: [{ sample_id: "draft-1" }, { sample_id: "draft-2" }]
+      }
+    })
+
+    renderRecipesTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Use RAG Retrieval Tuning" }))
+    fireEvent.change(screen.getByLabelText("Media IDs"), {
+      target: { value: "10" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Generate synthetic drafts" }))
+
+    await waitFor(() => {
+      expect(setSyntheticReviewBatchIdSpy).toHaveBeenCalledWith("batch-123")
+      expect(setActiveTabSpy).toHaveBeenCalledWith("synthetic-review")
+    })
   })
 
   it("validates, launches, and renders the current recipe report", async () => {

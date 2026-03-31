@@ -75,6 +75,10 @@ export class EvaluationsPage extends BasePage {
     return this.page.getByRole("button", { name: /Run recipe|Try matching run/ })
   }
 
+  get generateSyntheticDraftsButton(): Locator {
+    return this.page.getByRole("button", { name: "Generate synthetic drafts" })
+  }
+
   get recipeValidationAlert(): Locator {
     return this.page.getByText(/Dataset format is valid\.|Dataset format needs attention\./)
   }
@@ -223,6 +227,12 @@ export class EvaluationsPage extends BasePage {
     await expect(this.recipeValidationAlert).toBeVisible({ timeout: 10_000 })
   }
 
+  async generateSyntheticDrafts(): Promise<void> {
+    await this.ensureRecipesTabSelected()
+    await expect(this.generateSyntheticDraftsButton).toBeVisible({ timeout: 10_000 })
+    await this.generateSyntheticDraftsButton.click()
+  }
+
   async assertRecipeRunOutcome(): Promise<void> {
     await expect(
       this.currentRunCard.or(this.recipeWorkerUnavailableAlert).first()
@@ -230,5 +240,11 @@ export class EvaluationsPage extends BasePage {
     await expect(
       this.page.getByText("recipe_run_enqueue_failed")
     ).toHaveCount(0)
+  }
+
+  async assertSyntheticReviewBatch(batchId: string): Promise<void> {
+    await expect(
+      this.page.getByText(`Showing generated draft batch ${batchId}.`)
+    ).toBeVisible({ timeout: 10_000 })
   }
 }

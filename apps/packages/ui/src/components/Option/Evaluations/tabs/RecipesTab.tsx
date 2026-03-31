@@ -285,9 +285,16 @@ export const RecipesTab: React.FC = () => {
   const [localError, setLocalError] = React.useState<string | null>(null)
   const [currentRunId, setCurrentRunId] = React.useState<string | null>(null)
   const setActiveTab = useEvaluationsStore((s) => s.setActiveTab)
+  const syntheticReviewRecipeKind = useEvaluationsStore(
+    (s) => s.syntheticReviewRecipeKind
+  )
+  const syntheticReviewBatchId = useEvaluationsStore(
+    (s) => s.syntheticReviewBatchId
+  )
   const setSyntheticReviewRecipeKind = useEvaluationsStore(
     (s) => s.setSyntheticReviewRecipeKind
   )
+  const lastAutoOpenedBatchId = React.useRef<string | null>(null)
 
   const {
     data: manifestsResp,
@@ -363,6 +370,24 @@ export const RecipesTab: React.FC = () => {
       return datasets[0]?.id || null
     })
   }, [datasets])
+
+  React.useEffect(() => {
+    const recipeKind = syntheticReviewRecipeKind || null
+    const batchId = syntheticReviewBatchId || null
+    const supportsSyntheticReview =
+      recipeKind === "rag_retrieval_tuning" || recipeKind === "rag_answer_quality"
+
+    if (!supportsSyntheticReview || !batchId) {
+      return
+    }
+
+    if (lastAutoOpenedBatchId.current === batchId) {
+      return
+    }
+
+    lastAutoOpenedBatchId.current = batchId
+    setActiveTab("synthetic-review")
+  }, [setActiveTab, syntheticReviewBatchId, syntheticReviewRecipeKind])
 
   const buildDatasetPayload = (): {
     datasetId?: string
