@@ -1,5 +1,3 @@
-import React from "react"
-import { render } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const loadStoreModule = async () =>
@@ -77,24 +75,5 @@ describe("persona buddy shell store", () => {
         margin: 12
       })
     ).toEqual({ x: 12, y: 12 })
-  })
-
-  it("resets the open shell session when the render-context provider mounts", async () => {
-    const storeModule = await loadStoreModule()
-    const providerModule = await import(
-      "../../components/Common/PersonaBuddy/BuddyShellRenderContext"
-    )
-
-    storeModule.usePersonaBuddyShellStore.getState().setOpen(true)
-
-    render(
-      React.createElement(
-        providerModule.BuddyShellRenderContextProvider,
-        null,
-        React.createElement("div", null, "buddy shell")
-      )
-    )
-
-    expect(storeModule.usePersonaBuddyShellStore.getState().isOpen).toBe(false)
   })
 })

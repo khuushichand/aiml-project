@@ -1,6 +1,5 @@
 import React from "react"
 
-import { usePersonaBuddyShellStore } from "@/store/persona-buddy-shell"
 import type { PersonaBuddyRenderContext } from "@/types/persona-buddy"
 
 type BuddyShellRenderContextValue = {
@@ -43,10 +42,6 @@ export const BuddyShellRenderContextProvider: React.FC<
   const [renderContext, setRenderContextState] =
     React.useState<PersonaBuddyRenderContext | null>(initialContext)
 
-  React.useEffect(() => {
-    usePersonaBuddyShellStore.getState().resetSessionState()
-  }, [])
-
   const setRenderContext = React.useCallback(
     (value: PersonaBuddyRenderContext | null) => {
       setRenderContextState((current) =>
@@ -84,16 +79,3 @@ export const useBuddyShellRenderContextController = () =>
 
 export const useSetBuddyShellRenderContext = () =>
   React.useContext(BuddyShellRenderContext).setRenderContext
-
-export const usePublishBuddyShellRenderContext = (
-  value: PersonaBuddyRenderContext | null
-) => {
-  const setRenderContext = useSetBuddyShellRenderContext()
-
-  React.useEffect(() => {
-    setRenderContext(value)
-    return () => {
-      setRenderContext(null)
-    }
-  }, [setRenderContext, value])
-}
