@@ -37,6 +37,7 @@ import {
   buildCharactersRoute as buildCharactersRouteUrl,
   resolveCharactersDestinationMode
 } from "@/utils/characters-route"
+import type { PersonaInfo } from "@/routes/personaTypes"
 import type {
   Character as StoredCharacter,
   CharacterApiResponse
@@ -73,12 +74,6 @@ type FavoriteCharacter = {
 type ImageOnlyErrorDetail = {
   code?: string
   message?: string
-}
-
-type PersonaApiResponse = Record<string, unknown> & {
-  id?: string | number
-  name?: string | null
-  avatar_url?: string | null
 }
 
 const GREETING_RETRY_DELAY_MS = 800
@@ -228,12 +223,12 @@ export const CharacterSelect: React.FC<Props> = ({
     enabled: !!hasCharacters,
     staleTime: 5 * 60 * 1000 // 5 minutes
   })
-  const { data: personas = [] } = useQuery<PersonaApiResponse[]>({
+  const { data: personas = [] } = useQuery<PersonaInfo[]>({
     queryKey: ["persona-profiles", "sidepanel-character-select"],
     queryFn: async () => {
       await tldwClient.initialize().catch(() => null)
       const result = await tldwClient.listPersonaProfiles().catch(() => [])
-      return Array.isArray(result) ? (result as PersonaApiResponse[]) : []
+      return Array.isArray(result) ? (result as PersonaInfo[]) : []
     },
     enabled: !!hasPersona,
     staleTime: 5 * 60 * 1000
@@ -251,7 +246,7 @@ export const CharacterSelect: React.FC<Props> = ({
         char.tags?.some((tag) => tag.toLowerCase().includes(q))
     )
   }, [characters, searchText])
-  const filteredPersonas = useMemo<PersonaApiResponse[]>(() => {
+  const filteredPersonas = useMemo<PersonaInfo[]>(() => {
     if (!personas) return []
     if (!searchText.trim()) return personas
     const q = searchText.toLowerCase()
@@ -1043,7 +1038,7 @@ export const CharacterSelect: React.FC<Props> = ({
   )
 
   const handlePersonaSelect = React.useCallback(
-    async (persona: PersonaApiResponse) => {
+    async (persona: PersonaInfo) => {
       const selection = personaToAssistantSelection({
         ...persona,
         id: String(persona.id ?? ""),

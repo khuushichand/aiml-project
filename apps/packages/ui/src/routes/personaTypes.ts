@@ -4,6 +4,7 @@ import type {
   SetupReviewSummary,
   SetupHandoffRecommendedAction
 } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
+import type { PersonaBuddySummary } from "@/types/persona-buddy"
 import type { PersonaGardenTabKey } from "@/utils/persona-garden-route"
 import type { PersonaSetupState, PersonaSetupStep } from "@/hooks/usePersonaSetupWizard"
 import {
@@ -15,6 +16,12 @@ export type PersonaInfo = {
   name: string
   description?: string | null
   voice?: string | null
+  avatar_url?: string | null
+  system_prompt?: string | null
+  greeting?: string | null
+  extensions?: Record<string, unknown> | null
+  buddy_summary?: PersonaBuddySummary | null
+  [key: string]: unknown
 }
 
 export type PersonaPlanStep = {
