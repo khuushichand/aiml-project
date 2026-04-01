@@ -1191,7 +1191,12 @@ export const OverviewTab: React.FC = () => {
           {(data.sources.total === 0 || data.jobs.total === 0) && (
             <Card
               size="small"
-              title={t("watchlists:overview.onboarding.title", "Quick setup")}
+              title={
+                <span>
+                  {t("watchlists:overview.onboarding.title", "Quick setup")}{" "}
+                  <Tag color="green">{t("watchlists:overview.onboarding.recommended", "Recommended")}</Tag>
+                </span>
+              }
             >
               <p className="mb-3 text-sm text-text-muted">
                 {t(

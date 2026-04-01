@@ -698,6 +698,67 @@ def test_start_authorize_zotero_ignores_untrusted_request_base_when_connector_ba
 
 
 @pytest.mark.integration
+def test_start_authorize_zotero_rejects_request_derived_localhost_base_in_production_mode(
+    connectors_client,
+    monkeypatch,
+):
+    base_client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            raise AssertionError("temporary credentials must not be requested when redirect base is unconfigured")
+
+        def authorize_url(self, *a, **kw):
+            raise AssertionError("authorize_url must not be reached when redirect base is unconfigured")
+
+    monkeypatch.delenv("CONNECTOR_REDIRECT_BASE_URL", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    client = TestClient(base_client.app, base_url="http://localhost")
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must be configured before enabling OAuth connectors"
+
+
+@pytest.mark.integration
+def test_start_authorize_zotero_rejects_insecure_non_https_redirect_base(
+    connectors_client,
+    monkeypatch,
+):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            raise AssertionError("temporary credentials must not be requested for insecure redirect bases")
+
+        def authorize_url(self, *a, **kw):
+            raise AssertionError("authorize_url must not be reached for insecure redirect bases")
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("CONNECTOR_REDIRECT_BASE_URL", "http://example.com")
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must use https unless it targets localhost"
+
+
+@pytest.mark.integration
 def test_oauth_callback_accepts_zotero_oauth1_payload_and_persists_provider_identity(
     connectors_client,
     monkeypatch,

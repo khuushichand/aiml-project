@@ -28,7 +28,8 @@ import {
   ChevronDown,
   GitBranch,
   MessageSquare,
-  FolderIcon
+  FolderIcon,
+  Plus
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
@@ -840,6 +841,19 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
               className="w-full rounded-md border border-border bg-surface"
             />
           </div>
+          <Tooltip title={t("common:newChat", { defaultValue: "New Chat" })}>
+            <Button
+              type="text"
+              icon={<Plus className="w-4 h-4" />}
+              aria-label={t("common:newChat", { defaultValue: "New Chat" })}
+              data-testid="sidebar-new-chat"
+              onClick={() => {
+                clearChat()
+                navigate("/chat")
+                onClose()
+              }}
+            />
+          </Tooltip>
           {isConnected && <FolderToolbar compact />}
         </div>
       </div>

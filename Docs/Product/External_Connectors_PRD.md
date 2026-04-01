@@ -211,7 +211,7 @@ Environment variables (examples):
 - CONNECTOR_MS_CLIENT_ID / CONNECTOR_MS_CLIENT_SECRET
 - CONNECTOR_NOTION_SECRET (internal token for Notion OAuth or integration secret)
 - CONNECTOR_DROPBOX_CLIENT_ID / CONNECTOR_DROPBOX_CLIENT_SECRET
-- CONNECTOR_REDIRECT_BASE_URL (optional; fallback to request host/connector base)
+- CONNECTOR_REDIRECT_BASE_URL (required outside tests for OAuth/webhook callback generation; must be an absolute `https://` URL unless targeting localhost for local development)
 - CONNECTOR_OAUTH_STATE_TTL_MINUTES (default: 10)
 - CONNECTOR_DEFAULT_EXPORTS (json)
 - CONNECTOR_JOB_LIMITS (json)

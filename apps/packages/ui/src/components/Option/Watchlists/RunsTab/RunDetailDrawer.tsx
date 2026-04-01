@@ -1163,6 +1163,16 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                 ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
                 : t("watchlists:runs.cancelRun", "Cancel run")}
           </Button>
+        ) : data && String(data.status || "").toLowerCase() === "failed" ? (
+          <Button
+            size="small"
+            type="primary"
+            loading={retryingRun}
+            aria-label={t("watchlists:runs.detail.retryRun", "Retry run")}
+            onClick={handleRetryRun}
+          >
+            {t("watchlists:runs.detail.retryRun", "Retry run")}
+          </Button>
         ) : undefined
       }
       placement="right"

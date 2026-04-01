@@ -88,13 +88,13 @@ export function CompanionHomePage({
     if (!hasPersonalization) {
       return {
         label: "Setup required",
-        description: setupDescription
+        description: "Connect your tldw server and enable personalization to unlock this feature. " + setupDescription
       }
     }
     if (profileLoaded && !profile?.enabled) {
       return {
         label: "Enable Companion",
-        description: setupDescription
+        description: "Turn on personalized recommendations and goal tracking to populate this card. " + setupDescription
       }
     }
     if (workspaceUnavailable) {
@@ -119,13 +119,13 @@ export function CompanionHomePage({
         ? {
             label: "Setup required",
             description:
-              "Companion setup unlocks needs-attention signals from goals and reading."
+              "Connect your tldw server and enable personalization to unlock needs-attention signals from goals and reading."
           }
         : profileLoaded && !profile?.enabled
           ? {
               label: "Enable Companion",
               description:
-                "Enable Companion to surface needs-attention signals from goals and reading."
+                "Turn on personalized recommendations and goal tracking to surface needs-attention signals from goals and reading."
             }
           : workspaceUnavailable || readingUnavailable
             ? {
@@ -142,13 +142,13 @@ export function CompanionHomePage({
         ? {
             label: "Setup required",
             description:
-              "Companion setup unlocks resume suggestions across goals, reading, and notes."
+              "Connect your tldw server and enable personalization to unlock resume suggestions across goals, reading, and notes."
           }
         : profileLoaded && !profile?.enabled
           ? {
               label: "Enable Companion",
               description:
-                "Enable Companion to surface resume suggestions across goals, reading, and notes."
+                "Turn on personalized recommendations and goal tracking to surface resume suggestions across goals, reading, and notes."
             }
           : workspaceUnavailable || readingUnavailable || notesUnavailable
             ? {
