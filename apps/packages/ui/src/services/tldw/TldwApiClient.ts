@@ -5,12 +5,15 @@ import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import { createJsonResponseLike } from "@/services/tldw/json-response-like"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
 import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
 import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
+import { toTrimmedStringArray } from "@/services/tldw/client-utils"
+import { getTldwTTSModel, getTldwTTSVoice } from "@/services/tts"
 import {
   DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
   normalizeDefaultCharacterPreferenceId
@@ -80,6 +83,11 @@ const normalizeChatCompletionResponseBody = (
 }
 
 const sanitizeChatCompletionPayload = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return isSuspiciousChatCompletionString(value)
+      ? CHAT_COMPLETION_ERROR_MESSAGE
+      : value
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeChatCompletionPayload(item))
   }
@@ -177,15 +185,6 @@ const toOptionalNumber = (value: unknown): number | null => {
     }
   }
   return null
-}
-
-const toStringArray = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return []
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => entry.trim())
 }
 
 export const normalizeIngestionSourceSyncSummary = (
@@ -388,6 +387,10 @@ export type PresentationVisualStyleSnapshot = {
   scope: string
   name: string
   description?: string | null
+  category?: string | null
+  guide_number?: number | null
+  tags?: string[]
+  best_for?: string[]
   generation_rules?: Record<string, any>
   artifact_preferences?: string[]
   appearance_defaults?: Record<string, any>
@@ -400,6 +403,10 @@ export type VisualStyleRecord = {
   name: string
   scope: string
   description?: string | null
+  category?: string | null
+  guide_number?: number | null
+  tags: string[]
+  best_for: string[]
   generation_rules: Record<string, any>
   artifact_preferences: string[]
   appearance_defaults: Record<string, any>
@@ -458,6 +465,10 @@ export const clonePresentationVisualStyleSnapshot = (
     scope: snapshot.scope,
     name: snapshot.name,
     description: snapshot.description ?? null,
+    category: snapshot.category ?? null,
+    guide_number: snapshot.guide_number ?? null,
+    tags: [...(snapshot.tags || [])],
+    best_for: [...(snapshot.best_for || [])],
     generation_rules: cloneVisualStyleObject(snapshot.generation_rules),
     artifact_preferences: [...(snapshot.artifact_preferences || [])],
     appearance_defaults: cloneVisualStyleObject(snapshot.appearance_defaults),
@@ -473,6 +484,10 @@ export const buildPresentationVisualStyleSnapshot = (
     | "scope"
     | "name"
     | "description"
+    | "category"
+    | "guide_number"
+    | "tags"
+    | "best_for"
     | "generation_rules"
     | "artifact_preferences"
     | "appearance_defaults"
@@ -485,6 +500,10 @@ export const buildPresentationVisualStyleSnapshot = (
     scope: style.scope,
     name: style.name,
     description: style.description ?? null,
+    category: style.category ?? null,
+    guide_number: style.guide_number ?? null,
+    tags: [...(style.tags || [])],
+    best_for: [...(style.best_for || [])],
     generation_rules: cloneVisualStyleObject(style.generation_rules),
     artifact_preferences: [...(style.artifact_preferences || [])],
     appearance_defaults: cloneVisualStyleObject(style.appearance_defaults),
@@ -564,8 +583,12 @@ const normalizeVisualStyleSnapshot = (
     scope,
     name,
     description: toOptionalString(snapshot.description),
+    category: toOptionalString(snapshot.category),
+    guide_number: toOptionalNumber(snapshot.guide_number),
+    tags: toTrimmedStringArray(snapshot.tags),
+    best_for: toTrimmedStringArray(snapshot.best_for),
     generation_rules: toRecord(snapshot.generation_rules),
-    artifact_preferences: toStringArray(snapshot.artifact_preferences),
+    artifact_preferences: toTrimmedStringArray(snapshot.artifact_preferences),
     appearance_defaults: toRecord(snapshot.appearance_defaults),
     fallback_policy: toRecord(snapshot.fallback_policy),
     version: toOptionalNumber(snapshot.version)
@@ -581,8 +604,12 @@ const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
     name: String(record.name ?? ""),
     scope: String(record.scope ?? ""),
     description: toOptionalString(record.description),
+    category: toOptionalString(record.category),
+    guide_number: toOptionalNumber(record.guide_number),
+    tags: toTrimmedStringArray(record.tags),
+    best_for: toTrimmedStringArray(record.best_for),
     generation_rules: toRecord(record.generation_rules),
-    artifact_preferences: toStringArray(record.artifact_preferences),
+    artifact_preferences: toTrimmedStringArray(record.artifact_preferences),
     appearance_defaults: toRecord(record.appearance_defaults),
     fallback_policy: toRecord(record.fallback_policy),
     version: toOptionalNumber(record.version),
@@ -2291,10 +2318,7 @@ export class TldwApiClient {
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
     const safeData = normalizeChatCompletionResponseBody(data)
-    return new Response(JSON.stringify(safeData), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })
+    return createJsonResponseLike(safeData, { status: 200 })
   }
 
   async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
@@ -6756,17 +6780,20 @@ export class TldwApiClient {
 
   async generateReadingItemTts(
     itemId: string,
-    options?: { voice?: string }
+    options?: { model?: string; voice?: string }
   ): Promise<{ audio_url: string }> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/tts` as const
+    const model = options?.model || (await getTldwTTSModel())
+    const voice = options?.voice || (await getTldwTTSVoice())
     const data = await bgRequest<ArrayBuffer>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: {
+        model,
+        voice,
         response_format: "mp3",
         stream: false,
-        ...(options || {})
       },
       responseType: "arrayBuffer"
     })

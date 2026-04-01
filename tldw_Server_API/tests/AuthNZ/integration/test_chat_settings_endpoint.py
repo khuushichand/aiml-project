@@ -1,5 +1,8 @@
 import pytest
 
+from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 
 pytestmark = pytest.mark.integration
 
@@ -47,6 +50,38 @@ def _create_character_and_chat(client, headers: dict[str, str]) -> str:
     return create_chat.json()["id"]
 
 
+def _current_user_id(client, headers: dict[str, str]) -> str:
+    me = client.get("/api/v1/users/me", headers=headers)
+    assert me.status_code == 200, me.text
+    return str(me.json()["id"])
+
+
+def _create_research_run(
+    *,
+    owner_user_id: str,
+    status: str = "completed",
+    phase: str = "completed",
+    query: str = "Owner-scoped attachment",
+) -> str:
+    db = ResearchSessionsDB(DatabasePaths.get_research_sessions_db_path(owner_user_id))
+    session = db.create_session(
+        owner_user_id=owner_user_id,
+        query=query,
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        limits_json={},
+        status=status,
+        phase=phase,
+    )
+    if status == "completed":
+        db.update_status(
+            session.id,
+            status="completed",
+            completed_at="2026-03-08T20:10:00Z",
+        )
+    return session.id
+
+
 def _valid_attachment(*, run_id: str = "run_123") -> dict:
     return {
         "run_id": run_id,
@@ -79,6 +114,9 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
     )
 
     chat_id = _create_character_and_chat(client, owner_headers)
+    owner_user_id = _current_user_id(client, owner_headers)
+    active_run_id = _create_research_run(owner_user_id=owner_user_id, query="Owner active attachment")
+    history_run_id = _create_research_run(owner_user_id=owner_user_id, query="Owner history attachment")
 
     owner_put = client.put(
         f"/api/v1/chats/{chat_id}/settings",
@@ -87,9 +125,9 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
             "settings": {
                 "schemaVersion": 2,
                 "updatedAt": "2026-03-08T20:00:00Z",
-                "deepResearchAttachment": _valid_attachment(),
+                "deepResearchAttachment": _valid_attachment(run_id=active_run_id),
                 "deepResearchAttachmentHistory": [
-                    _valid_attachment(run_id="run_hist_owner"),
+                    _valid_attachment(run_id=history_run_id),
                 ],
             }
         },
@@ -99,7 +137,7 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
     owner_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=owner_headers)
     assert owner_get.status_code == 200, owner_get.text
     owner_settings = owner_get.json()["settings"]
-    assert owner_settings["deepResearchAttachmentHistory"][0]["run_id"] == "run_hist_owner"
+    assert owner_settings["deepResearchAttachmentHistory"][0]["run_id"] == history_run_id
 
     other_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=other_headers)
     assert other_get.status_code == 404, other_get.text
@@ -139,6 +177,10 @@ def test_chat_settings_endpoint_enforces_chat_ownership_with_pinned_attachment(
     )
 
     chat_id = _create_character_and_chat(client, owner_headers)
+    owner_user_id = _current_user_id(client, owner_headers)
+    active_run_id = _create_research_run(owner_user_id=owner_user_id, query="Owner active attachment")
+    pinned_run_id = _create_research_run(owner_user_id=owner_user_id, query="Owner pinned attachment")
+    history_run_id = _create_research_run(owner_user_id=owner_user_id, query="Owner history attachment")
 
     owner_put = client.put(
         f"/api/v1/chats/{chat_id}/settings",
@@ -147,10 +189,10 @@ def test_chat_settings_endpoint_enforces_chat_ownership_with_pinned_attachment(
             "settings": {
                 "schemaVersion": 2,
                 "updatedAt": "2026-03-08T20:00:00Z",
-                "deepResearchAttachment": _valid_attachment(run_id="run_active"),
-                "deepResearchPinnedAttachment": _valid_attachment(run_id="run_pinned"),
+                "deepResearchAttachment": _valid_attachment(run_id=active_run_id),
+                "deepResearchPinnedAttachment": _valid_attachment(run_id=pinned_run_id),
                 "deepResearchAttachmentHistory": [
-                    _valid_attachment(run_id="run_hist_owner"),
+                    _valid_attachment(run_id=history_run_id),
                 ],
             }
         },
@@ -160,7 +202,7 @@ def test_chat_settings_endpoint_enforces_chat_ownership_with_pinned_attachment(
     owner_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=owner_headers)
     assert owner_get.status_code == 200, owner_get.text
     owner_settings = owner_get.json()["settings"]
-    assert owner_settings["deepResearchPinnedAttachment"]["run_id"] == "run_pinned"
+    assert owner_settings["deepResearchPinnedAttachment"]["run_id"] == pinned_run_id
 
     other_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=other_headers)
     assert other_get.status_code == 404, other_get.text

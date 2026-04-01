@@ -3,6 +3,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
+import { DemoModeProvider } from "@/context/demo-mode"
 
 vi.mock("../CompanionHomePage", () => ({
   CompanionHomePage: ({ surface }: { surface: "options" | "sidepanel" }) => (
@@ -16,7 +17,9 @@ describe("CompanionHomeShell", () => {
   it("renders functional quick actions for the options surface", () => {
     render(
       <MemoryRouter>
-        <CompanionHomeShell surface="options" />
+        <DemoModeProvider>
+          <CompanionHomeShell surface="options" />
+        </DemoModeProvider>
       </MemoryRouter>
     )
 
@@ -35,7 +38,9 @@ describe("CompanionHomeShell", () => {
   it("offers a forced-chat escape hatch on the sidepanel surface", () => {
     render(
       <MemoryRouter>
-        <CompanionHomeShell surface="sidepanel" />
+        <DemoModeProvider>
+          <CompanionHomeShell surface="sidepanel" />
+        </DemoModeProvider>
       </MemoryRouter>
     )
 

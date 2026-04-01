@@ -17,4 +17,15 @@ https://github.com/trailofbits/claude-code-devcontainer?utm_source=substack&utm_
 https://gobii.ai/blog/how-we-sandbox-ai-agents-in-production/
 https://github.com/gobii-ai/gobii-platform
 https://github.com/gobii-ai/sandbox-compute-server
+https://github.com/s7ephen/OSX-Sandbox--Seatbelt--Profiles
+https://github.com/instavm/coderunner
+https://github.com/vrn21/bouvet
+
+
+
+
+
+
+
+
 

@@ -68,6 +68,118 @@ class TestUnifiedPipelineUnit:
 
     @pytest.mark.unit
     @pytest.mark.asyncio
+    async def test_rerank_snapshots_are_hidden_when_debug_mode_is_disabled(self):
+        docs = [
+            Document(id="doc-1", content="Paris is the capital of France.", metadata={}, source=DataSource.MEDIA_DB, score=0.9),
+            Document(id="doc-2", content="France is in Europe.", metadata={}, source=DataSource.MEDIA_DB, score=0.8),
+        ]
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever, patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.create_reranker'
+        ) as mock_create_reranker:
+            mock_retriever_instance = MagicMock()
+            mock_retriever_instance.retrieve = AsyncMock(return_value=docs)
+            mock_retriever.return_value = mock_retriever_instance
+
+            reranker = MagicMock()
+            reranker.rerank = AsyncMock(return_value=list(reversed(docs)))
+            mock_create_reranker.return_value = reranker
+
+            result = await unified_rag_pipeline(
+                query="What is the capital of France?",
+                top_k=2,
+                enable_cache=False,
+                enable_reranking=True,
+                enable_generation=False,
+                debug_mode=False,
+            )
+
+            assert isinstance(result, UnifiedRAGResponse)
+            assert "pre_rerank_documents" not in (result.metadata or {})
+            assert "reranked_documents" not in (result.metadata or {})
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_rerank_snapshots_default_to_lightweight_summaries_when_debug_mode_is_enabled(self):
+        docs = [
+            Document(id="doc-1", content="Paris is the capital of France.", metadata={}, source=DataSource.MEDIA_DB, score=0.9),
+            Document(id="doc-2", content="France is in Europe.", metadata={}, source=DataSource.MEDIA_DB, score=0.8),
+        ]
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever, patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.create_reranker'
+        ) as mock_create_reranker:
+            mock_retriever_instance = MagicMock()
+            mock_retriever_instance.retrieve = AsyncMock(return_value=docs)
+            mock_retriever.return_value = mock_retriever_instance
+
+            reranker = MagicMock()
+            reranker.rerank = AsyncMock(return_value=list(reversed(docs)))
+            mock_create_reranker.return_value = reranker
+
+            result = await unified_rag_pipeline(
+                query="What is the capital of France?",
+                top_k=2,
+                enable_cache=False,
+                enable_reranking=True,
+                enable_generation=False,
+                debug_mode=True,
+            )
+
+            assert isinstance(result, UnifiedRAGResponse)
+            assert [doc["id"] for doc in result.metadata["pre_rerank_documents"]] == ["doc-1", "doc-2"]
+            assert [doc["id"] for doc in result.metadata["reranked_documents"]] == ["doc-2", "doc-1"]
+            assert all("content" not in doc for doc in result.metadata["pre_rerank_documents"])
+            assert all("content" not in doc for doc in result.metadata["reranked_documents"])
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_rerank_snapshots_include_truncated_content_when_explicitly_enabled(self):
+        docs = [
+            Document(
+                id="doc-1",
+                content="Paris is the capital of France. " * 60,
+                metadata={"media_id": "media-1"},
+                source=DataSource.MEDIA_DB,
+                score=0.9,
+            ),
+            Document(
+                id="doc-2",
+                content="France is in Europe.",
+                metadata={"media_id": "media-2"},
+                source=DataSource.MEDIA_DB,
+                score=0.8,
+            ),
+        ]
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever, patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.create_reranker'
+        ) as mock_create_reranker:
+            mock_retriever_instance = MagicMock()
+            mock_retriever_instance.retrieve = AsyncMock(return_value=docs)
+            mock_retriever.return_value = mock_retriever_instance
+
+            reranker = MagicMock()
+            reranker.rerank = AsyncMock(return_value=list(reversed(docs)))
+            mock_create_reranker.return_value = reranker
+
+            result = await unified_rag_pipeline(
+                query="What is the capital of France?",
+                top_k=2,
+                enable_cache=False,
+                enable_reranking=True,
+                enable_generation=False,
+                debug_mode=True,
+                include_rerank_debug_documents=True,
+            )
+
+            assert isinstance(result, UnifiedRAGResponse)
+            assert result.metadata["pre_rerank_documents"][0]["content"].startswith("Paris is the capital of France.")
+            assert len(result.metadata["pre_rerank_documents"][0]["content"]) < len(docs[0].content)
+            assert result.metadata["pre_rerank_documents"][0]["metadata"]["media_id"] == "media-1"
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
     async def test_citations_generation(self):
         """Citations should populate academic and chunk-level fields when enabled."""
         # Create two simple documents with metadata sufficient for academic formatting

@@ -119,7 +119,7 @@ async def review_synthetic_sample(
         record = service.review_sample(
             sample_id,
             action=payload.action.value,
-            reviewer_id=payload.reviewer_id or getattr(current_user, "id_str", None) or str(current_user.id),
+            reviewer_id=getattr(current_user, "id_str", None) or str(current_user.id),
             notes=payload.notes,
             action_payload=payload.action_payload,
             resulting_review_state=(
@@ -154,7 +154,7 @@ async def promote_synthetic_samples(
             dataset_name=payload.dataset_name,
             dataset_description=payload.dataset_description,
             dataset_metadata=payload.dataset_metadata,
-            promoted_by=payload.promoted_by or getattr(current_user, "id_str", None) or str(current_user.id),
+            promoted_by=getattr(current_user, "id_str", None) or str(current_user.id),
             promotion_reason=payload.promotion_reason,
         )
         return SyntheticEvalPromotionResponse(

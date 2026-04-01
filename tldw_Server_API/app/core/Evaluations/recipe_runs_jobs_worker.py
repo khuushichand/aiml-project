@@ -63,6 +63,21 @@ _LOCAL_SUMMARIZATION_PROVIDERS = {
 }
 
 
+class RecipeRunJobError(RuntimeError):
+    """Worker error wrapper with explicit retry semantics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        backoff_seconds: int = 10,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.backoff_seconds = int(backoff_seconds)
+
+
 def _get_db(*, user_id: str | None) -> EvaluationsDatabase:
     db_path = os.getenv("EVALUATIONS_TEST_DB_PATH")
     if not db_path:
@@ -89,6 +104,11 @@ def _parse_json_list(value: Any) -> list[Any]:
         if isinstance(parsed, list):
             return list(parsed)
     return []
+
+
+def _run_config_for_execution(record: Any) -> dict[str, Any]:
+    metadata = getattr(record, "metadata", {}) or {}
+    return dict(metadata.get("run_config_internal") or metadata.get("run_config") or {})
 
 
 def _resolve_embeddings_dataset(record: Any, db: EvaluationsDatabase, user_id: str | None) -> list[dict[str, Any]]:
@@ -170,6 +190,20 @@ def _coerce_media_ids(run_config: dict[str, Any], dataset: list[dict[str, Any]])
     raise ValueError(
         "Embeddings recipe execution requires run_config.media_ids or labeled expected_ids to derive the corpus."
     )
+
+
+def _classify_recipe_run_job_error(exc: Exception) -> RecipeRunJobError:
+    if isinstance(exc, RecipeRunJobError):
+        return exc
+    if hasattr(exc, "retryable"):
+        return RecipeRunJobError(
+            str(exc),
+            retryable=bool(getattr(exc, "retryable", False)),
+            backoff_seconds=int(getattr(exc, "backoff_seconds", 10)),
+        )
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return RecipeRunJobError(str(exc), retryable=True, backoff_seconds=15)
+    return RecipeRunJobError(str(exc), retryable=False, backoff_seconds=0)
 
 
 def _extract_summarization_source_text(sample: dict[str, Any]) -> str:
@@ -467,7 +501,7 @@ def _score_summary_with_geval(
 
 
 def _build_embeddings_abtest_config(record: Any, dataset: list[dict[str, Any]]) -> EmbeddingsABTestConfig:
-    run_config = dict(record.metadata.get("run_config") or {})
+    run_config = _run_config_for_execution(record)
     candidates = run_config.get("candidates") or []
     if not isinstance(candidates, list) or not candidates:
         raise ValueError("Embeddings recipe run_config.candidates must be populated before execution.")
@@ -556,7 +590,7 @@ def _collect_embeddings_candidate_results(
             "query_id": str(metadata_payload.get("query_id") or row.get("query_id") or ""),
         }
 
-    candidate_configs = list((record.metadata.get("run_config") or {}).get("candidates") or [])
+    candidate_configs = list(_run_config_for_execution(record).get("candidates") or [])
     results_by_arm: dict[str, list[dict[str, Any]]] = {}
     for row in results_rows:
         results_by_arm.setdefault(str(row.get("arm_id") or ""), []).append(dict(row))
@@ -672,7 +706,7 @@ def _execute_summarization_recipe_run(
 ) -> dict[str, Any]:
     del service
     dataset = _resolve_inline_or_persisted_dataset(record, db, user_id)
-    run_config = dict(record.metadata.get("run_config") or {})
+    run_config = _run_config_for_execution(record)
     candidate_model_ids = list(run_config.get("candidate_model_ids") or [])
     if not candidate_model_ids:
         raise ValueError(
@@ -755,7 +789,7 @@ def _execute_rag_retrieval_tuning_recipe_run(
     service: RecipeRunsService | Any,
 ) -> dict[str, Any]:
     dataset = _resolve_inline_or_persisted_dataset(record, db, user_id)
-    run_config = dict(record.metadata.get("run_config") or {})
+    run_config = _run_config_for_execution(record)
     recipe = service.recipe_registry.get_recipe(record.recipe_id)
     corpus_scope = dict(run_config.get("corpus_scope") or {})
     candidates = list(run_config.get("candidates") or [])
@@ -913,7 +947,10 @@ def handle_recipe_run_job(
     run_id = payload["run_id"]
     job_id = str(job.get("id")) if job.get("id") is not None else None
 
-    record = service.get_run(run_id)
+    service.get_run(run_id)
+    record = db.get_recipe_run(run_id)
+    if record is None:
+        raise ValueError(f"Recipe run '{run_id}' was not found.")
     if record.status is RunStatus.COMPLETED:
         return {
             "status": "completed",
@@ -942,7 +979,10 @@ def handle_recipe_run_job(
             service=service,
         )
         if execution_artifacts:
-            merged_metadata = dict(service.get_run(run_id).metadata)
+            refreshed_record = db.get_recipe_run(run_id)
+            if refreshed_record is None:
+                raise ValueError(f"Recipe run '{run_id}' disappeared during execution.")
+            merged_metadata = dict(refreshed_record.metadata)
             merged_metadata.update(execution_artifacts.get("metadata") or {})
             db.update_recipe_run(
                 run_id,
@@ -952,7 +992,13 @@ def handle_recipe_run_job(
             if child_run_ids:
                 db.set_recipe_run_children(run_id, list(child_run_ids))
         report = service.get_report(run_id)
-        completed_metadata = dict(report.run.metadata)
+        refreshed_record = db.get_recipe_run(run_id)
+        if refreshed_record is None:
+            raise ValueError(f"Recipe run '{run_id}' disappeared during report persistence.")
+        completed_metadata = dict(refreshed_record.metadata)
+        recipe_report = report.run.metadata.get("recipe_report")
+        if recipe_report is not None:
+            completed_metadata["recipe_report"] = recipe_report
         completed_metadata["jobs"] = {
             "job_id": job_id,
             "worker_state": "completed",
@@ -965,21 +1011,28 @@ def handle_recipe_run_job(
             metadata=completed_metadata,
         )
     except Exception as exc:
+        job_error = _classify_recipe_run_job_error(exc)
         logger.exception("Recipe run job failed: run_id={} job_id={}", run_id, job_id)
-        failed_metadata = dict(service.get_run(run_id).metadata)
+        failed_record = db.get_recipe_run(run_id)
+        failed_metadata = dict(failed_record.metadata) if failed_record is not None else {}
         failed_metadata["jobs"] = {
             "job_id": job_id,
-            "worker_state": "failed",
-            "error": "recipe_run_failed",
+            "worker_state": "retrying" if job_error.retryable else "failed",
+            "error": "recipe_run_retrying" if job_error.retryable else "recipe_run_failed",
             "error_type": type(exc).__name__,
-            "error_message": "Recipe run execution failed.",
+            "error_message": (
+                "Recipe run execution will be retried."
+                if job_error.retryable
+                else "Recipe run execution failed."
+            ),
+            "retryable": job_error.retryable,
         }
         db.update_recipe_run(
             run_id,
-            status=RunStatus.FAILED,
+            status=RunStatus.PENDING if job_error.retryable else RunStatus.FAILED,
             metadata=failed_metadata,
         )
-        raise
+        raise job_error from exc
 
     logger.info("Recipe run job completed: run_id={} job_id={}", run_id, job_id)
     return {
@@ -1028,6 +1081,7 @@ async def start_recipe_run_jobs_worker() -> asyncio.Task[None] | None:
 
 
 __all__ = [
+    "RecipeRunJobError",
     "handle_recipe_run_job",
     "handle_recipe_run_job_async",
     "recipe_run_jobs_worker_enabled",

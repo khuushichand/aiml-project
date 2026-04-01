@@ -2,7 +2,9 @@ from __future__ import annotations
 
 """Helpers for resolving companion storage IDs from logical user identities."""
 
-import hashlib
+import hmac
+
+_COMPANION_STORAGE_ID_NAMESPACE = b"tldw-companion-storage-user-id"
 
 
 def resolve_companion_storage_user_id(user_id: str | int) -> str:
@@ -13,10 +15,11 @@ def resolve_companion_storage_user_id(user_id: str | int) -> str:
     try:
         return str(int(raw))
     except (TypeError, ValueError):
-        try:
-            digest = hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).digest()
-        except TypeError:  # pragma: no cover - compatibility fallback
-            digest = hashlib.sha1(raw.encode("utf-8")).digest()  # nosec B324
+        digest = hmac.digest(
+            _COMPANION_STORAGE_ID_NAMESPACE,
+            raw.encode("utf-8"),
+            "sha256",
+        )
         return str(int.from_bytes(digest[:4], byteorder="big", signed=False))
 
 

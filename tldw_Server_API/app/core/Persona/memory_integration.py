@@ -78,8 +78,7 @@ def _normalize_personalization_user_id(user_id: str) -> str:
 
 def _get_db_for_user(user_id: str) -> tuple[PersonalizationDB, str]:
     normalized_user_id = _normalize_personalization_user_id(user_id)
-    db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
-    return PersonalizationDB(str(db_path)), normalized_user_id
+    return PersonalizationDB.for_user(normalized_user_id), normalized_user_id
 
 
 def _open_chacha_db_for_user(user_id: str) -> tuple[CharactersRAGDB, str]:
@@ -290,8 +289,7 @@ def _write_legacy_persona_turn(
     metadata: dict[str, Any] | None,
     store_as_memory: bool,
 ) -> bool:
-    db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
-    db = PersonalizationDB(str(db_path))
+    db = PersonalizationDB.for_user(normalized_user_id)
     clean_metadata = dict(metadata or {})
     clean_metadata["persona_id"] = str(persona_id or "")
     clean_metadata["turn_type"] = str(turn_type or "text")
@@ -398,8 +396,7 @@ def _read_legacy_memories(
     query_text: str,
     top_k: int,
 ) -> list[RetrievedMemory]:
-    db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
-    db = PersonalizationDB(str(db_path))
+    db = PersonalizationDB.for_user(normalized_user_id)
     safe_top_k = max(1, min(int(top_k), 10))
     query = str(query_text or "").strip() or None
     items, _ = db.list_semantic_memories(

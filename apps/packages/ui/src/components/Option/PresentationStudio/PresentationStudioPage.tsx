@@ -2,6 +2,7 @@ import React from "react"
 import { useNavigate } from "react-router-dom"
 
 import { ProjectWorkspace } from "./ProjectWorkspace"
+import { VisualStylePicker } from "./VisualStylePicker"
 import { VisualStyleManager } from "./VisualStyleManager"
 import {
   buildPresentationVisualStyleSnapshot,
@@ -63,6 +64,19 @@ const getDefaultVisualStyleValue = (styles: VisualStyleRecord[]): string => {
   return preferred ? encodeVisualStyleValue(preferred.id, preferred.scope) : ""
 }
 
+const resolveThemeFromVisualStyle = (
+  style: VisualStyleRecord | null,
+  fallbackTheme: string
+): string => {
+  if (style?.scope !== "builtin") {
+    return fallbackTheme
+  }
+  const resolvedTheme = style.appearance_defaults?.theme
+  return typeof resolvedTheme === "string" && resolvedTheme.trim().length > 0
+    ? resolvedTheme.trim()
+    : fallbackTheme
+}
+
 export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   mode = "index",
   projectId = null
@@ -74,6 +88,7 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   const title = usePresentationStudioStore((state) => state.title)
   const slides = usePresentationStudioStore((state) => state.slides)
   const currentProjectId = usePresentationStudioStore((state) => state.projectId)
+  const theme = usePresentationStudioStore((state) => state.theme)
   const visualStyleId = usePresentationStudioStore((state) => state.visualStyleId)
   const visualStyleScope = usePresentationStudioStore((state) => state.visualStyleScope)
   const visualStyleName = usePresentationStudioStore((state) => state.visualStyleName)
@@ -183,6 +198,10 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
         scope: visualStyleScope,
         name: visualStyleName || `${visualStyleScope}:${visualStyleId}`,
         description: "This style is no longer available, but this deck still retains its snapshot.",
+        category: null,
+        guide_number: null,
+        tags: [],
+        best_for: [],
         generation_rules: {},
         artifact_preferences: [],
         appearance_defaults: {},
@@ -193,23 +212,15 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
     return options
   }, [availableStyles, visualStyleId, visualStyleName, visualStyleScope])
 
-  const groupedStyleOptions = React.useMemo(
-    () => ({
-      builtin: styleOptions.filter((style) => style.scope === "builtin"),
-      user: styleOptions.filter((style) => style.scope !== "builtin")
-    }),
-    [styleOptions]
-  )
-
   const selectedDraftStyle = React.useMemo(() => {
     const { visualStyleId: nextStyleId, visualStyleScope: nextStyleScope } =
       parseVisualStyleValue(draftVisualStyleValue)
     return (
-      availableStyles.find(
+      styleOptions.find(
         (style) => style.id === nextStyleId && style.scope === nextStyleScope
       ) || null
     )
-  }, [availableStyles, draftVisualStyleValue])
+  }, [draftVisualStyleValue, styleOptions])
 
   const selectedPresentationStyle = React.useMemo(
     () =>
@@ -241,6 +252,10 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
     },
     [mode, updateProjectMeta]
   )
+
+  const handleDraftStyleChange = React.useCallback((nextValue: string) => {
+    setDraftVisualStyleValue(nextValue)
+  }, [])
 
   const handleCreateProject = React.useCallback(async () => {
     if (isCreatingProject) {
@@ -305,14 +320,14 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   }, [draftTitle, draftVisualStyleValue, isCreatingProject, loadProject, navigate, styleOptions])
 
   const handleDetailStyleChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLSelectElement>) => {
-      const nextValue = event.target.value
+    (nextValue: string) => {
       const { visualStyleId: nextStyleId, visualStyleScope: nextStyleScope } =
         parseVisualStyleValue(nextValue)
       const selectedStyle =
         styleOptions.find(
           (style) => style.id === nextStyleId && style.scope === nextStyleScope
         ) || null
+      const nextTheme = resolveThemeFromVisualStyle(selectedStyle, theme)
       updateProjectMeta({
         visualStyleId: nextStyleId,
         visualStyleScope: nextStyleScope,
@@ -320,10 +335,11 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
         visualStyleVersion: selectedStyle?.version ?? null,
         visualStyleSnapshot: selectedStyle
           ? buildPresentationVisualStyleSnapshot(selectedStyle)
-          : null
+          : null,
+        theme: selectedStyle?.scope === "builtin" ? nextTheme : undefined
       })
     },
-    [styleOptions, updateProjectMeta]
+    [styleOptions, theme, updateProjectMeta]
   )
 
   if (!isOnline) {
@@ -393,59 +409,15 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
               </div>
 
               <div>
-                <label
-                  className="mb-1 block text-sm font-medium text-slate-700"
-                  htmlFor="presentation-studio-visual-style"
-                >
-                  Choose visual style
-                </label>
-                <select
-                  id="presentation-studio-visual-style"
-                  aria-label="Choose visual style"
+                <VisualStylePicker
+                  label="Choose visual style"
                   value={draftVisualStyleValue}
-                  onChange={(event) => setDraftVisualStyleValue(event.target.value)}
+                  styles={styleOptions}
+                  onChange={handleDraftStyleChange}
                   disabled={stylesLoading || isCreatingProject}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 disabled:bg-slate-100"
-                >
-                  <option value="">No visual style preset</option>
-                  {groupedStyleOptions.builtin.length > 0 && (
-                    <optgroup label="Built-in styles">
-                      {groupedStyleOptions.builtin.map((style) => (
-                        <option
-                          key={`${style.scope}:${style.id}`}
-                          value={encodeVisualStyleValue(style.id, style.scope)}
-                        >
-                          {style.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {groupedStyleOptions.user.length > 0 && (
-                    <optgroup label="Custom styles">
-                      {groupedStyleOptions.user.map((style) => (
-                        <option
-                          key={`${style.scope}:${style.id}`}
-                          value={encodeVisualStyleValue(style.id, style.scope)}
-                        >
-                          {style.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-medium text-slate-900">
-                  {selectedDraftStyle?.name || "Manual deck defaults"}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  {selectedDraftStyle?.description ||
-                    "No preset selected. The deck starts with standard manual settings."}
-                </p>
-                <p className="mt-3 text-xs uppercase tracking-wide text-slate-500">
-                  Applies to future generated slides. Existing slides stay unchanged.
-                </p>
+                  loading={stylesLoading}
+                  description="Built-ins stay read-only. Updates deck appearance defaults and future generated slides. Existing slide content stays unchanged. Custom styles stay editable below."
+                />
               </div>
 
               {stylesError && <p className="text-sm text-rose-600">{stylesError}</p>}
@@ -516,50 +488,15 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
             </p>
           </div>
           <div className="min-w-[240px] flex-1 sm:max-w-sm">
-            <label
-              className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500"
-              htmlFor="presentation-studio-detail-visual-style"
-            >
-              Choose visual style
-            </label>
-            <select
-              id="presentation-studio-detail-visual-style"
-              aria-label="Choose visual style"
+            <VisualStylePicker
+              label="Choose visual style"
               value={encodeVisualStyleValue(visualStyleId, visualStyleScope)}
+              styles={styleOptions}
               onChange={handleDetailStyleChange}
               disabled={stylesLoading}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 disabled:bg-slate-100"
-            >
-              <option value="">No visual style preset</option>
-              {groupedStyleOptions.builtin.length > 0 && (
-                <optgroup label="Built-in styles">
-                  {groupedStyleOptions.builtin.map((style) => (
-                    <option
-                      key={`${style.scope}:${style.id}`}
-                      value={encodeVisualStyleValue(style.id, style.scope)}
-                    >
-                      {style.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {groupedStyleOptions.user.length > 0 && (
-                <optgroup label="Custom styles">
-                  {groupedStyleOptions.user.map((style) => (
-                    <option
-                      key={`${style.scope}:${style.id}`}
-                      value={encodeVisualStyleValue(style.id, style.scope)}
-                    >
-                      {style.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-            <p className="mt-1 text-xs text-slate-500">
-              {selectedPresentationStyle?.description ||
-                "Applies to future generated slides. Existing slides are unchanged."}
-            </p>
+              loading={stylesLoading}
+              description="Updates deck appearance defaults and future generated slides. Existing slide content stays unchanged."
+            />
           </div>
         </div>
       </header>

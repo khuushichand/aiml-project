@@ -151,7 +151,9 @@ describe("PresentationStudioPage", () => {
       expect(clientMocks.listVisualStyles).toHaveBeenCalledTimes(1)
     })
     expect(
-      screen.getByText("Applies to future generated slides. Existing slides stay unchanged.")
+      screen.getByText(
+        /Updates deck appearance defaults and future generated slides\. Existing slide content stays unchanged\./
+      )
     ).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId("presentation-studio-create-button"))
@@ -316,9 +318,11 @@ describe("PresentationStudioPage", () => {
       expect(screen.getByTestId("presentation-studio-slide-rail")).toBeInTheDocument()
     })
     expect(screen.queryByText("Loading presentation…")).not.toBeInTheDocument()
-    expect(
-      (screen.getByLabelText("Choose visual style") as HTMLSelectElement).value
-    ).toBe("builtin::minimal-academic")
+    fireEvent.click(screen.getByRole("button", { name: /Timeline/ }))
+
+    await waitFor(() => {
+      expect(usePresentationStudioStore.getState().theme).toBe("beige")
+    })
   })
 
   it("updates the deck visual style preference on the detail page without mutating slides", async () => {
@@ -363,17 +367,15 @@ describe("PresentationStudioPage", () => {
 
     render(<PresentationStudioPage mode="detail" projectId="presentation-style" />)
 
-    const styleSelect = await screen.findByLabelText("Choose visual style")
-    fireEvent.change(styleSelect, {
-      target: { value: "builtin::timeline" }
-    })
+    await screen.findByText("Timeline")
+    fireEvent.click(screen.getByRole("button", { name: /Timeline/ }))
 
     const state = usePresentationStudioStore.getState()
     expect(state.visualStyleId).toBe("timeline")
     expect(state.visualStyleScope).toBe("builtin")
     expect(state.visualStyleName).toBe("Timeline")
     expect(state.slides).toHaveLength(1)
-    expect(state.theme).toBe("black")
+    expect(state.theme).toBe("beige")
   })
 
   it("creates a custom visual style and selects it in new mode", async () => {
@@ -454,9 +456,10 @@ describe("PresentationStudioPage", () => {
       )
     })
     await waitFor(() => {
-      expect(
-        (screen.getByLabelText("Choose visual style") as HTMLSelectElement).value
-      ).toBe("user::style-user-1")
+      expect(screen.getByRole("button", { name: /CGPSC Sprint/ })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      )
     })
   })
 

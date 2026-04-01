@@ -317,6 +317,11 @@ def _cuda_available() -> bool:
     return True
 
 
+def cuda_available() -> bool:
+    """Public compatibility wrapper for machine-profile detection helpers."""
+    return _cuda_available()
+
+
 def _resolve_kitten_tts_prefetch_settings() -> dict[str, str | None]:
     cache_dir = "cache/kitten_tts"
 

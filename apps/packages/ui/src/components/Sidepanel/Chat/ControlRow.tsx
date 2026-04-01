@@ -16,6 +16,7 @@ import { ModelSelect } from "@/components/Common/ModelSelect"
 import { PromptSelect } from "@/components/Common/PromptSelect"
 import { FeatureHint, useFeatureHintSeen } from "@/components/Common/FeatureHint"
 import { CharacterSelect } from "./CharacterSelect"
+import { useChatMoodBadgePreference } from "@/hooks/useChatMoodBadgePreference"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useMcpTools } from "@/hooks/useMcpTools"
 import { browser } from "wxt/browser"
@@ -99,10 +100,7 @@ const ControlRowBase: React.FC<ControlRowProps> = ({
     "allowExternalImages",
     DEFAULT_CHAT_SETTINGS.allowExternalImages
   )
-  const [showMoodBadge, setShowMoodBadge] = useStorage(
-    "chatShowMoodBadge",
-    true
-  )
+  const [showMoodBadge, setShowMoodBadge] = useChatMoodBadgePreference()
   const [showMoodConfidence, setShowMoodConfidence] = useStorage(
     "chatShowMoodConfidence",
     Boolean(selectedCharacterId)

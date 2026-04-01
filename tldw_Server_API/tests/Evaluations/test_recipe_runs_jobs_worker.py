@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
     recipe_run_queue,
 )
 from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+    RecipeRunJobError,
     handle_recipe_run_job,
     start_recipe_run_jobs_worker,
 )
@@ -681,7 +682,7 @@ def test_handle_recipe_run_job_fails_rag_answer_quality_live_mode_when_baseline_
 
     monkeypatch.setattr(execution, "unified_rag_pipeline", _unexpected_unified_rag_pipeline)
 
-    with pytest.raises(ValueError, match="retrieval_baseline_ref"):
+    with pytest.raises(RecipeRunJobError, match="retrieval_baseline_ref") as exc_info:
         worker.handle_recipe_run_job(
             {
                 "id": "job-rag-answer-quality-live-missing-baseline",
@@ -694,6 +695,7 @@ def test_handle_recipe_run_job_fails_rag_answer_quality_live_mode_when_baseline_
             db=db,
             user_id=user_id,
         )
+    assert exc_info.value.retryable is False
 
     refreshed = db.get_recipe_run(record.run_id)
 
@@ -878,7 +880,7 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
     monkeypatch.setattr(worker, "_execute_summarization_recipe_run", _fake_execute)
 
     try:
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(RecipeRunJobError, match="boom") as exc_info:
             handle_recipe_run_job(
                 {
                     "id": "job-99",
@@ -892,6 +894,7 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
                 user_id=user_id,
                 service=_BrokenService(),
             )
+        assert exc_info.value.retryable is False
     finally:
         monkeypatch.undo()
 
@@ -901,6 +904,50 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
     assert refreshed.metadata["jobs"]["worker_state"] == "failed"
     assert refreshed.metadata["jobs"]["error"] == "recipe_run_failed"
     assert refreshed.metadata["jobs"]["error_type"] == "RuntimeError"
+
+
+def test_handle_recipe_run_job_marks_retryable_failures_pending(tmp_path) -> None:
+    db, service, user_id = _service(tmp_path)
+    record = service.create_run(
+        "summarization_quality",
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
+    )
+
+    import tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker as worker
+
+    def _fake_execute(*, record, db, user_id, service):
+        del record, db, user_id, service
+        raise TimeoutError("temporary upstream timeout")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(worker, "_execute_summarization_recipe_run", _fake_execute)
+
+    try:
+        with pytest.raises(RecipeRunJobError, match="temporary upstream timeout") as exc_info:
+            handle_recipe_run_job(
+                {
+                    "id": "job-100",
+                    "payload": build_recipe_run_job_payload(
+                        run_id=record.run_id,
+                        recipe_id=record.recipe_id,
+                        owner_user_id=user_id,
+                    ),
+                },
+                db=db,
+                user_id=user_id,
+                service=service,
+            )
+        assert exc_info.value.retryable is True
+    finally:
+        monkeypatch.undo()
+
+    refreshed = db.get_recipe_run(record.run_id)
+    assert refreshed is not None
+    assert refreshed.status is RunStatus.PENDING
+    assert refreshed.metadata["jobs"]["worker_state"] == "retrying"
+    assert refreshed.metadata["jobs"]["error"] == "recipe_run_retrying"
+    assert refreshed.metadata["jobs"]["retryable"] is True
 
 
 def test_handle_recipe_run_job_executes_summarization_recipe_and_persists_artifacts(

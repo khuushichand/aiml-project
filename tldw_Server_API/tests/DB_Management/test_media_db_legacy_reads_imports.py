@@ -1,14 +1,15 @@
 import importlib
 
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.tests.DB_Management._media_db_legacy_stub import (
+    install_legacy_media_db_stub,
+)
 
 
 def test_document_references_imports_latest_transcription_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     document_references = importlib.import_module(
         "tldw_Server_API.app.api.v1.endpoints.media.document_references"
     )
@@ -31,9 +32,7 @@ def test_document_references_imports_latest_transcription_from_media_db_api(
 def test_document_insights_imports_latest_transcription_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     document_insights = importlib.import_module(
         "tldw_Server_API.app.api.v1.endpoints.media.document_insights"
     )
@@ -56,9 +55,7 @@ def test_document_insights_imports_latest_transcription_from_media_db_api(
 def test_quiz_source_resolver_imports_latest_transcription_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     quiz_source_resolver = importlib.import_module(
         "tldw_Server_API.app.services.quiz_source_resolver"
     )
@@ -81,9 +78,7 @@ def test_quiz_source_resolver_imports_latest_transcription_from_media_db_api(
 def test_slides_endpoint_imports_latest_transcription_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     slides_endpoint = importlib.import_module(
         "tldw_Server_API.app.api.v1.endpoints.slides"
     )
@@ -106,9 +101,7 @@ def test_slides_endpoint_imports_latest_transcription_from_media_db_api(
 def test_data_tables_jobs_worker_imports_latest_transcription_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     data_tables_jobs_worker = importlib.import_module(
         "tldw_Server_API.app.core.Data_Tables.jobs_worker"
     )
@@ -131,9 +124,7 @@ def test_data_tables_jobs_worker_imports_latest_transcription_from_media_db_api(
 def test_navigation_endpoint_imports_read_helpers_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     navigation_endpoint = importlib.import_module(
         "tldw_Server_API.app.api.v1.endpoints.media.navigation"
     )
@@ -162,9 +153,7 @@ def test_navigation_endpoint_imports_read_helpers_from_media_db_api(
 def test_media_module_imports_read_helpers_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     media_module_impl = importlib.import_module(
         "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module"
     )
@@ -193,9 +182,7 @@ def test_media_module_imports_read_helpers_from_media_db_api(
 def test_chatbook_service_imports_read_helpers_from_media_db_api(
     monkeypatch,
 ) -> None:
-    media_db_v2 = importlib.import_module(
-        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
-    )
+    media_db_v2 = install_legacy_media_db_stub(monkeypatch)
     chatbook_service = importlib.import_module(
         "tldw_Server_API.app.core.Chatbooks.chatbook_service"
     )

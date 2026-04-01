@@ -83,6 +83,9 @@ class _FakeDB:
         self.created_versions = []
         self.add_calls = []
 
+    def _get_current_utc_timestamp_str(self):
+        return "2026-03-29T00:00:00Z"
+
     # Context manager for transaction()
     def transaction(self):
         class _Tx:
@@ -303,6 +306,7 @@ async def test_pubmed_ingest_normalizes_pmcid_in_saved_metadata(monkeypatch):
     )
 
     fake_db = _FakeDB()
+    fake_db.transaction = None
     async def _override_db():
         return fake_db
 

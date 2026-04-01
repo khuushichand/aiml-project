@@ -240,10 +240,16 @@ class TestNemoTranscription:
     def test_load_parakeet_onnx(self, mock_config_data, mock_download, mock_ort_session, mock_config):
         """Test loading ONNX variant of Parakeet."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-            load_parakeet_model
+            _model_cache,
+            load_parakeet_model,
+        )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
+            _onnx_model_cache,
         )
 
         mock_config_data.return_value = mock_config
+        _model_cache.clear()
+        _onnx_model_cache.clear()
 
         # Create a temporary directory and file to simulate model
         with tempfile.TemporaryDirectory() as tmpdir:

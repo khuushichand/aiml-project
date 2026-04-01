@@ -22,3 +22,6 @@ https://github.com/kruskal-labs/toolfront
 https://vercel.com/blog/the-second-wave-of-mcp-building-for-llms-not-developers
 
 https://thealliance.ai/blog/building-a-deep-research-agent-using-mcp-agent
+
+https://github.com/sibyllinesoft/smith-gateway
+https://www.dbos.dev/blog/mcp-agent-for-durable-workflows

@@ -1437,10 +1437,13 @@ async def lifespan(app: FastAPI):
     # Fail fast if the assembled app contains duplicate method+path route registrations.
     _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
     # Run environmental preflight checks before heavy initialization.
+    # Executed in a worker thread because some checks (e.g. database
+    # connectivity) perform blocking network I/O.
     try:
+        import asyncio as _preflight_asyncio
         from tldw_Server_API.app.core.startup_preflight import run_preflight_checks
 
-        preflight = run_preflight_checks()
+        preflight = await _preflight_asyncio.to_thread(run_preflight_checks)
         logger.info(
             "Preflight: {} checks, {} warnings, {} failures",
             len(preflight.checks),
@@ -2818,6 +2821,26 @@ async def lifespan(app: FastAPI):
                 )
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning("Failed to start evaluation recipe-run Jobs worker: {}", e)
+
+    # Evaluations recipe-run Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Evaluation recipe-run Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+                start_recipe_run_jobs_worker,
+            )
+
+            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
+            if recipe_run_jobs_task:
+                logger.info("Evaluation recipe-run Jobs worker started")
+            else:
+                logger.info(
+                    "Evaluation recipe-run Jobs worker disabled "
+                    "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start evaluation recipe-run Jobs worker: {e}")
 
     # Jobs notifications bridge worker
     try:
@@ -6582,7 +6605,11 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Notifications endpoint not available: {_e}")
     _reading_import_enabled = True
-    if _EXPLICIT_PYTEST_RUNTIME and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING"):
+    if (
+        _EXPLICIT_PYTEST_RUNTIME
+        and _MINIMAL_TEST_APP
+        and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING")
+    ):
         _reading_import_enabled = False
         logger.info("Skipping reading endpoint imports in pytest startup (set MINIMAL_TEST_INCLUDE_READING=1 to enable)")
     if _reading_import_enabled:

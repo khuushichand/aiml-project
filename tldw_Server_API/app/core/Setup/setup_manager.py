@@ -313,11 +313,14 @@ def _normalize_root_path(raw: str, *, project_root: Path) -> Path | None:
     value = str(raw).strip()
     if not value:
         return None
+    expanded = os.path.expanduser(value)
+    if os.path.isabs(expanded):
+        return Path(os.path.normpath(expanded))
+    candidate = Path(os.path.normpath(os.path.join(str(project_root), expanded)))
     try:
-        candidate = Path(value).expanduser()
-    except Exception:
-        candidate = Path(value)
-    candidate = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+        candidate.relative_to(project_root)
+    except ValueError:
+        return None
     return candidate
 
 
@@ -325,18 +328,15 @@ def _normalize_user_db_base_dir_candidate(raw: Any, *, project_root: Path) -> Pa
     value = str(raw).strip()
     if not value:
         raise ValueError("USER_DB_BASE_DIR must not be empty")
-    try:
-        candidate = Path(value).expanduser()
-    except Exception:
-        candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = (project_root / candidate).resolve()
+    expanded = os.path.expanduser(value)
+    if not os.path.isabs(expanded):
+        candidate = Path(os.path.normpath(os.path.join(str(project_root), expanded)))
         try:
             candidate.relative_to(project_root)
         except ValueError as exc:
             raise ValueError("Relative USER_DB_BASE_DIR must stay within the project root") from exc
     else:
-        candidate = candidate.resolve()
+        candidate = Path(os.path.normpath(expanded))
     return candidate
 
 

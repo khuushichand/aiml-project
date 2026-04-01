@@ -29,6 +29,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ../docker-data/app:/app/Databases
+      - ../docker-data/user_data:/app/Databases/user_databases
     depends_on:
       redis:
         condition: service_healthy

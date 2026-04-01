@@ -166,3 +166,62 @@ def test_persona_exemplar_crud_scoping_and_tag_normalization(db_instance: Charac
         )
         is None
     )
+
+
+def test_update_persona_exemplar_updates_selected_fields_and_preserves_others(
+    db_instance: CharactersRAGDB,
+):
+    persona_id = db_instance.create_persona_profile(
+        {
+            "id": "persona_update_target",
+            "user_id": "user-1",
+            "name": "Persona Update Target",
+            "mode": "session_scoped",
+            "system_prompt": "Update target",
+            "is_active": True,
+        }
+    )
+    exemplar_id = db_instance.create_persona_exemplar(
+        {
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "kind": "style",
+            "content": "Original exemplar content.",
+            "tone": "neutral",
+            "scenario_tags": ["small_talk"],
+            "capability_tags": ["can_search"],
+            "priority": 1,
+            "enabled": True,
+            "source_type": "manual",
+            "source_ref": "seed://persona/update-target",
+            "notes": "Original notes",
+        }
+    )
+
+    assert db_instance.update_persona_exemplar(
+        exemplar_id=exemplar_id,
+        persona_id=persona_id,
+        user_id="user-1",
+        update_data={
+            "tone": " SUPPORTIVE ",
+            "priority": "7",
+            "enabled": False,
+            "source_ref": None,
+            "notes": "Updated notes",
+            "ignored_field": "ignored",
+        },
+    )
+
+    fetched = db_instance.get_persona_exemplar(
+        exemplar_id=exemplar_id,
+        persona_id=persona_id,
+        user_id="user-1",
+        include_disabled=True,
+    )
+    assert fetched is not None
+    assert fetched["content"] == "Original exemplar content."
+    assert fetched["tone"] == "supportive"
+    assert fetched["priority"] == 7
+    assert fetched["enabled"] is False
+    assert fetched["source_ref"] is None
+    assert fetched["notes"] == "Updated notes"

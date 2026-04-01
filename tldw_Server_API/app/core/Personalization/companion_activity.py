@@ -10,7 +10,6 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
 
 
@@ -19,8 +18,7 @@ def _open_db_for_user(user_id: str | int) -> tuple[PersonalizationDB, str]:
     normalized_user_id = str(user_id or "").strip()
     if not normalized_user_id:
         raise ValueError("user_id is required")
-    db_path = DatabasePaths.get_personalization_db_path(user_id)
-    return PersonalizationDB(str(db_path)), normalized_user_id
+    return PersonalizationDB.for_user(user_id), normalized_user_id
 
 
 def _profile_opted_in(db: PersonalizationDB, user_id: str) -> bool:

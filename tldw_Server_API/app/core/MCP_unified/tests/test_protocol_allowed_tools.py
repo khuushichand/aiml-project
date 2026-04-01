@@ -2,6 +2,12 @@ import os
 
 import pytest
 
+from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
+from tldw_Server_API.app.core.MCP_unified.modules.implementations.run_command_module import (
+    RunCommandModule,
+)
+from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -480,3 +486,50 @@ async def test_protocol_process_request_returns_approval_required_payload(monkey
     assert response.error is not None
     assert response.error.code == -32001
     assert response.error.data["approval"]["reason"] == "outside_profile"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_run_help_only_advertises_commands_backed_by_visible_tools():
+    class _ProtocolStub:
+        async def _handle_tools_list(self, params, context):  # noqa: ANN001
+            return {
+                "tools": [
+                    {"name": "fs.list", "module": "filesystem", "canExecute": True},
+                    {"name": "knowledge.search", "module": "knowledge", "canExecute": True},
+                    {"name": "knowledge.get", "module": "knowledge", "canExecute": False},
+                    {"name": "mcp.tools.list", "module": "mcp", "canExecute": False},
+                ]
+            }
+
+        def _is_tool_allowed_by_context(self, tool_name, tool_args, context):  # noqa: ANN001
+            allowed = set((context.metadata or {}).get("allowed_tools") or [])
+            return not allowed or tool_name in allowed
+
+        async def _resolve_effective_tool_policy(self, context):  # noqa: ANN001
+            return {
+                "enabled": True,
+                "allowed_tools": ["fs.list"],
+                "denied_tools": [],
+            }
+
+        def _is_tool_allowed_by_effective_policy(self, tool_name, tool_args, policy):  # noqa: ANN001
+            allowed = set(policy.get("allowed_tools") or [])
+            return not allowed or tool_name in allowed
+
+    module = RunCommandModule(
+        ModuleConfig(name="run", settings={"protocol": _ProtocolStub()}),
+    )
+    context = RequestContext(
+        request_id="run-help-filtered",
+        user_id="1",
+        client_id="unit",
+        metadata={"allowed_tools": ["fs.list", "knowledge.search"]},
+    )
+
+    rendered = await module.execute_tool("run", {"command": "help"}, context=context)
+
+    assert "ls" in rendered
+    assert "knowledge" not in rendered
+    assert "cat" not in rendered
+    assert "mcp" not in rendered

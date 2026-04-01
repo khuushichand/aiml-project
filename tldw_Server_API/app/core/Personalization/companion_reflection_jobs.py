@@ -390,9 +390,7 @@ def run_companion_reflection_job(
     normalized_user_id = str(user_id)
     current_time = _coerce_now(_parse_iso_datetime(scheduled_for) or now)
     storage_user_id = resolve_companion_storage_user_id(normalized_user_id)
-    db = personalization_db or PersonalizationDB(
-        str(DatabasePaths.get_personalization_db_path(storage_user_id))
-    )
+    db = personalization_db or PersonalizationDB.for_user(storage_user_id)
     cdb = collections_db or CollectionsDatabase.for_user(user_id=normalized_user_id)
     profile = db.get_or_create_profile(normalized_user_id)
 

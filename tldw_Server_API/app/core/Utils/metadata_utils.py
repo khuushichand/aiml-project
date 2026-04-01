@@ -82,6 +82,24 @@ def normalize_safe_metadata(sm: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def merge_missing_safe_metadata(
+    existing: Mapping[str, Any] | None,
+    incoming: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Preserve existing metadata values and fill only missing normalized fields."""
+    normalized_existing = normalize_safe_metadata(dict(existing or {}))
+    normalized_incoming = normalize_safe_metadata(dict(incoming or {}))
+    merged = dict(normalized_existing)
+
+    for key, value in normalized_incoming.items():
+        if value in (None, ""):
+            continue
+        if merged.get(key) in (None, ""):
+            merged[key] = value
+
+    return merged
+
+
 def update_version_safe_metadata_in_transaction(
     db: Any,
     dv_id: int,

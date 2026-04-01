@@ -5711,29 +5711,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def _ensure_workspace_study_material_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure workspace ownership columns and workspace study-material policy exist for SQLite."""
         try:
-            workspace_cols = {row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()}
-            if "study_materials_policy" not in workspace_cols:
+            existing_tables = {
+                str(row[0])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+            if "workspaces" in existing_tables:
+                workspace_cols = {row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()}
+                if "study_materials_policy" not in workspace_cols:
+                    conn.execute(
+                        "ALTER TABLE workspaces ADD COLUMN study_materials_policy TEXT NOT NULL DEFAULT 'general'"
+                    )
                 conn.execute(
-                    "ALTER TABLE workspaces ADD COLUMN study_materials_policy TEXT NOT NULL DEFAULT 'general'"
+                    "UPDATE workspaces SET study_materials_policy = 'general' "
+                    "WHERE study_materials_policy IS NULL OR trim(study_materials_policy) = ''"
                 )
-            conn.execute(
-                "UPDATE workspaces SET study_materials_policy = 'general' "
-                "WHERE study_materials_policy IS NULL OR trim(study_materials_policy) = ''"
-            )
 
-            quiz_cols = {row[1] for row in conn.execute("PRAGMA table_info('quizzes')").fetchall()}
-            if "workspace_id" not in quiz_cols:
-                conn.execute(
-                    "ALTER TABLE quizzes ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
-                )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id)")
+            if "quizzes" in existing_tables:
+                quiz_cols = {row[1] for row in conn.execute("PRAGMA table_info('quizzes')").fetchall()}
+                if "workspace_id" not in quiz_cols:
+                    conn.execute(
+                        "ALTER TABLE quizzes ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                    )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id)")
 
-            deck_cols = {row[1] for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
-            if "workspace_id" not in deck_cols:
-                conn.execute(
-                    "ALTER TABLE decks ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
-                )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id)")
+            if "decks" in existing_tables:
+                deck_cols = {row[1] for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+                if "workspace_id" not in deck_cols:
+                    conn.execute(
+                        "ALTER TABLE decks ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                    )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id)")
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring SQLite workspace study-material schema: {exc}") from exc  # noqa: TRY003
 
@@ -6361,6 +6368,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v36_to_v37(conn)
                             elif fallback_version == 37:
                                 self._migrate_from_v37_to_v38(conn)
+                            elif fallback_version == 38:
+                                self._migrate_from_v38_to_v39(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -6825,16 +6834,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return "learning"
         return "review"
 
-    def _ensure_flashcard_scheduler_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+    def _ensure_flashcard_scheduler_sync_triggers_sqlite(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        decks_exists: bool = True,
+        flashcards_exists: bool = True,
+        sync_log_exists: bool = True,
+    ) -> None:
         """Ensure deck and flashcard sync triggers include scheduler fields."""
-        try:
-            conn.executescript(
-                """
-                DROP TRIGGER IF EXISTS decks_sync_create;
-                DROP TRIGGER IF EXISTS decks_sync_update;
-                DROP TRIGGER IF EXISTS decks_sync_delete;
-                DROP TRIGGER IF EXISTS decks_sync_undelete;
+        if not sync_log_exists:
+            return
 
+        deck_script = ""
+        if decks_exists:
+            deck_script = """
                 CREATE TRIGGER decks_sync_create
                 AFTER INSERT ON decks BEGIN
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -6887,12 +6901,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
+            """
 
-                DROP TRIGGER IF EXISTS flashcards_sync_create;
-                DROP TRIGGER IF EXISTS flashcards_sync_update;
-                DROP TRIGGER IF EXISTS flashcards_sync_delete;
-                DROP TRIGGER IF EXISTS flashcards_sync_undelete;
-
+        flashcard_script = ""
+        if flashcards_exists:
+            flashcard_script = """
                 CREATE TRIGGER flashcards_sync_create
                 AFTER INSERT ON flashcards BEGIN
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -6982,6 +6995,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
+            """
+
+        try:
+            conn.executescript(
+                f"""
+                DROP TRIGGER IF EXISTS decks_sync_create;
+                DROP TRIGGER IF EXISTS decks_sync_update;
+                DROP TRIGGER IF EXISTS decks_sync_delete;
+                DROP TRIGGER IF EXISTS decks_sync_undelete;
+                {deck_script}
+                DROP TRIGGER IF EXISTS flashcards_sync_create;
+                DROP TRIGGER IF EXISTS flashcards_sync_update;
+                DROP TRIGGER IF EXISTS flashcards_sync_delete;
+                DROP TRIGGER IF EXISTS flashcards_sync_undelete;
+                {flashcard_script}
                 """
             )
         except sqlite3.Error as exc:
@@ -6991,101 +7019,181 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Ensure scheduler-related deck, flashcard, and review columns exist for SQLite."""
         default_settings_json = scheduler_settings_to_json(None)
         try:
-            deck_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
-            if "scheduler_settings_json" not in deck_cols:
+            existing_tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading flashcard scheduler table inventory: {exc}") from exc  # noqa: TRY003
+
+        decks_exists = "decks" in existing_tables
+        flashcards_exists = "flashcards" in existing_tables
+        flashcard_reviews_exists = "flashcard_reviews" in existing_tables
+        sync_log_exists = "sync_log" in existing_tables
+
+        if not decks_exists and not flashcards_exists:
+            return
+
+        try:
+            if decks_exists:
+                deck_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+                if "scheduler_settings_json" not in deck_cols:
+                    conn.execute(
+                        f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
+                    )
+                if "scheduler_type" not in deck_cols:
+                    conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
                 conn.execute(
-                    f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
+                    """
+                    UPDATE decks
+                       SET scheduler_settings_json = ?
+                     WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
+                    """,
+                    (default_settings_json,),
                 )
-            if "scheduler_type" not in deck_cols:
-                conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
-            conn.execute(
-                """
-                UPDATE decks
-                   SET scheduler_settings_json = ?
-                 WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
-                """,
-                (default_settings_json,),
-            )
-            conn.execute(
-                """
-                UPDATE decks
-                   SET scheduler_type = 'sm2_plus'
-                 WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
-                """
-            )
+                conn.execute(
+                    """
+                    UPDATE decks
+                       SET scheduler_type = 'sm2_plus'
+                     WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
+                    """
+                )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring decks.scheduler_settings_json: {exc}") from exc  # noqa: TRY003
 
         try:
-            flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
-            if "queue_state" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN queue_state TEXT NOT NULL DEFAULT 'new'")
-            if "step_index" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
-            if "suspended_reason" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
-            if "scheduler_state_json" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN scheduler_state_json TEXT NOT NULL DEFAULT '{}'")
-            conn.execute(
-                """
-                UPDATE flashcards
-                   SET scheduler_state_json = '{}'
-                 WHERE scheduler_state_json IS NULL OR trim(scheduler_state_json) = ''
-                """
-            )
-
-            rows = conn.execute(
-                """
-                SELECT id, queue_state, last_reviewed_at, repetitions, lapses, interval_days, due_at, created_at
-                  FROM flashcards
-                """
-            ).fetchall()
-            scheduler_params: list[tuple[str, int]] = []
-            due_params: list[tuple[str, int]] = []
-            now_iso = self._get_current_utc_timestamp_iso()
-            for row in rows:
-                record = {
-                    "queue_state": row["queue_state"],
-                    "last_reviewed_at": row["last_reviewed_at"],
-                    "repetitions": row["repetitions"],
-                    "lapses": row["lapses"],
-                    "interval_days": row["interval_days"],
-                    "due_at": row["due_at"],
+            if flashcards_exists:
+                flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
+                legacy_flashcard_column_defs = {
+                    "uuid": "TEXT",
+                    "deck_id": "INTEGER",
+                    "extra": "TEXT",
+                    "is_cloze": "BOOLEAN NOT NULL DEFAULT 0",
+                    "tags_json": "TEXT",
+                    "source_ref_type": "TEXT NOT NULL DEFAULT 'manual'",
+                    "source_ref_id": "TEXT",
+                    "conversation_id": "TEXT",
+                    "message_id": "TEXT",
+                    "ef": "REAL NOT NULL DEFAULT 2.5",
+                    "interval_days": "INTEGER NOT NULL DEFAULT 0",
+                    "repetitions": "INTEGER NOT NULL DEFAULT 0",
+                    "lapses": "INTEGER NOT NULL DEFAULT 0",
+                    "due_at": "DATETIME",
+                    "last_reviewed_at": "DATETIME",
+                    "model_type": "TEXT NOT NULL DEFAULT 'basic'",
+                    "reverse": "BOOLEAN NOT NULL DEFAULT 0",
+                    "queue_state": "TEXT NOT NULL DEFAULT 'new'",
+                    "step_index": "INTEGER",
+                    "suspended_reason": "TEXT",
+                    "scheduler_state_json": "TEXT NOT NULL DEFAULT '{}'",
                 }
-                scheduler_params.append((self._infer_queue_state_for_row(record), int(row["id"])))
-                if not row["due_at"]:
-                    due_params.append((str(row["created_at"] or now_iso), int(row["id"])))
-            if scheduler_params:
-                conn.executemany(
+                for column_name, column_type in legacy_flashcard_column_defs.items():
+                    if column_name not in flashcard_cols:
+                        conn.execute(f"ALTER TABLE flashcards ADD COLUMN {column_name} {column_type}")
+                flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
+
+                uuid_rows = conn.execute("SELECT id, uuid FROM flashcards").fetchall()
+                seen_uuids: set[str] = set()
+                uuid_backfill_params: list[tuple[str, int]] = []
+                for row in uuid_rows:
+                    current_uuid = str(row["uuid"] or "").strip()
+                    if current_uuid and current_uuid not in seen_uuids:
+                        seen_uuids.add(current_uuid)
+                        continue
+                    replacement_uuid = self._generate_uuid()
+                    while replacement_uuid in seen_uuids:
+                        replacement_uuid = self._generate_uuid()
+                    seen_uuids.add(replacement_uuid)
+                    uuid_backfill_params.append((replacement_uuid, int(row["id"])))
+                if uuid_backfill_params:
+                    conn.executemany("UPDATE flashcards SET uuid = ? WHERE id = ?", uuid_backfill_params)
+
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_uuid ON flashcards(uuid)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_deck_id ON flashcards(deck_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_due_at ON flashcards(due_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_deleted ON flashcards(deleted)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id)")
+
+                if "queue_state" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN queue_state TEXT NOT NULL DEFAULT 'new'")
+                if "step_index" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
+                if "suspended_reason" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
+                if "scheduler_state_json" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN scheduler_state_json TEXT NOT NULL DEFAULT '{}'")
+                conn.execute(
                     """
                     UPDATE flashcards
-                       SET queue_state = ?,
-                           suspended_reason = NULL
-                     WHERE id = ?
-                    """,
-                    scheduler_params,
+                       SET scheduler_state_json = '{}'
+                     WHERE scheduler_state_json IS NULL OR trim(scheduler_state_json) = ''
+                    """
                 )
-            if due_params:
-                conn.executemany("UPDATE flashcards SET due_at = ? WHERE id = ?", due_params)
+
+                rows = conn.execute(
+                    """
+                    SELECT id, queue_state, last_reviewed_at, repetitions, lapses, interval_days, due_at, created_at
+                      FROM flashcards
+                    """
+                ).fetchall()
+                scheduler_params: list[tuple[str, int]] = []
+                due_params: list[tuple[str, int]] = []
+                now_iso = self._get_current_utc_timestamp_iso()
+                for row in rows:
+                    record = {
+                        "queue_state": row["queue_state"],
+                        "last_reviewed_at": row["last_reviewed_at"],
+                        "repetitions": row["repetitions"],
+                        "lapses": row["lapses"],
+                        "interval_days": row["interval_days"],
+                        "due_at": row["due_at"],
+                    }
+                    scheduler_params.append((self._infer_queue_state_for_row(record), int(row["id"])))
+                    if not row["due_at"]:
+                        due_params.append((str(row["created_at"] or now_iso), int(row["id"])))
+                if scheduler_params:
+                    conn.executemany(
+                        """
+                        UPDATE flashcards
+                           SET queue_state = ?,
+                               suspended_reason = NULL
+                         WHERE id = ?
+                        """,
+                        scheduler_params,
+                    )
+                if due_params:
+                    conn.executemany("UPDATE flashcards SET due_at = ? WHERE id = ?", due_params)
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring flashcard scheduler columns: {exc}") from exc  # noqa: TRY003
 
         try:
-            review_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()}
-            if "scheduler_type" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
-            if "previous_queue_state" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
-            if "next_queue_state" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_queue_state TEXT")
-            if "previous_due_at" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
-            if "next_due_at" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
+            if flashcard_reviews_exists:
+                review_cols = {
+                    str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()
+                }
+                if "scheduler_type" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
+                if "previous_queue_state" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
+                if "next_queue_state" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_queue_state TEXT")
+                if "previous_due_at" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
+                if "next_due_at" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring flashcard review scheduler columns: {exc}") from exc  # noqa: TRY003
 
-        self._ensure_flashcard_scheduler_sync_triggers_sqlite(conn)
+        self._ensure_flashcard_scheduler_sync_triggers_sqlite(
+            conn,
+            decks_exists=decks_exists,
+            flashcards_exists=flashcards_exists,
+            sync_log_exists=sync_log_exists,
+        )
 
     def _ensure_flashcard_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild flashcard FTS around sanitized search shadow columns."""
@@ -7569,6 +7677,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 current_version = 4
             else:
                 current_version = self._get_schema_version_postgres(conn)
+
+            if current_version < 36:
+                self._ensure_postgres_workspaces_table_base(conn)
 
             if current_version < 5:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V4_TO_V5, conn, expected_version=5)
@@ -10425,27 +10536,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted_personas: bool = False,
     ) -> dict[str, Any] | None:
         """Fetch a persona exemplar owned by a user."""
-        clauses = [
-            "pe.id = ?",
-            "pe.persona_id = ?",
-            "pe.user_id = ?",
-            "pp.id = pe.persona_id",
-            "pp.user_id = pe.user_id",
-        ]
-        params: list[Any] = [exemplar_id, persona_id, user_id]
-        if not include_disabled:
-            clauses.append("pe.enabled = 1")
-        if not include_deleted:
-            clauses.append("pe.deleted = 0")
-        if not include_deleted_personas:
-            clauses.append("pp.deleted = 0")
-        query = (
-            "SELECT pe.* "
-            "FROM persona_exemplars pe "
-            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
-            "WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        query = """
+            SELECT pe.*
+              FROM persona_exemplars pe
+              JOIN persona_profiles pp
+                ON pp.id = pe.persona_id
+               AND pp.user_id = pe.user_id
+             WHERE pe.id = ?
+               AND pe.persona_id = ?
+               AND pe.user_id = ?
+               AND (? OR pe.enabled = 1)
+               AND (? OR pe.deleted = 0)
+               AND (? OR pp.deleted = 0)
+             LIMIT 1
+        """
+        params = (
+            exemplar_id,
+            persona_id,
+            user_id,
+            bool(include_disabled),
+            bool(include_deleted),
+            bool(include_deleted_personas),
         )
-        cursor = self.execute_query(query, tuple(params))
+        cursor = self.execute_query(query, params)
         return self._persona_exemplar_row_to_dict(cursor.fetchone())
 
     def list_persona_exemplars(
@@ -10460,30 +10573,31 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List persona exemplars for a user, optionally filtered to a persona."""
-        clauses = [
-            "pe.user_id = ?",
-            "pp.id = pe.persona_id",
-            "pp.user_id = pe.user_id",
-        ]
-        params: list[Any] = [user_id]
-        if persona_id is not None:
-            clauses.append("pe.persona_id = ?")
-            params.append(persona_id)
-        if not include_disabled:
-            clauses.append("pe.enabled = 1")
-        if not include_deleted:
-            clauses.append("pe.deleted = 0")
-        if not include_deleted_personas:
-            clauses.append("pp.deleted = 0")
-        query = (
-            "SELECT pe.* "
-            "FROM persona_exemplars pe "
-            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
-            "WHERE " + " AND ".join(clauses) + " "
-            "ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC LIMIT ? OFFSET ?"
+        query = """
+            SELECT pe.*
+              FROM persona_exemplars pe
+              JOIN persona_profiles pp
+                ON pp.id = pe.persona_id
+               AND pp.user_id = pe.user_id
+             WHERE pe.user_id = ?
+               AND (? IS NULL OR pe.persona_id = ?)
+               AND (? OR pe.enabled = 1)
+               AND (? OR pe.deleted = 0)
+               AND (? OR pp.deleted = 0)
+             ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC
+             LIMIT ? OFFSET ?
+        """
+        params = (
+            user_id,
+            persona_id,
+            persona_id,
+            bool(include_disabled),
+            bool(include_deleted),
+            bool(include_deleted_personas),
+            max(1, int(limit)),
+            max(0, int(offset)),
         )
-        params.extend([max(1, int(limit)), max(0, int(offset))])
-        cursor = self.execute_query(query, tuple(params))
+        cursor = self.execute_query(query, params)
         return [self._persona_exemplar_row_to_dict(row) for row in cursor.fetchall() if row]
 
     def update_persona_exemplar(
@@ -10511,81 +10625,108 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "notes",
             "deleted",
         }
-        set_parts: list[str] = []
-        params: list[Any] = []
+        normalized_updates: dict[str, Any] = {}
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
 
         for key, value in update_data.items():
             if key not in allowed_fields:
                 continue
             if key == "kind":
-                params.append(
-                    self._normalize_exemplar_enum(
-                        value,
-                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
-                        field_name="kind",
-                        default="style",
-                    )
+                normalized_updates["kind"] = self._normalize_exemplar_enum(
+                    value,
+                    allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+                    field_name="kind",
+                    default="style",
                 )
-                set_parts.append("kind = ?")
             elif key == "content":
                 content = self._normalize_nullable_text(value)
                 if not content:
                     raise InputError("content cannot be empty.")  # noqa: TRY003
-                params.append(content)
-                set_parts.append("content = ?")
+                normalized_updates["content"] = content
             elif key == "tone":
-                params.append(self._normalize_persona_exemplar_tone(value))
-                set_parts.append("tone = ?")
+                normalized_updates["tone"] = self._normalize_persona_exemplar_tone(value)
             elif key == "scenario_tags":
-                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]")
-                set_parts.append("scenario_tags_json = ?")
+                normalized_updates["scenario_tags_json"] = (
+                    self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]"
+                )
             elif key == "capability_tags":
-                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]")
-                set_parts.append("capability_tags_json = ?")
+                normalized_updates["capability_tags_json"] = (
+                    self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]"
+                )
             elif key == "priority":
                 try:
-                    params.append(int(value))
+                    normalized_updates["priority"] = int(value)
                 except (TypeError, ValueError) as exc:
                     raise InputError("priority must be an integer.") from exc  # noqa: TRY003
-                set_parts.append("priority = ?")
             elif key == "enabled":
-                params.append(bool_cast(self._as_bool(value)))
-                set_parts.append("enabled = ?")
+                normalized_updates["enabled"] = bool_cast(self._as_bool(value))
             elif key == "source_type":
-                params.append(
-                    self._normalize_exemplar_enum(
-                        value,
-                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
-                        field_name="source_type",
-                        default="manual",
-                    )
+                normalized_updates["source_type"] = self._normalize_exemplar_enum(
+                    value,
+                    allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+                    field_name="source_type",
+                    default="manual",
                 )
-                set_parts.append("source_type = ?")
+            elif key == "source_ref":
+                normalized_updates["source_ref"] = self._normalize_nullable_text(value)
+            elif key == "notes":
+                normalized_updates["notes"] = self._normalize_nullable_text(value)
             elif key == "deleted":
-                params.append(bool_cast(self._normalize_deleted_input(value)))
-                set_parts.append("deleted = ?")
-            else:
-                params.append(self._normalize_nullable_text(value))
-                set_parts.append(f"{key} = ?")
+                normalized_updates["deleted"] = bool_cast(self._normalize_deleted_input(value))
 
-        if not set_parts:
+        if not normalized_updates:
             raise InputError("No valid exemplar fields provided for update.")  # noqa: TRY003
 
         now = self._get_current_utc_timestamp_iso()
-        set_parts.append("last_modified = ?")
-        params.append(now)
-        set_parts.append("version = version + 1")
+        query = """
+            UPDATE persona_exemplars
+               SET kind = CASE WHEN ? THEN ? ELSE kind END,
+                   content = CASE WHEN ? THEN ? ELSE content END,
+                   tone = CASE WHEN ? THEN ? ELSE tone END,
+                   scenario_tags_json = CASE WHEN ? THEN ? ELSE scenario_tags_json END,
+                   capability_tags_json = CASE WHEN ? THEN ? ELSE capability_tags_json END,
+                   priority = CASE WHEN ? THEN ? ELSE priority END,
+                   enabled = CASE WHEN ? THEN ? ELSE enabled END,
+                   source_type = CASE WHEN ? THEN ? ELSE source_type END,
+                   source_ref = CASE WHEN ? THEN ? ELSE source_ref END,
+                   notes = CASE WHEN ? THEN ? ELSE notes END,
+                   deleted = CASE WHEN ? THEN ? ELSE deleted END,
+                   last_modified = ?,
+                   version = version + 1
+             WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0
+        """
+        params = (
+            "kind" in normalized_updates,
+            normalized_updates.get("kind"),
+            "content" in normalized_updates,
+            normalized_updates.get("content"),
+            "tone" in normalized_updates,
+            normalized_updates.get("tone"),
+            "scenario_tags_json" in normalized_updates,
+            normalized_updates.get("scenario_tags_json"),
+            "capability_tags_json" in normalized_updates,
+            normalized_updates.get("capability_tags_json"),
+            "priority" in normalized_updates,
+            normalized_updates.get("priority"),
+            "enabled" in normalized_updates,
+            normalized_updates.get("enabled"),
+            "source_type" in normalized_updates,
+            normalized_updates.get("source_type"),
+            "source_ref" in normalized_updates,
+            normalized_updates.get("source_ref"),
+            "notes" in normalized_updates,
+            normalized_updates.get("notes"),
+            "deleted" in normalized_updates,
+            normalized_updates.get("deleted"),
+            now,
+            exemplar_id,
+            persona_id,
+            user_id,
+        )
 
         with self.transaction() as conn:
             self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
-            query = (
-                "UPDATE persona_exemplars "
-                f"SET {', '.join(set_parts)} "
-                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
-            )
-            params.extend([exemplar_id, persona_id, user_id])
-            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
             cursor = conn.execute(prepared_query, prepared_params or ())
             return cursor.rowcount > 0
 
@@ -12072,6 +12213,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         self._set_schema_version_postgres(conn, 4)
         self._sync_postgres_sequences(conn)
+
+    def _ensure_postgres_workspaces_table_base(self, conn) -> None:
+        """Create the workspaces table early for legacy Postgres migrations that reference it."""
+        self.backend.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                description   TEXT,
+                metadata_json TEXT    NOT NULL DEFAULT '{}',
+                study_materials_policy TEXT NOT NULL DEFAULT 'general',
+                archived      BOOLEAN NOT NULL DEFAULT false,
+                created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted       BOOLEAN NOT NULL DEFAULT false,
+                client_id     TEXT    NOT NULL DEFAULT 'unknown',
+                version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            connection=conn,
+        )
 
     def _apply_postgres_migration_script(self, script: str, conn, *, expected_version: int) -> None:
         statements = self._convert_sqlite_schema_to_postgres_statements(script)
@@ -14516,6 +14678,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if normalized_kind is None:
             normalized_kind = "character" if character_id is not None else None
         if normalized_kind is None:
+            if (
+                character_id is None
+                and normalized_assistant_id is None
+                and normalized_memory_mode is None
+            ):
+                raise InputError("Required field 'character_id' is missing")  # noqa: TRY003
             raise InputError(
                 "Conversation requires either 'character_id' or assistant identity fields."
             )  # noqa: TRY003

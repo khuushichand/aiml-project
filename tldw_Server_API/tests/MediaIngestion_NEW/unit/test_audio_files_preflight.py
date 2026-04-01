@@ -66,6 +66,27 @@ def test_check_transcription_model_status_marks_uncached_whisper_usable(monkeypa
 
 
 @pytest.mark.unit
+def test_check_transcription_model_status_hides_validation_exception_details(monkeypatch):
+    """Validation failures should not echo filesystem paths or traceback text."""
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    monkeypatch.setattr(atlib, "parse_transcription_model", lambda _: ("whisper", "bad-model", None), raising=True)
+
+    def _raise_validation(_value: str) -> str:
+        raise ValueError("Traceback: /Users/private/models/model.bin")
+
+    monkeypatch.setattr(atlib, "validate_whisper_model_identifier", _raise_validation, raising=True)
+
+    status = audio_files.check_transcription_model_status("whisper-bad-model")
+
+    assert status["provider"] == "whisper"
+    assert status["available"] is False
+    assert status["usable"] is False
+    assert status["message"] == "Invalid transcription model identifier."
+    assert "/Users/private" not in str(status)
+
+
+@pytest.mark.unit
 def test_default_title_from_audio_path_strips_hex_suffix():
     title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd34.wav")  # nosec B108
     assert title == "My_Clip"

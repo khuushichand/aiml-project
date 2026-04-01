@@ -1,5 +1,6 @@
 import base64
 import io
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import numpy as np
@@ -73,6 +74,15 @@ class _StubTTSService:
         **_kwargs,
     ):
         # Return a single tiny chunk of bytes
+        yield b"stub-audio"
+
+
+class _RecordingTTSService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def generate_speech(self, request, **kwargs):
+        self.calls.append({"request": request, "kwargs": kwargs})
         yield b"stub-audio"
 
 
@@ -350,6 +360,82 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
     assert resp.action_result.get("action") == "play_music"
     assert resp.action_result.get("status") == "ok"
     assert resp.action_result.get("result", {}).get("played") == "action transcript"
+
+
+@pytest.mark.asyncio
+async def test_run_speech_chat_turn_uses_configured_tts_defaults_when_tts_config_omitted(monkeypatch):
+    from tldw_Server_API.app.core.Streaming import speech_chat_service
+    from tldw_Server_API.app.core.TTS import tts_request_resolution
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        tts_request_resolution,
+        "get_tts_config",
+        lambda: SimpleNamespace(default_provider="openai", default_voice="shimmer"),
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "transcribe_audio", lambda *a, **k: "hello from audio"
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
+    )
+
+    async def _fake_get_or_create_character_context(*_args, **_kwargs):
+        return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
+
+    async def _fake_get_or_create_conversation(*_args, **_kwargs):
+        conv_id = _kwargs.get("conversation_id")
+        return conv_id or "conv-1", conv_id is None
+
+    async def _fake_load_history(*_args, **_kwargs):
+        return []
+
+    async def _fake_chat_api_call_async(**_kwargs):
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "stub assistant reply"}}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_character_context",
+        _fake_get_or_create_character_context,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_conversation",
+        _fake_get_or_create_conversation,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "load_conversation_history",
+        _fake_load_history,
+    )
+    monkeypatch.setattr(speech_chat_service, "chat_api_call_async", _fake_chat_api_call_async)
+
+    req = SpeechChatRequest(
+        session_id=None,
+        input_audio=_encode_silence_base64(),
+        input_audio_format="wav",
+        llm_config=SpeechChatLLMConfig(model="gpt-4o-mini", api_provider="openai"),
+    )
+    user = _StubUser()
+    db = _StubChatDB()
+    tts = _RecordingTTSService()
+
+    await run_speech_chat_turn(
+        request_data=req,
+        current_user=user,
+        chat_db=db,
+        tts_service=tts,
+    )
+
+    assert len(tts.calls) == 1
+    request = tts.calls[0]["request"]
+    assert request.model == "tts-1"
+    assert request.voice == "shimmer"
 
 
 @pytest.mark.asyncio

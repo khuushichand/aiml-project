@@ -185,7 +185,7 @@ class SyntheticEvalPromotionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    sample_ids: list[str] = Field(default_factory=list, min_length=1)
+    sample_ids: list[str] = Field(..., min_length=1)
     dataset_name: str
     dataset_description: str | None = None
     dataset_metadata: dict[str, Any] = Field(default_factory=dict)

@@ -104,15 +104,31 @@ class TestTTSGenerateEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test without provider",
+                    "model": "tts-1",
                     "voice": "nova",
                     "response_format": "mp3",
                     "stream": False
-                    # No provider specified, should use default
+                    # No provider override specified; model routing should resolve it.
                 },
                 headers=auth_headers
             )
 
             assert response.status_code == status.HTTP_200_OK
+
+    async def test_generate_requires_explicit_model(self, test_client, auth_headers):
+        """Public speech endpoint should reject omitted model instead of silently defaulting."""
+        response = test_client.post(
+            "/api/v1/audio/speech",
+            json={
+                "input": "Test without model",
+                "voice": "nova",
+                "response_format": "mp3",
+                "stream": False,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     async def test_generate_with_voice_settings(self, test_client, auth_headers):
         """Test generation with voice settings."""
@@ -126,6 +142,7 @@ class TestTTSGenerateEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Custom voice test",
+                    "model": "tts-1",
                     "voice": "rachel",
                     "response_format": "mp3",
                     "stream": False,
@@ -280,6 +297,7 @@ class TestTTSGenerateEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": long_text,
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "mp3",
                     "stream": False
@@ -312,6 +330,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Stream this text",
+                    "model": "tts-1",
                     "voice": "echo",
                     "response_format": "mp3",
                     "stream": True
@@ -344,6 +363,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Stream PCM",
+                    "model": "tts-1",
                     "voice": "echo",
                     "response_format": "pcm",
                     "stream": True,
@@ -610,6 +630,7 @@ class TestTTSStreamingEndpoint:
                     "/api/v1/audio/speech",
                     json={
                         "input": "Error test history",
+                        "model": "tts-1",
                         "voice": "alloy",
                         "response_format": "mp3",
                         "stream": True
@@ -675,6 +696,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "request id correlation test",
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "mp3",
                     "stream": False,
@@ -700,6 +722,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "rachel",
                     "response_format": "mp3",
                     "stream": True
@@ -948,6 +971,7 @@ class TestFileDownloadEndpoints:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Download this audio",
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "wav",
                     "stream": False
@@ -978,6 +1002,7 @@ class TestErrorHandling:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "mp3",
                     "stream": False
@@ -999,6 +1024,7 @@ class TestErrorHandling:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "rachel",
                     "response_format": "mp3",
                     "stream": False
@@ -1021,6 +1047,7 @@ class TestErrorHandling:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "voice1",
                     "response_format": "mp3",
                     "stream": False
@@ -1078,9 +1105,9 @@ class TestBatchProcessing:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
 
             payloads = [
-                {"input": "First text", "voice": "alloy", "response_format": "mp3", "stream": False},
-                {"input": "Second text", "voice": "echo", "response_format": "mp3", "stream": False},
-                {"input": "Third text", "voice": "nova", "response_format": "mp3", "stream": False},
+                {"input": "First text", "model": "tts-1", "voice": "alloy", "response_format": "mp3", "stream": False},
+                {"input": "Second text", "model": "tts-1", "voice": "echo", "response_format": "mp3", "stream": False},
+                {"input": "Third text", "model": "tts-1", "voice": "nova", "response_format": "mp3", "stream": False},
             ]
             responses = [
                 test_client.post("/api/v1/audio/speech", json=p, headers=auth_headers)
@@ -1106,9 +1133,9 @@ class TestBatchProcessing:
             mock_generate_speech.side_effect = side_effect
 
             payloads = [
-                {"input": "Success 1", "voice": "alloy", "response_format": "mp3", "stream": False},
-                {"input": "Failure", "voice": "echo", "response_format": "mp3", "stream": False},
-                {"input": "Success 2", "voice": "nova", "response_format": "mp3", "stream": False},
+                {"input": "Success 1", "model": "tts-1", "voice": "alloy", "response_format": "mp3", "stream": False},
+                {"input": "Failure", "model": "tts-1", "voice": "echo", "response_format": "mp3", "stream": False},
+                {"input": "Success 2", "model": "tts-1", "voice": "nova", "response_format": "mp3", "stream": False},
             ]
             responses = [
                 test_client.post("/api/v1/audio/speech", json=p, headers=auth_headers)

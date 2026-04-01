@@ -45,10 +45,12 @@ class OpenAISpeechRequest(BaseModel):
     """Request schema for OpenAI-compatible speech endpoint"""
 
     model: str = Field(
-        default="kokoro",
+        ...,
+        min_length=1,
         description=(
-            "The model to use for generation. Supported choices include tts-1, tts-1-hd, "
-            "kokoro, kitten_tts, KittenML/kitten-tts-nano-0.8, higgs, chatterbox, and vibevoice."
+            "The model to use for generation. This must be sent explicitly by the caller or its "
+            "user-configured defaults. Supported choices include tts-1, tts-1-hd, kokoro, "
+            "kitten_tts, KittenML/kitten-tts-nano-0.8, higgs, chatterbox, and vibevoice."
         ),
     )
     input: str = Field(..., description="The text to generate audio for")

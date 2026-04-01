@@ -1,5 +1,6 @@
 import { bgRequest, bgStream, bgUpload } from '@/services/background-proxy'
 import { buildQuery } from '../client-utils'
+import { createJsonResponseLike } from '../json-response-like'
 import { appendPathQuery } from '../path-utils'
 import { captureChatRequestDebugSnapshot } from '../chat-request-debug'
 import type { TldwApiClientCore } from '../TldwApiClient'
@@ -98,6 +99,11 @@ const normalizeChatCompletionResponseBody = (
 }
 
 const sanitizeChatCompletionPayload = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return isSuspiciousChatCompletionString(value)
+      ? CHAT_COMPLETION_ERROR_MESSAGE
+      : value
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeChatCompletionPayload(item))
   }
@@ -251,15 +257,7 @@ export const chatRagMethods = {
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
     const safeData = normalizeChatCompletionResponseBody(data)
-    return new Response(
-      JSON.stringify(safeData),
-      {
-        status: 200,
-        headers: {
-          'content-type': 'application/json'
-        }
-      }
-    )
+    return createJsonResponseLike(safeData, { status: 200 })
   },
 
   async *streamChatCompletion(this: TldwApiClientCore, request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {

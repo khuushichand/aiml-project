@@ -184,10 +184,11 @@ export const PlaygroundChat = ({
   } = useMessageOption()
   const [openReasoning] = useStorage("openReasoning", false)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
-  const { data: chatModels = [] } = useQuery({
+  const { data: chatModels = [], refetch: refetchChatModels } = useQuery({
     queryKey: ["playground:chatModels"],
-    queryFn: () => fetchChatModels({ returnEmpty: true }),
-    enabled: true
+    queryFn: () => fetchChatModels({ returnEmpty: true, forceRefresh: true }),
+    enabled: true,
+    staleTime: 30_000,
   })
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
@@ -992,6 +993,21 @@ export const PlaygroundChat = ({
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-4 w-full">
+            {chatModels.length === 0 && (
+              <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
+                <p className="font-medium">No AI models available</p>
+                <p className="mt-1 text-xs text-text-muted">
+                  Add an LLM provider API key to your server&apos;s .env file and restart, then{" "}
+                  <button
+                    type="button"
+                    className="underline hover:text-text"
+                    onClick={() => void refetchChatModels()}
+                  >
+                    refresh models
+                  </button>.
+                </p>
+              </div>
+            )}
             <PlaygroundEmpty />
           </div>
         )}

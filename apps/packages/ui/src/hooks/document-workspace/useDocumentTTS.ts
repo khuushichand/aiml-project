@@ -1,6 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { fetchTldwVoices, type TldwVoice } from "@/services/tldw/audio-voices"
+import {
+  DEFAULT_TLDW_TTS_VOICE,
+  getTldwTTSModel,
+  getTldwTTSVoice
+} from "@/services/tts"
 
 /**
  * TTS Voice information
@@ -61,8 +66,7 @@ export interface UseDocumentTTSReturn {
   setVolume: (volume: number) => void
 }
 
-// Default voice (Kokoro)
-const DEFAULT_VOICE = "af_sky"
+const DEFAULT_VOICE = DEFAULT_TLDW_TTS_VOICE
 const DEFAULT_SPEED = 1.0
 
 /**
@@ -122,21 +126,21 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
         if (tldwVoices.length > 0) {
           return tldwVoices.map(toTTSVoice)
         }
-        // Return default voices if fetch returns empty
+        // Return provider-compatible fallback voices if the catalog is empty.
         return [
-          { id: "af_sky", name: "Sky", provider: "kokoro" },
-          { id: "af_bella", name: "Bella", provider: "kokoro" },
-          { id: "am_adam", name: "Adam", provider: "kokoro" },
-          { id: "am_michael", name: "Michael", provider: "kokoro" }
+          { id: "Bella", name: "Bella", provider: "kitten_tts" },
+          { id: "Jasper", name: "Jasper", provider: "kitten_tts" },
+          { id: "Luna", name: "Luna", provider: "kitten_tts" },
+          { id: "Leo", name: "Leo", provider: "kitten_tts" }
         ]
       } catch (e) {
         console.error("Failed to fetch TTS voices:", e)
-        // Return default voices if fetch fails
+        // Return provider-compatible fallback voices if the catalog request fails.
         return [
-          { id: "af_sky", name: "Sky", provider: "kokoro" },
-          { id: "af_bella", name: "Bella", provider: "kokoro" },
-          { id: "am_adam", name: "Adam", provider: "kokoro" },
-          { id: "am_michael", name: "Michael", provider: "kokoro" }
+          { id: "Bella", name: "Bella", provider: "kitten_tts" },
+          { id: "Jasper", name: "Jasper", provider: "kitten_tts" },
+          { id: "Luna", name: "Luna", provider: "kitten_tts" },
+          { id: "Leo", name: "Leo", provider: "kitten_tts" }
         ]
       }
     },
@@ -157,6 +161,32 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
         URL.revokeObjectURL(audioUrlRef.current)
         audioUrlRef.current = null
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadConfiguredVoice = async () => {
+      if (typeof window === "undefined") return
+
+      try {
+        const hasLocalVoice = Boolean(localStorage.getItem("tts-voice"))
+        if (hasLocalVoice) return
+
+        const configuredVoice = await getTldwTTSVoice()
+        if (!cancelled && configuredVoice) {
+          setVoice(configuredVoice)
+        }
+      } catch {
+        // Ignore storage/config lookup errors and keep the local fallback.
+      }
+    }
+
+    void loadConfiguredVoice()
+
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -184,6 +214,10 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
     }))
 
     try {
+      const model = await getTldwTTSModel()
+      const fallbackVoice = await getTldwTTSVoice()
+      const resolvedVoice = voice || fallbackVoice || DEFAULT_VOICE
+
       // Call TTS API
       const response = await fetch("/api/v1/audio/speech", {
         method: "POST",
@@ -192,8 +226,8 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
         },
         body: JSON.stringify({
           input: text,
-          voice: voice,
-          model: "kokoro", // Default to Kokoro, could be made configurable
+          voice: resolvedVoice,
+          model,
           speed: speed,
           response_format: "mp3"
         })

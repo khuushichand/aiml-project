@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageChops
@@ -8,6 +10,7 @@ from tldw_Server_API.app.core.Slides.presentation_rendering import (
     PresentationRenderError,
     _TRANSITION_DURATION_SECONDS,
     _build_transition_video_command,
+    load_presentation_render_snapshot,
     _probe_media_duration_seconds,
     _resolve_effective_slide_duration_seconds,
     _resolve_ffmpeg_timeout_seconds,
@@ -40,6 +43,52 @@ def test_render_slide_frame_draws_slide_text_content(tmp_path):
     background = Image.new("RGB", rendered.size, "#0f172a")
 
     assert ImageChops.difference(rendered, background).getbbox() is not None
+
+
+def test_load_presentation_render_snapshot_accepts_richer_style_snapshot_metadata():
+    db = SimpleNamespace(
+        get_presentation_version=lambda **kwargs: SimpleNamespace(
+            payload_json=json.dumps(
+                {
+                    "title": "Deck",
+                    "theme": "night",
+                    "slides": [{"order": 0, "layout": "content", "title": "Slide", "content": "Hello"}],
+                    "visual_style_snapshot": {
+                        "id": "notebooklm-blueprint",
+                        "scope": "builtin",
+                        "resolution": {
+                            "style_pack": "technical_grid",
+                            "style_pack_version": 1,
+                            "token_overrides": {"surface": "#0f172a"},
+                            "resolved_settings": {"controls": True},
+                        },
+                    },
+                    "studio_data": {
+                        "resolution": {
+                            "style_pack": "technical_grid",
+                            "resolved_theme": "night",
+                        }
+                    },
+                }
+            )
+        )
+    )
+
+    snapshot = load_presentation_render_snapshot(
+        db,
+        presentation_id="pres_123",
+        presentation_version=4,
+    )
+
+    assert snapshot.title == "Deck"
+    assert snapshot.theme == "night"
+    assert snapshot.slides[0]["content"] == "Hello"
+    assert snapshot.studio_data == {
+        "resolution": {
+            "style_pack": "technical_grid",
+            "resolved_theme": "night",
+        }
+    }
 
 
 def test_resolve_slide_audio_duration_prefers_metadata_and_probes_asset_when_needed(monkeypatch, tmp_path):

@@ -19,6 +19,35 @@ except AttributeError:  # Starlette < 0.27
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
+def _resolve_transcription_model_or_default(
+    transcription_model: str | None,
+    *,
+    fallback_whisper_model: str,
+    context: str,
+) -> str:
+    """
+    Return a validated transcription model or the configured default.
+
+    Keep `/media/add` aligned with the dedicated media processing endpoints:
+    older faster-whisper aliases like `small` should not fail form parsing.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+        resolve_default_transcription_model,
+    )
+
+    model = (transcription_model or "").strip()
+    default_model = resolve_default_transcription_model(fallback_whisper_model)
+    if model and model not in TRANSCRIPTION_MODEL_ENUM:
+        logger.warning(
+            "Invalid transcription_model '{}' for {}; defaulting to {}",
+            model,
+            context,
+            default_model,
+        )
+        return default_model
+    return model or default_model
+
+
 async def get_add_media_form(
     # Replicate ALL Form(...) fields from the endpoint signature
     # Accept string here so AddMediaForm can control error messaging for invalid values
@@ -258,26 +287,11 @@ async def get_add_media_form(
     Dependency function to parse form data for the /media/add endpoint and
     validate it against the AddMediaForm model.
     """
-    # Lazy import to avoid pulling optional STT backends during module import.
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
-        resolve_default_transcription_model,
+    transcription_model_value = _resolve_transcription_model_or_default(
+        transcription_model,
+        fallback_whisper_model="whisper-large-v3",
+        context="media/add",
     )
-
-    transcription_model_value = (transcription_model or "").strip()
-    if not transcription_model_value:
-        transcription_model_value = resolve_default_transcription_model("whisper-large-v3")
-    elif transcription_model_value not in TRANSCRIPTION_MODEL_ENUM:
-        raise HTTPException(
-            status_code=HTTP_422_UNPROCESSABLE,
-            detail=[
-                {
-                    "loc": ["body", "transcription_model"],
-                    "msg": f"Invalid transcription model: {transcription_model_value}",
-                    "type": "value_error.enum",
-                    "ctx": {"enum_values": TRANSCRIPTION_MODEL_ENUM},
-                }
-            ],
-        )
 
     try:
         # Coerce JSON string inputs for urls into a list for robustness

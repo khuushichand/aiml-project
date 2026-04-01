@@ -1293,6 +1293,12 @@ class UnifiedRAGRequest(BaseModel):
         example=False
     )
 
+    include_rerank_debug_documents: Optional[bool] = Field(
+        default=None,
+        description="Override whether rerank debug metadata may include truncated document previews when debug_mode is enabled",
+        example=False,
+    )
+
     # ========== EXPLAIN / DRY-RUN ==========
     explain_only: bool = Field(
         default=False,

@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 import importlib.util
 import os
 import platform
+import re
 import sys
 from ctypes.util import find_library as _ctypes_find_library
 from typing import Any, Optional
@@ -32,6 +33,11 @@ router = APIRouter(
 )
 
 _AUTH_HEALTH_PROVIDERS = frozenset({"openai", "elevenlabs"})
+_SUSPICIOUS_PUBLIC_HEALTH_RE = re.compile(
+    r"traceback|stack(?:\s*trace)?|exception|\/Users\/|[A-Za-z]:\\|\.py:\d+",
+    re.IGNORECASE,
+)
+_SANITIZED_PUBLIC_HEALTH_MESSAGE = "Internal health diagnostics were suppressed."
 _PROVIDER_API_KEY_PLACEHOLDERS: dict[str, set[str]] = {
     "openai": {
         "",
@@ -66,6 +72,25 @@ def _build_internal_health_request(path: str) -> Request:
         "scheme": "http",
     }
     return Request(scope)
+
+
+def _sanitize_public_health_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return (
+            _SANITIZED_PUBLIC_HEALTH_MESSAGE
+            if _SUSPICIOUS_PUBLIC_HEALTH_RE.search(value)
+            else value
+        )
+    if isinstance(value, list):
+        return [_sanitize_public_health_payload(item) for item in value]
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"details", "exception", "traceback", "stack", "stack_trace"}:
+                continue
+            sanitized[key] = _sanitize_public_health_payload(item)
+        return sanitized
+    return value
 
 
 def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
@@ -654,7 +679,7 @@ async def get_stt_health(
     if warm_info:
         health["warm"] = warm_info
 
-    return health
+    return _sanitize_public_health_payload(health)
 
 
 async def collect_setup_stt_health(
@@ -669,6 +694,7 @@ async def collect_setup_stt_health(
         return await get_stt_health(request, model=model, warm=warm)
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        detail = _sanitize_public_health_payload(detail)
         message = detail.get("message")
         if not isinstance(message, str) or not message.strip():
             raw_error = detail.get("error")
@@ -683,6 +709,10 @@ async def collect_setup_stt_health(
             "usable": False,
             "on_demand": False,
             "message": message,
-            "error": detail,
+            "error": (
+                detail.get("error")
+                if isinstance(detail, dict) and isinstance(detail.get("error"), str)
+                else None
+            ),
             "status_code": exc.status_code,
         }

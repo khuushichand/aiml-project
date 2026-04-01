@@ -27,12 +27,14 @@ from tldw_Server_API.app.core.DB_Management.media_db.api import (
     fetch_keywords_for_media,
     get_full_media_details_rich,
     get_media_by_id,
-    permanently_delete_item,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
+)
+from .....core.DB_Management.media_db.legacy_maintenance import (
+    permanently_delete_item,
 )
 
 router = APIRouter(tags=["Media Management"])

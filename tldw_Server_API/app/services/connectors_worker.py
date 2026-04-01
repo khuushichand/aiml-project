@@ -673,7 +673,9 @@ async def _process_import_job(
     from tldw_Server_API.app.core.External_Sources import get_connector_by_name
     from tldw_Server_API.app.core.External_Sources.connectors_service import (
         FILE_SYNC_PROVIDERS,
+        REFERENCE_MANAGER_PROVIDERS,
         get_external_item_binding,
+        get_account_for_user,
         get_account_tokens,
         record_item_event,
         get_source_by_id,
@@ -694,8 +696,17 @@ async def _process_import_job(
         account_id = int(src.get("account_id"))
         options = src.get("options") or {}
         remote_id = str(src.get("remote_id"))
+        account_row = {}
+        if provider in REFERENCE_MANAGER_PROVIDERS:
+            account_row = await get_account_for_user(db, user_id, account_id) or {}
         tokens = await get_account_tokens(db, user_id, account_id)
-        acct = {"tokens": tokens, "email": src.get("email")}
+        acct = dict(account_row)
+        acct["tokens"] = dict(tokens or {})
+        acct.setdefault("email", src.get("email"))
+        for key, value in dict(tokens or {}).items():
+            if key in {"access_token", "refresh_token"} or value in (None, ""):
+                continue
+            acct.setdefault(str(key), value)
         # Load org policy for this user (best-effort)
         try:
             from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
@@ -758,6 +769,26 @@ async def _process_import_job(
                 return await call_coro(*args, **kwargs)
             except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 raise
+
+    async def _renew_reference_manager_lease_until_stopped(stop_event: asyncio.Event) -> None:
+        if not lease_id:
+            return
+
+        while not stop_event.is_set():
+            try:
+                jm.renew_job_lease(
+                    jid,
+                    seconds=120,
+                    worker_id=worker_id,
+                    lease_id=lease_id,
+                )
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+                pass
+
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=30)
+            except TimeoutError:
+                continue
 
     # Prepare DB instance
     mdb = _create_connector_media_db(user_id)
@@ -1390,6 +1421,83 @@ async def _process_import_job(
             _close_connector_media_db(mdb)
             return
         if not await _process_file_sync_changes():
+            if provider in REFERENCE_MANAGER_PROVIDERS:
+                from tldw_Server_API.app.core.External_Sources.reference_manager_import import (
+                    sync_reference_manager_source,
+                )
+
+                async with pool.transaction() as db:
+                    reference_sync_state = await get_source_sync_state(
+                        db,
+                        source_id=source_id,
+                    ) or {}
+                    await upsert_source_sync_state(
+                        db,
+                        source_id=source_id,
+                        last_sync_started_at=_utc_now_db_text(),
+                        last_error=None,
+                    )
+                heartbeat_stop = asyncio.Event()
+                heartbeat_task = asyncio.create_task(
+                    _renew_reference_manager_lease_until_stopped(heartbeat_stop)
+                )
+                try:
+                    reference_result = await sync_reference_manager_source(
+                        connectors_pool=pool,
+                        connector=conn,
+                        account=acct,
+                        source=src,
+                        sync_state=reference_sync_state,
+                        media_db=mdb,
+                        job_id=str(jid),
+                        convert_bytes_to_text=_convert_document_bytes_to_text,
+                    )
+                except _CONNECTOR_NONCRITICAL_EXCEPTIONS as exc:
+                    async with pool.transaction() as db:
+                        await upsert_source_sync_state(
+                            db,
+                            source_id=source_id,
+                            last_sync_failed_at=_utc_now_db_text(),
+                            last_error=str(exc),
+                        )
+                    raise
+                finally:
+                    heartbeat_stop.set()
+                    await heartbeat_task
+
+                processed = int(reference_result.get("processed") or 0)
+                total = int(reference_result.get("total") or 0)
+                failed = int(reference_result.get("failed") or 0)
+                if "cursor" in reference_result:
+                    cursor_value = reference_result.get("cursor")
+                else:
+                    cursor_value = reference_sync_state.get("cursor")
+                final_cursor = str(cursor_value).strip() or None if cursor_value is not None else None
+                result_payload = {
+                    "processed": processed,
+                    "total": total,
+                    "failed": failed,
+                    "imported": int(reference_result.get("imported") or 0),
+                    "duplicates": int(reference_result.get("duplicates") or 0),
+                    "metadata_only": int(reference_result.get("metadata_only") or 0),
+                }
+                async with pool.transaction() as db:
+                    await upsert_source_sync_state(
+                        db,
+                        source_id=source_id,
+                        cursor=final_cursor,
+                        last_sync_succeeded_at=_utc_now_db_text(),
+                        last_error=None,
+                    )
+                jm.complete_job(
+                    jid,
+                    result=result_payload,
+                    worker_id=worker_id,
+                    lease_id=lease_id,
+                    completion_token=lease_id,
+                )
+                _close_connector_media_db(mdb)
+                return
             bootstrap_file_sync_scan = provider in FILE_SYNC_PROVIDERS
             if bootstrap_file_sync_scan:
                 async with pool.transaction() as db:

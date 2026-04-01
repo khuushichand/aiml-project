@@ -95,4 +95,4 @@ def test_chat_research_runs_endpoint_enforces_chat_ownership(isolated_test_envir
     assert owner_response.json()["runs"][0]["run_id"] == session.id
 
     other_response = client.get(f"/api/v1/chats/{chat_id}/research-runs", headers=other_headers)
-    assert other_response.status_code == 403, other_response.text
+    assert other_response.status_code == 404, other_response.text

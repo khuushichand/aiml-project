@@ -79,6 +79,11 @@ _LIVE_RETRIEVAL_FROZEN_FLAGS = {
 }
 
 
+def _run_config_for_execution(record: Any) -> dict[str, Any]:
+    metadata = getattr(record, "metadata", {}) or {}
+    return dict(metadata.get("run_config_internal") or metadata.get("run_config") or {})
+
+
 def execute_rag_answer_quality_recipe_run(
     *,
     record: Any,
@@ -87,7 +92,7 @@ def execute_rag_answer_quality_recipe_run(
     service: Any,
 ) -> dict[str, Any]:
     """Dispatch rag_answer_quality execution to fixed or live mode."""
-    run_config = dict(record.metadata.get("run_config") or {})
+    run_config = _run_config_for_execution(record)
     evaluation_mode = str(run_config.get("evaluation_mode") or "fixed_context").strip().lower()
     if evaluation_mode == "live_end_to_end":
         return _execute_live_end_to_end_rag_answer_quality_recipe_run(
@@ -114,7 +119,7 @@ def execute_fixed_context_rag_answer_quality_recipe_run(
     """Execute a fixed-context answer-quality run and return persisted artifacts."""
     del service
 
-    run_config = dict(record.metadata.get("run_config") or {})
+    run_config = _run_config_for_execution(record)
     evaluation_mode = str(run_config.get("evaluation_mode") or "fixed_context").strip().lower()
     if evaluation_mode != "fixed_context":
         raise NotImplementedError("rag_answer_quality fixed-context execution only handles fixed_context runs.")
@@ -136,7 +141,7 @@ def _execute_live_end_to_end_rag_answer_quality_recipe_run(
     service: Any,
 ) -> dict[str, Any]:
     """Execute a live end-to-end answer-quality run with frozen retrieval behavior."""
-    run_config = dict(record.metadata.get("run_config") or {})
+    run_config = _run_config_for_execution(record)
     evaluation_mode = str(run_config.get("evaluation_mode") or "live_end_to_end").strip().lower()
     if evaluation_mode != "live_end_to_end":
         raise NotImplementedError("rag_answer_quality live execution only handles live_end_to_end runs.")

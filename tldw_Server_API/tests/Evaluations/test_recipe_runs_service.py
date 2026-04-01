@@ -1113,6 +1113,56 @@ def test_recipe_service_get_report_ignores_invalid_confidence_summary_payload(
     assert report.confidence_summary is None
 
 
+def test_find_latest_completed_run_by_reuse_hash_does_not_refetch_full_record(tmp_path, monkeypatch) -> None:
+    db, service, _ = _service(tmp_path)
+    created = service.create_run(
+        "summarization_quality",
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
+    )
+    _mark_recipe_run_completed(db, created.run_id)
+
+    reuse_hash = created.metadata["reuse_hash"]
+
+    def _unexpected_get_recipe_run(_run_id: str):
+        raise AssertionError("reuse-hash lookup should not refetch the full recipe run record")
+
+    monkeypatch.setattr(db, "get_recipe_run", _unexpected_get_recipe_run)
+
+    record = service._find_latest_completed_run_by_reuse_hash(reuse_hash)
+
+    assert record is not None
+    assert record.run_id == created.run_id
+    assert record.status is RunStatus.COMPLETED
+
+
+def test_recipe_service_redacts_sensitive_run_config_in_public_metadata(tmp_path) -> None:
+    db, service, _ = _service(tmp_path)
+    record = service.create_run(
+        "rag_answer_quality",
+        dataset=_rag_answer_quality_dataset(),
+        run_config={
+            **_rag_answer_quality_run_config(prompt_variant="default"),
+            "candidate_api_keys": {
+                "openai": "sk-live-secret",
+                "ollama": "ollama-local-secret",
+            },
+            "judge_config": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "api_key": "sk-judge-secret",
+            },
+        },
+    )
+
+    assert record.metadata["run_config"]["judge_config"]["api_key"] == "[REDACTED]"
+    assert "run_config_internal" not in record.metadata
+
+    raw_record = db.get_recipe_run(record.run_id)
+    assert raw_record is not None
+    assert raw_record.metadata["run_config_internal"]["judge_config"]["api_key"] == "sk-judge-secret"
+
+
 def test_recipe_service_get_run_rejects_other_users_run(tmp_path) -> None:
     db, _, _ = _service(tmp_path)
     other_user_service = RecipeRunsService(db=db, user_id="other-user")

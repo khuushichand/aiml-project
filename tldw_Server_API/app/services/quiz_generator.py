@@ -532,6 +532,14 @@ async def _call_quiz_generation_llm(
     return raw_response
 
 
+_ORIGINAL_CALL_QUIZ_GENERATION_LLM = _call_quiz_generation_llm
+
+
+def _should_use_deterministic_test_mode() -> bool:
+    """Keep deterministic test-mode behavior unless a test explicitly patches the LLM call."""
+    return is_test_mode() and _call_quiz_generation_llm is _ORIGINAL_CALL_QUIZ_GENERATION_LLM
+
+
 def _resolve_primary_media_id(normalized_sources: Sequence[dict[str, str]]) -> int | None:
     for source in normalized_sources:
         if source["source_type"] != "media":
@@ -631,6 +639,7 @@ async def generate_quiz_from_sources(
     difficulty: str = "mixed",
     focus_topics: list[str] | None = None,
     model: str | None = None,
+    api_provider: str | None = None,
     workspace_id: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
@@ -656,7 +665,7 @@ async def generate_quiz_from_sources(
         primary_media_id=primary_media_id,
     )
 
-    if is_test_mode():
+    if _should_use_deterministic_test_mode():
         questions = _build_test_mode_questions(
             evidence=evidence,
             normalized_sources=normalized_sources,
@@ -672,6 +681,7 @@ async def generate_quiz_from_sources(
             quiz_title=quiz_title,
             quiz_description=quiz_description,
             primary_media_id=primary_media_id,
+            workspace_id=workspace_id,
             workspace_tag=workspace_tag,
         )
 
@@ -731,6 +741,7 @@ async def generate_quiz_from_media(
     difficulty: str = "mixed",
     focus_topics: list[str] | None = None,
     model: str | None = None,
+    api_provider: str | None = None,
     workspace_id: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
@@ -744,6 +755,7 @@ async def generate_quiz_from_media(
         difficulty=difficulty,
         focus_topics=focus_topics,
         model=model,
+        api_provider=api_provider,
         workspace_id=workspace_id,
         workspace_tag=workspace_tag,
     )

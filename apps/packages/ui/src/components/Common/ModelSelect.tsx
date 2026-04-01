@@ -57,7 +57,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
   )
   const [searchQuery, setSearchQuery] = React.useState("")
   const [dropdownOpen, setDropdownOpen] = React.useState(false)
-  const { data } = useQuery<ChatModel[]>({
+  const { data, isLoading } = useQuery<ChatModel[]>({
     queryKey: ["getAllModelsForSelect"],
     queryFn: () => fetchChatModels({ returnEmpty: true })
   })
@@ -312,6 +312,24 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
     // Truncate if too long
     return shortName.length > 20 ? shortName.substring(0, 18) + '…' : shortName
   }, [selectedModelValue, data])
+
+  if (isLoading && !data) {
+    return (
+      <Tooltip title={t("modelSelect.loading", "Loading models...")}>
+        <IconButton
+          ariaLabel={t("selectAModel") as string}
+          hasPopup="menu"
+          dataTestId="chat-model-select"
+          className="px-2 text-text-muted animate-pulse"
+        >
+          <LucideBrain className={iconClassName} />
+          <span className="ml-1 hidden sm:inline text-xs">
+            {t("modelSelect.loading", "Loading models...")}
+          </span>
+        </IconButton>
+      </Tooltip>
+    )
+  }
 
   return (
     <>

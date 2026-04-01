@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -322,6 +324,12 @@ def test_persona_voice_analytics_returns_recent_live_sessions_from_summary_store
 ):
     with _client_for_user(1, persona_db) as client:
         persona_id = _create_persona(client, name="Recent Session Summary Persona")
+        started_at = (
+            datetime.now(timezone.utc) - timedelta(days=1)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        ended_at = (
+            datetime.now(timezone.utc) - timedelta(days=1) + timedelta(minutes=5)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
         persona_db.execute_query(
             """
@@ -338,10 +346,10 @@ def test_persona_voice_analytics_returns_recent_live_sessions_from_summary_store
                 1,
                 persona_id,
                 "sess-summary-1",
-                "2026-03-13T12:00:00Z",
-                "2026-03-13T12:05:00Z",
-                "2026-03-13T12:00:00Z",
-                "2026-03-13T12:05:00Z",
+                started_at,
+                ended_at,
+                started_at,
+                ended_at,
                 1,
                 0.5,
                 250,
@@ -368,8 +376,8 @@ def test_persona_voice_analytics_returns_recent_live_sessions_from_summary_store
         assert payload["recent_live_sessions"] == [
             {
                 "session_id": "sess-summary-1",
-                "started_at": "2026-03-13T12:00:00Z",
-                "ended_at": "2026-03-13T12:05:00Z",
+                "started_at": started_at,
+                "ended_at": ended_at,
                 "auto_commit_enabled": True,
                 "vad_threshold": 0.5,
                 "min_silence_ms": 250,

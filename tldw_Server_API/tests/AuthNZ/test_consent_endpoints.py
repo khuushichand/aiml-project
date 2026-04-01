@@ -10,7 +10,6 @@ Verifies that:
 from __future__ import annotations
 
 from datetime import datetime
-import importlib
 import os
 
 import pytest
@@ -23,6 +22,7 @@ from tldw_Server_API.app.api.v1.endpoints.consent import (
 from tldw_Server_API.app.api.v1.schemas.consent_schemas import ConsentRecordResponse
 from tldw_Server_API.app.core.AuthNZ.consent_manager import ConsentManager
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.tests.helpers.app_main_state import reload_app_main
 
 from fastapi import HTTPException
 
@@ -193,10 +193,8 @@ class TestConsentRouterWiring:
         monkeypatch.delenv("ROUTES_ENABLE", raising=False)
 
         from tldw_Server_API.app.core import config as config_mod
-        from tldw_Server_API.app import main as app_main
-
         config_mod.clear_config_cache()
-        reloaded = importlib.reload(app_main)
+        reloaded = reload_app_main()
         route_paths = {getattr(route, "path", "") for route in reloaded.app.routes}
 
         assert "/api/v1/consent/preferences" in route_paths
@@ -208,10 +206,8 @@ class TestConsentRouterWiring:
         monkeypatch.delenv("ROUTES_ENABLE", raising=False)
 
         from tldw_Server_API.app.core import config as config_mod
-        from tldw_Server_API.app import main as app_main
-
         config_mod.clear_config_cache()
-        reloaded = importlib.reload(app_main)
+        reloaded = reload_app_main()
         route_paths = {getattr(route, "path", "") for route in reloaded.app.routes}
 
         assert "/api/v1/consent/preferences" not in route_paths

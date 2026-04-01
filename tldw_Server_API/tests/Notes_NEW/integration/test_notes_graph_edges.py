@@ -40,7 +40,14 @@ def client_with_graph_db(tmp_path, monkeypatch):
     db = CharactersRAGDB(str(db_path), client_id="integration_user")
 
     async def override_user():
-        return User(id=1, username="tester", email="t@e.com", is_active=True)
+        return User(
+            id=1,
+            username="tester",
+            email="t@e.com",
+            is_active=True,
+            roles=["user"],
+            permissions=["notes.graph.read", "notes.graph.write"],
+        )
 
     # Inject per-user DB via dependency override
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user

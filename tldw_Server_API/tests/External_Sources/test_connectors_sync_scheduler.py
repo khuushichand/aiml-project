@@ -75,6 +75,17 @@ async def test_connectors_sync_scheduler_scan_enqueues_renewal_repair_and_increm
                 "webhook_subscription_id": None,
                 "webhook_expires_at": None,
             },
+            {
+                "id": 15,
+                "user_id": 5,
+                "provider": "zotero",
+                "enabled": True,
+                "sync_mode": "poll",
+                "needs_full_rescan": False,
+                "webhook_status": None,
+                "webhook_subscription_id": None,
+                "webhook_expires_at": None,
+            },
         ]
 
     queued_jobs: list[dict[str, object]] = []
@@ -129,4 +140,5 @@ async def test_connectors_sync_scheduler_scan_enqueues_renewal_repair_and_increm
         {"user_id": 1, "source_id": 11, "job_type": "subscription_renewal"},
         {"user_id": 2, "source_id": 12, "job_type": "repair_rescan"},
         {"user_id": 3, "source_id": 13, "job_type": "incremental_sync"},
+        {"user_id": 5, "source_id": 15, "job_type": "incremental_sync"},
     ]

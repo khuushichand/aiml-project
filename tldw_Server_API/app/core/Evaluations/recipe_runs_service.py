@@ -32,6 +32,18 @@ from tldw_Server_API.app.core.Evaluations.recipes.registry import (
 from tldw_Server_API.app.core.Evaluations.recipes.reporting import RecipeRunReport
 
 RECIPE_RUN_REUSE_ENTITY_TYPE = "recipe_run_reuse"
+_SENSITIVE_RUN_CONFIG_KEYS = {
+    "api_key",
+    "api_keys",
+    "candidate_api_keys",
+    "token",
+    "access_token",
+    "secret",
+    "client_secret",
+    "password",
+    "authorization",
+    "auth_header",
+}
 REQUIRED_RECOMMENDATION_SLOTS: tuple[str, ...] = (
     "best_overall",
     "best_quality",
@@ -234,7 +246,7 @@ class RecipeRunsService:
             reusable = self._get_reusable_completed_run(reuse_hash)
             if reusable is not None:
                 self._record_reuse_mapping(reusable.run_id, reuse_hash)
-                return reusable
+                return self.get_run(reusable.run_id)
 
         run_id = self.db.create_recipe_run(
             recipe_id=manifest.recipe_id,
@@ -243,7 +255,8 @@ class RecipeRunsService:
             dataset_snapshot_ref=validation["dataset_snapshot_ref"],
             dataset_content_hash=validation["dataset_content_hash"],
             metadata={
-                "run_config": normalized_run_config,
+                "run_config": self._sanitize_run_config_for_metadata(normalized_run_config),
+                "run_config_internal": normalized_run_config,
                 "reuse_hash": reuse_hash,
                 "dataset_mode": validation["dataset_mode"],
                 "dataset_id": dataset_id,
@@ -274,10 +287,9 @@ class RecipeRunsService:
         if owner_user_id:
             if owner_user_id != self.user_id:
                 raise RecipeRunNotFoundError(run_id)
-            return record
-        if self.user_id and not is_single_user_mode():
+        elif self.user_id and not is_single_user_mode():
             raise RecipeRunNotFoundError(run_id)
-        return record
+        return self._public_record(record)
 
     def get_report(self, run_id: str) -> RecipeRunReport:
         """Fetch a normalized report shell for a recipe run."""
@@ -557,6 +569,35 @@ class RecipeRunsService:
                 ),
             )
         return normalized
+
+    def _public_record(self, record: RecipeRunRecord) -> RecipeRunRecord:
+        metadata = dict(record.metadata or {})
+        metadata.pop("run_config_internal", None)
+        return record.model_copy(update={"metadata": metadata})
+
+    def _sanitize_run_config_for_metadata(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, item in value.items():
+                key_str = str(key)
+                lowered = key_str.lower()
+                if lowered in _SENSITIVE_RUN_CONFIG_KEYS or lowered.endswith(
+                    ("_api_key", "_token", "_secret", "_password")
+                ):
+                    sanitized[key_str] = self._redact_sensitive_value(item)
+                else:
+                    sanitized[key_str] = self._sanitize_run_config_for_metadata(item)
+            return sanitized
+        if isinstance(value, list):
+            return [self._sanitize_run_config_for_metadata(item) for item in value]
+        return value
+
+    def _redact_sensitive_value(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): "[REDACTED]" for key in value.keys()}
+        if isinstance(value, list):
+            return ["[REDACTED]" for _ in value]
+        return "[REDACTED]"
 
     def _extract_recipe_report_inputs(self, record: RecipeRunRecord) -> dict[str, Any] | None:
         explicit_inputs = record.metadata.get("recipe_report_inputs")

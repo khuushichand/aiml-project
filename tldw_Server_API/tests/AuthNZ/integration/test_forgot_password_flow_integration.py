@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.tests.helpers.app_main_state import reload_app_main
 
 pytestmark = pytest.mark.integration
 
@@ -44,10 +45,7 @@ async def test_forgot_password_email_and_reset_flow(tmp_path, monkeypatch):
         return True
 
     # Reload app so auth router mounts with stubbed MFA
-    import importlib
-    import tldw_Server_API.app.main as _main
-    reloaded = importlib.reload(_main)
-    from tldw_Server_API.app.main import app as _app
+    _app = reload_app_main().app
 
     # Patch is_postgres_backend on the auth endpoints module after reload
     import tldw_Server_API.app.api.v1.endpoints.auth as auth

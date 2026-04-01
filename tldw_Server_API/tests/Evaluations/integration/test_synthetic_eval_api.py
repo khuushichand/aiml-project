@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
+from tldw_Server_API.app.core.Evaluations.synthetic_eval_service import (
+    get_synthetic_eval_service_for_user,
+)
+
 pytestmark = [pytest.mark.integration]
 
 
@@ -79,6 +84,7 @@ async def test_synthetic_queue_filters_by_recipe_kind(async_api_client, auth_hea
 
 @pytest.mark.asyncio
 async def test_synthetic_review_and_promotion_flow(async_api_client, auth_headers) -> None:
+    user_id = get_single_user_instance().id_str
     generation_response = await async_api_client.post(
         "/api/v1/evaluations/synthetic/drafts/generate",
         json=_answer_quality_generation_payload(),
@@ -98,6 +104,7 @@ async def test_synthetic_review_and_promotion_flow(async_api_client, auth_header
     )
     assert review_response.status_code == 200
     assert review_response.json()["resulting_review_state"] == "approved"
+    assert review_response.json()["reviewer_id"] == user_id
 
     promote_response = await async_api_client.post(
         "/api/v1/evaluations/synthetic/promotions",
@@ -105,6 +112,7 @@ async def test_synthetic_review_and_promotion_flow(async_api_client, auth_header
             "sample_ids": [sample_id],
             "dataset_name": "approved synthetic answer-quality set",
             "dataset_description": "Reviewed synthetic samples for answer quality.",
+            "promoted_by": "malicious-reviewer",
         },
         headers=auth_headers,
     )
@@ -115,6 +123,10 @@ async def test_synthetic_review_and_promotion_flow(async_api_client, auth_header
     assert body["dataset_snapshot_ref"]
     assert len(body["promotion_ids"]) == 1
     assert body["sample_count"] == 1
+    service = get_synthetic_eval_service_for_user(user_id)
+    promotion_record = service.repository.get_promotion(body["promotion_ids"][0])
+    assert promotion_record is not None
+    assert promotion_record["promoted_by"] == user_id
 
 
 @pytest.mark.asyncio
@@ -165,3 +177,14 @@ async def test_generate_endpoint_returns_batch_id_and_anchor_metadata(async_api_
     assert body["samples"][0]["sample_payload"]["context_snapshot_ref"] == "context-1"
     assert body["samples"][0]["sample_payload"]["retrieval_baseline_ref"] == "baseline-1"
     assert body["samples"][0]["sample_payload"]["reference_answer"] == "The rollout finished on Friday, but beta access remained limited."
+
+
+@pytest.mark.asyncio
+async def test_promote_endpoint_requires_sample_ids(async_api_client, auth_headers) -> None:
+    response = await async_api_client.post(
+        "/api/v1/evaluations/synthetic/promotions",
+        json={"dataset_name": "missing samples"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
