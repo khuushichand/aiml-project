@@ -3287,6 +3287,10 @@ async def execute_streaming_call(
                                 try:
                                     result = llm_call_func_fb()
                                     selected_provider = fallback_provider
+                                    # Update run-first metric context to reflect fallback provider/model
+                                    if run_first_metric_context is not None:
+                                        run_first_metric_context["provider"] = str(fallback_provider or "").strip() or "unknown"
+                                        run_first_metric_context["model"] = str(model or "").strip() or "unknown"
                                     llm_call_func = llm_call_func_fb
                                     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                                         metrics.track_provider_fallback_success(
@@ -3516,6 +3520,10 @@ async def execute_streaming_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        # Update run-first metric context to reflect fallback provider/model
+                        if run_first_metric_context is not None:
+                            run_first_metric_context["provider"] = str(fallback_provider or "").strip() or "unknown"
+                            run_first_metric_context["model"] = str(model or "").strip() or "unknown"
                         llm_call_func = llm_call_func_fb
                         _fallback_stream_ok = True
                         # Explicit telemetry for direct (non-queued) streaming fallback success
@@ -4546,6 +4554,10 @@ async def execute_non_stream_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        # Update run-first metric context to reflect fallback provider/model
+                        if run_first_metric_context is not None:
+                            run_first_metric_context["provider"] = str(fallback_provider or "").strip() or "unknown"
+                            run_first_metric_context["model"] = str(model or "").strip() or "unknown"
                         metrics_recorded = True
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
