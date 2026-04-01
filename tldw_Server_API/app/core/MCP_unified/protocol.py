@@ -906,6 +906,12 @@ class MCPProtocol:
             raw_idempotency_key = params.get("idempotencyKey")
             if raw_idempotency_key is None:
                 raw_idempotency_key = params.get("idempotency_key")
+        if raw_idempotency_key is None:
+            arguments = params.get("arguments")
+            if isinstance(arguments, dict):
+                raw_idempotency_key = arguments.get("idempotencyKey")
+                if raw_idempotency_key is None:
+                    raw_idempotency_key = arguments.get("idempotency_key")
 
         if raw_idempotency_key is None:
             return None

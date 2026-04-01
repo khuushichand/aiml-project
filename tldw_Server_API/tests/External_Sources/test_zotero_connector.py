@@ -143,6 +143,7 @@ async def test_zotero_collection_item_listing_is_flat_for_selected_collection_in
             "tokens": {"access_token": "api-key"},
         },
         "COLL1234",
+        collection_name="Language Models",
         cursor=None,
         page_size=50,
     )
@@ -152,6 +153,7 @@ async def test_zotero_collection_item_listing_is_flat_for_selected_collection_in
     assert items[0].provider == "zotero"
     assert items[0].provider_library_id == "123456"
     assert items[0].collection_key == "COLL1234"
+    assert items[0].collection_name == "Language Models"
     assert items[0].doi == "10.1000/example"
     assert items[0].title == "Attention Is All You Need"
     assert items[0].authors == "Ashish Vaswani, Noam Shazeer"

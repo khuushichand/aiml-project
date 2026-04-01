@@ -770,6 +770,26 @@ async def _process_import_job(
             except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 raise
 
+    async def _renew_reference_manager_lease_until_stopped(stop_event: asyncio.Event) -> None:
+        if not lease_id:
+            return
+
+        while not stop_event.is_set():
+            try:
+                jm.renew_job_lease(
+                    jid,
+                    seconds=120,
+                    worker_id=worker_id,
+                    lease_id=lease_id,
+                )
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+                pass
+
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=30)
+            except TimeoutError:
+                continue
+
     # Prepare DB instance
     mdb = _create_connector_media_db(user_id)
 
@@ -1417,6 +1437,10 @@ async def _process_import_job(
                         last_sync_started_at=_utc_now_db_text(),
                         last_error=None,
                     )
+                heartbeat_stop = asyncio.Event()
+                heartbeat_task = asyncio.create_task(
+                    _renew_reference_manager_lease_until_stopped(heartbeat_stop)
+                )
                 try:
                     reference_result = await sync_reference_manager_source(
                         connectors_pool=pool,
@@ -1437,10 +1461,18 @@ async def _process_import_job(
                             last_error=str(exc),
                         )
                     raise
+                finally:
+                    heartbeat_stop.set()
+                    await heartbeat_task
 
                 processed = int(reference_result.get("processed") or 0)
                 total = int(reference_result.get("total") or 0)
                 failed = int(reference_result.get("failed") or 0)
+                if "cursor" in reference_result:
+                    cursor_value = reference_result.get("cursor")
+                else:
+                    cursor_value = reference_sync_state.get("cursor")
+                final_cursor = str(cursor_value).strip() or None if cursor_value is not None else None
                 result_payload = {
                     "processed": processed,
                     "total": total,
@@ -1453,7 +1485,7 @@ async def _process_import_job(
                     await upsert_source_sync_state(
                         db,
                         source_id=source_id,
-                        cursor=reference_result.get("cursor"),
+                        cursor=final_cursor,
                         last_sync_succeeded_at=_utc_now_db_text(),
                         last_error=None,
                     )

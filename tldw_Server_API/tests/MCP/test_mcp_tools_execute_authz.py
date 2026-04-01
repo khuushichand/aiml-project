@@ -1,3 +1,4 @@
+import contextlib
 import os
 import asyncio
 import pytest
@@ -197,3 +198,103 @@ def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path, mon
     assert run_response.status_code == 200, run_response.text
     run_body = run_response.json()
     assert "[exit:0 |" in run_body["result"]
+
+
+def test_tools_execute_with_api_key_can_run_virtual_cli_help(tmp_path):
+    from tldw_Server_API.app.core.MCP_unified.config import get_config
+    from tldw_Server_API.app.core.MCP_unified.server import get_mcp_server, reset_mcp_server
+
+    db_file = tmp_path / "mcp_run_help.sqlite"
+    os.environ["DATABASE_URL"] = f"sqlite:///{db_file}"
+    os.environ["AUTH_MODE"] = "single_user"
+    os.environ.pop("MCP_MODULES", None)
+    os.environ.pop("MCP_MODULES_CONFIG", None)
+
+    _run(reset_db_pool())
+    reset_settings()
+    with contextlib.suppress(AttributeError):
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    _run(reset_mcp_server())
+
+    ensure_authnz_tables(Path(db_file))
+    pool = _run(get_db_pool())
+
+    async def _insert_user():
+        async with pool.transaction() as conn:
+            if hasattr(conn, 'fetchval'):
+                uid = await conn.fetchval(
+                    "INSERT INTO users (username, email, password_hash, is_active, role, is_verified) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+                    "run_user", "run@test.local", "dummyhash", True, "user", True
+                )
+                return uid
+            else:
+                cur = await conn.execute(
+                    "INSERT INTO users (username, email, password_hash, is_active, role, is_verified) VALUES (?,?,?,?,?,?)",
+                    ("run_user", "run@test.local", "dummyhash", 1, "user", 1)
+                )
+                uid = cur.lastrowid
+                await conn.commit()
+                return uid
+
+    user_id = _run(_insert_user())
+    api_mgr = _run(get_api_key_manager())
+    key_data = _run(api_mgr.create_api_key(user_id=user_id, name="run-key"))
+    api_key = key_data["key"]
+
+    async def _seed():
+        async with pool.transaction() as conn:
+            if not hasattr(conn, 'fetchval'):
+                await conn.execute("CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, description TEXT, is_system INTEGER DEFAULT 0)")
+                await conn.execute("CREATE TABLE IF NOT EXISTS permissions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, description TEXT, category TEXT)")
+                await conn.execute("CREATE TABLE IF NOT EXISTS role_permissions (role_id INTEGER NOT NULL, permission_id INTEGER NOT NULL, PRIMARY KEY(role_id, permission_id))")
+                await conn.execute("CREATE TABLE IF NOT EXISTS user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL, PRIMARY KEY(user_id, role_id))")
+            if hasattr(conn, 'fetchval'):
+                pid = await conn.fetchval(
+                    "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING RETURNING id",
+                    "tools.execute:*", "Wildcard tool execution", "tools"
+                )
+                if not pid:
+                    pid = await conn.fetchval("SELECT id FROM permissions WHERE name = $1", "tools.execute:*")
+                rid = await conn.fetchval(
+                    "INSERT INTO roles (name, description, is_system) VALUES ($1,$2,$3) RETURNING id",
+                    "run_tool_role", "Role for run tool exec", False
+                )
+                await conn.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", rid, pid)
+                await conn.execute("INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", user_id, rid)
+            else:
+                cur = await conn.execute("SELECT id FROM permissions WHERE name = ?", ("tools.execute:*",))
+                row = await cur.fetchone()
+                if row:
+                    pid = row[0]
+                else:
+                    cur = await conn.execute(
+                        "INSERT INTO permissions (name, description, category) VALUES (?,?,?)",
+                        ("tools.execute:*", "Wildcard tool execution", "tools")
+                    )
+                    pid = cur.lastrowid
+                cur = await conn.execute(
+                    "INSERT INTO roles (name, description, is_system) VALUES (?,?,?)",
+                    ("run_tool_role", "Role for run tool exec", 0)
+                )
+                rid = cur.lastrowid
+                await conn.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES (?,?)", (rid, pid))
+                await conn.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)", (user_id, rid))
+                await conn.commit()
+
+    _run(_seed())
+
+    payload = {"tool_name": "run", "arguments": {"command": "help"}}
+    r = client.post(
+        "/api/v1/mcp/tools/execute",
+        json=payload,
+        headers={"X-API-KEY": api_key},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["module"] == "run_command"
+    assert isinstance(body["result"], str)
+    assert "Virtual CLI commands available in this context" in body["result"]
+    assert "[exit:0 |" in body["result"]
+
+    module_ids = set(_run(get_mcp_server().module_registry.get_all_modules()).keys())
+    assert {"filesystem", "knowledge", "run_command"}.issubset(module_ids)

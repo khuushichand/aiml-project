@@ -65,5 +65,8 @@ def test_parser_handles_semicolon_and_or_operator():
     ],
 )
 def test_parser_rejects_malformed_input(command: str):
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError,
+        match="operator cannot appear here|dangling operator|unterminated",
+    ):
         parse_command(command)
