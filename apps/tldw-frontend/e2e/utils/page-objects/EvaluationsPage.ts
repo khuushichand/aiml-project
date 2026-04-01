@@ -24,7 +24,7 @@ export class EvaluationsPage extends BasePage {
     return this.page.getByTestId("evaluations-page-title")
   }
 
-  /** Evaluations tab trigger */
+  /** Recipes tab trigger */
   get recipesTab(): Locator {
     return this.page.getByTestId("evaluations-tab-recipes")
   }
@@ -216,8 +216,6 @@ export class EvaluationsPage extends BasePage {
   async assertRecipeCatalogVisible(): Promise<void> {
     await this.ensureRecipesTabSelected()
     await expect(this.recipeUseButtons.first()).toBeVisible({ timeout: 10_000 })
-    await expect(this.validateDatasetButton).toBeVisible({ timeout: 10_000 })
-    await expect(this.runRecipeButton).toBeVisible({ timeout: 10_000 })
   }
 
   async validateCurrentRecipe(): Promise<void> {

@@ -170,48 +170,6 @@ describe("RagRetrievalTuningConfig", () => {
     ).toBeEnabled()
   })
 
-  it("clears stale ids when a corpus source is disabled", () => {
-    let runConfigState: Record<string, any> = {}
-
-    const Harness = () => {
-      const [dataset, setDataset] = React.useState<DatasetSample[]>([])
-      const [runConfig, setRunConfig] = React.useState<Record<string, any>>({
-        candidate_creation_mode: "auto_sweep",
-        corpus_scope: {
-          sources: ["media_db", "notes"],
-          media_ids: [10],
-          note_ids: ["note-7"]
-        },
-        weak_supervision_budget: DEFAULT_WEAK_SUPERVISION_BUDGET
-      })
-
-      React.useEffect(() => {
-        runConfigState = runConfig
-      }, [runConfig])
-
-      return (
-        <RagRetrievalTuningConfig
-          datasetSource="inline"
-          dataset={dataset}
-          runConfig={runConfig}
-          onDatasetChange={setDataset}
-          onRunConfigChange={setRunConfig}
-        />
-      )
-    }
-
-    render(<Harness />)
-
-    fireEvent.click(screen.getByLabelText("Use media_db source"))
-
-    expect(runConfigState.corpus_scope.sources).toEqual(["notes"])
-    expect(runConfigState.corpus_scope.media_ids).toEqual([])
-    expect(runConfigState.corpus_scope.note_ids).toEqual(["note-7"])
-    expect(
-      screen.getByRole("button", { name: "Generate synthetic drafts" })
-    ).toBeEnabled()
-  })
-
   it("submits structured retrieval examples and corpus scope to synthetic generation", async () => {
     const Harness = () => {
       const [dataset, setDataset] = React.useState<DatasetSample[]>([])

@@ -32,8 +32,11 @@ export const getRecipeRunUserErrorMessage = (error: unknown): string => {
         ? error
         : (error as any)?.resp?.error || (error as any)?.message || ""
 
-  if (String(rawMessage).includes("recipe_run_enqueue_failed")) {
+  if (String(rawMessage).includes("recipe_run_worker_disabled")) {
     return "Recipe runs are unavailable because the recipe worker is not running on this server. Enable the evaluations recipe worker and try again."
+  }
+  if (String(rawMessage).includes("recipe_run_enqueue_failed")) {
+    return "The recipe run could not be queued on this server. Try again."
   }
 
   return rawMessage || "Failed to start recipe run."
@@ -103,11 +106,20 @@ export function useCreateRecipeRun() {
           force_rerun: params.forceRerun
         })
       ),
-    onSuccess: () => {
+    onSuccess: (resp: any) => {
+      const runStatus = String(resp?.data?.status || "").toLowerCase()
       notification.success({
-        message: t("evaluations:recipeRunCreateSuccessTitle", {
-          defaultValue: "Recipe run started"
-        })
+        message: t(
+          runStatus === "completed"
+            ? "evaluations:recipeRunCreateReuseTitle"
+            : "evaluations:recipeRunCreateSuccessTitle",
+          {
+            defaultValue:
+              runStatus === "completed"
+                ? "Reused matching recipe run"
+                : "Recipe run started"
+          }
+        )
       })
     },
     onError: (error: any) => {

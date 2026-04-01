@@ -1593,6 +1593,103 @@ class EvaluationsDatabase:
                 # Best-effort; safe to ignore failures
                 pass
 
+    def update_idempotency_entity(
+        self,
+        entity_type: str,
+        key: str,
+        entity_id: str,
+        user_id: Optional[str],
+    ) -> bool:
+        """Update an existing idempotency mapping to a new entity id."""
+        if not key or not entity_id:
+            return False
+        uid = user_id or ""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE idempotency_keys
+                    SET entity_id = ?
+                    WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
+                    """,
+                    (entity_id, uid, entity_type, key),
+                )
+                conn.commit()
+                return bool(cursor.rowcount)
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
+
+    def find_latest_recipe_run_by_reuse_hash(
+        self,
+        *,
+        reuse_hash: str,
+        owner_user_id: str | None,
+        allow_legacy_unowned: bool = False,
+    ) -> RecipeRunRecord | None:
+        """Fetch the latest completed recipe run matching a reuse hash and owner scope."""
+        normalized_reuse_hash = str(reuse_hash or "").strip()
+        normalized_owner_user_id = str(owner_user_id or "").strip()
+        if not normalized_reuse_hash or not normalized_owner_user_id:
+            return None
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM evaluation_recipe_runs
+                    WHERE status = %s
+                      AND COALESCE(metadata_json, '{}')::jsonb ->> 'reuse_hash' = %s
+                      AND (
+                        COALESCE(metadata_json, '{}')::jsonb ->> 'owner_user_id' = %s
+                        OR (
+                            %s = TRUE
+                            AND NOT (COALESCE(metadata_json, '{}')::jsonb ? 'owner_user_id')
+                        )
+                      )
+                    ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        RunStatus.COMPLETED.value,
+                        normalized_reuse_hash,
+                        normalized_owner_user_id,
+                        allow_legacy_unowned,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM evaluation_recipe_runs
+                    WHERE status = ?
+                      AND json_extract(COALESCE(metadata_json, '{}'), '$.reuse_hash') = ?
+                      AND (
+                        json_extract(COALESCE(metadata_json, '{}'), '$.owner_user_id') = ?
+                        OR (
+                            ? = 1
+                            AND json_type(COALESCE(metadata_json, '{}'), '$.owner_user_id') IS NULL
+                        )
+                      )
+                    ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        RunStatus.COMPLETED.value,
+                        normalized_reuse_hash,
+                        normalized_owner_user_id,
+                        1 if allow_legacy_unowned else 0,
+                    ),
+                )
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_recipe_run_record(row)
+        return None
+
     def cleanup_idempotency_keys(self, ttl_hours: int = 72) -> int:
         """Remove idempotency keys older than ttl_hours. Returns deleted row count.
 
@@ -1897,8 +1994,8 @@ class EvaluationsDatabase:
         *,
         created_by: Optional[str] = None,
         include_samples: bool = True,
-        limit: Optional[int] = None,
-        offset: int = 0,
+        sample_limit: Optional[int] = None,
+        sample_offset: int = 0,
     ) -> Optional[dict[str, Any]]:
         """Get dataset by ID"""
         with self.get_connection() as conn:
@@ -1912,8 +2009,8 @@ class EvaluationsDatabase:
                 return self._row_to_dataset_dict(
                     row,
                     include_samples=include_samples,
-                    limit=limit,
-                    offset=offset,
+                    sample_limit=sample_limit,
+                    sample_offset=sample_offset,
                 )
         return None
 
@@ -2431,9 +2528,8 @@ class EvaluationsDatabase:
         self,
         row,
         include_samples: bool = True,
-        *,
-        limit: Optional[int] = None,
-        offset: int = 0,
+        sample_limit: Optional[int] = None,
+        sample_offset: int = 0,
     ) -> dict[str, Any]:
         """Convert database row to dataset dictionary"""
         created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
@@ -2452,10 +2548,12 @@ class EvaluationsDatabase:
 
         if include_samples:
             samples = self._json_maybe(row["samples"], default=[])
-            if limit is not None:
-                start = max(0, int(offset))
-                end = start + max(0, int(limit))
-                samples = samples[start:end]
+            normalized_offset = max(0, int(sample_offset or 0))
+            if sample_limit is not None:
+                normalized_limit = max(0, int(sample_limit))
+                samples = samples[normalized_offset:normalized_offset + normalized_limit]
+            elif normalized_offset:
+                samples = samples[normalized_offset:]
             result["samples"] = samples
 
         return result

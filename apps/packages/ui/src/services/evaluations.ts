@@ -254,35 +254,14 @@ export type RecipeRunReport = {
   recommendation_slots: Record<string, RecipeRecommendationSlot>
 }
 
-export type SyntheticEvalRecipeKind = "rag_retrieval_tuning" | "rag_answer_quality"
-export type SyntheticEvalProvenance =
-  | "real"
-  | "real_edited"
-  | "synthetic_from_corpus"
-  | "synthetic_from_seed_examples"
-  | "synthetic_human_edited"
-export type SyntheticEvalReviewState =
-  | "draft"
-  | "in_review"
-  | "edited"
-  | "approved"
-  | "rejected"
-export type SyntheticEvalSourceKind = "media_db" | "notes"
-export type SyntheticEvalReviewActionType =
-  | "edit"
-  | "approve"
-  | "reject"
-  | "request_changes"
-  | "edit_and_approve"
-
 export type SyntheticEvalDraftSample = {
   sample_id: string
-  recipe_kind: SyntheticEvalRecipeKind
-  provenance: SyntheticEvalProvenance
-  review_state: SyntheticEvalReviewState
+  recipe_kind: string
+  provenance: string
+  review_state: string
   sample_payload?: Record<string, any>
   sample_metadata?: Record<string, any>
-  source_kind?: SyntheticEvalSourceKind | null
+  source_kind?: string | null
   created_by?: string | null
   created_at?: string | null
   updated_at?: string | null
@@ -317,11 +296,11 @@ export type SyntheticEvalGenerationResponse = {
 export type SyntheticEvalReviewActionRecord = {
   action_id: string
   sample_id: string
-  action: SyntheticEvalReviewActionType
+  action: string
   reviewer_id?: string | null
   notes?: string | null
   action_payload?: Record<string, any>
-  resulting_review_state?: SyntheticEvalReviewState | null
+  resulting_review_state?: string | null
   created_at?: string | null
 }
 
@@ -444,7 +423,11 @@ export async function listDatasets(params?: {
 
 export async function getDataset(
   datasetId: string,
-  params?: { include_samples?: boolean; limit?: number; offset?: number }
+  params?: {
+    include_samples?: boolean
+    limit?: number
+    offset?: number
+  }
 ) {
   const search = new URLSearchParams()
   if (params?.include_samples) search.set("include_samples", "true")

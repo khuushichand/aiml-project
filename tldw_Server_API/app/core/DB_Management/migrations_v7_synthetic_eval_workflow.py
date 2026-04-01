@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 
 from loguru import logger
@@ -11,18 +10,12 @@ from loguru import logger
 def migrate_to_synthetic_eval_workflow(db_path: str) -> bool:
     """Create the synthetic eval draft, review, and promotion tables."""
 
-    def _validate_table_name(table_name: str) -> str:
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name):
-            raise ValueError(f"Invalid table name for migration: {table_name!r}")
-        return table_name
-
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
 
             def _table_columns(table_name: str) -> set[str]:
-                safe_table_name = _validate_table_name(table_name)
-                cursor.execute(f"PRAGMA table_info('{safe_table_name}')")
+                cursor.execute(f"PRAGMA table_info('{table_name}')")
                 return {row[1] for row in cursor.fetchall()}
 
             def _add_column_if_missing(table_name: str, column_name: str, column_sql: str) -> None:
@@ -112,6 +105,6 @@ def migrate_to_synthetic_eval_workflow(db_path: str) -> bool:
             conn.commit()
             logger.info("Applied synthetic eval workflow migration successfully")
             return True
-    except (sqlite3.Error, ValueError) as exc:  # pragma: no cover - defensive migration wrapper
+    except Exception as exc:  # pragma: no cover - defensive migration wrapper
         logger.error("Failed to migrate synthetic eval workflow schema: {}", exc)
         return False
