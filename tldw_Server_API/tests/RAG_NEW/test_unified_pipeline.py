@@ -100,7 +100,8 @@ class TestUnifiedPipelineUnit:
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_rerank_snapshots_default_to_lightweight_summaries_when_debug_mode_is_enabled(self):
+    async def test_rerank_snapshots_are_hidden_without_explicit_opt_in(self, monkeypatch):
+        monkeypatch.delenv("RAG_INCLUDE_RERANK_DEBUG_DOCUMENTS", raising=False)
         docs = [
             Document(id="doc-1", content="Paris is the capital of France.", metadata={}, source=DataSource.MEDIA_DB, score=0.9),
             Document(id="doc-2", content="France is in Europe.", metadata={}, source=DataSource.MEDIA_DB, score=0.8),
@@ -127,14 +128,13 @@ class TestUnifiedPipelineUnit:
             )
 
             assert isinstance(result, UnifiedRAGResponse)
-            assert [doc["id"] for doc in result.metadata["pre_rerank_documents"]] == ["doc-1", "doc-2"]
-            assert [doc["id"] for doc in result.metadata["reranked_documents"]] == ["doc-2", "doc-1"]
-            assert all("content" not in doc for doc in result.metadata["pre_rerank_documents"])
-            assert all("content" not in doc for doc in result.metadata["reranked_documents"])
+            assert "pre_rerank_documents" not in (result.metadata or {})
+            assert "reranked_documents" not in (result.metadata or {})
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_rerank_snapshots_include_truncated_content_when_explicitly_enabled(self):
+    async def test_rerank_snapshots_include_truncated_content_when_explicitly_enabled(self, monkeypatch):
+        monkeypatch.delenv("RAG_INCLUDE_RERANK_DEBUG_DOCUMENTS", raising=False)
         docs = [
             Document(
                 id="doc-1",
