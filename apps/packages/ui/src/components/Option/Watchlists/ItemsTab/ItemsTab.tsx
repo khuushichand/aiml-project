@@ -562,10 +562,10 @@ export const ItemsTab: React.FC = () => {
     )
   }, [hasCollapsedSources, orderedSources.length])
 
-  const loadItems = useCallback(async () => {
+  const loadItems = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     const requestToken = itemsRequestTokenRef.current + 1
     itemsRequestTokenRef.current = requestToken
-    setItemsLoading(true)
+    if (!silent) setItemsLoading(true)
     try {
       const response = await fetchScrapedItems(
         buildBaseFilterParams({
@@ -582,13 +582,15 @@ export const ItemsTab: React.FC = () => {
     } catch (error) {
       if (requestToken !== itemsRequestTokenRef.current) return
       console.error("Failed to load watchlist items:", error)
-      message.error(t("watchlists:items.fetchError", "Failed to load feed items"))
-      setItems([])
-      setItemsTotal(0)
-      setSelectedItemId(null)
+      if (!silent) {
+        message.error(t("watchlists:items.fetchError", "Failed to load feed items"))
+        setItems([])
+        setItemsTotal(0)
+        setSelectedItemId(null)
+      }
     } finally {
       if (requestToken !== itemsRequestTokenRef.current) return
-      setItemsLoading(false)
+      if (!silent) setItemsLoading(false)
     }
   }, [buildBaseFilterParams, itemsPage, itemsPageSize, sortMode, t])
 
@@ -658,11 +660,21 @@ export const ItemsTab: React.FC = () => {
 
   // Auto-refresh items every 30 seconds to pick up new content from runs
   useEffect(() => {
+    let pollInFlight = false
     const interval = setInterval(() => {
-      void loadItems()
-      void loadSmartCounts()
+      if (pollInFlight || document.visibilityState !== "visible") return
+      pollInFlight = true
+      void Promise.all([
+        loadItems({ silent: true }),
+        loadSmartCounts()
+      ]).finally(() => {
+        pollInFlight = false
+      })
     }, 30_000)
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      pollInFlight = false
+    }
   }, [loadItems, loadSmartCounts])
 
   useEffect(() => {
