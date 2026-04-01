@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
 from loguru import logger
 from starlette import status as _starlette_status
@@ -39,6 +39,7 @@ from tldw_Server_API.app.api.v1.router_registry import include_router_idempotent
 from tldw_Server_API.app.services.app_lifecycle import (
     mark_lifecycle_shutdown,
     mark_lifecycle_startup,
+    get_or_create_lifecycle_state,
 )
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
@@ -114,6 +115,10 @@ _REQUEST_GUARD_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+_READINESS_GUARD_EXCEPTIONS = _REQUEST_GUARD_EXCEPTIONS + (
+    ImportError,
+    ModuleNotFoundError,
+)
 
 
 @contextmanager
@@ -130,6 +135,148 @@ def _claims_rebuild_db_session(
         initialize=False,
     ) as db:
         yield user_id, db_path, db
+
+
+def _apply_shutdown_transition_gate(app: FastAPI, readiness_state: Any | None) -> None:
+    """Move the app into draining mode and gate new jobs."""
+    try:
+        lifecycle_state = get_or_create_lifecycle_state(app)
+    except _STARTUP_GUARD_EXCEPTIONS as exc:
+        lifecycle_state = None
+        logger.debug(f"Shutdown transition gate: lifecycle state lookup skipped: {exc}")
+
+    try:
+        if lifecycle_state is None or lifecycle_state.phase != "draining" or not lifecycle_state.draining:
+            mark_lifecycle_shutdown(app, readiness_state)
+    except _STARTUP_GUARD_EXCEPTIONS as exc:
+        logger.warning(f"Shutdown transition gate: failed to mark lifecycle shutdown: {exc}")
+
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+
+        _JM.set_acquire_gate(True)
+    except _IMPORT_EXCEPTIONS as exc:
+        logger.debug(f"Shutdown transition gate: job acquire gate unavailable: {exc}")
+
+
+def _build_legacy_shutdown_context(
+    *,
+    readiness_state: Any | None,
+    usage_task: Any = None,
+    llm_usage_task: Any = None,
+    authnz_scheduler_started: bool = False,
+    chatbooks_cleanup_task: Any = None,
+    chatbooks_cleanup_stop_event: Any = None,
+    storage_cleanup_service: Any = None,
+) -> "LegacyShutdownContext":
+    """Collect the explicit shutdown dependencies used by legacy adapters."""
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import LegacyShutdownContext
+
+    return LegacyShutdownContext(
+        readiness_state=readiness_state,
+        usage_task=usage_task,
+        llm_usage_task=llm_usage_task,
+        authnz_scheduler_started=authnz_scheduler_started,
+        chatbooks_cleanup_task=chatbooks_cleanup_task,
+        chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+        storage_cleanup_service=storage_cleanup_service,
+    )
+
+
+def _build_coordinated_shutdown_coordinator(
+    app: FastAPI,
+    legacy_shutdown_plan: list[Any],
+    *,
+    transport_registry: Any | None = None,
+) -> tuple["ShutdownCoordinator", list["ShutdownComponent"], list["ShutdownComponent"]]:
+    """Assemble the production drain coordinator with legacy and transport owners."""
+    from tldw_Server_API.app.services.shutdown_coordinator import ShutdownCoordinator
+    from tldw_Server_API.app.services.shutdown_transport_registry import (
+        build_shutdown_components,
+    )
+
+    coordinator = ShutdownCoordinator(profile="prod_drain")
+    legacy_components: list[Any] = []
+    try:
+        from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+            register_legacy_shutdown_components,
+        )
+
+        legacy_components = register_legacy_shutdown_components(
+            coordinator,
+            legacy_shutdown_plan,
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS):
+        legacy_components = []
+    transport_components = build_shutdown_components(transport_registry)
+    for component in transport_components:
+        coordinator.register(component)
+
+    try:
+        app.state._tldw_shutdown_transport_component_names = [
+            component.name for component in transport_components
+        ]
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
+
+    return coordinator, legacy_components, transport_components
+
+
+async def _run_coordinated_shutdown(
+    app: FastAPI,
+    legacy_shutdown_plan: list[Any],
+    *,
+    transport_registry: Any | None = None,
+) -> set[str]:
+    """Run the coordinated shutdown slice used by the real lifespan teardown."""
+    try:
+        from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+            get_legacy_shutdown_suppressed_component_names,
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS):
+        get_legacy_shutdown_suppressed_component_names = lambda _summary: set()
+
+    (
+        coordinated_legacy_coordinator,
+        coordinated_legacy_components,
+        coordinated_transport_components,
+    ) = _build_coordinated_shutdown_coordinator(
+        app,
+        legacy_shutdown_plan,
+        transport_registry=transport_registry,
+    )
+    all_components = list(coordinated_legacy_components) + list(coordinated_transport_components)
+    if not all_components:
+        return set()
+
+    coordinated_legacy_summary = await coordinated_legacy_coordinator.shutdown()
+    legacy_component_name_set = {component.name for component in coordinated_legacy_components}
+    coordinated_legacy_component_names = {
+        name
+        for name in get_legacy_shutdown_suppressed_component_names(coordinated_legacy_summary)
+        if name in legacy_component_name_set
+    }
+    try:
+        app.state._tldw_shutdown_legacy_coordinator_summary = coordinated_legacy_summary
+        app.state._tldw_shutdown_legacy_coordinator_component_names = [
+            component.name for component in all_components
+        ]
+        app.state._tldw_shutdown_legacy_coordinator_phase_groups = {
+            phase.value: phase_summary.component_names
+            for phase, phase_summary in coordinated_legacy_summary.phases.items()
+        }
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
+    logger.info(
+        "App Shutdown: legacy coordinator summary components={} phase_groups={} wall_time_ms={}",
+        [component.name for component in all_components],
+        {
+            phase.value: phase_summary.component_names
+            for phase, phase_summary in coordinated_legacy_summary.phases.items()
+        },
+        coordinated_legacy_summary.wall_time_ms,
+    )
+    return coordinated_legacy_component_names
 
 _early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
 try:
@@ -1434,6 +1581,12 @@ async def lifespan(app: FastAPI):
         _JM.set_acquire_gate(False)
     except _IMPORT_EXCEPTIONS:
         pass
+    usage_task = None
+    llm_usage_task = None
+    chatbooks_cleanup_task = None
+    chatbooks_cleanup_stop_event = None
+    storage_cleanup_service = None
+    _authnz_sched_started = False
     # Fail fast if the assembled app contains duplicate method+path route registrations.
     _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
     # Run environmental preflight checks before heavy initialization.
@@ -3611,14 +3764,67 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Flip readiness early and gate new job acquisitions for graceful shutdown
+    # Build and record the legacy shutdown inventory first.
+    # Execute only the narrow transition gate handoff through the coordinator;
+    # the remaining legacy teardown paths stay on the existing direct teardown path.
+    transition_gate_applied = False
+    legacy_shutdown_plan: list[Any] = []
+    coordinated_legacy_component_names: set[str] = set()
     try:
-        mark_lifecycle_shutdown(app, READINESS_STATE)
-        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+        from tldw_Server_API.app.services.shutdown_coordinator import ShutdownCoordinator, ShutdownPhase
+        from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+            build_legacy_shutdown_plan,
+        )
 
-        _JM.set_acquire_gate(True)
-    except _STARTUP_GUARD_EXCEPTIONS:
-        pass
+        shutdown_context = _build_legacy_shutdown_context(
+            readiness_state=READINESS_STATE,
+            usage_task=usage_task,
+            llm_usage_task=llm_usage_task,
+            authnz_scheduler_started=_authnz_sched_started,
+            chatbooks_cleanup_task=chatbooks_cleanup_task,
+            chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+            storage_cleanup_service=storage_cleanup_service,
+        )
+        legacy_shutdown_plan = build_legacy_shutdown_plan(app, shutdown_context)
+        legacy_phase_groups: dict[str, list[str]] = {}
+        for component in legacy_shutdown_plan:
+            legacy_phase_groups.setdefault(component.phase.value, []).append(component.name)
+
+        try:
+            app.state._tldw_shutdown_legacy_plan = legacy_shutdown_plan
+            app.state._tldw_shutdown_legacy_phase_groups = legacy_phase_groups
+            app.state._tldw_shutdown_legacy_inventory_visible = bool(legacy_shutdown_plan)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            pass
+
+        logger.info(
+            "App Shutdown: legacy inventory visible={} phase_groups={}",
+            bool(legacy_shutdown_plan),
+            legacy_phase_groups,
+        )
+
+        transition_coordinator = ShutdownCoordinator(profile="dev_fast")
+        for component in legacy_shutdown_plan:
+            if component.phase == ShutdownPhase.TRANSITION:
+                transition_coordinator.register(component)
+        if legacy_shutdown_plan:
+            transition_summary = await transition_coordinator.shutdown()
+            transition_gate_summary = transition_summary.components.get("lifecycle_gate")
+            transition_gate_applied = bool(
+                transition_gate_summary is not None and transition_gate_summary.result == "stopped"
+            )
+            if transition_gate_applied:
+                logger.info("App Shutdown: legacy transition gate handoff executed via coordinator")
+            else:
+                logger.warning(
+                    "App Shutdown: legacy transition gate handoff did not complete cleanly; "
+                    "falling back to direct drain",
+                )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _legacy_shutdown_err:
+        logger.debug(f"Legacy shutdown inventory skipped: {_legacy_shutdown_err}")
+    finally:
+        if not transition_gate_applied:
+            _apply_shutdown_transition_gate(app, READINESS_STATE)
 
     # Optionally wait for leases to finish (bounded wait)
     try:
@@ -3640,6 +3846,20 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS:
         pass
 
+    # Execute the migrated legacy shutdown components through the coordinator.
+    try:
+        non_transition_legacy_shutdown_plan = [
+            component
+            for component in legacy_shutdown_plan
+            if getattr(getattr(component, "phase", None), "value", None) != "transition"
+        ]
+        coordinated_legacy_component_names = await _run_coordinated_shutdown(
+            app,
+            non_transition_legacy_shutdown_plan,
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _coordinated_legacy_shutdown_err:
+        logger.debug(f"Legacy coordinator shutdown skipped: {_coordinated_legacy_shutdown_err}")
+
     # Cancel/stop background worker(s)
     try:
         bg = getattr(app.state, "bg_tasks", None)
@@ -3653,17 +3873,19 @@ async def lifespan(app: FastAPI):
     try:
         if "cleanup_task" in locals() and cleanup_task:
             cleanup_task.cancel()
-        if "chatbooks_cleanup_stop_event" in locals() and chatbooks_cleanup_stop_event:
-            chatbooks_cleanup_stop_event.set()
-        if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
-            chatbooks_cleanup_task.cancel()
+        if "chatbooks_cleanup" not in coordinated_legacy_component_names:
+            if "chatbooks_cleanup_stop_event" in locals() and chatbooks_cleanup_stop_event:
+                chatbooks_cleanup_stop_event.set()
+            if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
+                chatbooks_cleanup_task.cancel()
         # Storage cleanup service shutdown
         if "storage_cleanup_service" in locals() and storage_cleanup_service:
-            try:
-                await storage_cleanup_service.stop()
-                logger.info("Storage cleanup worker stopped")
-            except _STARTUP_GUARD_EXCEPTIONS:
-                pass
+            if "storage_cleanup_service" not in coordinated_legacy_component_names:
+                try:
+                    await storage_cleanup_service.stop()
+                    logger.info("Storage cleanup worker stopped")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    pass
         try:
             from tldw_Server_API.app.services.storage_cleanup_service import (
                 reset_cleanup_service as _reset_cleanup_service,
@@ -3896,18 +4118,26 @@ async def lifespan(app: FastAPI):
             logger.info("WebSub renewal worker cancelled")
         # Stop usage aggregators gracefully
         try:
-            if "usage_task" in locals() and usage_task:
-                from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator as _stop_usage
+            if "usage_aggregator" not in coordinated_legacy_component_names:
+                if "usage_task" in locals() and usage_task:
+                    from tldw_Server_API.app.services.usage_aggregator import (
+                        stop_usage_aggregator as _stop_usage,
+                    )
 
-                await _stop_usage(usage_task)
+                    await _stop_usage(usage_task)
+                    usage_task = None
         except _STARTUP_GUARD_EXCEPTIONS:
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 usage_task.cancel()
+                usage_task = None
         try:
-            if "llm_usage_task" in locals() and llm_usage_task:
-                from tldw_Server_API.app.services.llm_usage_aggregator import stop_llm_usage_aggregator as _stop_llm
+            if "llm_usage_aggregator" not in coordinated_legacy_component_names:
+                if "llm_usage_task" in locals() and llm_usage_task:
+                    from tldw_Server_API.app.services.llm_usage_aggregator import (
+                        stop_llm_usage_aggregator as _stop_llm,
+                    )
 
-                await _stop_llm(llm_usage_task)
+                    await _stop_llm(llm_usage_task)
         except _STARTUP_GUARD_EXCEPTIONS:
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 llm_usage_task.cancel()
@@ -4126,7 +4356,11 @@ async def lifespan(app: FastAPI):
 
     # Stop AuthNZ scheduler early so it can't keep the loop alive during shutdown.
     try:
-        if "_authnz_sched_started" in locals() and _authnz_sched_started:
+        if (
+            "_authnz_sched_started" in locals()
+            and _authnz_sched_started
+            and "authnz_scheduler" not in coordinated_legacy_component_names
+        ):
             from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
 
             await stop_authnz_scheduler()
@@ -4346,11 +4580,13 @@ async def lifespan(app: FastAPI):
 
     # Stop usage aggregator
     try:
-        if "usage_task" in locals() and usage_task:
-            from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator
+        if "usage_aggregator" not in coordinated_legacy_component_names:
+            if "usage_task" in locals() and usage_task:
+                from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator
 
-            await stop_usage_aggregator(usage_task)
-            logger.info("Usage aggregator stopped")
+                await stop_usage_aggregator(usage_task)
+                logger.info("Usage aggregator stopped")
+                usage_task = None
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping usage aggregator: {e}")
 
@@ -4358,7 +4594,11 @@ async def lifespan(app: FastAPI):
     try:
         # Stop AuthNZ scheduler if started
         try:
-            if "_authnz_sched_started" in locals() and _authnz_sched_started:
+            if (
+                "_authnz_sched_started" in locals()
+                and _authnz_sched_started
+                and "authnz_scheduler" not in coordinated_legacy_component_names
+            ):
                 from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
 
                 await stop_authnz_scheduler()
@@ -5297,6 +5537,16 @@ else:
         enforce_explicit_origins=_cors_enforce_explicit_origins,
     )
     _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
+    try:
+        app.state._tldw_drain_gate_cors_config = {
+            "allow_all_origins": _cors_allow_all_origins,
+            "allow_origin_regex": _cors_allow_origin_regex,
+            "allow_credentials": _cors_allow_credentials,
+            "allowed_origins": _cors_allowed_openapi_origins,
+            "expose_headers": "X-Request-ID, traceparent, X-Trace-Id",
+        }
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
     # # -- If you have any global middleware, add it here --
     app.add_middleware(
         CORSMiddleware,
@@ -5357,6 +5607,7 @@ from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddl
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.Sandbox.middleware import SandboxArtifactTraversalGuardMiddleware
+from tldw_Server_API.app.core.Security.drain_gate_middleware import DrainGateMiddleware
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
@@ -5384,8 +5635,6 @@ if _TEST_FLAGS_SET and not _EXPLICIT_PYTEST_RUNTIME:
 
 if _TEST_MODE:
     logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
-    # Provide request id + trace headers even in tests for assertions
-    app.add_middleware(RequestIDMiddleware)
     # Apply Setup CSP nonce injection even in tests to keep behavior consistent
     try:
         app.add_middleware(SetupCSPMiddleware)
@@ -5484,9 +5733,6 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.debug(f"Skipping AccessLogMiddleware: {_e}")
 
-    # Request ID propagation (adds X-Request-ID header)
-    app.add_middleware(RequestIDMiddleware)
-
     # Sandbox artifact traversal guard (pre-routing)
     try:
         app.add_middleware(SandboxArtifactTraversalGuardMiddleware)
@@ -5552,6 +5798,11 @@ try:
     app.add_middleware(LLMBudgetMiddleware)
 except _STARTUP_GUARD_EXCEPTIONS as _e:
     logger.debug(f"Skipping LLMBudgetMiddleware: {_e}")
+
+# Request ID context should be available before the drain gate, and the drain gate
+# should reject work before the LLM budget middleware gets a chance to do heavier setup.
+app.add_middleware(DrainGateMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # Keep Setup UI HTML outside the static mounts to avoid bypassing the
 # /setup gating via direct file access.
@@ -6947,12 +7198,15 @@ async def health_check():
 
 
 # Readiness check (verifies critical dependencies) - registered conditionally below
-async def readiness_check():
+async def readiness_check(request: Request) -> JSONResponse:
     """Readiness probe for orchestrators and load balancers."""
     try:
-        # Early flip: when shutting down, report not ready immediately
-        if not READINESS_STATE.get("ready", True):
-            return {"status": "not_ready", "reason": "shutdown_in_progress"}
+        lifecycle = get_or_create_lifecycle_state(request.app)
+        if lifecycle.draining or lifecycle.phase == "draining":
+            return JSONResponse(
+                {"status": "not_ready", "reason": "shutdown_in_progress"},
+                status_code=503,
+            )
         # Engine stats
         try:
             from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler as _WS
@@ -7051,31 +7305,33 @@ async def readiness_check():
                         pass
         except _REQUEST_GUARD_EXCEPTIONS:
             pass
-        from fastapi.responses import JSONResponse as _JR
-
-        return _JR(body, status_code=(200 if ready else 503))
-    except _REQUEST_GUARD_EXCEPTIONS as e:
-        return {"status": "not_ready", "error": str(e)}
+        return JSONResponse(body, status_code=(200 if ready else 503))
+    except _READINESS_GUARD_EXCEPTIONS as exc:
+        logger.debug(f"Readiness check failed: {type(exc).__name__}: {exc}")
+        return JSONResponse(
+            {"status": "not_ready", "reason": "dependency_check_failed"},
+            status_code=503,
+        )
 
 
 # /health/ready alias for some orchestrators (registered conditionally below)
-async def readiness_alias():
-    return await readiness_check()
+async def readiness_alias(request: Request) -> JSONResponse:
+    return await readiness_check(request)
 
 
 # Register control-plane health endpoints (works in both minimal and full modes)
 try:
     if route_enabled("health"):
-        app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
-        app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
-        app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
+        app.add_api_route("/health", health_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+        app.add_api_route("/ready", readiness_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+        app.add_api_route("/health/ready", readiness_alias, methods=["GET", "HEAD"], openapi_extra={"security": []})
     else:
         logger.info("Route disabled by policy: health (/health, /ready, /health/ready)")
 except _STARTUP_GUARD_EXCEPTIONS as _health_rt_err:
     logger.warning(f"Route gating error for health; including by default. Error: {_health_rt_err}")
-    app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
-    app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
-    app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
+    app.add_api_route("/health", health_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+    app.add_api_route("/ready", readiness_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+    app.add_api_route("/health/ready", readiness_alias, methods=["GET", "HEAD"], openapi_extra={"security": []})
 
 # Import-time CI/startup guard: fail immediately if the route table contains duplicates.
 _fail_on_duplicate_route_method_pairs(app, context="module import")

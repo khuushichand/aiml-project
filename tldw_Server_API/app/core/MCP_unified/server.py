@@ -30,6 +30,10 @@ from tldw_Server_API.app.core.testing import (
     is_test_mode as _is_test_mode,
     is_truthy as _is_truthy,
 )
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
+from tldw_Server_API.app.services.shutdown_transport_registry import (
+    register_shutdown_transport_family,
+)
 
 from .auth.authnz_rbac import get_rbac_policy
 from .auth.jwt_manager import JWTManager, get_jwt_manager
@@ -261,8 +265,30 @@ class MCPServer:
 
         # Background tasks
         self.background_tasks: set[asyncio.Task] = set()
+        register_shutdown_transport_family(
+            "mcp.websocket",
+            active_count=self.get_active_connection_count,
+            drain=self.drain_connections,
+        )
 
         logger.info("MCP Server created")
+
+    def get_active_connection_count(self) -> int:
+        return len(self.connections)
+
+    async def drain_connections(self, timeout_s: float | None = None) -> None:
+        await self._close_all_connections()
+
+    async def _guard_websocket_start(self, websocket: WebSocket) -> bool:
+        app = getattr(websocket, "app", None)
+        if app is None:
+            return True
+        try:
+            assert_may_start_work(app, "mcp.websocket")
+            return True
+        except HTTPException:
+            await websocket.close(code=1013, reason="shutdown_draining")
+            return False
 
     @staticmethod
     def _mask_secrets(text: str) -> str:
@@ -929,6 +955,16 @@ class MCPServer:
             await websocket.close(code=1008, reason="Authentication required")
             return
 
+        if stable_session_id:
+            metadata["session_id"] = stable_session_id
+        if workspace_key:
+            metadata["workspace_id"] = workspace_key
+        if cwd_key:
+            metadata["cwd"] = cwd_key
+
+        if not await self._guard_websocket_start(websocket):
+            return
+
         try:
             if stable_session_id:
                 await self._get_or_create_session(
@@ -940,13 +976,6 @@ class MCPServer:
         except PermissionError as exc:
             await websocket.close(code=1008, reason=str(exc))
             return
-
-        if stable_session_id:
-            metadata["session_id"] = stable_session_id
-        if workspace_key:
-            metadata["workspace_id"] = workspace_key
-        if cwd_key:
-            metadata["cwd"] = cwd_key
 
         # Check connection limits (global and per-IP)
         async with self.connection_lock:
