@@ -1449,7 +1449,11 @@ def _build_scope_snapshot(rules: list[dict[str, Any]]) -> tuple[dict[str, Any], 
     return snapshot, audit
 
 
-def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileResponse:
+def _persona_profile_to_response(
+    profile: dict[str, Any],
+    *,
+    buddy_row: dict[str, Any] | None = None,
+) -> PersonaProfileResponse:
     raw_voice_defaults = profile.get("voice_defaults")
     raw_setup = profile.get("setup")
     try:
@@ -1487,7 +1491,7 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),
-        buddy_summary=_persona_buddy_summary_from_profile(profile),
+        buddy_summary=_persona_buddy_summary_from_profile(profile, buddy_row=buddy_row),
     )
 
 
@@ -1913,16 +1917,12 @@ def _persona_buddy_summary_from_profile(
     *,
     buddy_row: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    attached_buddy_row = buddy_row
-    if attached_buddy_row is None and isinstance(profile.get("buddy_row"), dict):
-        attached_buddy_row = profile["buddy_row"]
-
     description = str(profile.get("system_prompt") or "").strip()
     role_summary = description[:300] if description else _DEFAULT_PERSONA_DESCRIPTION
     return build_persona_buddy_summary(
         persona_name=str(profile.get("name") or _DEFAULT_PERSONA_NAME),
         role_summary=role_summary,
-        buddy_row=attached_buddy_row,
+        buddy_row=buddy_row,
     )
 
 
@@ -1931,10 +1931,6 @@ def _load_persona_buddy_row_for_projection(
     *,
     profile: dict[str, Any],
 ) -> dict[str, Any] | None:
-    attached_buddy_row = profile.get("buddy_row")
-    if isinstance(attached_buddy_row, dict):
-        return attached_buddy_row
-
     persona_id = str(profile.get("id") or "").strip()
     user_id = str(profile.get("user_id") or "").strip()
     if not persona_id or not user_id:
@@ -2576,9 +2572,13 @@ async def list_persona_profiles(
         )
         if not profiles and not include_deleted:
             profiles = [_ensure_default_persona_profile(db, user_id=user_id)]
-        for profile in profiles:
-            profile["buddy_row"] = _load_persona_buddy_row_for_projection(db, profile=profile)
-        return [_persona_profile_to_response(profile) for profile in profiles]
+        return [
+            _persona_profile_to_response(
+                profile,
+                buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+            )
+            for profile in profiles
+        ]
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="list persona profiles") from exc
 
@@ -2606,7 +2606,7 @@ async def create_persona_profile(
         if profile is None:
             raise HTTPException(status_code=500, detail="Failed to load created persona profile")
         try:
-            profile["buddy_row"] = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+            buddy_row = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
             _rollback_created_persona_profile_after_buddy_failure(
                 db,
@@ -2615,7 +2615,7 @@ async def create_persona_profile(
                 expected_version=int(profile.get("version") or 1),
             )
             raise HTTPException(status_code=500, detail="Persona buddy sync failed after profile create") from exc
-        return _persona_profile_to_response(profile)
+        return _persona_profile_to_response(profile, buddy_row=buddy_row)
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
@@ -2640,8 +2640,10 @@ async def get_persona_profile(
         profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        profile["buddy_row"] = _load_persona_buddy_row_for_projection(db, profile=profile)
-        return _persona_profile_to_response(profile)
+        return _persona_profile_to_response(
+            profile,
+            buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+        )
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
@@ -2683,7 +2685,7 @@ async def update_persona_profile(
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
         try:
-            profile["buddy_row"] = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+            buddy_row = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
             _rollback_updated_persona_profile_after_buddy_failure(
                 db,
@@ -2694,7 +2696,7 @@ async def update_persona_profile(
                 expected_version=int(profile.get("version") or 1),
             )
             raise HTTPException(status_code=500, detail="Persona buddy sync failed after profile update") from exc
-        return _persona_profile_to_response(profile)
+        return _persona_profile_to_response(profile, buddy_row=buddy_row)
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
@@ -2792,7 +2794,10 @@ async def restore_persona_profile(
         profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        return _persona_profile_to_response(profile)
+        return _persona_profile_to_response(
+            profile,
+            buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+        )
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:

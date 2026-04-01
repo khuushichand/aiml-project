@@ -227,7 +227,14 @@ def test_deleted_persona_hides_buddy_until_restore_and_restore_preserves_buddy_r
             params={"expected_version": int(deleted_profile["version"])},
         )
         assert restored.status_code == 200, restored.text
-        assert restored.json()["is_active"] is True
+        restored_payload = restored.json()
+        assert restored_payload["is_active"] is True
+        restored_buddy_summary = restored_payload["buddy_summary"]
+        assert restored_buddy_summary is not None
+        assert restored_buddy_summary["has_buddy"] is True
+        assert restored_buddy_summary["persona_name"] == "Delete Restore Buddy API Persona"
+        assert restored_buddy_summary["role_summary"]
+        assert restored_buddy_summary["visual"]["species_id"]
 
         after = client.get(f"/api/v1/persona/profiles/{persona_id}/buddy")
         assert after.status_code == 200, after.text
