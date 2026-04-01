@@ -440,7 +440,7 @@ class CollectionsDatabase:
         if not self._owns_backend:
             return
         try:
-            self.backend.close_all()
+            self.backend.get_pool().close_all()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections_db: failed to close backend for user {}: {}", self.user_id, exc)
 

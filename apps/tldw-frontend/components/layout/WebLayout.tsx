@@ -52,6 +52,7 @@ import {
 } from "@/services/request-events"
 import { useBackendRecoveryUi } from "@/components/Common/BackendRecoveryUiContext"
 import { BackendUnavailableModalGate } from "@web/components/layout/BackendUnavailableModalGate"
+import { getUnreadCount } from "@web/lib/api/notifications"
 import { CommandPalette } from "@/components/Common/CommandPalette"
 import {
   useConnectionActions,
@@ -107,6 +108,22 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const [showChatSidebar] = useChatSidebar()
   const isMobileViewport = useMobile()
   useServerOnline()
+
+  // Notification unread count for header bell
+  const [notificationCount, setNotificationCount] = useState(0)
+  useEffect(() => {
+    if (demoEnabled) return
+    let cancelled = false
+    const poll = () => {
+      getUnreadCount()
+        .then((res) => { if (!cancelled) setNotificationCount(res?.unread ?? 0) })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, 30_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [demoEnabled])
+  const handleOpenNotifications = useCallback(() => navigate("/notifications"), [navigate])
   const location = useLocation()
   const { historyId, serverChatId } = useStoreMessageOption((state) => ({
     historyId: state.historyId,
@@ -378,6 +395,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                     ? !sidebarOpen
                     : chatSidebarCollapsed
                 }
+                notificationCount={notificationCount}
+                onOpenNotifications={handleOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -395,6 +414,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                     ? !sidebarOpen
                     : chatSidebarCollapsed
                 }
+                notificationCount={notificationCount}
+                onOpenNotifications={handleOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
