@@ -97,7 +97,7 @@ Track B should stay focused on shared rendering, shell behavior, and data hydrat
 
 ## Recommended Approach
 
-Implement Track B as a single shared `BuddyShellHost` mounted at the layout level for persona-aware desktop surfaces.
+Implement Track B as a shared `BuddyShellHost` pattern mounted at each app root that can host persona-aware desktop surfaces.
 
 That host owns:
 
@@ -121,21 +121,28 @@ This is the recommended shape because it:
 
 ### 1. Component Model
 
-Track B should introduce four focused frontend units.
+Track B should introduce four focused frontend units plus one explicit surface-to-host adapter contract.
 
 #### Buddy Shell Host
 
-A layout-level host component mounted alongside other global desktop overlays.
+An app-root-level host component mounted alongside other global desktop overlays.
 
 Responsibilities:
 
 - read the global buddy-shell enabled setting
-- suppress itself entirely on narrow/mobile layouts
+- suppress itself on unsupported layouts for Track B
 - resolve the active persona for the current workspace
 - choose the correct persisted position bucket for the current layout class
 - render dormant, docked, or open buddy states
 
-The host should mount once per layout root rather than once per page panel.
+The host should mount once per app root rather than once per page panel.
+
+Day-one roots should be explicit:
+
+- the main authenticated web app layout root
+- the extension sidepanel app root
+
+Track B should not assume one process-wide singleton host spanning both roots.
 
 #### Buddy Shell Store
 
@@ -149,6 +156,22 @@ Day-one state should include:
 Track B should not persist speculative future interaction state, chat history, or persona-authored content in this store.
 
 The shell should default back to its compact docked state when it mounts for a new session or fresh page load. Phase 2 should persist position, not persistent expanded-session UI state.
+
+#### Persona Buddy Render Context
+
+Track B should define an explicit frontend adapter contract between surfaces and the host.
+
+Recommended day-one shape:
+
+- `surface_id`
+- `surface_active`
+- `active_persona_id`
+- `position_bucket`
+- `persona_source`
+
+This contract exists to prevent the host from inferring buddy activation from unrelated global state alone.
+
+Surface adapters should publish context into their own app root only. The host for a given root reads only that root's active render context.
 
 #### Buddy Dock
 
@@ -181,6 +204,28 @@ Track B should render exactly one buddy shell per active layout context.
 
 The host should target the active persona rather than whichever persona the user last hovered.
 
+#### Activation Gate
+
+The shell should render only when both of these are true:
+
+- the current surface has explicitly marked buddy rendering as active
+- the surface has resolved an active persona for that context
+
+Persisted global assistant selection by itself must not activate the buddy shell on unrelated routes. If the app root is mounted on a page that is not participating in Track B, the host should remain dormant even if a persona was selected elsewhere earlier.
+
+#### Active Persona Precedence
+
+Track B should define a strict precedence rule so "active persona" is not ambiguous across surfaces:
+
+1. route-local or surface-local active persona state for the current surface
+2. route bootstrap state for the current surface
+3. current-surface hydrated persona catalog entry matching the active surface selection
+4. persisted global assistant selection only as a same-root fallback when the surface is already marked active
+
+This means Persona Garden route-local persona state beats persisted chat assistant selection inside Persona Garden, and chat-selected persona state beats stale stored persona data inside chat.
+
+Each host should resolve persona only from the render context for its own root. A Persona Garden root and a chat root may legitimately point at different personas at the same time without conflicting.
+
 #### Chat
 
 In chat surfaces, the shell should follow the currently selected active persona. Existing message avatars and selected-assistant inline imagery remain unchanged.
@@ -208,13 +253,28 @@ Track B rendering behavior should follow these rules:
 - remember position per supported layout class
 - preserve current inline avatar rendering everywhere
 
-The relevant layout classes for day one should be grouped broadly, not per route, so position memory stays predictable. A main app layout and a narrower sidepanel-style layout are sufficient for phase 2 unless implementation discovers a clearer existing split.
+The relevant layout classes for day one should be grouped broadly, not per route, so position memory stays predictable. A main web-app desktop bucket and an extension-sidepanel bucket are sufficient for phase 2 unless implementation discovers a clearer existing split.
 
 ### 4. Data Contract And Hydration
 
 Track B should not drive rendering from `GET /persona/profiles/{id}/buddy` on every surface.
 
 Instead, the persona payloads already consumed by phase 2 surfaces should project a compact buddy summary sufficient for shell rendering.
+
+Track B should define one canonical frontend summary type rather than allowing each surface to invent its own partial shape.
+
+Recommended day-one canonical type:
+
+- `has_buddy: boolean`
+- `persona_name: string`
+- `role_summary: string | null`
+- `visual`
+  - `species_id: string`
+  - `silhouette_id: string`
+  - `palette_id: string`
+  - `accessory_id?: string | null`
+  - `eye_style?: string | null`
+  - `expression_profile?: string | null`
 
 Recommended compact buddy summary fields:
 
@@ -224,6 +284,16 @@ Recommended compact buddy summary fields:
 - `buddy_summary.has_buddy`
 
 The exact field names may adapt to repo conventions, but the contract should remain compact and render-oriented.
+
+Day-one payloads that should carry this canonical summary are:
+
+- `/api/v1/persona/catalog` list responses normalized into shared persona summary clients
+- `/api/v1/persona/profiles/{persona_id}` detail responses used by Persona Garden when route detail is loaded
+- any route-local persona catalog shape that currently shadows the shared client summary type
+
+Track B should prefer converging those frontend persona summary types onto a shared contract instead of adding parallel ad hoc buddy fields in multiple local type aliases.
+
+`AssistantSelection` may mirror `buddy_summary` when a persona is selected from hydrated catalog data, but that mirrored copy is a cache or fallback only. The shell host must prefer current-surface persona payloads over stale persisted assistant-selection data.
 
 #### Why Summary Projection
 
@@ -252,13 +322,21 @@ This is a presence toggle, not a full identity-mode switch. Since inline avatars
 
 ### 6. Desktop-Only Boundary
 
-Track B should explicitly suppress the buddy shell on narrow/mobile layouts.
+Track B should explicitly suppress the buddy shell on responsive web narrow/mobile layouts.
 
 This should be treated as a deliberate rollout boundary, not a degraded desktop implementation. Mobile shell behavior can be designed later with its own interaction and layout assumptions.
 
+To avoid ambiguity, day-one support should be:
+
+- main web app desktop layouts only at desktop breakpoint (`>=1024px`)
+- extension sidepanel root as its own supported desktop surface class, even though its visual width may be narrow
+
+The extension sidepanel is in scope for Track B because it is a desktop shell, not a mobile layout. Responsive web tablet and mobile layouts remain out of scope.
+
 The host should therefore:
 
-- not mount on narrow/mobile layouts
+- not mount on responsive web layouts below desktop breakpoint
+- mount in the extension sidepanel root only when that root has an active Track B surface
 - not attempt a fixed mobile dock fallback in phase 2
 - avoid persisting mobile-specific shell positions
 
@@ -288,19 +366,23 @@ Track B should be tested across three layers.
 - default docked state
 - open and close behavior
 - active-persona-only targeting
+- explicit `surface_active` gating
 - dormancy with no active persona
 - per-surface position persistence
 - mobile suppression
+- sidepanel-root support without responsive-web leakage
 
 #### Surface Integration Tests
 
 - chat surfaces publish or resolve the active persona correctly
 - Persona Garden publishes or resolves the active persona correctly
 - selector surfaces do not retarget the shell to arbitrary hovered rows
+- route-local persona state beats stale persisted assistant selection inside Persona Garden
 - existing inline avatar rendering remains intact
 
 #### Data Contract Tests
 
+- shared persona summary consumers normalize the same canonical `buddy_summary` shape
 - persona payloads used by phase 2 surfaces expose compact buddy summary fields
 - shell consumers do not regress into per-persona `/buddy` fetch loops
 - missing buddy summary data degrades safely
@@ -323,7 +405,8 @@ The implementation plan for this spec should stay limited to:
 
 - compact summary payload projection
 - shared desktop buddy host and store
-- surface adapters for active-persona resolution
+- explicit render-context adapters and active-persona precedence
+- shared persona summary normalization for `buddy_summary`
 - settings wiring
 - tests and failure-safe rollout
 
