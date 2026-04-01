@@ -222,7 +222,14 @@ export default function NotificationsPage() {
                         onClick={() => {
                           void handleMarkRead(item.id)
                           if (item.link_url) {
-                            window.location.href = item.link_url
+                            try {
+                              const url = new URL(item.link_url, window.location.origin)
+                              if (url.origin === window.location.origin) {
+                                void router.push(url.pathname + url.search + url.hash)
+                              }
+                            } catch {
+                              // Malformed URL — ignore
+                            }
                           } else if (item.link_type) {
                             const lt = (item.link_type || "").toLowerCase()
                             let route = "/companion"

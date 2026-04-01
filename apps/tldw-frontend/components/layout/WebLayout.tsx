@@ -116,7 +116,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     let cancelled = false
     const poll = () => {
       getUnreadCount()
-        .then((res) => { if (!cancelled) setNotificationCount(res?.unread ?? 0) })
+        .then((res) => { if (!cancelled) setNotificationCount(res?.unread_count ?? 0) })
         .catch(() => {})
     }
     poll()
