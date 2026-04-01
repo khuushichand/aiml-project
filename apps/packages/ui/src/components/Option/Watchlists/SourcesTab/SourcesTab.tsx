@@ -1548,22 +1548,30 @@ export const SourcesTab: React.FC = () => {
               </div>
             }
           >
-            <Space>
+            <Space direction="vertical" align="center" size="middle">
               <Button
                 type="primary"
-                icon={<Plus className="h-4 w-4" />}
-                onClick={() => openSourceForm()}
+                size="large"
+                onClick={() => setActiveTab("overview")}
               >
-                {t("watchlists:sources.addSource", "Add Source")}
+                {t("watchlists:sources.quickSetupCta", "Get started with Quick Setup")}
               </Button>
-              <Tooltip title={t("watchlists:sources.importTooltip", "Import feeds from an OPML file (standard RSS reader export format)")}>
+              <Space>
                 <Button
-                  icon={<UploadCloud className="h-4 w-4" />}
-                  onClick={() => setImportOpen(true)}
+                  icon={<Plus className="h-4 w-4" />}
+                  onClick={() => openSourceForm()}
                 >
-                  {t("watchlists:sources.import", "Import OPML")}
+                  {t("watchlists:sources.addSource", "Add Source")}
                 </Button>
-              </Tooltip>
+                <Tooltip title={t("watchlists:sources.importTooltip", "Import feeds from an OPML file (standard RSS reader export format)")}>
+                  <Button
+                    icon={<UploadCloud className="h-4 w-4" />}
+                    onClick={() => setImportOpen(true)}
+                  >
+                    {t("watchlists:sources.import", "Import OPML")}
+                  </Button>
+                </Tooltip>
+              </Space>
             </Space>
           </Empty>
         </div>

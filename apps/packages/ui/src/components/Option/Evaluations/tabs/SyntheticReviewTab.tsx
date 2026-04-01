@@ -63,7 +63,6 @@ export const SyntheticReviewTab: React.FC = () => {
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   const [datasetName, setDatasetName] = React.useState("approved synthetic review set")
   const [notesById, setNotesById] = React.useState<Record<string, string>>({})
-  const [reviewingSampleId, setReviewingSampleId] = React.useState<string | null>(null)
 
   const { data, isLoading, isError, error } = useSyntheticEvalQueue({
     recipeKind: storedRecipeKind && storedRecipeKind !== "all" ? storedRecipeKind : null,
@@ -75,10 +74,13 @@ export const SyntheticReviewTab: React.FC = () => {
   const promoteMutation = usePromoteSyntheticEvalSamples()
 
   const rawQueueItems = Array.isArray(data?.data?.data) ? data.data.data : []
-  const queueItems =
-    !storedBatchId && storedSampleIds.length > 0
-      ? rawQueueItems.filter((sample) => storedSampleIds.includes(sample.sample_id))
-      : rawQueueItems
+  const queueItems = React.useMemo(
+    () =>
+      !storedBatchId && storedSampleIds.length > 0
+        ? rawQueueItems.filter((sample) => storedSampleIds.includes(sample.sample_id))
+        : rawQueueItems,
+    [rawQueueItems, storedBatchId, storedSampleIds]
+  )
   const totalQueueItems = typeof data?.data?.total === "number" ? data.data.total : queueItems.length
 
   React.useEffect(() => {
@@ -91,16 +93,11 @@ export const SyntheticReviewTab: React.FC = () => {
     sample: SyntheticEvalDraftSample,
     action: "approve" | "reject" | "edit_and_approve"
   ) => {
-    setReviewingSampleId(sample.sample_id)
-    try {
-      await reviewMutation.mutateAsync({
-        sampleId: sample.sample_id,
-        action,
-        notes: notesById[sample.sample_id] || undefined
-      })
-    } finally {
-      setReviewingSampleId(null)
-    }
+    await reviewMutation.mutateAsync({
+      sampleId: sample.sample_id,
+      action,
+      notes: notesById[sample.sample_id] || undefined
+    })
   }
 
   const toggleSelection = (sampleId: string, checked: boolean) => {
@@ -314,7 +311,7 @@ export const SyntheticReviewTab: React.FC = () => {
                 <Space wrap>
                   <Button
                     onClick={() => void handleReviewAction(sample, "approve")}
-                    loading={reviewingSampleId === sample.sample_id}
+                    loading={reviewMutation.isPending}
                   >
                     {t("evaluations:syntheticApproveCta", {
                       defaultValue: "Approve"
@@ -323,7 +320,7 @@ export const SyntheticReviewTab: React.FC = () => {
                   <Button
                     danger
                     onClick={() => void handleReviewAction(sample, "reject")}
-                    loading={reviewingSampleId === sample.sample_id}
+                    loading={reviewMutation.isPending}
                   >
                     {t("evaluations:syntheticRejectCta", {
                       defaultValue: "Reject"
@@ -332,7 +329,7 @@ export const SyntheticReviewTab: React.FC = () => {
                   <Button
                     type="primary"
                     onClick={() => void handleReviewAction(sample, "edit_and_approve")}
-                    loading={reviewingSampleId === sample.sample_id}
+                    loading={reviewMutation.isPending}
                   >
                     {t("evaluations:syntheticEditApproveCta", {
                       defaultValue: "Edit & approve"

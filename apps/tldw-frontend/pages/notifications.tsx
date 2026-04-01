@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/router';
 import { useToast } from '@web/components/ui/ToastProvider';
 import {
   dismissNotification,
@@ -34,6 +35,7 @@ function toNotificationFromStream(payload: unknown): NotificationItem | null {
 
 export default function NotificationsPage() {
   const { show } = useToast();
+  const router = useRouter();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -213,6 +215,27 @@ export default function NotificationsPage() {
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {(item.link_url || item.link_type) && (
+                      <button
+                        type="button"
+                        className="rounded bg-primary/10 border border-primary/30 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+                        onClick={() => {
+                          void handleMarkRead(item.id)
+                          if (item.link_url) {
+                            window.location.href = item.link_url
+                          } else if (item.link_type) {
+                            const lt = (item.link_type || "").toLowerCase()
+                            let route = "/companion"
+                            if (lt.includes("reading")) route = "/collections"
+                            else if (lt.includes("note") || lt.includes("document")) route = "/notes"
+                            else if (lt.includes("watchlist") || lt.includes("job")) route = "/watchlists"
+                            void router.push(route)
+                          }
+                        }}
+                      >
+                        View
+                      </button>
+                    )}
                     {!item.read_at && (
                       <button
                         type="button"

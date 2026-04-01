@@ -17,6 +17,7 @@ import asyncio
 import calendar
 import hashlib
 import inspect
+import os
 import re
 import sqlite3
 import time
@@ -43,11 +44,32 @@ from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 
+_RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS = 500
+
 
 def _serialize_result_document(doc: Any) -> dict[str, Any]:
     """Serialize a pipeline document into the response-compatible document shape."""
     if isinstance(doc, dict):
-        return dict(doc)
+        metadata = dict(doc.get("metadata") or {})
+        source = doc.get("source")
+        if source is not None:
+            metadata.setdefault(
+                "source",
+                source.value if hasattr(source, "value") else str(source),
+            )
+        for field_name in ("media_id", "note_id", "chunk_id", "record_id", "start", "end"):
+            value = doc.get(field_name)
+            if value is not None:
+                metadata.setdefault(field_name, value)
+        doc_id = doc.get("id")
+        if doc_id is not None:
+            metadata.setdefault("chunk_id", str(doc_id))
+        return {
+            "id": doc_id,
+            "content": doc.get("content") or doc.get("text") or doc.get("body"),
+            "score": doc.get("score", 0.0),
+            "metadata": metadata,
+        }
 
     metadata = dict(getattr(doc, "metadata", {}) or {})
     try:
@@ -70,6 +92,102 @@ def _serialize_result_document(doc: Any) -> dict[str, Any]:
         "score": getattr(doc, "score", 0.0),
         "metadata": metadata,
     }
+
+
+def _resolve_include_rerank_debug_documents(explicit_flag: Any) -> bool:
+    """Resolve whether rerank debug snapshots are enabled."""
+    if explicit_flag is None:
+        return _shared_is_truthy(os.getenv("RAG_INCLUDE_RERANK_DEBUG_DOCUMENTS", "false"))
+    if isinstance(explicit_flag, bool):
+        return explicit_flag
+    return _shared_is_truthy(explicit_flag)
+
+
+def _truncate_rerank_debug_content(content: Any, *, max_chars: int = _RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS) -> str | None:
+    if content is None:
+        return None
+    text = str(content)
+    if max_chars > 0 and len(text) > max_chars:
+        return f"{text[:max_chars].rstrip()}..."
+    return text
+
+
+def _serialize_rerank_debug_document(
+    doc: Any,
+    *,
+    include_content: bool,
+    max_content_chars: int = _RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS,
+) -> dict[str, Any]:
+    """Serialize rerank debug snapshots without duplicating the full document body by default."""
+    serialized = _serialize_result_document(doc)
+    metadata = dict(serialized.get("metadata", {}) or {})
+
+    def _pick(field_name: str) -> Any:
+        value = serialized.get(field_name)
+        if value is None:
+            value = metadata.get(field_name)
+        return value
+
+    debug_doc: dict[str, Any] = {}
+    doc_id = _pick("id") or _pick("chunk_id") or _pick("record_id")
+    if doc_id is not None:
+        debug_doc["id"] = doc_id
+    score = _pick("score")
+    if score is not None:
+        debug_doc["score"] = score
+    source = _pick("source")
+    if source is not None:
+        debug_doc["source"] = source
+
+    identity_fields = (
+        "chunk_id",
+        "media_id",
+        "note_id",
+        "record_id",
+        "sql_target_id",
+        "start",
+        "end",
+        "chunk_start",
+        "chunk_end",
+        "page_number",
+        "section_title",
+        "title",
+        "path",
+    )
+    debug_metadata: dict[str, Any] = {}
+    for field_name in identity_fields:
+        value = _pick(field_name)
+        if value is None:
+            continue
+        if field_name in {"chunk_id", "media_id", "note_id", "record_id", "start", "end"}:
+            debug_doc[field_name] = value
+        debug_metadata[field_name] = value
+    if debug_metadata:
+        debug_doc["metadata"] = debug_metadata
+
+    if include_content:
+        content = _truncate_rerank_debug_content(
+            serialized.get("content"),
+            max_chars=max_content_chars,
+        )
+        if content:
+            debug_doc["content"] = content
+
+    return debug_doc
+
+
+def _serialize_rerank_debug_documents(
+    documents: list[Any] | None,
+    *,
+    include_content: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    return [
+        _serialize_rerank_debug_document(doc, include_content=include_content)
+        for doc in list(documents or [])[:limit]
+    ]
 
 
 # Optional dependency placeholders (typed as Any to keep mypy tolerant for missing deps).
@@ -1225,6 +1343,7 @@ async def unified_rag_pipeline(
     highlight_query_terms: bool = False,
     track_cost: bool = False,
     debug_mode: bool = False,
+    include_rerank_debug_documents: Optional[bool] = None,
 
     # ========== GENERATION GUARDRAILS ==========
     # Pre-generation: instruction-injection filtering and down-weighting
@@ -4351,12 +4470,17 @@ async def unified_rag_pipeline(
                         min_relevance_prob=rerank_min_relevance_prob,
                         sentinel_margin=rerank_sentinel_margin,
                     )
+                    include_rerank_snapshots = debug_mode and _resolve_include_rerank_debug_documents(
+                        include_rerank_debug_documents
+                    )
+                    rerank_debug_limit = max(1, int(rerank_top_k or top_k or 1))
                     try:
-                        if debug_mode and isinstance(result.metadata, dict):
-                            result.metadata["pre_rerank_documents"] = [
-                                _serialize_result_document(doc)
-                                for doc in (result.documents or [])
-                            ]
+                        if include_rerank_snapshots and isinstance(result.metadata, dict):
+                            result.metadata["pre_rerank_documents"] = _serialize_rerank_debug_documents(
+                                result.documents,
+                                include_content=True,
+                                limit=rerank_debug_limit,
+                            )
                         reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
                         reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
                     except Exception as rerank_exc:
@@ -4387,11 +4511,12 @@ async def unified_rag_pipeline(
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
                         result.documents = reranked[:(rerank_top_k or top_k)]
-                    if debug_mode and isinstance(result.metadata, dict):
-                        result.metadata["reranked_documents"] = [
-                            _serialize_result_document(doc)
-                            for doc in (result.documents or [])
-                        ]
+                    if include_rerank_snapshots and isinstance(result.metadata, dict):
+                        result.metadata["reranked_documents"] = _serialize_rerank_debug_documents(
+                            result.documents,
+                            include_content=True,
+                            limit=rerank_debug_limit,
+                        )
 
                     result.timings["reranking"] = time.time() - rerank_start
                     try:
@@ -5878,6 +6003,7 @@ async def unified_rag_pipeline(
                             highlight_query_terms=highlight_query_terms,
                             track_cost=track_cost,
                             debug_mode=debug_mode,
+                            include_rerank_debug_documents=include_rerank_debug_documents,
                         )
                         # Quick verify the new answer without repairs to compare factuality
                         new_ratio = None

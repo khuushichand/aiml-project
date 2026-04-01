@@ -1,6 +1,9 @@
+import { useQuery } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { useSafeDemoMode } from "@/context/demo-mode"
+import { fetchChatModels } from "@/services/tldw-server"
 import { CompanionHomePage } from "./CompanionHomePage"
 
 type CompanionHomeShellProps = {
@@ -14,6 +17,15 @@ export function CompanionHomeShell({
 }: CompanionHomeShellProps) {
   const { demoEnabled, setDemoEnabled } = useSafeDemoMode()
   const demoExitPath = surface === "sidepanel" ? "/settings" : "/setup"
+
+  const isConnected = useIsConnected()
+  const { data: models = [] } = useQuery({
+    queryKey: ["companion-home:chatModels"],
+    queryFn: () => fetchChatModels({ returnEmpty: true }),
+    enabled: isConnected && !demoEnabled,
+    staleTime: 30_000,
+  })
+  const needsProvider = isConnected && !demoEnabled && models.length === 0
 
   const actions =
     surface === "sidepanel"
@@ -69,6 +81,27 @@ export function CompanionHomeShell({
               className="shrink-0 rounded-lg border border-border bg-bg px-3 py-1.5 text-xs font-medium text-text transition-colors hover:bg-surface-hover"
             >
               Connect a server
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {needsProvider && (
+        <div className="rounded-2xl border border-primary/30 bg-primary/5 px-5 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-text">
+                Configure an LLM provider to start chatting
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                Add an API key for OpenAI, Anthropic, or another provider in your server&apos;s .env file, then restart.
+              </p>
+            </div>
+            <Link
+              to="/settings/model"
+              className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Open Model Settings
             </Link>
           </div>
         </div>

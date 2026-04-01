@@ -10,7 +10,8 @@ import {
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
 import { generateID, updateMessageMedia } from "@/db/dexie/helpers"
-import { fetchChatModels } from "@/services/tldw-server"
+import { fetchChatModels, clearChatModelsCache } from "@/services/tldw-server"
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { tldwClient, type ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import {
@@ -184,10 +185,12 @@ export const PlaygroundChat = ({
   } = useMessageOption()
   const [openReasoning] = useStorage("openReasoning", false)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
-  const { data: chatModels = [] } = useQuery({
+  const isConnected = useIsConnected()
+  const { data: chatModels = [], isFetched: chatModelsFetched, refetch: refetchChatModels } = useQuery({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
-    enabled: true
+    enabled: isConnected,
+    staleTime: 30_000,
   })
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
@@ -992,6 +995,21 @@ export const PlaygroundChat = ({
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-4 w-full">
+            {isConnected && chatModelsFetched && chatModels.length === 0 && (
+              <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
+                <p className="font-medium">{t("playground:noModelsAvailable", "No AI models available")}</p>
+                <p className="mt-1 text-xs text-text-muted">
+                  {t("playground:addApiKeyInstructions", "Add an LLM provider API key to your server's .env file and restart, then")}{" "}
+                  <button
+                    type="button"
+                    className="underline hover:text-text"
+                    onClick={() => { clearChatModelsCache(); void refetchChatModels() }}
+                  >
+                    {t("playground:refreshModels", "refresh models")}
+                  </button>.
+                </p>
+              </div>
+            )}
             <PlaygroundEmpty />
           </div>
         )}

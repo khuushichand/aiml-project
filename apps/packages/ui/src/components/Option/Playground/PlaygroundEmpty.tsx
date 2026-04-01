@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useDemoMode } from "@/context/demo-mode"
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { useHelpModal } from "@/store/tutorials"
 import { buildResearchLaunchPath } from "@/routes/route-paths"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
@@ -19,6 +20,7 @@ import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 export const PlaygroundEmpty = () => {
   const { t } = useTranslation(["playground", "common"])
   const { demoEnabled } = useDemoMode()
+  const isConnected = useIsConnected()
   const { open: openHelpModal } = useHelpModal()
   const navigate = useNavigate()
 
@@ -143,10 +145,15 @@ export const PlaygroundEmpty = () => {
                 defaultValue:
                   "You're in demo mode — try asking a question to see how the assistant responds. You can connect your own tldw server later."
               })
-            : t("playground:empty.description", {
-                defaultValue:
-                  "Experiment with different models, prompts, and knowledge sources here."
-              })
+            : !isConnected
+              ? t("playground:empty.disconnectedDescription", {
+                  defaultValue:
+                    "Connect to a tldw server to start chatting. Go to Settings to configure your connection."
+                })
+              : t("playground:empty.description", {
+                  defaultValue:
+                    "Experiment with different models, prompts, and knowledge sources here."
+                })
         }
         primaryActionLabel={t("playground:empty.primaryCta", {
           defaultValue: "Start chatting"

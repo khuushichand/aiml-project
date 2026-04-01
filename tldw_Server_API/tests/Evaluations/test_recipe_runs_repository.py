@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import sqlite3
 
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
@@ -84,7 +85,7 @@ def test_set_recipe_run_children_rejects_missing_parent(tmp_path) -> None:
 def test_create_recipe_run_rolls_back_when_child_links_fail(tmp_path) -> None:
     db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
 
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         db.create_recipe_run(
             run_id="recipe-run-atomic",
             recipe_id="embeddings_model_selection",

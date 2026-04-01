@@ -101,7 +101,7 @@ class RecipeLaunchReadiness(BaseModel):
     message: str | None = None
 
 
-class ValidateRecipeDatasetRequest(BaseModel):
+class RecipeDatasetValidationRequest(BaseModel):
     """Typed request payload for recipe dataset validation."""
 
     model_config = ConfigDict(extra="forbid")
@@ -111,10 +111,24 @@ class ValidateRecipeDatasetRequest(BaseModel):
     run_config: dict[str, Any] | None = None
 
 
-class CreateRecipeRunRequest(ValidateRecipeDatasetRequest):
-    """Typed request payload for recipe run creation."""
+class RecipeRunCreateRequest(RecipeDatasetValidationRequest):
+    """Typed request payload for recipe-run creation."""
 
+    run_config: dict[str, Any] = Field(default_factory=dict)
     force_rerun: bool = False
+
+
+class RecipeDatasetValidationResponse(BaseModel):
+    """Normalized validation payload with recipe-specific extension fields."""
+
+    model_config = ConfigDict(extra="allow")
+
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    dataset_mode: str | None = None
+    sample_count: int = Field(default=0, ge=0)
+    dataset_snapshot_ref: str | None = None
+    dataset_content_hash: str | None = None
 
 
 class RecipeRunRecord(BaseModel):

@@ -1261,8 +1261,8 @@ class UnifiedEvaluationService:
                 dataset_id,
                 created_by=created_by,
                 include_samples=include_samples,
-                limit=limit,
-                offset=offset,
+                sample_limit=limit,
+                sample_offset=offset,
             )
         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get dataset {dataset_id}: {e}")

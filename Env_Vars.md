@@ -284,6 +284,7 @@ Total detected variables: 1169
 - `RAG_GUARDRAILS_STRICT`
 - `RAG_HYDE_MODEL`
 - `RAG_HYDE_PROVIDER`
+- `RAG_INCLUDE_RERANK_DEBUG_DOCUMENTS`
 - `RAG_INCLUDE_PARENT_DOCUMENT`
 - `RAG_INCLUDE_SIBLING_CHUNKS`
 - `RAG_LLAMA_RERANKER_BIN`
@@ -430,7 +431,7 @@ Total detected variables: 1169
 - `CONNECTOR_NOTION_CLIENT_ID`
 - `CONNECTOR_NOTION_SECRET`
 - `CONNECTOR_OAUTH_STATE_TTL_MINUTES`
-- `CONNECTOR_REDIRECT_BASE_URL`
+- `CONNECTOR_REDIRECT_BASE_URL` - Required outside tests for connector OAuth/webhook callbacks; must be an absolute `https://` URL unless targeting localhost
 
 ## Watchlists
 

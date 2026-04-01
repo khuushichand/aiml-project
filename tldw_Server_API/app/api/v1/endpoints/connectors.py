@@ -85,29 +85,11 @@ def _extract_request_base(request: Request | None) -> str:
         return ""
 
 
-def _resolve_redirect_base(request: Request | None, conn) -> str:
-    """Resolve connector redirect base, allowing request to be optional for tests.
-
-    Priority: CONNECTOR_REDIRECT_BASE_URL env var > trusted local request.base_url > connector.redirect_base.
-    Returns empty string only in test scenarios where the OAuth flow is mocked.
-    """
-    base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
-    if base:
-        return base.rstrip("/")
-    request_base = _extract_request_base(request)
-    if request_base and _is_local_callback_base(request_base):
-        return request_base
-    resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
-    if request_base and resolved and request_base != resolved:
-        logger.warning(
-            "Ignoring untrusted request base_url for connector OAuth redirect base: {}",
-            request_base,
-        )
-    if not resolved and request is not None:
-        logger.warning(
-            "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
-        )
-    return resolved
+def _is_connector_test_mode() -> bool:
+    return (
+        os.getenv("TEST_MODE", "").strip().lower() == "true"
+        or os.getenv("TESTING", "").strip().lower() == "true"
+    )
 
 
 def _is_local_callback_base(base_url: str) -> bool:
@@ -118,17 +100,82 @@ def _is_local_callback_base(base_url: str) -> bool:
     return host in {"localhost", "127.0.0.1", "testserver"} or host.endswith(".localhost")
 
 
+def _validate_redirect_base(base_url: str, *, setting_name: str = "CONNECTOR_REDIRECT_BASE_URL") -> str:
+    normalized = str(base_url or "").strip().rstrip("/")
+    if not normalized:
+        return ""
+    try:
+        parsed = urlparse(normalized)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{setting_name} must be a valid absolute URL",
+        ) from exc
+    scheme = str(parsed.scheme or "").strip().lower()
+    host = str(parsed.hostname or "").strip().lower()
+    if not scheme or not host:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{setting_name} must be a valid absolute URL",
+        )
+    if scheme == "https":
+        return normalized
+    if scheme == "http" and _is_local_callback_base(normalized):
+        return normalized
+    raise HTTPException(
+        status_code=500,
+        detail=f"{setting_name} must use https unless it targets localhost",
+    )
+
+
+def _resolve_redirect_base(request: Request | None, conn) -> str:
+    """Resolve connector redirect base for OAuth flows.
+
+    Non-test mode requires an explicit CONNECTOR_REDIRECT_BASE_URL so request host
+    headers cannot influence OAuth callback construction. Test mode keeps the
+    local request/fixture fallback for isolated integration tests.
+    """
+    configured_base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
+    if configured_base:
+        return _validate_redirect_base(configured_base)
+
+    request_base = _extract_request_base(request)
+    if not _is_connector_test_mode():
+        if request_base:
+            logger.warning(
+                "Rejecting request-derived base_url for connector OAuth redirect base in non-test mode: {}",
+                request_base,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="CONNECTOR_REDIRECT_BASE_URL must be configured before enabling OAuth connectors",
+        )
+
+    if request_base and _is_local_callback_base(request_base):
+        return _validate_redirect_base(request_base)
+
+    resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
+    if request_base and resolved and request_base != resolved:
+        logger.warning(
+            "Ignoring untrusted request base_url for connector OAuth redirect base: {}",
+            request_base,
+        )
+    if resolved:
+        return _validate_redirect_base(resolved)
+    if request is not None:
+        logger.warning(
+            "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
+        )
+    return ""
+
+
 def _resolve_webhook_callback_base(request: Request | None, conn) -> str:
     configured_base = (os.getenv("CONNECTOR_REDIRECT_BASE_URL") or getattr(conn, "redirect_base", "") or "").rstrip("/")
     if configured_base:
-        return configured_base
-    request_base = _resolve_redirect_base(request, conn)
-    if request_base and (
-        os.getenv("TEST_MODE", "").strip().lower() == "true"
-        or os.getenv("TESTING", "").strip().lower() == "true"
-        or _is_local_callback_base(request_base)
-    ):
-        return request_base
+        return _validate_redirect_base(configured_base)
+    request_base = _extract_request_base(request)
+    if request_base and (_is_connector_test_mode() or _is_local_callback_base(request_base)):
+        return _validate_redirect_base(request_base)
     raise HTTPException(
         status_code=500,
         detail="CONNECTOR_REDIRECT_BASE_URL must be configured before enabling webhook subscriptions",

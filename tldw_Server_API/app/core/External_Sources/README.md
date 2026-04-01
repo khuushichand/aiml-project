@@ -69,7 +69,7 @@
   - `external_source_sync_state` stores cursor, webhook, retry, and active-job fence state per source
   - File content versions remain in Media DB v2 `DocumentVersions`; connector tables do not duplicate content bodies
 - Configuration:
-  - `CONNECTOR_REDIRECT_BASE_URL` for OAuth callbacks (fallback to request host/connector redirect base); provider keys via env/config
+  - `CONNECTOR_REDIRECT_BASE_URL` for OAuth and webhook callbacks; required outside test mode and must be `https://` unless targeting localhost for local development
   - `CONNECTOR_OAUTH_STATE_TTL_MINUTES` to control OAuth state validity (default: 10)
   - `CONNECTORS_SYNC_SCHEDULER_ENABLED` to start recurring source scans
   - `CONNECTORS_SYNC_SCHEDULER_SCAN_SEC` to control scan cadence (default: 300)

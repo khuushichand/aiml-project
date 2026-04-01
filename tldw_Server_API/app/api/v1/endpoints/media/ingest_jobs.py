@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
 
 router = APIRouter()
 
@@ -636,6 +637,7 @@ async def stream_media_ingest_job_events(
     principal: AuthPrincipal = Depends(get_auth_principal),
     jm: JobManager = Depends(get_job_manager),
 ) -> StreamingResponse:
+    assert_may_start_work(request.app, "media.ingest.jobs.events.stream")
     is_admin = _principal_has_admin_claims(principal)
     owner_filter = None if is_admin else str(current_user.id)
 
