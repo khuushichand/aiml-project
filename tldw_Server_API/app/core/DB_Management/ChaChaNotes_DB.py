@@ -108,6 +108,7 @@ from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
     normalize_fsrs_settings,
     simulate_fsrs_review_transition,
 )
+from tldw_Server_API.app.core.Persona.buddy import resolve_persona_buddy_profile  # noqa: E402
 
 #
 ########################################################################################################################
@@ -530,7 +531,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 39  # Schema v39 adds workspace ownership for quizzes/decks and workspace policy
+    _CURRENT_SCHEMA_VERSION = 40  # Schema v40 adds persona buddy storage contract table
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3284,6 +3285,29 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 39;
 """
+    _MIGRATION_SQL_V39_TO_V40 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31)
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+    _MIGRATION_SQL_V39_TO_V40_POSTGRES = _MIGRATION_SQL_V39_TO_V40
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5087,6 +5111,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V38->V39: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V39 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v39_to_v40(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V39 to V40 (persona buddy storage contract)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V39 to V40 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V39_TO_V40)
+            final_version = self._get_db_version(conn)
+            if final_version != 40:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V39->V40 failed version check. Expected 40, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V40 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V39->V40 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V39->V40 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V39->V40: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V40 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -6037,6 +6081,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 39 and current_db_version == 38:
                         self._migrate_from_v38_to_v39(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 40 and current_db_version == 39:
+                        self._migrate_from_v39_to_v40(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -6370,6 +6417,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v37_to_v38(conn)
                             elif fallback_version == 38:
                                 self._migrate_from_v38_to_v39(conn)
+                            elif fallback_version == 39:
+                                self._migrate_from_v39_to_v40(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -6462,6 +6511,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 39 and current_db_version == 38:
                     self._migrate_from_v38_to_v39(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 40 and current_db_version == 39:
+                    self._migrate_from_v39_to_v40(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -7801,6 +7853,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_workspace_study_material_schema_postgres(conn)
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V38_TO_V39_POSTGRES, conn, expected_version=39)
                 current_version = 39
+            if current_version < 40:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40, conn, expected_version=40)
+                current_version = 40
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -10289,6 +10344,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item["deleted"] = self._as_bool(item.get("deleted"))
         return item
 
+    def _persona_buddy_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona buddy DB `row: Any` to an API-safe dict."""
+        if not row:
+            return None
+        item = dict(row)
+        buddy_label = str(item.get("persona_id") or "unknown")
+        item["derived_core"] = self._decode_persona_json_object(
+            item.get("derived_core_json"),
+            field_name="derived_core_json",
+            context_label=f"persona buddy {buddy_label}",
+        )
+        item["overlay_preferences"] = self._decode_persona_json_object(
+            item.get("overlay_preferences_json"),
+            field_name="overlay_preferences_json",
+            context_label=f"persona buddy {buddy_label}",
+        )
+        try:
+            item["resolved_profile"] = resolve_persona_buddy_profile(
+                derived_core=item["derived_core"],
+                overlay_preferences=item["overlay_preferences"],
+            )
+        except (TypeError, KeyError, ValueError):
+            logger.warning(
+                "Unable to resolve persona buddy profile for persona_id={}.",
+                buddy_label,
+            )
+            item["resolved_profile"] = {}
+        return item
+
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a scope rule DB `row: Any` to an API-safe dict.
 
@@ -11028,6 +11112,202 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             update_data=update_data,
             expected_version=expected_version,
         )
+
+    def restore_persona_profile(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        expected_version: int,
+    ) -> bool:
+        """Restore a soft-deleted persona profile using optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        expected_version_value = self._parse_version_input(expected_version)
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        is_active_true = True if self.backend_type == BackendType.POSTGRESQL else 1
+
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            if not row:
+                return False
+
+            if not self._as_bool(row["deleted"]):
+                return True
+
+            current_db_version = int(row["version"])
+            if current_db_version != expected_version_value:
+                raise ConflictError(  # noqa: TRY003
+                    (
+                        f"Restore for persona profile {persona_id} failed: "
+                        f"version mismatch (db has {current_db_version}, expected {expected_version_value})."
+                    ),
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                )
+
+            query = (
+                "UPDATE persona_profiles "
+                "SET deleted = ?, is_active = ?, last_modified = ?, version = version + 1 "
+                "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 1"
+            )
+            params = (
+                deleted_false,
+                is_active_true,
+                now,
+                persona_id,
+                user_id,
+                expected_version_value,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            if cursor.rowcount > 0:
+                return True
+
+            final_state = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            if final_state and not self._as_bool(final_state["deleted"]):
+                return True
+            return False
+
+    def get_persona_buddy(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        include_deleted_personas: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch one persona buddy row for a user-owned persona profile."""
+        query = """
+            SELECT pb.*
+              FROM persona_buddies pb
+              JOIN persona_profiles pp
+                ON pp.id = pb.persona_id
+               AND pp.user_id = pb.user_id
+             WHERE pb.persona_id = ?
+               AND pb.user_id = ?
+               AND (? OR pp.deleted = 0)
+             LIMIT 1
+        """
+        params = (
+            persona_id,
+            user_id,
+            bool(include_deleted_personas),
+        )
+        cursor = self.execute_query(query, params)
+        return self._persona_buddy_row_to_dict(cursor.fetchone())
+
+    def upsert_persona_buddy(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        derivation_version: int,
+        source_fingerprint: str,
+        derived_core: dict[str, Any] | None,
+        overlay_preferences: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Insert or update one persona buddy row keyed by persona_id."""
+        if not source_fingerprint:
+            raise InputError("source_fingerprint is required for persona buddy upsert.")  # noqa: TRY003
+        try:
+            derivation_version_value = int(derivation_version)
+        except (TypeError, ValueError) as exc:
+            raise InputError("derivation_version must be an integer >= 1.") from exc  # noqa: TRY003
+        if derivation_version_value < 1:
+            raise InputError("derivation_version must be an integer >= 1.")  # noqa: TRY003
+
+        derived_core_json = self._ensure_json_string(derived_core if isinstance(derived_core, dict) else {}) or "{}"
+        overlay_preferences_json = (
+            self._ensure_json_string(overlay_preferences if isinstance(overlay_preferences, dict) else {}) or "{}"
+        )
+        now = self._get_current_utc_timestamp_iso()
+        update_query = (
+            "UPDATE persona_buddies "
+            "SET user_id = ?, derivation_version = ?, source_fingerprint = ?, derived_core_json = ?, "
+            "overlay_preferences_json = ?, last_modified = ?, version = version + 1 "
+            "WHERE persona_id = ? AND ("
+            "user_id <> ? OR derivation_version <> ? OR source_fingerprint <> ? OR "
+            "derived_core_json <> ? OR overlay_preferences_json <> ?"
+            ")"
+        )
+        update_params = (
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+            now,
+            persona_id,
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+        )
+        insert_query = (
+            "INSERT INTO persona_buddies("
+            "persona_id, user_id, derivation_version, source_fingerprint, derived_core_json, "
+            "overlay_preferences_json, created_at, last_modified, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        insert_params = (
+            persona_id,
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+            now,
+            now,
+            1,
+        )
+
+        def _load_persisted_item(connection: Any) -> dict[str, Any]:
+            row = connection.execute(
+                "SELECT * FROM persona_buddies WHERE persona_id = ? LIMIT 1",
+                (persona_id,),
+            ).fetchone()
+            item = self._persona_buddy_row_to_dict(row)
+            if not item:
+                raise CharactersRAGDBError("Failed to load persona buddy after upsert.")  # noqa: TRY003
+            return item
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            prepared_update, prepared_update_params = self._prepare_backend_statement(update_query, update_params)
+            update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+
+            if update_cursor.rowcount == 0:
+                existing_row = conn.execute(
+                    "SELECT 1 FROM persona_buddies WHERE persona_id = ? LIMIT 1",
+                    (persona_id,),
+                ).fetchone()
+                if existing_row:
+                    return _load_persisted_item(conn)
+
+                prepared_insert, prepared_insert_params = self._prepare_backend_statement(insert_query, insert_params)
+                try:
+                    conn.execute(prepared_insert, prepared_insert_params or ())
+                except sqlite3.IntegrityError as exc:
+                    msg = str(exc).lower()
+                    if "unique constraint failed" not in msg:
+                        raise
+                    update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+                    if update_cursor.rowcount == 0:
+                        return _load_persisted_item(conn)
+                except BackendDatabaseError as exc:
+                    if not self._is_unique_violation(exc):
+                        raise
+                    update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+                    if update_cursor.rowcount == 0:
+                        return _load_persisted_item(conn)
+
+            return _load_persisted_item(conn)
 
     def list_persona_scope_rules(
         self,

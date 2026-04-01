@@ -44,6 +44,7 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaInfo,
     PersonaPolicyRulesReplaceRequest,
     PersonaPolicyRulesResponse,
+    PersonaBuddyResponse,
     PersonaProfileCreate,
     PersonaProfileResponse,
     PersonaProfileUpdate,
@@ -147,6 +148,7 @@ from tldw_Server_API.app.core.Persona.policy_evaluator import (
     evaluate_canonical_policy,
     normalize_policy_rules,
 )
+from tldw_Server_API.app.core.Persona.buddy import ensure_persona_buddy_for_profile
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.Skills.context_integration import handle_skill_tool_call
@@ -1485,6 +1487,94 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
     )
 
 
+def _persona_buddy_to_response(buddy: dict[str, Any]) -> PersonaBuddyResponse:
+    return PersonaBuddyResponse(
+        persona_id=str(buddy.get("persona_id") or ""),
+        resolved_profile=buddy.get("resolved_profile") or {},
+        created_at=str(buddy.get("created_at") or _utc_now_iso()),
+        last_modified=str(buddy.get("last_modified") or buddy.get("created_at") or _utc_now_iso()),
+    )
+
+
+def _rollback_created_persona_profile_after_buddy_failure(
+    db: CharactersRAGDB,
+    *,
+    persona_id: str,
+    user_id: str,
+    expected_version: int,
+) -> None:
+    """Hide a newly created profile when buddy sync fails after commit."""
+    try:
+        rolled_back = db.soft_delete_persona_profile(
+            persona_id=persona_id,
+            user_id=user_id,
+            expected_version=expected_version,
+        )
+        if rolled_back:
+            logger.warning(
+                "Rolled back newly created persona profile {} after buddy sync failure.",
+                persona_id,
+            )
+        else:
+            logger.error(
+                "Failed to roll back newly created persona profile {} after buddy sync failure.",
+                persona_id,
+            )
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        logger.error(
+            "Error rolling back newly created persona profile {} after buddy sync failure: {}",
+            persona_id,
+            exc,
+        )
+
+
+def _rollback_updated_persona_profile_after_buddy_failure(
+    db: CharactersRAGDB,
+    *,
+    persona_id: str,
+    user_id: str,
+    update_data: dict[str, Any],
+    previous_profile: dict[str, Any],
+    expected_version: int,
+) -> None:
+    """Restore the previous visible profile state when buddy sync fails after update."""
+    rollback_data = {field: previous_profile.get(field) for field in update_data.keys()}
+    if not rollback_data:
+        return
+    try:
+        rolled_back = db.update_persona_profile(
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data=rollback_data,
+            expected_version=expected_version,
+        )
+        if rolled_back:
+            logger.warning(
+                "Rolled back persona profile {} after buddy sync failure.",
+                persona_id,
+            )
+        else:
+            logger.error(
+                "Failed to roll back persona profile {} after buddy sync failure.",
+                persona_id,
+            )
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        logger.error(
+            "Error rolling back persona profile {} after buddy sync failure: {}",
+            persona_id,
+            exc,
+        )
+
+
+def _ensure_persona_buddy_after_profile_mutation(
+    *,
+    db: CharactersRAGDB,
+    profile: dict[str, Any],
+) -> None:
+    """Keep buddy state aligned after a committed profile mutation."""
+    _ = ensure_persona_buddy_for_profile(db, profile)
+
+
 def _persona_exemplar_to_response(exemplar: dict[str, Any]) -> PersonaExemplarResponse:
     return PersonaExemplarResponse(
         id=str(exemplar.get("id") or ""),
@@ -2464,10 +2554,20 @@ async def create_persona_profile(
                 persona_id=persona_id,
                 user_id=user_id,
                 rules=_DEFAULT_PERSONA_POLICY_RULES,
-            )
+        )
         profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=500, detail="Failed to load created persona profile")
+        try:
+            _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+        except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
+            _rollback_created_persona_profile_after_buddy_failure(
+                db,
+                persona_id=persona_id,
+                user_id=user_id,
+                expected_version=int(profile.get("version") or 1),
+            )
+            raise HTTPException(status_code=500, detail="Persona buddy sync failed after profile create") from exc
         return _persona_profile_to_response(profile)
     except HTTPException:
         raise
@@ -2520,6 +2620,9 @@ async def update_persona_profile(
     if not update_data:
         raise HTTPException(status_code=400, detail="No profile fields provided for update")
     try:
+        previous_profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if previous_profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
         ok = db.update_persona_profile(
             persona_id=persona_id,
             user_id=user_id,
@@ -2531,11 +2634,58 @@ async def update_persona_profile(
         profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
+        try:
+            _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+        except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
+            _rollback_updated_persona_profile_after_buddy_failure(
+                db,
+                persona_id=persona_id,
+                user_id=user_id,
+                update_data=update_data,
+                previous_profile=previous_profile,
+                expected_version=int(profile.get("version") or 1),
+            )
+            raise HTTPException(status_code=500, detail="Persona buddy sync failed after profile update") from exc
         return _persona_profile_to_response(profile)
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="update persona profile") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/buddy",
+    response_model=PersonaBuddyResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def get_persona_buddy(
+    persona_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaBuddyResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        _ = ensure_persona_buddy_for_profile(db, profile)
+        buddy = db.get_persona_buddy(
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted_personas=False,
+        )
+        if buddy is None:
+            raise HTTPException(status_code=500, detail="Failed to load persona buddy")
+        return _persona_buddy_to_response(buddy)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="get persona buddy") from exc
 
 
 @router.delete(
@@ -2566,6 +2716,39 @@ async def delete_persona_profile(
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="delete persona profile") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/restore",
+    response_model=PersonaProfileResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def restore_persona_profile(
+    persona_id: str,
+    expected_version: int = Query(..., ge=1),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaProfileResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        ok = db.restore_persona_profile(
+            persona_id=persona_id,
+            user_id=user_id,
+            expected_version=expected_version,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        return _persona_profile_to_response(profile)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="restore persona profile") from exc
 
 
 @router.get(

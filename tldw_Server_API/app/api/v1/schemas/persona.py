@@ -274,6 +274,25 @@ class PersonaProfileResponse(BaseModel):
     version: int = 1
 
 
+class PersonaBuddyResolvedProfile(BaseModel):
+    derivation_version: int
+    species_id: str
+    silhouette_id: str
+    palette_id: str
+    behavior_family: str
+    expression_profile: str
+    accessory_id: str | None = None
+    eye_style: str | None = None
+    compatibility_status: Literal["exact", "fallback_applied"] = "exact"
+
+
+class PersonaBuddyResponse(BaseModel):
+    persona_id: str
+    resolved_profile: PersonaBuddyResolvedProfile
+    created_at: str
+    last_modified: str
+
+
 class PersonaScopeRule(BaseModel):
     rule_type: PersonaScopeRuleType
     rule_value: str = Field(..., min_length=1, max_length=2048)
