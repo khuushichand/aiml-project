@@ -1512,6 +1512,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
               href={WATCHLISTS_MAIN_DOCS_URL}
               target="_blank"
               rel="noreferrer"
+              aria-label={t("watchlists:help.docsTooltip", "Open watchlists documentation")}
               data-testid="watchlists-help-icon"
               className="text-text-muted hover:text-primary"
             >

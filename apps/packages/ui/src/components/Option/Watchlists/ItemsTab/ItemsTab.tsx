@@ -656,6 +656,15 @@ export const ItemsTab: React.FC = () => {
     void loadItems()
   }, [loadItems])
 
+  // Auto-refresh items every 30 seconds to pick up new content from runs
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadItems()
+      void loadSmartCounts()
+    }, 30_000)
+    return () => clearInterval(interval)
+  }, [loadItems, loadSmartCounts])
+
   useEffect(() => {
     void loadSmartCounts()
   }, [loadSmartCounts])

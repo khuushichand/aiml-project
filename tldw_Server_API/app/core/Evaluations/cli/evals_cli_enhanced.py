@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeRunsService,
 )
 from tldw_Server_API.app.core.Evaluations.recipe_runs_service import get_recipe_runs_service_for_user
+from tldw_Server_API.app.core.exceptions import RecipeEnqueueError
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -98,13 +99,24 @@ def _get_recipe_runs_service(*, user_id: str | None = None, db_path: str | None 
     return get_recipe_runs_service_for_user(user_id or _default_recipe_user_id())
 
 
-def _load_json_option(value: str | None, *, option_name: str, default: Any) -> Any:
+def _load_json_option(
+    value: str | None,
+    *,
+    option_name: str,
+    default: Any,
+    expected_type: type | None = None,
+    expected_description: str | None = None,
+) -> Any:
     if value is None:
         return default
     try:
-        return json.loads(value)
+        parsed = json.loads(value)
     except json.JSONDecodeError as exc:
         raise click.ClickException(f"{option_name} must be valid JSON: {exc}") from exc
+    if expected_type is not None and not isinstance(parsed, expected_type):
+        description = expected_description or expected_type.__name__
+        raise click.ClickException(f"{option_name} must be a {description}.")
+    return parsed
 
 
 def _call_adapter_text(
@@ -620,7 +632,13 @@ def list_recipes(ctx, output_format):
 @click.pass_context
 def validate_recipe_dataset(ctx, recipe_id, dataset_id, dataset_json):
     """Validate a dataset for one recipe."""
-    dataset = _load_json_option(dataset_json, option_name="--dataset-json", default=None)
+    dataset = _load_json_option(
+        dataset_json,
+        option_name="--dataset-json",
+        default=None,
+        expected_type=list,
+        expected_description="JSON array",
+    )
     cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
     service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
     try:
@@ -639,8 +657,20 @@ def validate_recipe_dataset(ctx, recipe_id, dataset_id, dataset_json):
 @click.pass_context
 def run_recipe(ctx, recipe_id, dataset_id, dataset_json, run_config_json, force_rerun):
     """Create and enqueue a recipe run."""
-    dataset = _load_json_option(dataset_json, option_name="--dataset-json", default=None)
-    run_config = _load_json_option(run_config_json, option_name="--run-config-json", default={})
+    dataset = _load_json_option(
+        dataset_json,
+        option_name="--dataset-json",
+        default=None,
+        expected_type=list,
+        expected_description="JSON array",
+    )
+    run_config = _load_json_option(
+        run_config_json,
+        option_name="--run-config-json",
+        default={},
+        expected_type=dict,
+        expected_description="JSON object",
+    )
     cli_context = (ctx.obj or {}).get("cli_context") if ctx.obj else None
     service = _get_recipe_runs_service(db_path=getattr(cli_context, "db_path", None))
     try:
@@ -657,8 +687,13 @@ def run_recipe(ctx, recipe_id, dataset_id, dataset_json, run_config_json, force_
     if getattr(record.status, "value", record.status) == "pending":
         try:
             output["job_id"] = enqueue_recipe_run(record)
-        except Exception as exc:
-            mark_recipe_run_enqueue_failure(service, record, error=str(exc))
+        except RecipeEnqueueError as exc:
+            mark_recipe_run_enqueue_failure(
+                service,
+                record,
+                error_code=exc.error_code,
+                error_message=str(exc),
+            )
             raise click.ClickException(f"Failed to enqueue recipe run: {exc}") from exc
     click.echo(json.dumps(output, indent=2, default=str))
 

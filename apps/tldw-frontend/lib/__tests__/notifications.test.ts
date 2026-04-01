@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   buildAuthHeaders: vi.fn(),
+  hasExplicitAuthHeaders: vi.fn(),
   getApiBaseUrl: vi.fn(),
   streamStructuredSSE: vi.fn(),
   bgRequest: vi.fn(),
@@ -18,6 +19,8 @@ vi.mock("@web/lib/api", () => ({
     post: (...args: unknown[]) => mocks.apiPost(...args)
   },
   buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
+  hasExplicitAuthHeaders: (...args: unknown[]) =>
+    mocks.hasExplicitAuthHeaders(...args),
   getApiBaseUrl: (...args: unknown[]) => mocks.getApiBaseUrl(...args)
 }))
 
@@ -46,6 +49,7 @@ describe("web notifications adapter", () => {
       Authorization: "Bearer web-token",
       "X-CSRF-Token": "csrf-token"
     })
+    mocks.hasExplicitAuthHeaders.mockReturnValue(true)
     mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
     mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
     mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
@@ -126,6 +130,7 @@ describe("web notifications adapter", () => {
 
   it("keeps cookie credentials enabled when there is no header-based auth", async () => {
     mocks.buildAuthHeaders.mockReturnValue({})
+    mocks.hasExplicitAuthHeaders.mockReturnValue(false)
     mocks.streamStructuredSSE.mockImplementationOnce(async (_url, options, _onEvent) => {
       expect(options).toEqual(
         expect.objectContaining({

@@ -1,7 +1,7 @@
 /**
  * Common test helpers for E2E tests
  */
-import { type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
 
 /**
  * Environment configuration for tests
@@ -362,6 +362,20 @@ export async function waitForVisualSettle(page: Page, timeoutMs = 5000): Promise
       });
     })
     .catch(() => {});
+}
+
+export function getAntdSelectTrigger(
+  page: Page,
+  options: {
+    ariaLabel: string | RegExp;
+  }
+): Locator {
+  const combobox = page.getByRole('combobox', { name: options.ariaLabel }).first();
+  return page
+    .locator('.ant-select')
+    .filter({ has: combobox })
+    .locator('.ant-select-selector')
+    .first();
 }
 
 /**
