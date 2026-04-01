@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from copy import deepcopy
 import inspect
 from collections import OrderedDict
@@ -317,7 +318,7 @@ class ShutdownCoordinator:
                 timeout_ms=timeout_ms,
             )
 
-        stop_task = asyncio.create_task(self._invoke_stop(component))
+        stop_task = asyncio.create_task(self._invoke_stop(component, timeout_ms=timeout_ms))
         stop_task.add_done_callback(self._consume_stop_task_result)
 
         try:
@@ -326,6 +327,7 @@ class ShutdownCoordinator:
             await asyncio.wait_for(asyncio.shield(stop_task), timeout=timeout_ms / 1000.0)
         except TimeoutError:
             stop_task.cancel()
+            await self._wait_for_task_quiescence(stop_task, deadline_at=summary.hard_cutoff_at)
             finished_at = float(self._clock())
             result = "timed_out" if finished_at < summary.hard_cutoff_at else "cancelled"
             return ShutdownComponentSummary(
@@ -388,16 +390,35 @@ class ShutdownCoordinator:
         return max(0, int((window_end - started_at) * 1000))
 
     @staticmethod
-    async def _invoke_stop(component: ShutdownComponent) -> None:
+    async def _invoke_stop(component: ShutdownComponent, *, timeout_ms: int) -> None:
         stop_callable = component.stop
+        accepts_timeout = ShutdownCoordinator._stop_accepts_timeout(stop_callable)
         if inspect.iscoroutinefunction(stop_callable) or inspect.iscoroutinefunction(
             getattr(stop_callable, "__call__", None)
         ):
-            outcome = stop_callable()
+            outcome = stop_callable(timeout_ms) if accepts_timeout else stop_callable()
         else:
-            outcome = await asyncio.to_thread(stop_callable)
+            if accepts_timeout:
+                outcome = await asyncio.to_thread(stop_callable, timeout_ms)
+            else:
+                outcome = await asyncio.to_thread(stop_callable)
         if inspect.isawaitable(outcome):
             await outcome
+
+    @staticmethod
+    def _stop_accepts_timeout(stop_callable: Callable[..., object]) -> bool:
+        try:
+            signature = inspect.signature(stop_callable)
+        except (TypeError, ValueError):
+            return False
+        return bool(signature.parameters)
+
+    async def _wait_for_task_quiescence(self, task: asyncio.Task[None], *, deadline_at: float) -> None:
+        remaining_s = max(0.0, deadline_at - float(self._clock()))
+        if remaining_s <= 0:
+            return
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=remaining_s)
 
     @staticmethod
     def _consume_stop_task_result(task: asyncio.Task[None]) -> None:

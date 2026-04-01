@@ -3805,9 +3805,14 @@ async def lifespan(app: FastAPI):
 
     # Execute the migrated legacy shutdown components through the coordinator.
     try:
+        non_transition_legacy_shutdown_plan = [
+            component
+            for component in legacy_shutdown_plan
+            if getattr(getattr(component, "phase", None), "value", None) != "transition"
+        ]
         coordinated_legacy_component_names = await _run_coordinated_shutdown(
             app,
-            legacy_shutdown_plan,
+            non_transition_legacy_shutdown_plan,
         )
     except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _coordinated_legacy_shutdown_err:
         logger.debug(f"Legacy coordinator shutdown skipped: {_coordinated_legacy_shutdown_err}")
@@ -5476,6 +5481,16 @@ else:
         enforce_explicit_origins=_cors_enforce_explicit_origins,
     )
     _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
+    try:
+        app.state._tldw_drain_gate_cors_config = {
+            "allow_all_origins": _cors_allow_all_origins,
+            "allow_origin_regex": _cors_allow_origin_regex,
+            "allow_credentials": _cors_allow_credentials,
+            "allowed_origins": _cors_allowed_openapi_origins,
+            "expose_headers": "X-Request-ID, traceparent, X-Trace-Id",
+        }
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
     # # -- If you have any global middleware, add it here --
     app.add_middleware(
         CORSMiddleware,

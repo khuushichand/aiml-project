@@ -11,16 +11,27 @@ pytestmark = pytest.mark.unit
 
 
 class _BlockingExecutor(Executor):
-    def __init__(self, started: threading.Event, release: threading.Event, started_count: list[int]) -> None:
-        self._started = started
+    def __init__(
+        self,
+        expected_starts: int,
+        started_all: threading.Event,
+        release: threading.Event,
+        started_count: list[int],
+        started_lock: threading.Lock,
+    ) -> None:
+        self._expected_starts = expected_starts
+        self._started_all = started_all
         self._release = release
         self._started_count = started_count
+        self._started_lock = started_lock
 
     def shutdown(self, wait: bool = True, cancel_futures: bool = True) -> None:
-        self._started_count[0] += 1
-        if self._started_count[0] >= 2:
-            self._started.set()
-        self._release.wait(timeout=1.0)
+        del wait, cancel_futures
+        with self._started_lock:
+            self._started_count[0] += 1
+            if self._started_count[0] >= self._expected_starts:
+                self._started_all.set()
+        self._release.wait()
 
 
 def test_snapshot_registered_executors_exposes_registered_names() -> None:
@@ -30,8 +41,10 @@ def test_snapshot_registered_executors_exposes_registered_names() -> None:
         unregister_executor,
     )
 
-    first = _BlockingExecutor(threading.Event(), threading.Event(), [0])
-    second = _BlockingExecutor(threading.Event(), threading.Event(), [0])
+    started_lock = threading.Lock()
+    started_all = threading.Event()
+    first = _BlockingExecutor(1, started_all, threading.Event(), [0], started_lock)
+    second = _BlockingExecutor(1, started_all, threading.Event(), [0], started_lock)
     register_executor("alpha", first)
     register_executor("beta", second)
 
@@ -53,18 +66,18 @@ async def test_shutdown_all_registered_executors_runs_shutdowns_concurrently() -
         unregister_executor,
     )
 
-    started = threading.Event()
+    started_all = threading.Event()
     release = threading.Event()
     started_count = [0]
-    first = _BlockingExecutor(started, release, started_count)
-    second = _BlockingExecutor(started, release, started_count)
+    started_lock = threading.Lock()
+    first = _BlockingExecutor(2, started_all, release, started_count, started_lock)
+    second = _BlockingExecutor(2, started_all, release, started_count, started_lock)
     register_executor("alpha", first)
     register_executor("beta", second)
 
     try:
         shutdown_task = asyncio.create_task(shutdown_all_registered_executors())
-        await asyncio.wait_for(asyncio.to_thread(started.wait, 1.0), timeout=1.5)
-
+        await asyncio.wait_for(asyncio.to_thread(started_all.wait), timeout=1.5)
         assert started_count[0] == 2
 
         release.set()

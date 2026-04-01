@@ -21,6 +21,10 @@ class ShutdownPolicy(str, Enum):
 
 
 ShutdownResult = Literal["stopped", "timed_out", "cancelled", "skipped", "failed"]
+ShutdownStopCallable = (
+    Callable[[], Awaitable[None] | None]
+    | Callable[[int | None], Awaitable[None] | None]
+)
 
 
 @dataclass(slots=True)
@@ -29,7 +33,7 @@ class ShutdownComponent:
     phase: ShutdownPhase | str
     policy: ShutdownPolicy | str
     default_timeout_ms: int
-    stop: Callable[[], Awaitable[None] | None]
+    stop: ShutdownStopCallable
 
     def __post_init__(self) -> None:
         if not isinstance(self.phase, ShutdownPhase):

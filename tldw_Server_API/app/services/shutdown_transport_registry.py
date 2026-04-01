@@ -46,12 +46,23 @@ class RegisteredTransportFamily:
     async def drain(self, timeout_s: float | None = None) -> None:
         if self._drain is None:
             return
-        result = self._drain(timeout_s)
-        if inspect.isawaitable(result):
+        if inspect.iscoroutinefunction(self._drain):
+            result = self._drain(timeout_s)
             if timeout_s is None:
                 await result
             else:
                 await asyncio.wait_for(result, timeout=timeout_s)
+            return
+
+        async def _run_sync_drain() -> None:
+            result = await asyncio.to_thread(self._drain, timeout_s)
+            if inspect.isawaitable(result):
+                await result
+
+        if timeout_s is None:
+            await _run_sync_drain()
+        else:
+            await asyncio.wait_for(_run_sync_drain(), timeout=timeout_s)
 
     def snapshot(self) -> TransportFamilySnapshot:
         return TransportFamilySnapshot(
@@ -139,8 +150,8 @@ def build_shutdown_components(
                 phase=phase,
                 policy=policy,
                 default_timeout_ms=default_timeout_ms,
-                stop=lambda family=family, timeout_ms=default_timeout_ms: family.drain(
-                    timeout_s=max(0.0, timeout_ms / 1000.0),
+                stop=lambda timeout_ms=None, family=family: family.drain(
+                    timeout_s=None if timeout_ms is None else max(0.0, timeout_ms / 1000.0),
                 ),
             )
         )

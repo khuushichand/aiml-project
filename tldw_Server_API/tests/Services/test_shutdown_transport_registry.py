@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -95,6 +96,18 @@ class _FakeAudioWebSocket:
         raise AssertionError("receive_json should not be reached while draining")
 
 
+class _PausingPromptStudioWebSocket(_FakeAudioWebSocket):
+    def __init__(self, accepted: asyncio.Event, release_accept: asyncio.Event) -> None:
+        super().__init__()
+        self._accepted = accepted
+        self._release_accept = release_accept
+
+    async def accept(self) -> None:
+        self.accepted += 1
+        self._accepted.set()
+        await self._release_accept.wait()
+
+
 def test_transport_registry_snapshot_reports_active_counts() -> None:
     from tldw_Server_API.app.services.shutdown_transport_registry import ShutdownTransportRegistry
 
@@ -182,6 +195,52 @@ async def test_prompt_studio_transport_registry_hook_tracks_and_drains_connectio
     finally:
         prompt_studio_websocket.connection_manager.active_connections = original_active
         prompt_studio_websocket.connection_manager.connection_metadata = original_metadata
+
+
+@pytest.mark.asyncio
+async def test_transport_registry_offloads_sync_drain_hooks() -> None:
+    from tldw_Server_API.app.services.shutdown_transport_registry import RegisteredTransportFamily
+
+    main_thread_id = threading.get_ident()
+    seen_thread_ids: list[int] = []
+
+    def _sync_drain(timeout_s: float | None = None) -> None:
+        del timeout_s
+        seen_thread_ids.append(threading.get_ident())
+
+    family = RegisteredTransportFamily(
+        name="alpha",
+        active_count=lambda: 0,
+        drain=_sync_drain,
+    )
+
+    await family.drain(timeout_s=0.2)
+
+    assert seen_thread_ids
+    assert seen_thread_ids[0] != main_thread_id
+
+
+@pytest.mark.asyncio
+async def test_transport_components_forward_runtime_timeout_budget() -> None:
+    from tldw_Server_API.app.services.shutdown_transport_registry import (
+        ShutdownTransportRegistry,
+        build_shutdown_components,
+    )
+
+    observed_timeout_s: list[float | None] = []
+    registry = ShutdownTransportRegistry()
+    registry.register_family(
+        "alpha",
+        active_count=lambda: 0,
+        drain=lambda timeout_s=None: observed_timeout_s.append(timeout_s),
+    )
+
+    component = build_shutdown_components(registry, default_timeout_ms=1000)[0]
+    result = component.stop(125)
+    if result is not None:
+        await result
+
+    assert observed_timeout_s == [0.125]
 
 
 @pytest.mark.asyncio
@@ -299,6 +358,30 @@ async def test_mcp_websocket_rejects_new_connections_while_draining(
     assert session_calls == []
 
 
+@pytest.mark.asyncio
+async def test_prompt_studio_connect_rechecks_drain_after_accept() -> None:
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import (
+        ConnectionManager,
+    )
+
+    accepted = asyncio.Event()
+    release_accept = asyncio.Event()
+    websocket = _PausingPromptStudioWebSocket(accepted, release_accept)
+    manager = ConnectionManager()
+
+    connect_task = asyncio.create_task(manager.connect(websocket, "global"))
+    await asyncio.wait_for(accepted.wait(), timeout=1.0)
+    mark_lifecycle_shutdown(websocket.app)
+    release_accept.set()
+
+    connected = await asyncio.wait_for(connect_task, timeout=1.0)
+
+    assert connected is False
+    assert websocket.accepted == 1
+    assert websocket.closed == [(1013, "shutdown_draining")]
+    assert manager.get_connection_count() == 0
+
+
 class _UnexpectedPromptStudioStream:
     def __init__(self, *args, **kwargs) -> None:
         return None
@@ -343,6 +426,7 @@ async def test_prompt_studio_websockets_reject_new_connections_while_draining(
     await endpoint(websocket, **kwargs)
 
     assert connect_calls == []
+    assert websocket.accepted == 1
     assert websocket.closed == [(1013, "shutdown_draining")]
 
 

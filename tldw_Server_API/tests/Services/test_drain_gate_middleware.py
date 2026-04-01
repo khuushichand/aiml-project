@@ -9,10 +9,14 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture()
-def test_app():
+def test_app(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MCP_DEBUG", "true")
+    from tldw_Server_API.app.core.MCP_unified.config import get_config as get_mcp_config
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.services.app_lifecycle import reset_lifecycle_state
 
+    if hasattr(get_mcp_config, "cache_clear"):
+        get_mcp_config.cache_clear()
     reset_lifecycle_state(app)
     return app
 
@@ -52,6 +56,23 @@ def test_drain_gate_rejects_non_control_plane_head_request(test_app, draining_cl
     blocked = draining_client.head("/api/v1/chat/completions")
     if blocked.status_code != 503:
         raise AssertionError(f"expected drain gate to reject HEAD /api/v1/chat/completions, got {blocked.status_code}")
+
+
+def test_drain_gate_503_preserves_cors_headers_for_browser_clients(draining_client):
+    blocked = draining_client.options(
+        "/api/v1/chat/completions",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    if blocked.status_code != 503:
+        raise AssertionError(f"expected drain gate to return 503, got {blocked.status_code}")
+    if blocked.headers.get("Access-Control-Allow-Origin") != "http://localhost:3000":
+        raise AssertionError("drain gate should preserve CORS allow-origin on blocked responses")
+    if blocked.headers.get("Access-Control-Allow-Methods") != "POST":
+        raise AssertionError("drain gate should echo requested method for blocked preflight responses")
 
 
 def test_assert_may_start_work_raises_when_draining(test_app):
