@@ -186,7 +186,7 @@ export const PlaygroundChat = ({
   const [openReasoning] = useStorage("openReasoning", false)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
   const isConnected = useIsConnected()
-  const { data: chatModels = [], refetch: refetchChatModels, isFetched } = useQuery({
+  const { data: chatModels = [], isFetched: chatModelsFetched, refetch: refetchChatModels } = useQuery({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
     enabled: isConnected,
@@ -995,7 +995,7 @@ export const PlaygroundChat = ({
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-4 w-full">
-            {isConnected && isFetched && chatModels.length === 0 && (
+            {isConnected && chatModelsFetched && chatModels.length === 0 && (
               <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
                 <p className="font-medium">{t("playground:noModelsAvailable", "No AI models available")}</p>
                 <p className="mt-1 text-xs text-text-muted">

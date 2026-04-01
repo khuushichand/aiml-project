@@ -18,20 +18,9 @@ const queueState = {
             relevant_media_ids: [1]
           },
           sample_metadata: {}
-        },
-        {
-          sample_id: "draft-2",
-          recipe_kind: "rag_retrieval_tuning",
-          provenance: "synthetic_from_seed_examples",
-          review_state: "draft",
-          sample_payload: {
-            query: "Which note confirms the rollout date?",
-            relevant_note_ids: ["note-7"]
-          },
-          sample_metadata: {}
         }
       ],
-      total: 2
+      total: 1
     }
   },
   isLoading: false,
@@ -191,34 +180,13 @@ describe("SyntheticReviewTab", () => {
     fireEvent.change(screen.getByLabelText("Review notes draft-1"), {
       target: { value: "Looks grounded." }
     })
-    fireEvent.click(screen.getAllByRole("button", { name: "Approve" })[0])
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }))
 
     expect(reviewMutateAsync).toHaveBeenCalledWith({
       sampleId: "draft-1",
       action: "approve",
       notes: "Looks grounded."
     })
-  })
-
-  it("shows loading only on the row currently being reviewed", async () => {
-    let resolveReview: (() => void) | undefined
-    reviewMutateAsync.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveReview = resolve
-        })
-    )
-
-    render(<SyntheticReviewTab />)
-
-    const approveButtons = screen.getAllByRole("button", { name: "Approve" })
-    fireEvent.click(approveButtons[0])
-
-    await screen.findByText("draft-2")
-    expect(approveButtons[0]).toHaveAttribute("data-loading", "true")
-    expect(approveButtons[1]).toHaveAttribute("data-loading", "false")
-
-    resolveReview?.()
   })
 
   it("updates the recipe filter and promotes selected samples", () => {

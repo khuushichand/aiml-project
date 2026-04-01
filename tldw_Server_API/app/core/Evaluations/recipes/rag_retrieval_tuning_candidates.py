@@ -78,9 +78,19 @@ def normalize_candidate_config(
     if raw_candidate.get("description") is not None:
         normalized["description"] = str(raw_candidate["description"]).strip()
     if raw_candidate.get("metadata") is not None:
+        if not isinstance(raw_candidate["metadata"], Mapping):
+            raise ValueError("candidate.metadata must be an object when provided.")
         normalized["metadata"] = dict(raw_candidate["metadata"])
     if raw_candidate.get("tags") is not None:
-        normalized["tags"] = [str(tag).strip() for tag in list(raw_candidate["tags"]) if str(tag).strip()]
+        raw_tags = raw_candidate["tags"]
+        if isinstance(raw_tags, str) or not isinstance(raw_tags, (list, tuple, set)):
+            raise ValueError("candidate.tags must be a list of strings when provided.")
+        normalized["tags"] = []
+        for tag in raw_tags:
+            if not isinstance(tag, str):
+                raise ValueError("candidate.tags entries must be strings.")
+            if tag.strip():
+                normalized["tags"].append(tag.strip())
     return normalized
 
 
@@ -259,8 +269,14 @@ def _normalize_retrieval_config(retrieval_config: Mapping[str, Any]) -> dict[str
     if search_mode not in _ALLOWED_SEARCH_MODES:
         raise ValueError(f"unsupported candidate knob: search_mode={search_mode}")
     normalized["search_mode"] = search_mode
-    normalized["top_k"] = int(normalized["top_k"])
-    normalized["hybrid_alpha"] = float(normalized["hybrid_alpha"])
+    try:
+        normalized["top_k"] = int(normalized["top_k"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("top_k must be a positive integer.") from exc
+    try:
+        normalized["hybrid_alpha"] = float(normalized["hybrid_alpha"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("hybrid_alpha must be between 0.0 and 1.0.") from exc
     if not 0.0 <= normalized["hybrid_alpha"] <= 1.0:
         raise ValueError("hybrid_alpha must be between 0.0 and 1.0.")
     normalized["enable_reranking"] = _normalize_bool_value(
@@ -271,7 +287,10 @@ def _normalize_retrieval_config(retrieval_config: Mapping[str, Any]) -> dict[str
     if reranking_strategy not in _ALLOWED_RERANKING_STRATEGIES:
         raise ValueError(f"unsupported candidate knob: reranking_strategy={reranking_strategy}")
     normalized["reranking_strategy"] = reranking_strategy
-    normalized["rerank_top_k"] = int(normalized["rerank_top_k"])
+    try:
+        normalized["rerank_top_k"] = int(normalized["rerank_top_k"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("rerank_top_k must be a positive integer.") from exc
     if normalized["top_k"] <= 0:
         raise ValueError("top_k must be a positive integer.")
     if normalized["rerank_top_k"] <= 0:
@@ -286,7 +305,9 @@ def _normalize_indexing_config(indexing_config: Mapping[str, Any]) -> dict[str, 
     if unknown_keys:
         raise ValueError(f"unsupported candidate knob: {unknown_keys[0]}")
     normalized = dict(indexing_config)
-    chunking_preset = str(normalized["chunking_preset"]).strip().lower()
+    chunking_preset = str(normalized.get("chunking_preset") or "").strip().lower()
+    if not chunking_preset:
+        return {}
     if chunking_preset not in _ALLOWED_CHUNKING_PRESETS:
         raise ValueError(f"unsupported candidate knob: chunking_preset={chunking_preset}")
     normalized["chunking_preset"] = chunking_preset

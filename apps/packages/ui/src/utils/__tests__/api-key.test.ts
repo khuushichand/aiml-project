@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { isPlaceholderApiKey } from "../api-key"
+import {
+  isPlaceholderApiKey,
+  LOCAL_SINGLE_USER_DEMO_KEY
+} from "../api-key"
 
 describe("isPlaceholderApiKey", () => {
   it("allows the documented local demo key", () => {
-    expect(
-      isPlaceholderApiKey("THIS-IS-A-SECURE-KEY-123-REPLACE-ME")
-    ).toBe(false)
+    expect(isPlaceholderApiKey(LOCAL_SINGLE_USER_DEMO_KEY)).toBe(false)
   })
 
   it("rejects obvious placeholder values", () => {

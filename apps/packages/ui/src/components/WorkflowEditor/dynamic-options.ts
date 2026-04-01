@@ -571,7 +571,7 @@ export const useWorkflowDynamicOptions = (params: {
       fieldToSource,
       sources: Array.from(sources)
     }
-  }, [sourceSignature, fields, stepType])
+  }, [sourceSignature])
 
   const [optionsBySource, setOptionsBySource] = useState<
     Record<string, Option[]>

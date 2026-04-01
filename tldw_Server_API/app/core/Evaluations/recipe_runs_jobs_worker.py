@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_chacha_db_path,
     get_user_media_db_path,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import run_abtest_full
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.recipes.rag_retrieval_tuning_execution import (
@@ -89,16 +89,6 @@ def _get_service(*, user_id: str | None, db: EvaluationsDatabase | None = None) 
     if db is not None:
         return RecipeRunsService(db=db, user_id=user_id)
     return get_recipe_runs_service_for_user(user_id)
-
-
-def _build_media_db(user_id: str) -> Any:
-    backend = get_content_backend_instance()
-    db_path = get_user_media_db_path(user_id)
-    return create_media_database(
-        client_id=f"recipe_runs_jobs_worker:{user_id}",
-        db_path=db_path,
-        backend=backend,
-    )
 
 
 def _parse_json_list(value: Any) -> list[Any]:
@@ -193,12 +183,27 @@ def _coerce_media_ids(run_config: dict[str, Any], dataset: list[dict[str, Any]])
             try:
                 derived_media_ids.add(int(expected_id))
             except (TypeError, ValueError):
+                logger.debug("Skipping non-integer embeddings expected_id while deriving media_ids: {}", expected_id)
                 continue
     if derived_media_ids:
         return sorted(derived_media_ids)
     raise ValueError(
         "Embeddings recipe execution requires run_config.media_ids or labeled expected_ids to derive the corpus."
     )
+
+
+def _classify_recipe_run_job_error(exc: Exception) -> RecipeRunJobError:
+    if isinstance(exc, RecipeRunJobError):
+        return exc
+    if hasattr(exc, "retryable"):
+        return RecipeRunJobError(
+            str(exc),
+            retryable=bool(getattr(exc, "retryable", False)),
+            backoff_seconds=int(getattr(exc, "backoff_seconds", 10)),
+        )
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return RecipeRunJobError(str(exc), retryable=True, backoff_seconds=15)
+    return RecipeRunJobError(str(exc), retryable=False, backoff_seconds=0)
 
 
 def _extract_summarization_source_text(sample: dict[str, Any]) -> str:
@@ -319,73 +324,6 @@ async def _run_unified_rag_request(
     if hasattr(response, "model_dump"):
         return dict(response.model_dump(mode="json"))
     return dict(response)
-
-
-async def _evaluate_rag_retrieval_candidate_queries(
-    *,
-    dataset: list[dict[str, Any]],
-    recipe: Any,
-    corpus_scope: dict[str, Any],
-    candidate: dict[str, Any],
-    plan: Any,
-    owner_user_id: str,
-) -> tuple[list[dict[str, Any]], list[float]]:
-    query_results: list[dict[str, Any]] = []
-    candidate_latency_values: list[float] = []
-    for index, sample in enumerate(dataset):
-        query = _extract_rag_query(sample)
-        sample_id = _extract_rag_sample_id(sample, index)
-        request = recipe.build_unified_rag_request(
-            query=query,
-            corpus_scope=corpus_scope,
-            candidate=candidate,
-            index_key=plan.index_key,
-        )
-        started = time.perf_counter()
-        response_payload = await _run_unified_rag_request(
-            request=request,
-            user_id=owner_user_id or None,
-        )
-        latency_ms = (time.perf_counter() - started) * 1000.0
-        candidate_latency_values.append(latency_ms)
-        first_pass_docs, reranked_docs = _extract_ranked_documents(response_payload)
-        normalized_targets = _normalize_rag_targets(sample)
-        first_pass_hits = [
-            {"grade": _grade_rag_document(doc, normalized_targets)}
-            for doc in first_pass_docs
-        ]
-        reranked_hits = [
-            {"grade": _grade_rag_document(doc, normalized_targets)}
-            for doc in reranked_docs
-        ]
-        query_results.append(
-            {
-                "query_id": sample_id,
-                "query": query,
-                "latency_ms": latency_ms,
-                "metrics": recipe.summarize_candidate_metrics(
-                    first_pass_hits=first_pass_hits,
-                    reranked_hits=reranked_hits,
-                )["metrics"],
-                "first_pass_hits": first_pass_hits,
-                "reranked_hits": reranked_hits,
-            }
-        )
-    return query_results, candidate_latency_values
-
-
-def _classify_recipe_run_job_error(exc: Exception) -> RecipeRunJobError:
-    if isinstance(exc, RecipeRunJobError):
-        return exc
-    if hasattr(exc, "retryable"):
-        return RecipeRunJobError(
-            str(exc),
-            retryable=bool(getattr(exc, "retryable", False)),
-            backoff_seconds=int(getattr(exc, "backoff_seconds", 10)),
-        )
-    if isinstance(exc, (TimeoutError, ConnectionError)):
-        return RecipeRunJobError(str(exc), retryable=True, backoff_seconds=15)
-    return RecipeRunJobError(str(exc), retryable=False, backoff_seconds=0)
 
 
 def _extract_ranked_documents(response_payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -721,8 +659,14 @@ def _execute_embeddings_recipe_run(
         )
     db.insert_abtest_queries(test_id, [query.model_dump() for query in config.queries])
 
-    media_db = _build_media_db(resolved_user_id)
-    asyncio.run(run_abtest_full(db, config, test_id, resolved_user_id, media_db))
+    backend = get_content_backend_instance()
+    db_path = get_user_media_db_path(resolved_user_id)
+    with managed_media_database(
+        client_id=f"recipe_runs_jobs_worker:{resolved_user_id}",
+        db_path=db_path,
+        backend=backend,
+    ) as media_db:
+        asyncio.run(run_abtest_full(db, config, test_id, resolved_user_id, media_db))
     candidate_results = _collect_embeddings_candidate_results(
         db=db,
         test_id=test_id,
@@ -869,16 +813,49 @@ def _execute_rag_retrieval_tuning_recipe_run(
     for candidate in candidates:
         candidate_id = str(candidate.get("candidate_id") or "").strip()
         plan = index_plans[candidate_id]
-        query_results, candidate_latency_values = asyncio.run(
-            _evaluate_rag_retrieval_candidate_queries(
-                dataset=dataset,
-                recipe=recipe,
+        query_results: list[dict[str, Any]] = []
+        candidate_latency_values: list[float] = []
+        for index, sample in enumerate(dataset):
+            query = _extract_rag_query(sample)
+            sample_id = _extract_rag_sample_id(sample, index)
+            request = recipe.build_unified_rag_request(
+                query=query,
                 corpus_scope=corpus_scope,
                 candidate=candidate,
-                plan=plan,
-                owner_user_id=owner_user_id,
+                index_key=plan.index_key,
             )
-        )
+            started = time.perf_counter()
+            response_payload = asyncio.run(
+                _run_unified_rag_request(
+                    request=request,
+                    user_id=owner_user_id or None,
+                )
+            )
+            latency_ms = (time.perf_counter() - started) * 1000.0
+            candidate_latency_values.append(latency_ms)
+            first_pass_docs, reranked_docs = _extract_ranked_documents(response_payload)
+            normalized_targets = _normalize_rag_targets(sample)
+            first_pass_hits = [
+                {"grade": _grade_rag_document(doc, normalized_targets)}
+                for doc in first_pass_docs
+            ]
+            reranked_hits = [
+                {"grade": _grade_rag_document(doc, normalized_targets)}
+                for doc in reranked_docs
+            ]
+            query_results.append(
+                {
+                    "query_id": sample_id,
+                    "query": query,
+                    "latency_ms": latency_ms,
+                    "metrics": recipe.summarize_candidate_metrics(
+                        first_pass_hits=first_pass_hits,
+                        reranked_hits=reranked_hits,
+                    )["metrics"],
+                    "first_pass_hits": first_pass_hits,
+                    "reranked_hits": reranked_hits,
+                }
+            )
 
         candidate_results.append(
             {
@@ -970,6 +947,7 @@ def handle_recipe_run_job(
     run_id = payload["run_id"]
     job_id = str(job.get("id")) if job.get("id") is not None else None
 
+    service.get_run(run_id)
     record = db.get_recipe_run(run_id)
     if record is None:
         raise ValueError(f"Recipe run '{run_id}' was not found.")
@@ -1014,7 +992,13 @@ def handle_recipe_run_job(
             if child_run_ids:
                 db.set_recipe_run_children(run_id, list(child_run_ids))
         report = service.get_report(run_id)
-        completed_metadata = dict(getattr(report.run, "metadata", {}) or {})
+        refreshed_record = db.get_recipe_run(run_id)
+        if refreshed_record is None:
+            raise ValueError(f"Recipe run '{run_id}' disappeared during report persistence.")
+        completed_metadata = dict(refreshed_record.metadata)
+        recipe_report = report.run.metadata.get("recipe_report")
+        if recipe_report is not None:
+            completed_metadata["recipe_report"] = recipe_report
         completed_metadata["jobs"] = {
             "job_id": job_id,
             "worker_state": "completed",
@@ -1028,12 +1012,19 @@ def handle_recipe_run_job(
         )
     except Exception as exc:
         job_error = _classify_recipe_run_job_error(exc)
+        logger.exception("Recipe run job failed: run_id={} job_id={}", run_id, job_id)
         failed_record = db.get_recipe_run(run_id)
         failed_metadata = dict(failed_record.metadata) if failed_record is not None else {}
         failed_metadata["jobs"] = {
             "job_id": job_id,
             "worker_state": "retrying" if job_error.retryable else "failed",
-            "error": str(job_error),
+            "error": "recipe_run_retrying" if job_error.retryable else "recipe_run_failed",
+            "error_type": type(exc).__name__,
+            "error_message": (
+                "Recipe run execution will be retried."
+                if job_error.retryable
+                else "Recipe run execution failed."
+            ),
             "retryable": job_error.retryable,
         }
         db.update_recipe_run(
@@ -1079,7 +1070,7 @@ def recipe_run_jobs_worker_enabled() -> bool:
     )
 
 
-async def start_recipe_run_jobs_worker() -> asyncio.Task[None]:
+async def start_recipe_run_jobs_worker() -> asyncio.Task[None] | None:
     """Start the recipe-run worker as a background task."""
     if not recipe_run_jobs_worker_enabled():
         return None
@@ -1090,6 +1081,7 @@ async def start_recipe_run_jobs_worker() -> asyncio.Task[None]:
 
 
 __all__ = [
+    "RecipeRunJobError",
     "handle_recipe_run_job",
     "handle_recipe_run_job_async",
     "recipe_run_jobs_worker_enabled",

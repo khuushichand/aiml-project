@@ -154,7 +154,7 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
         best_local = self._pick_best_local(candidate_summaries)
 
         winner_margin = self._winner_margin(candidate_summaries, best_overall)
-        spreads = [summary["quality_score"] for summary in candidate_summaries]
+        spreads = [summary["metrics"]["quality_score"] for summary in candidate_summaries]
         spread = statistics.pstdev(spreads) if len(spreads) > 1 else 0.0
         judge_agreements = [
             float(summary["judge_agreement"])
@@ -338,6 +338,12 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
             "is_local": bool(is_local) if is_local is not None else None,
             "cost_usd": cost_usd,
             "latency_ms": latency_value,
+            "metrics": {
+                "recall_at_k": recall_value,
+                "mrr": mrr_value,
+                "ndcg": ndcg_value,
+                "quality_score": quality_score,
+            },
             "recall_at_k": recall_value,
             "mrr": mrr_value,
             "ndcg": ndcg_value,
@@ -352,7 +358,7 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
         return max(
             candidate_summaries,
             key=lambda summary: (
-                summary["quality_score"],
+                summary["metrics"]["quality_score"],
                 (
                     -summary["cost_usd"]
                     if summary.get("cost_usd") is not None
@@ -372,7 +378,7 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
             affordable_candidates,
             key=lambda summary: (
                 summary["cost_usd"],
-                -summary["quality_score"],
+                -summary["metrics"]["quality_score"],
                 summary["latency_ms"],
             ),
         )
@@ -386,7 +392,7 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
         return max(
             local_candidates,
             key=lambda summary: (
-                summary["quality_score"],
+                summary["metrics"]["quality_score"],
                 -summary["latency_ms"],
             ),
         )
@@ -400,10 +406,13 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
             return 0.0
         ordered = sorted(
             candidate_summaries,
-            key=lambda summary: summary["quality_score"],
+            key=lambda summary: summary["metrics"]["quality_score"],
             reverse=True,
         )
-        return max(0.0, float(ordered[0]["quality_score"]) - float(ordered[1]["quality_score"]))
+        return max(
+            0.0,
+            float(ordered[0]["metrics"]["quality_score"]) - float(ordered[1]["metrics"]["quality_score"]),
+        )
 
     def _confidence_score(self, *, sample_count: int, spread: float, winner_margin: float) -> float:
         sample_factor = min(1.0, sample_count / 10.0)
@@ -427,8 +436,12 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
                 explanation=f"No candidate qualified for '{slot_name}'.",
             )
 
+        candidate_id = str(candidate_summary.get("candidate_id") or "").strip() or None
         return RecommendationSlot(
-            candidate_run_id=str(candidate_summary.get("candidate_run_id") or "").strip() or None,
+            candidate_run_id=(
+                str(candidate_summary.get("candidate_run_id") or "").strip()
+                or candidate_id
+            ),
             reason_code=reason_code,
             explanation=(
                 f"{candidate_summary.get('model') or candidate_summary.get('candidate_id')} "
@@ -436,10 +449,10 @@ class EmbeddingsRetrievalRecipe(RecipeDefinition):
             ),
             confidence=confidence,
             metadata={
-                "candidate_id": candidate_summary.get("candidate_id"),
+                "candidate_id": candidate_id,
                 "model": candidate_summary.get("model"),
                 "provider": candidate_summary.get("provider"),
-                "quality_score": candidate_summary.get("quality_score"),
+                "quality_score": candidate_summary["metrics"]["quality_score"],
                 "cost_usd": candidate_summary.get("cost_usd"),
                 "latency_ms": candidate_summary.get("latency_ms"),
             },

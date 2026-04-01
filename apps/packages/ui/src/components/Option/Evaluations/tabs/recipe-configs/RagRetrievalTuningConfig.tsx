@@ -461,13 +461,8 @@ export const RagRetrievalTuningConfig: React.FC<Props> = ({
   const corpusScope = normalizedRunConfig.corpus_scope
   const weakBudget = normalizedRunConfig.weak_supervision_budget
   const isManualMode = normalizedRunConfig.candidate_creation_mode === "manual"
-  const sourceSet = React.useMemo(
-    () => new Set(normalizeSources(corpusScope.sources)),
-    [corpusScope.sources]
-  )
   const hasValidRetrievalCorpusScope =
-    (sourceSet.has("media_db") && corpusScope.media_ids.length > 0) ||
-    (sourceSet.has("notes") && corpusScope.note_ids.length > 0)
+    corpusScope.media_ids.length > 0 || corpusScope.note_ids.length > 0
   const generateSyntheticDraftsMutation = useGenerateSyntheticEvalDrafts()
   const [generationTargetCount, setGenerationTargetCount] = React.useState(
     String(weakBudget.synthetic_query_limit ?? DEFAULT_WEAK_SUPERVISION_BUDGET.synthetic_query_limit)
@@ -498,17 +493,12 @@ export const RagRetrievalTuningConfig: React.FC<Props> = ({
       const nextSources = checked
         ? Array.from(new Set([...currentSources, source]))
         : currentSources.filter((item) => item !== source)
-      const nextCorpusScope: Record<string, any> = {
-        ...current.corpus_scope,
-        sources: nextSources.length > 0 ? nextSources : currentSources
-      }
-      if (!checked) {
-        if (source === "media_db") nextCorpusScope.media_ids = []
-        if (source === "notes") nextCorpusScope.note_ids = []
-      }
       return {
         ...current,
-        corpus_scope: nextCorpusScope
+        corpus_scope: {
+          ...current.corpus_scope,
+          sources: nextSources.length > 0 ? nextSources : currentSources
+        }
       }
     })
   }

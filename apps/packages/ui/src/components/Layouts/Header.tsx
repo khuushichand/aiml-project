@@ -28,11 +28,17 @@ import {
 type Props = {
   onToggleSidebar?: () => void
   sidebarCollapsed?: boolean
+  /** Unread notification count (passed through to ChatHeader bell) */
+  notificationCount?: number
+  /** Callback when notification bell is clicked */
+  onOpenNotifications?: () => void
 }
 
 export const Header: React.FC<Props> = ({
   onToggleSidebar,
-  sidebarCollapsed = false
+  sidebarCollapsed = false,
+  notificationCount,
+  onOpenNotifications
 }) => {
   const { t } = useTranslation([
     "option",
@@ -348,6 +354,8 @@ export const Header: React.FC<Props> = ({
         shortcutsExpanded={headerShortcutsExpanded}
         onToggleShortcuts={toggleHeaderShortcuts}
         commandKeyLabel={cmdKey}
+        notificationCount={notificationCount}
+        onOpenNotifications={onOpenNotifications}
       />
       <TtsClipsDrawer
         open={ttsClipsOpen}

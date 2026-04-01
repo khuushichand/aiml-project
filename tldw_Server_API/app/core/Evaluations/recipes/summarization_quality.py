@@ -330,7 +330,7 @@ class SummarizationQualityRecipe(RecipeDefinition):
             reverse=True,
         )
         if len(scores) < 2:
-            return float(scores[0]) if scores else 0.0
+            return 0.0
         return max(0.0, scores[0] - scores[1])
 
     def _confidence_score(

@@ -92,6 +92,29 @@ def test_rag_answer_quality_rejects_fixed_context_samples_without_resolved_conte
     assert any("actual context" in error for error in result["errors"])
 
 
+def test_rag_answer_quality_reference_answer_samples_count_as_labeled_data() -> None:
+    recipe = RAGAnswerQualityRecipe()
+
+    result = recipe.validate_dataset(
+        [
+            {
+                "sample_id": "sample-1",
+                "query": "What is the capital of France?",
+                "reference_answer": "Paris is the capital of France.",
+                "inline_contexts": [{"source": "kb", "text": "Paris is the capital of France."}],
+            }
+        ],
+        run_config={
+            "evaluation_mode": "fixed_context",
+            "supervision_mode": "reference_answer",
+            "candidates": [{"provider": "openai", "model": "gpt-4.1-mini"}],
+        },
+    )
+
+    assert result["valid"] is True
+    assert result["dataset_mode"] == "labeled"
+
+
 @pytest.mark.parametrize("supervision_mode", ["reference_answer", "pairwise", "mixed"])
 def test_rag_answer_quality_requires_reference_answers_for_supervised_modes(
     supervision_mode: str,
@@ -204,6 +227,51 @@ def test_rag_answer_quality_normalizes_run_config_and_requires_context_refs() ->
                 "candidates": [],
             }
         )
+
+
+def test_rag_answer_quality_rejects_duplicate_candidate_ids() -> None:
+    recipe = RAGAnswerQualityRecipe()
+
+    with pytest.raises(ValueError, match="candidate_id"):
+        recipe.normalize_run_config(
+            {
+                "evaluation_mode": "fixed_context",
+                "supervision_mode": "rubric",
+                "context_snapshot_ref": "context-snapshot-1",
+                "candidate_dimensions": ["generation_model"],
+                "candidates": [
+                    {
+                        "candidate_id": "duplicate",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                    },
+                    {
+                        "candidate_id": "duplicate",
+                        "provider": "openai",
+                        "model": "gpt-4.1-nano",
+                    },
+                ],
+            }
+        )
+
+
+def test_rag_answer_quality_rejects_placeholder_context_containers_without_text() -> None:
+    recipe = RAGAnswerQualityRecipe()
+
+    result = recipe.validate_dataset(
+        [
+            {
+                "sample_id": "sample-1",
+                "query": "What happened in the rollout?",
+                "expected_behavior": "answer",
+                "inline_contexts": [{}],
+            }
+        ],
+        run_config={"evaluation_mode": "fixed_context"},
+    )
+
+    assert result["valid"] is False
+    assert any("actual context" in error for error in result["errors"])
 
 
 def test_rag_answer_quality_build_report_applies_grounding_gate_to_best_overall() -> None:
@@ -394,3 +462,99 @@ def test_rag_answer_quality_build_report_surfaces_failure_examples() -> None:
         "hallucinated",
         "format_failure",
     ]
+
+
+def test_extract_contexts_accepts_string_and_mapping_inputs() -> None:
+    assert rag_answer_quality_execution._extract_contexts(
+        {"inline_contexts": "Paris is the capital of France."}
+    ) == [{"source": "inline", "text": "Paris is the capital of France."}]
+    assert rag_answer_quality_execution._extract_contexts(
+        {
+            "context": {
+                "source": "kb",
+                "text": "Paris is the capital of France.",
+            }
+        }
+    ) == [{"source": "kb", "text": "Paris is the capital of France."}]
+
+
+def test_live_retrieval_request_preserves_frozen_corpus_scope_constraints() -> None:
+    class _BaselineRecord:
+        recipe_id = "rag_retrieval_tuning"
+        recommendation_slots = {"best_overall": {"candidate_run_id": "baseline"}}
+        metadata = {
+            "run_config": {
+                "corpus_scope": {
+                    "sources": ["media_db", "notes"],
+                    "media_ids": [10, 12],
+                    "note_ids": ["note-7"],
+                    "index_namespace": "rag-eval/user/baseline",
+                },
+                "candidates": [
+                    {
+                        "candidate_id": "baseline",
+                        "retrieval_config": {
+                            "search_mode": "hybrid",
+                            "top_k": 5,
+                            "hybrid_alpha": 0.7,
+                            "enable_reranking": False,
+                        },
+                    }
+                ],
+            },
+            "recipe_report": {
+                "best_overall": {"candidate_id": "baseline"},
+            },
+        }
+
+    class _Service:
+        def get_run(self, run_id: str):
+            assert run_id == "baseline-run-42"
+            return _BaselineRecord()
+
+    request_payload = rag_answer_quality_execution._resolve_live_retrieval_request(
+        run_config={"retrieval_baseline_ref": "baseline-run-42"},
+        db=None,
+        service=_Service(),
+    )
+
+    assert request_payload["sources"] == ["media_db", "notes"]
+    assert request_payload["include_media_ids"] == [10, 12]
+    assert request_payload["include_note_ids"] == ["note-7"]
+    assert request_payload["index_namespace"] == "rag-eval/user/baseline"
+
+
+def test_live_retrieval_request_does_not_bypass_service_access_checks() -> None:
+    class _BaselineRecord:
+        recipe_id = "rag_retrieval_tuning"
+        recommendation_slots = {"best_overall": {"candidate_run_id": "baseline"}}
+        metadata = {
+            "run_config": {
+                "candidates": [
+                    {
+                        "candidate_id": "baseline",
+                        "retrieval_config": {"search_mode": "hybrid"},
+                    }
+                ],
+            },
+            "recipe_report": {
+                "best_overall": {"candidate_id": "baseline"},
+            },
+        }
+
+    class _DeniedService:
+        def get_run(self, run_id: str):
+            assert run_id == "baseline-run-42"
+            raise LookupError("forbidden")
+
+    class _FallbackDb:
+        def get_recipe_run(self, run_id: str):
+            assert run_id == "baseline-run-42"
+            return _BaselineRecord()
+
+    with pytest.raises(ValueError, match="retrieval_baseline_ref 'baseline-run-42' could not be resolved"):
+        rag_answer_quality_execution._resolve_live_retrieval_request(
+            run_config={"retrieval_baseline_ref": "baseline-run-42"},
+            db=_FallbackDb(),
+            service=_DeniedService(),
+        )

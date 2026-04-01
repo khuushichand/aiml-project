@@ -8,6 +8,9 @@ import json
 import os
 from typing import Any
 
+from loguru import logger
+from pydantic import ValidationError as PydanticValidationError
+
 from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
     ConfidenceSummary,
     RecommendationSlot,
@@ -169,12 +172,14 @@ class RecipeRunsService:
         dataset_id: str | None = None,
         dataset: list[dict[str, Any]] | None = None,
         run_config: dict[str, Any],
+        normalized_run_config: dict[str, Any] | None = None,
+        validation: dict[str, Any] | None = None,
     ) -> str:
         """Build the explicit reuse hash inputs required for recipe-run reuse."""
         manifest = self.get_manifest(recipe_id)
         self._ensure_launchable(manifest)
-        normalized_run_config = self._normalize_run_config(recipe_id, run_config)
-        validation = self.validate_dataset(
+        normalized_run_config = normalized_run_config or self._normalize_run_config(recipe_id, run_config)
+        validation = validation or self.validate_dataset(
             recipe_id,
             dataset_id=dataset_id,
             dataset=dataset,
@@ -233,6 +238,8 @@ class RecipeRunsService:
             dataset_id=dataset_id,
             dataset=dataset,
             run_config=normalized_run_config,
+            normalized_run_config=normalized_run_config,
+            validation=validation,
         )
 
         if not force_rerun:
@@ -276,9 +283,9 @@ class RecipeRunsService:
         record = self.db.get_recipe_run(run_id)
         if record is None:
             raise RecipeRunNotFoundError(run_id)
-        owner_user_id = str((record.metadata or {}).get("owner_user_id") or "").strip()
+        owner_user_id = str(record.metadata.get("owner_user_id") or "").strip()
         if owner_user_id:
-            if self.user_id != owner_user_id:
+            if owner_user_id != self.user_id:
                 raise RecipeRunNotFoundError(run_id)
         elif self.user_id and not is_single_user_mode():
             raise RecipeRunNotFoundError(run_id)
@@ -295,11 +302,20 @@ class RecipeRunsService:
             report_metadata = dict(record.metadata)
             report_metadata["recipe_report"] = built_report
             report_record = record.model_copy(update={"metadata": report_metadata})
+            confidence_summary = None
+            confidence_payload = built_report.get("confidence_summary")
+            if confidence_payload is not None:
+                try:
+                    confidence_summary = ConfidenceSummary.model_validate(confidence_payload)
+                except PydanticValidationError as exc:
+                    logger.warning(
+                        "Ignoring invalid recipe confidence_summary for run {}: {}",
+                        run_id,
+                        exc,
+                    )
             return RecipeRunReport(
                 run=report_record,
-                confidence_summary=ConfidenceSummary.model_validate(
-                    built_report.get("confidence_summary")
-                ),
+                confidence_summary=confidence_summary,
                 recommendation_slots=self._normalize_report_slots(
                     built_report.get("recommendation_slots") or {}
                 ),
@@ -345,46 +361,19 @@ class RecipeRunsService:
             return
 
         uid = self.user_id or ""
-        with self.db.get_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    """
-                    UPDATE idempotency_keys
-                    SET entity_id = ?
-                    WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
-                    """,
-                    (run_id, uid, RECIPE_RUN_REUSE_ENTITY_TYPE, reuse_hash),
-                )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        self.db.update_idempotency_entity(
+            RECIPE_RUN_REUSE_ENTITY_TYPE,
+            reuse_hash,
+            run_id,
+            uid,
+        )
 
     def _find_latest_completed_run_by_reuse_hash(self, reuse_hash: str) -> RecipeRunRecord | None:
-        owner_expr = "TRIM(COALESCE(json_extract(COALESCE(metadata_json, '{}'), '$.owner_user_id'), ''))"
-        with self.db.get_connection() as conn:
-            cursor = conn.cursor()
-            query = """
-                SELECT *
-                FROM evaluation_recipe_runs
-                WHERE status = ?
-                  AND json_extract(COALESCE(metadata_json, '{}'), '$.reuse_hash') = ?
-            """
-            params: list[Any] = [RunStatus.COMPLETED.value, reuse_hash]
-            if self.user_id:
-                if is_single_user_mode():
-                    query += f" AND ({owner_expr} = '' OR {owner_expr} = ?)"
-                else:
-                    query += f" AND {owner_expr} = ?"
-                params.append(self.user_id)
-            query += " ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC LIMIT 1"
-            cursor.execute(query, tuple(params))
-            row = cursor.fetchone()
-
-        if row is None:
-            return None
-        return self.db._row_to_recipe_run_record(row)
+        return self.db.find_latest_recipe_run_by_reuse_hash(
+            reuse_hash=reuse_hash,
+            owner_user_id=self.user_id or None,
+            allow_legacy_unowned=bool(self.user_id) and is_single_user_mode(),
+        )
 
     def _resolve_dataset(
         self,
@@ -481,7 +470,7 @@ class RecipeRunsService:
         normalizer = getattr(recipe, "normalize_run_config", None)
         if callable(normalizer):
             normalized = dict(normalizer(run_config))
-            if recipe_id == "rag_answer_quality" and "candidates" not in normalized:
+            if recipe_id == "rag_answer_quality":
                 normalized["candidates"] = self._normalize_rag_answer_quality_candidates(
                     run_config.get("candidates")
                 )
@@ -509,10 +498,15 @@ class RecipeRunsService:
         weights = run_config.get("weights") or {}
         if not isinstance(weights, dict):
             raise ValueError("run_config.weights must be an object.")
-        normalized_weights = {
-            str(key): float(value)
-            for key, value in weights.items()
-        }
+        normalized_weights: dict[str, float] = {}
+        for key, value in weights.items():
+            normalized_key = str(key).strip()
+            try:
+                normalized_weights[normalized_key] = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"run_config.weights.{normalized_key or '<empty>'} must be numeric."
+                ) from exc
 
         return {
             "candidate_model_ids": normalized_candidate_model_ids,

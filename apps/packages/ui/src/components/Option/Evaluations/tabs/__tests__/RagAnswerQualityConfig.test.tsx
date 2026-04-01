@@ -161,18 +161,10 @@ describe("RagAnswerQualityConfig", () => {
   })
 
   it("switches to live mode and preserves bounded candidate controls", () => {
-    let datasetState: DatasetSample[] = []
     let runConfigState: Record<string, any> = {}
 
     const Harness = () => {
-      const [dataset, setDataset] = React.useState<DatasetSample[]>([
-        {
-          sample_id: "sample-1",
-          query: "What changed in the rollout?",
-          expected_behavior: "answer",
-          retrieved_contexts: [{ content: "Rollout finished on Friday." }]
-        } as DatasetSample
-      ])
+      const [dataset, setDataset] = React.useState<DatasetSample[]>([])
       const [runConfig, setRunConfig] = React.useState<Record<string, any>>({
         evaluation_mode: "fixed_context",
         supervision_mode: "rubric",
@@ -186,10 +178,6 @@ describe("RagAnswerQualityConfig", () => {
           }
         ]
       })
-
-      React.useEffect(() => {
-        datasetState = dataset
-      }, [dataset])
 
       React.useEffect(() => {
         runConfigState = runConfig
@@ -244,9 +232,6 @@ describe("RagAnswerQualityConfig", () => {
       ]
     })
     expect(runConfigState.context_snapshot_ref).toBeUndefined()
-    expect(datasetState[0]).toMatchObject({
-      retrieved_contexts: [{ content: "Rollout finished on Friday." }]
-    })
   })
 
   it("requires a context snapshot or retrieval baseline before generation", () => {

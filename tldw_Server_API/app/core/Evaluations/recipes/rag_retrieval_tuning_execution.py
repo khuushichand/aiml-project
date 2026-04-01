@@ -114,7 +114,7 @@ def summarize_candidate_metrics(
 ) -> dict[str, Any]:
     """Summarize first-pass retrieval and post-rerank quality separately."""
     first_pass_grades = _extract_grades(first_pass_hits)
-    reranked_grades = _extract_grades(reranked_hits)
+    reranked_grades = _extract_grades(reranked_hits) or first_pass_grades
     pre_rerank_recall_at_k = _normalized_grade_average(first_pass_grades)
     post_rerank_ndcg_at_k = _ndcg(reranked_grades)
 
