@@ -1832,6 +1832,17 @@ export const PlaygroundMessage = (props: Props) => {
             ? "rounded-lg ring-1 ring-primary/35 ring-offset-1 ring-offset-bg"
             : ""
       }`}>
+      {/* "Generating..." indicator while streaming on the latest assistant message */}
+      {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && !props.message && (
+        <div className="flex items-center gap-2 px-4 py-2 text-xs text-text-muted">
+          <span className="inline-flex gap-0.5">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:0ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:150ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:300ms]" />
+          </span>
+          Generating...
+        </div>
+      )}
       {/* Inline stop button while streaming on the latest assistant message */}
       {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && props.onStopStreaming && (
         <div className="absolute right-2 top-0 z-10">
