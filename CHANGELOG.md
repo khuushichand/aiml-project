@@ -29,7 +29,6 @@ and this project adheres to Some kind of Versioning
 
 ### Changed
 
-- Admin review findings (120/120) completed with incident management, monitoring, billing, compliance, registration codes, webhooks, usage, and voice-command tooling fully overhauled. (PR #932)
 - Chat mood badge hidden by default across shared WebUI and extension chat surfaces, with one-time legacy preference migration and preserved user opt-in. (PR #943)
 - Workspace scope now forwarded when saving chat knowledge; voice-unavailable reason propagated through PlaygroundForm. (PR #943)
 
