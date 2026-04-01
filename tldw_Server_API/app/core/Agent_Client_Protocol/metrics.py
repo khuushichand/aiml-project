@@ -28,6 +28,15 @@ _KNOWN_INELIGIBLE_REASONS: frozenset[str] = frozenset({
     "none", "no_tools", "rollout_off", "run_missing",
     "provider_not_in_rollout_allowlist",
 })
+_KNOWN_PROVIDERS: frozenset[str] = frozenset({
+    "openai", "anthropic", "google", "groq", "mistral",
+    "ollama", "kobold", "tabby", "vllm", "aphrodite",
+    "deepseek", "cohere", "huggingface", "openrouter",
+    "local", "custom_openai", "unknown",
+})
+_KNOWN_TOOLS: frozenset[str] = frozenset({
+    "run", "unknown",
+})
 _LABEL_MAX_LEN = 64
 
 
@@ -270,12 +279,13 @@ def _run_first_base_labels(
     eligible: bool = False,
     ineligible_reason: str | None = None,
 ) -> dict[str, str]:
+    provider_prefix = str(provider or "").strip().lower().split(":")[0] or "unknown"
     return {
         "agent_type": _clamp_label(agent_type),
         "presentation_variant": _clamp_label(presentation_variant),
         "cohort": _clamp_label(cohort),
-        "provider": _clamp_label(provider),
-        "model": _clamp_label(model),
+        "provider": _clamp_label(provider_prefix, known=_KNOWN_PROVIDERS),
+        "model": "set" if str(model or "").strip() else "unknown",
         "eligible": str(bool(eligible)).lower(),
         "ineligible_reason": _clamp_label(
             str(ineligible_reason or "").strip() or "none",
@@ -330,7 +340,7 @@ def record_run_first_first_tool(
         eligible=eligible,
         ineligible_reason=ineligible_reason,
     )
-    labels["first_tool"] = _clamp_label(first_tool)
+    labels["first_tool"] = _clamp_label(first_tool, known=_KNOWN_TOOLS)
     increment_counter("acp_run_first_first_tool_total", labels=labels)
 
 
@@ -355,7 +365,7 @@ def record_run_first_fallback_after_run(
         eligible=eligible,
         ineligible_reason=ineligible_reason,
     )
-    labels["fallback_tool"] = _clamp_label(fallback_tool)
+    labels["fallback_tool"] = _clamp_label(fallback_tool, known=_KNOWN_TOOLS)
     increment_counter("acp_run_first_fallback_after_run_total", labels=labels)
 
 

@@ -764,6 +764,11 @@ def _emit_chat_run_first_rollout_metrics(
     return context
 
 
+def _run_first_metric_kwargs(context: dict[str, Any]) -> dict[str, Any]:
+    """Return *context* without internal bookkeeping keys."""
+    return {k: v for k, v in context.items() if not k.startswith("_")}
+
+
 def _emit_chat_run_first_tool_path_metrics(
     metrics: Any,
     *,
@@ -783,9 +788,10 @@ def _emit_chat_run_first_tool_path_metrics(
     if not tool_names:
         return
 
+    kw = _run_first_metric_kwargs(context)
     first_tool = tool_names[0]
     with contextlib.suppress(Exception):
-        metrics.track_run_first_first_tool(**context, first_tool=first_tool)
+        metrics.track_run_first_first_tool(**kw, first_tool=first_tool)
 
     if first_tool != "run":
         return
@@ -795,7 +801,7 @@ def _emit_chat_run_first_tool_path_metrics(
         return
 
     with contextlib.suppress(Exception):
-        metrics.track_run_first_fallback_after_run(**context, fallback_tool=fallback_tool)
+        metrics.track_run_first_fallback_after_run(**kw, fallback_tool=fallback_tool)
 
 
 def _emit_chat_run_first_completion_metric(
@@ -804,11 +810,20 @@ def _emit_chat_run_first_completion_metric(
     context: dict[str, Any] | None,
     outcome: str,
 ) -> None:
-    """Emit the completion-proxy metric for one chat execution."""
+    """Emit the completion-proxy metric exactly once per chat execution.
+
+    Uses a ``_completion_emitted`` flag on *context* to prevent duplicate
+    emissions when multiple error/fallback paths could fire in sequence.
+    """
     if context is None:
         return
+    if context.get("_completion_emitted"):
+        return
+    context["_completion_emitted"] = True
     with contextlib.suppress(Exception):
-        metrics.track_run_first_completion_proxy(**context, outcome=outcome)
+        metrics.track_run_first_completion_proxy(
+            **_run_first_metric_kwargs(context), outcome=outcome
+        )
 
 
 # --- Cached helpers (module scope) -------------------------------------------

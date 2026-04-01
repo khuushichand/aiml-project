@@ -267,7 +267,7 @@ class TestChatMetricsCollector:
         assert labels["presentation_variant"] == "chat_phase2a_v1"
         assert labels["cohort"] == "gated"
         assert labels["provider"] == "openai"
-        assert labels["model"] == "gpt-4o-mini"
+        assert labels["model"] == "set"
         assert labels["streaming"] == "false"
         assert labels["eligible"] == "true"
         assert labels["ineligible_reason"] == "none"
@@ -313,7 +313,7 @@ class TestChatMetricsCollector:
 
         collector.metrics.run_first_fallback_after_run.add.assert_called_once()
         _, fallback_labels = collector.metrics.run_first_fallback_after_run.add.call_args.args
-        assert fallback_labels["fallback_tool"] == "notes.search"
+        assert fallback_labels["fallback_tool"] == "other"
 
         collector.metrics.run_first_completion_proxy.add.assert_called_once()
         _, completion_labels = collector.metrics.run_first_completion_proxy.add.call_args.args
