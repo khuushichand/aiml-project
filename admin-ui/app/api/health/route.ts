@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server';
 
-let appVersion = '0.0.0';
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  appVersion = require('../../../package.json').version;
-} catch {
-  // Standalone builds may not bundle package.json.
-}
+const appVersion = process.env.npm_package_version ?? process.env.APP_VERSION ?? '0.0.0';
 
 export async function GET(): Promise<NextResponse> {
   return NextResponse.json(

@@ -7,22 +7,26 @@ export async function GET(): Promise<NextResponse> {
   // Probe backend health with 2-second timeout
   let backendReachable = false;
   let backendError: string | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    timeoutId = setTimeout(() => controller.abort(), 2000);
     const response = await fetch(buildApiUrl('/health'), {
       method: 'GET',
       cache: 'no-store',
       signal: controller.signal,
     });
-    clearTimeout(timeoutId);
     backendReachable = response.ok;
     if (!response.ok) {
       backendError = `Backend returned ${response.status}`;
     }
   } catch (error) {
-    backendError = error instanceof Error ? error.message : 'Unknown error';
+    // Log the full error server-side but don't expose internals to clients
+    console.error('[health/ready] Backend probe failed:', error);
+    backendError = 'Backend unreachable';
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 
   const status = backendReachable ? 'ready' : 'not_ready';

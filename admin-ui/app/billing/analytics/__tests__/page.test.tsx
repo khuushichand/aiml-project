@@ -115,6 +115,7 @@ describe('BillingAnalyticsPage', () => {
       await screen.findByText(/billing is not enabled/i)
     ).toBeInTheDocument();
     expect(screen.getByText(/NEXT_PUBLIC_BILLING_ENABLED=true/i)).toBeInTheDocument();
+    expect(apiMock.getBillingAnalytics).not.toHaveBeenCalled();
   });
 
   it('handles API error gracefully', async () => {

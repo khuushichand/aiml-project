@@ -150,7 +150,11 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     }
     const search = current.toString();
     const query = search ? `?${search}` : '';
-    router.replace(`${pathname}${query}`, { scroll: false });
+    const nextUrl = `${pathname}${query}`;
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl, { scroll: false });
+    }
   }, [timeRange, pathname, router, searchParams]);
 
   const handleToggleSeries = useCallback((seriesKey: MonitoringMetricSeriesKey) => {

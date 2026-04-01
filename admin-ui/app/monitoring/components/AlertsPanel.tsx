@@ -53,6 +53,8 @@ const formatTimestamp = (timestamp?: string) => {
   return new Date(timestamp).toLocaleString();
 };
 
+const ALERTS_PAGE_SIZE = 10;
+
 export default function AlertsPanel({
   alerts,
   history,
@@ -67,7 +69,6 @@ export default function AlertsPanel({
   onSnooze,
   onEscalate,
 }: AlertsPanelProps) {
-  const ALERTS_PAGE_SIZE = 10;
   const [snoozeSelections, setSnoozeSelections] = useState<Record<string, SnoozeDurationOption>>(
     {}
   );

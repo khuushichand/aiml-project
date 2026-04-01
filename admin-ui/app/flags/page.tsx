@@ -420,6 +420,10 @@ export default function FlagsPage() {
         enabled: nextEnabled,
         org_id: flag.org_id ?? undefined,
         user_id: flag.user_id ?? undefined,
+        description: flag.description ?? undefined,
+        target_user_ids: flag.target_user_ids ?? undefined,
+        rollout_percent: flag.rollout_percent ?? undefined,
+        variant_value: flag.variant_value ?? undefined,
         note: `Toggled ${nextEnabled ? 'on' : 'off'} via quick toggle`,
       });
       success(`Flag "${flag.key}" ${nextEnabled ? 'enabled' : 'disabled'}`);

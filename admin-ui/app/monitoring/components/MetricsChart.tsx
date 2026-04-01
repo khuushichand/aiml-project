@@ -128,7 +128,7 @@ export default function MetricsChart({
                     formatter={(value, name, item) => {
                       const key = String(item?.dataKey ?? name ?? '');
                       if (['cpu', 'memory', 'diskUsage'].includes(key)) {
-                        const percent = typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : value;
+                        const percent = typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : '—';
                         return [`${percent}%`, SERIES_DEFINITIONS.find((series) => series.key === key)?.label ?? key];
                       }
                       return [formatCount(value), SERIES_DEFINITIONS.find((series) => series.key === key)?.label ?? key];

@@ -25,6 +25,10 @@ vi.mock('@/components/ResponsiveLayout', () => ({
   ),
 }));
 
+vi.mock('@/components/ui/toast', () => ({
+  useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }),
+}));
+
 vi.mock('@/lib/api-client', () => ({
   api: {
     getCompliancePosture: vi.fn(),
@@ -140,7 +144,7 @@ describe('CompliancePage', () => {
     render(<CompliancePage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Unable to load compliance data/)).toBeInTheDocument();
+      expect(screen.getByText(/Unable to load compliance posture/)).toBeInTheDocument();
     });
 
     expect(screen.getByText(/Network failure/)).toBeInTheDocument();

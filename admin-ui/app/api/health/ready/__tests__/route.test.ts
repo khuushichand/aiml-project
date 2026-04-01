@@ -48,7 +48,7 @@ describe('GET /api/health/ready', () => {
     expect(response.body).toMatchObject({
       status: 'not_ready',
       backend: 'unreachable',
-      backend_error: 'ECONNREFUSED',
+      backend_error: 'Backend unreachable',
     });
   });
 

@@ -35,7 +35,10 @@ describe('POST /api/auth/logout', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { POST } = await import('./route');
-    const request = new NextRequest('http://localhost/api/auth/logout', { method: 'POST' });
+    const request = new NextRequest('http://localhost/api/auth/logout', {
+      method: 'POST',
+      headers: { cookie: 'access_token=test-jwt-token' },
+    });
     const response = await POST(request);
 
     expect(response.status).toBe(200);
@@ -55,5 +58,6 @@ describe('POST /api/auth/logout', () => {
     expect(clearAdminSessionCookies).toHaveBeenCalledWith(expect.objectContaining({
       cookies: expect.anything(),
     }));
+    expect(invalidateAuthCache).toHaveBeenCalled();
   });
 });

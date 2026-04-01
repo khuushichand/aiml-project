@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import type { CompliancePosture, ComplianceReportSchedule } from '@/types';
 import { Shield, ShieldCheck, Key, Users, FileText, RefreshCw, ExternalLink, Plus, Trash2, Send, Calendar } from 'lucide-react';
@@ -73,6 +74,7 @@ function ProgressBar({ value, className }: { value: number; className?: string }
 }
 
 function CompliancePageContent() {
+  const { error: showError } = useToast();
   const [posture, setPosture] = useState<CompliancePosture | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,8 +158,8 @@ function CompliancePageContent() {
       setDeletingIds((prev) => new Set(prev).add(id));
       await api.deleteReportSchedule(id);
       void fetchSchedules();
-    } catch {
-      // Silently handle - schedule may have already been deleted
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : 'Failed to delete schedule');
     } finally {
       setDeletingIds((prev) => {
         const next = new Set(prev);
@@ -192,8 +194,8 @@ function CompliancePageContent() {
     try {
       await api.updateReportSchedule(schedule.id, { enabled: !schedule.enabled });
       void fetchSchedules();
-    } catch {
-      // Silently handle
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : 'Failed to toggle schedule');
     }
   };
 
@@ -222,34 +224,13 @@ function CompliancePageContent() {
     );
   }
 
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Compliance Posture</h1>
-            <p className="text-muted-foreground">Security and compliance overview</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={fetchPosture}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Retry
-          </Button>
-        </div>
-        <Alert variant="destructive">
-          <AlertDescription>Unable to load compliance data: {error}</AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-
-  if (!posture) return null;
-
-  const grade = getGrade(posture.overall_score);
-  const gradeColor = getGradeColor(grade);
-  const gradeBadge = getGradeBadgeVariant(grade);
-  const mfaColor = getPercentColor(posture.mfa_adoption_pct);
-  const keyColor = getPercentColor(posture.key_rotation_compliance_pct);
-  const usersWithoutMfa = posture.total_users - posture.mfa_enabled_count;
+  const postureAvailable = !error && posture;
+  const grade = postureAvailable ? getGrade(posture.overall_score) : null;
+  const gradeColor = grade ? getGradeColor(grade) : '';
+  const gradeBadge = grade ? getGradeBadgeVariant(grade) : 'secondary';
+  const mfaColor = postureAvailable ? getPercentColor(posture.mfa_adoption_pct) : '';
+  const keyColor = postureAvailable ? getPercentColor(posture.key_rotation_compliance_pct) : '';
+  const usersWithoutMfa = postureAvailable ? posture.total_users - posture.mfa_enabled_count : 0;
 
   return (
     <div className="space-y-6">
@@ -265,8 +246,19 @@ function CompliancePageContent() {
         </Button>
       </div>
 
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            Unable to load compliance posture: {error}
+            <Button variant="outline" size="sm" className="ml-2" onClick={fetchPosture}>
+              <RefreshCw className="mr-1 h-3 w-3" /> Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Cards grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {postureAvailable && <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Overall Score */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -375,7 +367,7 @@ function CompliancePageContent() {
             </Link>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
       {/* Report Schedules */}
       <Card>
@@ -432,13 +424,17 @@ function CompliancePageContent() {
                       </TableCell>
                       <TableCell className="uppercase text-xs">{sched.format}</TableCell>
                       <TableCell>
-                        <Badge
-                          variant={sched.enabled ? 'default' : 'secondary'}
-                          className="cursor-pointer"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto px-2 py-0.5"
                           onClick={() => handleToggleEnabled(sched)}
+                          aria-label={`Toggle schedule ${sched.frequency} ${sched.enabled ? 'off' : 'on'}`}
                         >
-                          {sched.enabled ? 'Active' : 'Paused'}
-                        </Badge>
+                          <Badge variant={sched.enabled ? 'default' : 'secondary'}>
+                            {sched.enabled ? 'Active' : 'Paused'}
+                          </Badge>
+                        </Button>
                       </TableCell>
                       <TableCell>
                         {sched.last_sent_at

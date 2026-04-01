@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -334,8 +334,9 @@ export default function DependenciesPage() {
   const [prometheusAvailable, setPrometheusAvailable] = useState(false);
   const [systemDeps, setSystemDeps] = useState<SystemDependencyItem[]>([]);
   const [systemDepsCheckedAt, setSystemDepsCheckedAt] = useState<string | null>(null);
-  const [systemDepsLoading, setSystemDepsLoading] = useState(false);
+  const [systemDepsLoading, setSystemDepsLoading] = useState(true);
   const [uptimeByDep, setUptimeByDep] = useState<Record<string, DependencyUptimeStats>>({});
+  const systemDepsSeqRef = useRef(0);
 
   const runProviderCheck = useCallback(async (provider: Provider): Promise<Omit<ProviderHealthCheck, 'testing'>> => {
     const started = performance.now();
@@ -514,9 +515,11 @@ export default function DependenciesPage() {
   }, []);
 
   const loadSystemDeps = useCallback(async () => {
+    const seq = ++systemDepsSeqRef.current;
     setSystemDepsLoading(true);
     try {
       const result = await api.getSystemDependencies();
+      if (seq !== systemDepsSeqRef.current) return; // stale response
       const items = Array.isArray(result.items) ? result.items : [];
       setSystemDeps(items);
       setSystemDepsCheckedAt(result.checked_at ?? new Date().toISOString());
@@ -525,6 +528,7 @@ export default function DependenciesPage() {
       const uptimeResults = await Promise.allSettled(
         items.map((dep) => api.getDependencyUptime(dep.name, 7)),
       );
+      if (seq !== systemDepsSeqRef.current) return; // stale response
       const nextUptime: Record<string, DependencyUptimeStats> = {};
       uptimeResults.forEach((settledResult, index) => {
         if (settledResult.status === 'fulfilled' && settledResult.value) {
@@ -533,9 +537,10 @@ export default function DependenciesPage() {
       });
       setUptimeByDep(nextUptime);
     } catch {
+      if (seq !== systemDepsSeqRef.current) return;
       setSystemDeps([]);
     } finally {
-      setSystemDepsLoading(false);
+      if (seq === systemDepsSeqRef.current) setSystemDepsLoading(false);
     }
   }, []);
 

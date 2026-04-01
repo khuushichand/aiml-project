@@ -17,6 +17,7 @@ function formatCentsToCurrency(cents: number): string {
 }
 
 function AnalyticsContent() {
+  const billingActive = isBillingEnabled();
   const { error: showError } = useToast();
   const [analytics, setAnalytics] = useState<BillingAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,10 +39,10 @@ function AnalyticsContent() {
   }, [showError]);
 
   useEffect(() => {
-    fetchAnalytics();
-  }, [fetchAnalytics]);
+    if (billingActive) fetchAnalytics();
+  }, [billingActive, fetchAnalytics]);
 
-  if (!isBillingEnabled()) {
+  if (!billingActive) {
     return (
       <Alert>
         <AlertDescription>

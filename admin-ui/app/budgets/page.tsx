@@ -207,6 +207,7 @@ const parseOrgBudgetItems = (value: unknown): OrgBudgetItem[] => {
     const periodStart = typeof item.period_start === 'string' || item.period_start === null ? item.period_start : undefined;
     const budgets = parseBudgetSettings(item.budgets);
 
+    // Spend data may be nested under item.spend or flattened into the item itself
     const spendRaw = isRecord(item.spend) ? item.spend : (isRecord(item) ? item : null);
     const spend: BudgetSpend = {
       spend_day_usd: typeof spendRaw?.spend_day_usd === 'number' ? spendRaw.spend_day_usd : undefined,

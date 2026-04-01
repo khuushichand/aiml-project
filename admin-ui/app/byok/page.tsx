@@ -965,7 +965,7 @@ export default function ByokDashboardPage() {
                         {(latestValidationRun.error_count ?? 0) > 0 && (
                           <Badge className="bg-yellow-500 text-black">{latestValidationRun.error_count} errors</Badge>
                         )}
-                        {(latestValidationRun.invalid_count ?? 0) === 0 && (latestValidationRun.error_count ?? 0) === 0 && (
+                        {(latestValidationRun.keys_checked ?? 0) > 0 && (latestValidationRun.invalid_count ?? 0) === 0 && (latestValidationRun.error_count ?? 0) === 0 && (
                           <span className="text-xs text-green-600 font-medium">All keys passed validation</span>
                         )}
                       </div>
