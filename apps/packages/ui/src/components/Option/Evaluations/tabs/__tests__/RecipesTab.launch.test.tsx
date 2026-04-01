@@ -61,75 +61,74 @@ const mockStoreActions = {
     updateMockStore({ syntheticReviewSampleIds })
   }
 }
-const DEFAULT_MANIFESTS = [
-  {
-    recipe_id: "summarization_quality",
-    recipe_version: "1",
-    name: "Summarization Quality",
-    description: "Compare summarization candidates.",
-    supported_modes: ["labeled", "unlabeled"],
-    tags: ["summarization"],
-    launchable: true
-  },
-  {
-    recipe_id: "embeddings_model_selection",
-    recipe_version: "1",
-    name: "Embeddings Model Selection",
-    description: "Compare embedding candidates.",
-    supported_modes: ["labeled", "unlabeled"],
-    tags: ["embeddings"],
-    launchable: true
-  },
-  {
-    recipe_id: "rag_retrieval_tuning",
-    recipe_version: "1",
-    name: "RAG Retrieval Tuning",
-    description: "Tune retrieval candidates.",
-    supported_modes: ["labeled", "unlabeled"],
-    tags: ["rag", "retrieval"],
-    launchable: true,
-    capabilities: {
-      corpus_sources: ["media_db", "notes"],
-      candidate_creation_modes: ["auto_sweep", "manual"],
-      graded_relevance_scale: { min: 0, max: 3 }
-    },
-    default_run_config: {
-      candidate_creation_mode: "auto_sweep",
-      corpus_scope: { sources: ["media_db", "notes"] },
-      weak_supervision_budget: {
-        review_sample_fraction: 0.2,
-        max_review_samples: 25,
-        min_review_samples: 3,
-        synthetic_query_limit: 20
-      }
-    }
-  },
-  {
-    recipe_id: "rag_answer_quality",
-    recipe_version: "1",
-    name: "RAG Answer Quality",
-    description: "Compare answer-generation candidates.",
-    supported_modes: ["labeled", "unlabeled"],
-    tags: ["rag", "generation"],
-    launchable: true,
-    capabilities: {
-      evaluation_modes: ["fixed_context", "live_end_to_end"],
-      supervision_modes: ["rubric", "reference_answer", "pairwise", "mixed"],
-      candidate_dimensions: [
-        "generation_model",
-        "prompt_variant",
-        "formatting_citation_mode"
-      ]
-    },
-    default_run_config: {
-      evaluation_mode: "fixed_context",
-      supervision_mode: "rubric"
-    }
-  }
-]
 const recipeManifestState = {
   data: {
-    data: DEFAULT_MANIFESTS
+    data: [
+      {
+        recipe_id: "summarization_quality",
+        recipe_version: "1",
+        name: "Summarization Quality",
+        description: "Compare summarization candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["summarization"],
+        launchable: true
+      },
+      {
+        recipe_id: "embeddings_model_selection",
+        recipe_version: "1",
+        name: "Embeddings Model Selection",
+        description: "Compare embedding candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["embeddings"],
+        launchable: true
+      },
+      {
+        recipe_id: "rag_retrieval_tuning",
+        recipe_version: "1",
+        name: "RAG Retrieval Tuning",
+        description: "Tune retrieval candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["rag", "retrieval"],
+        launchable: true,
+        capabilities: {
+          corpus_sources: ["media_db", "notes"],
+          candidate_creation_modes: ["auto_sweep", "manual"],
+          graded_relevance_scale: { min: 0, max: 3 }
+        },
+        default_run_config: {
+          candidate_creation_mode: "auto_sweep",
+          corpus_scope: { sources: ["media_db", "notes"] },
+          weak_supervision_budget: {
+            review_sample_fraction: 0.2,
+            max_review_samples: 25,
+            min_review_samples: 3,
+            synthetic_query_limit: 20
+          }
+        }
+      },
+      {
+        recipe_id: "rag_answer_quality",
+        recipe_version: "1",
+        name: "RAG Answer Quality",
+        description: "Compare answer-generation candidates.",
+        supported_modes: ["labeled", "unlabeled"],
+        tags: ["rag", "generation"],
+        launchable: true,
+        capabilities: {
+          evaluation_modes: ["fixed_context", "live_end_to_end"],
+          supervision_modes: ["rubric", "reference_answer", "pairwise", "mixed"],
+          candidate_dimensions: [
+            "generation_model",
+            "prompt_variant",
+            "formatting_citation_mode"
+          ]
+        },
+        default_run_config: {
+          evaluation_mode: "fixed_context",
+          supervision_mode: "rubric"
+        }
+      }
+    ]
   },
   isLoading: false,
   isError: false,
@@ -169,20 +168,22 @@ const datasetsState = {
   isError: false
 }
 
-const renderRecipesTab = () => {
-  const queryClient = new QueryClient({
+const createTestQueryClient = () =>
+  new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false }
     }
   })
 
-  return render(
+const renderRecipesTab = (queryClient = createTestQueryClient()) => ({
+  queryClient,
+  ...render(
     <QueryClientProvider client={queryClient}>
       <RecipesTab />
     </QueryClientProvider>
   )
-}
+})
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -371,9 +372,12 @@ vi.mock("../../hooks/useRecipes", () => ({
                 }
               }
             }
-        : null,
+        : runId === "report-error-run"
+          ? undefined
+          : null,
     isLoading: false,
-    isError: false
+    isError: runId === "report-error-run",
+    error: runId === "report-error-run" ? new Error("HTTP 503") : null
   })
 }))
 
@@ -657,6 +661,59 @@ describe("RecipesTab recipe launch flow", () => {
       ).toBeInTheDocument()
       expect(screen.getByText("gpt-4.1-mini")).toBeInTheDocument()
     })
+  })
+
+  it("surfaces recipe report polling failures instead of the pending placeholder", async () => {
+    createSpy.mockResolvedValue({
+      data: {
+        run_id: "report-error-run",
+        recipe_id: "summarization_quality",
+        status: "pending"
+      }
+    })
+
+    renderRecipesTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Unable to load the recipe report")
+      ).toBeInTheDocument()
+      expect(screen.getByText("HTTP 503")).toBeInTheDocument()
+    })
+
+    expect(
+      screen.queryByText("Waiting for the recipe report.")
+    ).not.toBeInTheDocument()
+  })
+
+  it("does not fall back to inline dataset JSON when the saved selection disappears", async () => {
+    const queryClient = createTestQueryClient()
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RecipesTab />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Saved dataset" }))
+
+    datasetsState.data.data.data = []
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <RecipesTab />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Validate dataset" }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Select a saved dataset before continuing.")
+      ).toBeInTheDocument()
+    })
+
+    expect(validateSpy).not.toHaveBeenCalled()
   })
 
   it("serializes guided summarization inputs into dataset and run config payloads", async () => {

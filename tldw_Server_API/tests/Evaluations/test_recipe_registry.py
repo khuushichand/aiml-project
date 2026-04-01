@@ -4,7 +4,10 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeM
 from tldw_Server_API.app.core.Evaluations.recipes.rag_answer_quality import (
     RAGAnswerQualityRecipe,
 )
-from tldw_Server_API.app.core.Evaluations.recipes.registry import get_builtin_recipe_registry
+from tldw_Server_API.app.core.Evaluations.recipes.registry import (
+    RecipeNotFoundError,
+    get_builtin_recipe_registry,
+)
 
 
 def test_builtin_recipe_manifests_are_indexed_by_id() -> None:
@@ -86,3 +89,15 @@ def test_recipe_manifest_supports_richer_metadata() -> None:
 
     assert manifest.capabilities["evaluation_modes"] == ["fixed_context", "live_end_to_end"]
     assert manifest.default_run_config["evaluation_mode"] == "fixed_context"
+
+
+def test_registry_raises_specific_error_for_unknown_recipe() -> None:
+    registry = get_builtin_recipe_registry()
+
+    try:
+        registry.get_recipe("missing-recipe")
+    except RecipeNotFoundError as exc:
+        assert exc.recipe_id == "missing-recipe"
+        assert "missing-recipe" in str(exc)
+    else:
+        raise AssertionError("expected RecipeNotFoundError")

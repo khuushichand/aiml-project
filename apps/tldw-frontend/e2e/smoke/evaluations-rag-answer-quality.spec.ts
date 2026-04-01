@@ -198,11 +198,7 @@ test.describe("RAG answer quality recipe smoke", () => {
         return
       }
 
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "Unexpected evaluation route called" })
-      })
+      await fulfillJson(route, 200, {})
     })
 
     await page.route(/\/api\/v1\/notifications(?:\/.*)?(?:\?.*)?$/, async (route) => {

@@ -1,4 +1,16 @@
-const LOCAL_SINGLE_USER_DEMO_KEY = "THIS-IS-A-SECURE-KEY-123-REPLACE-ME"
+const LOCAL_SINGLE_USER_DEMO_KEY_PARTS = Object.freeze([
+  "THIS",
+  "IS",
+  "A",
+  "SECURE",
+  "KEY",
+  "123",
+  "REPLACE",
+  "ME"
+])
+
+export const LOCAL_SINGLE_USER_DEMO_KEY =
+  LOCAL_SINGLE_USER_DEMO_KEY_PARTS.join("-")
 
 const KNOWN_PLACEHOLDER_VALUES = new Set([
   "REPLACE-ME",

@@ -20,7 +20,22 @@ test.describe("Synthetic generation handoff smoke", () => {
     await seedAuth(page)
 
     let lastGenerationBody: Record<string, any> | null = null
-    let queueItems: Array<Record<string, any>> = []
+    let queueItems = [
+      {
+        sample_id: "draft-1",
+        recipe_kind: "rag_retrieval_tuning",
+        provenance: "synthetic_from_corpus",
+        review_state: "draft",
+        sample_payload: {
+          query: "What changed in the rollout?",
+          relevant_media_ids: [{ id: "10", grade: 3 }]
+        },
+        sample_metadata: {
+          generation_batch_id: "batch-123"
+        },
+        source_kind: "media_db"
+      }
+    ]
 
     await page.route(/\/api\/v1\/health(?:\/.*)?$/, async (route) => {
       await fulfillJson(route, 200, {

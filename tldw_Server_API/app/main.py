@@ -2800,7 +2800,27 @@ async def lifespan(app: FastAPI):
                     "(ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED != true)"
                 )
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.warning(f"Failed to start Admin maintenance rotation Jobs worker: {e}")
+        logger.warning("Failed to start Admin maintenance rotation Jobs worker: {}", e)
+
+    # Evaluations recipe-run Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Evaluation recipe-run Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+                start_recipe_run_jobs_worker,
+            )
+
+            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
+            if recipe_run_jobs_task:
+                logger.info("Evaluation recipe-run Jobs worker started")
+            else:
+                logger.info(
+                    "Evaluation recipe-run Jobs worker disabled "
+                    "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning("Failed to start evaluation recipe-run Jobs worker: {}", e)
 
     # Evaluations recipe-run Jobs worker
     try:

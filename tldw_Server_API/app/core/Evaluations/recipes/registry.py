@@ -13,6 +13,17 @@ from .rag_retrieval_tuning import RAGRetrievalTuningRecipe
 from .summarization_quality import SummarizationQualityRecipe
 
 
+class RecipeNotFoundError(KeyError):
+    """Raised when a requested recipe id is not registered."""
+
+    def __init__(self, recipe_id: str) -> None:
+        self.recipe_id = str(recipe_id)
+        super().__init__(self.recipe_id)
+
+    def __str__(self) -> str:
+        return f"Unknown recipe '{self.recipe_id}'."
+
+
 def _default_builtin_recipes() -> tuple[RecipeDefinition, ...]:
     return (
         EmbeddingsRetrievalRecipe(),
@@ -35,10 +46,17 @@ class RecipeRegistry:
         return {recipe_id: recipe.get_manifest() for recipe_id, recipe in self._recipes.items()}
 
     def get_manifest(self, recipe_id: str) -> RecipeManifest:
-        return self._recipes[recipe_id].get_manifest()
+        try:
+            recipe = self._recipes[recipe_id]
+        except KeyError as exc:
+            raise RecipeNotFoundError(recipe_id) from exc
+        return recipe.get_manifest()
 
     def get_recipe(self, recipe_id: str) -> RecipeDefinition:
-        return self._recipes[recipe_id]
+        try:
+            return self._recipes[recipe_id]
+        except KeyError as exc:
+            raise RecipeNotFoundError(recipe_id) from exc
 
     def recipe_ids(self) -> list[str]:
         return list(self._recipes)

@@ -35,7 +35,6 @@ const { Text } = Typography
 export const DatasetsTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
   const [form] = Form.useForm()
-  const [activeDatasetId, setActiveDatasetId] = React.useState<string | null>(null)
 
   // Store state
   const {
@@ -207,14 +206,13 @@ export const DatasetsTab: React.FC = () => {
                     <Button
                       size="small"
                       loading={loadDatasetMutation.isPending}
-                      onClick={() => {
-                        setActiveDatasetId(ds.id)
+                      onClick={() =>
                         loadDatasetMutation.mutate({
                           datasetId: ds.id,
                           page: 1,
                           pageSize: datasetSamplesPageSize
                         })
-                      }}
+                      }
                     >
                       {t("common:view", { defaultValue: "View" })}
                     </Button>
@@ -429,9 +427,12 @@ export const DatasetsTab: React.FC = () => {
                   total={datasetSamplesTotal}
                   size="small"
                   onChange={(page) => {
-                    if (!activeDatasetId) return
+                    if (!viewingDataset?.id) {
+                      setDatasetSamplesPage(page)
+                      return
+                    }
                     loadDatasetMutation.mutate({
-                      datasetId: activeDatasetId,
+                      datasetId: viewingDataset.id,
                       page,
                       pageSize: datasetSamplesPageSize
                     })

@@ -113,15 +113,21 @@ def test_build_report_emits_recommendation_slots_and_confidence_inputs() -> None
         ],
     )
 
+    candidates_by_id = {
+        candidate["candidate_id"]: candidate for candidate in report["candidates"]
+    }
+
     assert report["best_overall"]["candidate_id"] == "m1"
     assert report["best_cheap"]["candidate_id"] == "m2"
     assert report["best_local"]["candidate_id"] == "m2"
     assert report["confidence_summary"]["sample_count"] == 2
     assert report["confidence_summary"]["spread"] > 0.0
     assert "winner_margin" in report["confidence_inputs"]
-    assert report["recommendation_slots"]["best_overall"]["candidate_run_id"] is None
+    assert report["recommendation_slots"]["best_overall"]["candidate_run_id"] == "m1"
     assert report["recommendation_slots"]["best_overall"]["reason_code"] == "highest_quality_score"
     assert report["recommendation_slots"]["best_local"]["metadata"]["candidate_id"] == "m2"
+    assert candidates_by_id["m1"]["metrics"]["recall_at_k"] > 0.0
+    assert candidates_by_id["m1"]["metrics"]["quality_score"] > candidates_by_id["m2"]["metrics"]["quality_score"]
 
 
 def test_build_report_accepts_abtest_result_rows_and_uses_conservative_sample_count() -> None:
