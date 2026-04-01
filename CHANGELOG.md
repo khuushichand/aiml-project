@@ -17,6 +17,29 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 
+## [0.1.30] 2026-03-31
+
+### Added
+
+- **Evaluations Recipe Framework** — A recipe-driven evaluation system with manifests, run persistence, job worker integration, and reporting APIs. Includes guided retrieval tuning and RAG answer quality recipes, recipe-first UI flows with a guided launcher, and legacy evaluations tab fixes. Synthetic eval draft generation and shared review workflow added alongside browser and unit test coverage. (PR #942)
+- **MCP Virtual CLI** — Phase-1 virtual CLI command runtime with workspace-bounded filesystem tools, governed `run` MCP tool, parser/registry/execution/presentation layers, approval-gated execution for governed chains, policy-aware discovery, nested idempotency propagation, spill-safe presentation, and integration test coverage across authz and path scoping. (PRs #939, #941)
+- **Reference Manager Import/Sync** — Provider-neutral reference-manager connector contracts, storage, and Zotero integration. Zotero collection sources are exposed through the connectors API with import-mode scheduler and worker sync including dedupe, metadata-only tracking. (PR #940)
+- **NotebookLM Presentation Style Catalog** — Built-in visual style catalog with resolver-backed metadata, prompt profiles, and reusable style packs. Reveal export rendering extended with namespaced style CSS and richer visual-block HTML. Presentation Studio gained a visual style picker, client metadata support, and built-in theme synchronization. (PR #935)
+- **FTUE Audit** — Comprehensive first-time user experience audit addressing 41 issues across documentation, tooling, configuration, and frontend UX. Includes unified README entry points, `make help`/`make show-api-key` targets, restructured `.env.example`, improved onboarding error messages, Docker entrypoint auth-init failure handling, DATABASE_URL preflight checks, demo mode exit banners, and multi-user JWT setup guidance. (PRs #938, #944)
+
+### Changed
+
+- Admin review findings (120/120) completed with incident management, monitoring, billing, compliance, registration codes, webhooks, usage, and voice-command tooling fully overhauled. (PR #932)
+- Chat mood badge hidden by default across shared WebUI and extension chat surfaces, with one-time legacy preference migration and preserved user opt-in. (PR #943)
+- Workspace scope now forwarded when saving chat knowledge; voice-unavailable reason propagated through PlaygroundForm. (PR #943)
+
+### Fixed
+
+- Evaluations recipe framework hardened with 50 review-feedback fixes: Pydantic-typed recipe endpoints, worker readiness gating before enqueue, custom `RecipeEnqueueError` exception, sanitized error metadata, `managed_media_database` context manager for worker sessions, `owner_user_id` enforcement on `get_run()`, pre-validated `build_reuse_hash`, DB-level reuse-hash lookup, `ConfidenceSummary.model_validate` fallback, field-specific weight validation errors, CLI JSON shape validation, non-retryable `fts` mode error, `RecipeNotFoundError` custom exception, dict-backed document normalization in RAG pipeline, parameterized Loguru logging, and comprehensive recipe logic fixes across retrieval tuning, answer quality, embeddings, and summarization recipes. (PR #942 review follow-ups)
+- FTUE v2 residual issues: Docker entrypoint now exits on auth init failure, DATABASE_URL TCP connectivity preflight added, demo mode crash guard for missing `DemoModeProvider`, and clearer configuration guidance across Docker and local installs. (PR #944)
+- MCP virtual CLI review feedback addressed: preflight validation, filesystem module registration, command runtime path scope tests, and idempotency propagation fixes. (PR #941 review follow-ups)
+
+
 ## [0.1.29] 2026-03-29
 ### Added
 
