@@ -1215,8 +1215,8 @@ export const OverviewTab: React.FC = () => {
             <Card
               size="small"
               title={
-                <span>
-                  {t("watchlists:overview.onboarding.title", "Quick setup")}{" "}
+                <span className="flex items-center gap-2">
+                  {t("watchlists:overview.onboarding.title", "Quick setup")}
                   <Tag color="green">{t("watchlists:overview.onboarding.recommended", "Recommended")}</Tag>
                 </span>
               }
