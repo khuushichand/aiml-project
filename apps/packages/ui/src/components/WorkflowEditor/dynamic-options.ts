@@ -548,16 +548,6 @@ export const useWorkflowDynamicOptions = (params: {
   config?: Record<string, unknown>
 }): DynamicOptionsState => {
   const { fields, stepType, config } = params
-  const sourceSignature = useMemo(() => {
-    const evaluationId = resolveEvaluationIdFromConfig(config)
-    const provider = resolveProviderFromConfig(config)
-    return JSON.stringify({
-      fieldKeys: fields.map((field) => field.key),
-      stepType: stepType || "",
-      evaluationId,
-      provider
-    })
-  }, [fields, stepType, config])
   const resolvedSources = useMemo(() => {
     const fieldToSource = new Map<string, OptionSourceKey>()
     const sources = new Set<OptionSourceKey>()
@@ -571,7 +561,7 @@ export const useWorkflowDynamicOptions = (params: {
       fieldToSource,
       sources: Array.from(sources)
     }
-  }, [sourceSignature])
+  }, [fields, stepType, config])
 
   const [optionsBySource, setOptionsBySource] = useState<
     Record<string, Option[]>

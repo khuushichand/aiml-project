@@ -51,6 +51,7 @@ interface FormState {
 
 interface DataState {
   historyResults: EvaluationHistoryItem[]
+  historyTotalCount: number
   syntheticReviewRecipeKind: string | null
   syntheticReviewBatchId: string | null
   syntheticReviewSampleIds: string[]
@@ -106,7 +107,7 @@ interface FormActions {
 }
 
 interface DataActions {
-  setHistoryResults: (results: EvaluationHistoryItem[]) => void
+  setHistoryResults: (results: EvaluationHistoryItem[], totalCount?: number) => void
   setSyntheticReviewRecipeKind: (recipeKind: string | null) => void
   setSyntheticReviewBatchId: (batchId: string | null) => void
   setSyntheticReviewSampleIds: (sampleIds: string[]) => void
@@ -197,6 +198,7 @@ const initialFormState: FormState = {
 
 const initialDataState: DataState = {
   historyResults: [],
+  historyTotalCount: 0,
   syntheticReviewRecipeKind: null,
   syntheticReviewBatchId: null,
   syntheticReviewSampleIds: [],
@@ -267,7 +269,7 @@ export const useEvaluationsStore = createWithEqualityFn<EvaluationsState>()((set
   // Data Actions
   // ─────────────────────────────────────────────────────────────────────────
 
-  setHistoryResults: (historyResults) => set({ historyResults }),
+  setHistoryResults: (historyResults, totalCount) => set({ historyResults, historyTotalCount: totalCount ?? historyResults.length }),
   setSyntheticReviewRecipeKind: (syntheticReviewRecipeKind) =>
     set({ syntheticReviewRecipeKind }),
   setSyntheticReviewBatchId: (syntheticReviewBatchId) =>
