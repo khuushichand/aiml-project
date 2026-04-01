@@ -261,6 +261,7 @@ type Props = {
   onDeleteAllImageVariants?: (payload: {
     messageId?: string
   }) => void
+  scope?: string
 }
 
 export type MessageResearchActions = {

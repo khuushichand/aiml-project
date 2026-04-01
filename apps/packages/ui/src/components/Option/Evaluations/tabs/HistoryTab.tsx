@@ -67,6 +67,7 @@ export const HistoryTab: React.FC = () => {
               name="user_id"
             >
               <Input
+                data-testid="history-user-filter"
                 placeholder={t("evaluations:historyUserPlaceholder", {
                   defaultValue: "user_123"
                 })}

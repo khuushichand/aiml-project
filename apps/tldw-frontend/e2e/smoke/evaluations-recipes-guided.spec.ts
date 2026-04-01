@@ -26,7 +26,7 @@ test.describe("Evaluations recipes guided smoke", () => {
       await fulfillJson(route, 200, {
         status: "ok",
         auth_mode: "single_user",
-        test_api_key: "THIS-IS-A-SECURE-KEY-123-LOCAL-TEST"
+        test_api_key: "local-smoke-test-auth-token"
       })
     })
 

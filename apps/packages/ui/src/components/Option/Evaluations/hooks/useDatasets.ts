@@ -145,9 +145,13 @@ export function useLoadDatasetSamples() {
   }))
 
   return useMutation({
-    mutationFn: async (args: { datasetId: string; page?: number; pageSize?: number }) => {
-      const page = Math.max(1, args.page || 1)
-      const pageSize = Math.max(1, args.pageSize || 5)
+    mutationFn: async (args: {
+      datasetId: string
+      page?: number
+      pageSize?: number
+    }) => {
+      const page = Math.max(1, Number(args.page || 1))
+      const pageSize = Math.max(1, Number(args.pageSize || 20))
       return ensureOk<{ data: DatasetResponse }>(
         await getDataset(args.datasetId, {
           include_samples: true,
@@ -160,7 +164,7 @@ export function useLoadDatasetSamples() {
       const data = resp?.data || null
       setViewingDataset(data)
       setDatasetSamples(data?.samples || [])
-      setDatasetSamplesPage(Math.max(1, variables.page || 1))
+      setDatasetSamplesPage(Math.max(1, Number(variables.page || 1)))
       setDatasetSamplesTotal(
         typeof data?.sample_count === "number" ? data.sample_count : null
       )

@@ -230,6 +230,29 @@ export const OverviewTab: React.FC = () => {
     }
   }, [loadOverview])
 
+  // Auto-open Quick Setup for first-time users with no sources
+  const quickSetupAutoShownRef = useRef(false)
+  useEffect(() => {
+    if (
+      data &&
+      data.sources.total === 0 &&
+      !quickSetupOpen &&
+      !quickSetupAutoShownRef.current &&
+      onboardingPath === "beginner"
+    ) {
+      const autoShownKey = "watchlists:quickSetup:autoshown:v1"
+      try {
+        if (!localStorage.getItem(autoShownKey)) {
+          localStorage.setItem(autoShownKey, "1")
+          quickSetupAutoShownRef.current = true
+          openQuickSetup()
+        }
+      } catch {
+        // localStorage unavailable
+      }
+    }
+  }, [data, quickSetupOpen, onboardingPath, openQuickSetup])
+
   useLayoutEffect(() => {
     if (quickSetupOpen) {
       if (!quickSetupWasOpenRef.current) {
@@ -1192,8 +1215,8 @@ export const OverviewTab: React.FC = () => {
             <Card
               size="small"
               title={
-                <span>
-                  {t("watchlists:overview.onboarding.title", "Quick setup")}{" "}
+                <span className="flex items-center gap-2">
+                  {t("watchlists:overview.onboarding.title", "Quick setup")}
                   <Tag color="green">{t("watchlists:overview.onboarding.recommended", "Recommended")}</Tag>
                 </span>
               }

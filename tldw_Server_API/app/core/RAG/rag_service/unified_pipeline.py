@@ -50,7 +50,26 @@ _RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS = 500
 def _serialize_result_document(doc: Any) -> dict[str, Any]:
     """Serialize a pipeline document into the response-compatible document shape."""
     if isinstance(doc, dict):
-        return dict(doc)
+        metadata = dict(doc.get("metadata") or {})
+        source = doc.get("source")
+        if source is not None:
+            metadata.setdefault(
+                "source",
+                source.value if hasattr(source, "value") else str(source),
+            )
+        for field_name in ("media_id", "note_id", "chunk_id", "record_id", "start", "end"):
+            value = doc.get(field_name)
+            if value is not None:
+                metadata.setdefault(field_name, value)
+        doc_id = doc.get("id")
+        if doc_id is not None:
+            metadata.setdefault("chunk_id", str(doc_id))
+        return {
+            "id": doc_id,
+            "content": doc.get("content") or doc.get("text") or doc.get("body"),
+            "score": doc.get("score", 0.0),
+            "metadata": metadata,
+        }
 
     metadata = dict(getattr(doc, "metadata", {}) or {})
     try:
@@ -76,7 +95,7 @@ def _serialize_result_document(doc: Any) -> dict[str, Any]:
 
 
 def _resolve_include_rerank_debug_documents(explicit_flag: Any) -> bool:
-    """Resolve whether rerank debug snapshots may include content previews."""
+    """Resolve whether rerank debug snapshots are enabled."""
     if explicit_flag is None:
         return _shared_is_truthy(os.getenv("RAG_INCLUDE_RERANK_DEBUG_DOCUMENTS", "false"))
     if isinstance(explicit_flag, bool):
@@ -4451,15 +4470,15 @@ async def unified_rag_pipeline(
                         min_relevance_prob=rerank_min_relevance_prob,
                         sentinel_margin=rerank_sentinel_margin,
                     )
-                    rerank_debug_include_content = _resolve_include_rerank_debug_documents(
+                    include_rerank_snapshots = debug_mode and _resolve_include_rerank_debug_documents(
                         include_rerank_debug_documents
                     )
                     rerank_debug_limit = max(1, int(rerank_top_k or top_k or 1))
                     try:
-                        if debug_mode and isinstance(result.metadata, dict):
+                        if include_rerank_snapshots and isinstance(result.metadata, dict):
                             result.metadata["pre_rerank_documents"] = _serialize_rerank_debug_documents(
                                 result.documents,
-                                include_content=rerank_debug_include_content,
+                                include_content=True,
                                 limit=rerank_debug_limit,
                             )
                         reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
@@ -4492,10 +4511,10 @@ async def unified_rag_pipeline(
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
                         result.documents = reranked[:(rerank_top_k or top_k)]
-                    if debug_mode and isinstance(result.metadata, dict):
+                    if include_rerank_snapshots and isinstance(result.metadata, dict):
                         result.metadata["reranked_documents"] = _serialize_rerank_debug_documents(
                             result.documents,
-                            include_content=rerank_debug_include_content,
+                            include_content=True,
                             limit=rerank_debug_limit,
                         )
 
@@ -5984,6 +6003,7 @@ async def unified_rag_pipeline(
                             highlight_query_terms=highlight_query_terms,
                             track_cost=track_cost,
                             debug_mode=debug_mode,
+                            include_rerank_debug_documents=include_rerank_debug_documents,
                         )
                         # Quick verify the new answer without repairs to compare factuality
                         new_ratio = None

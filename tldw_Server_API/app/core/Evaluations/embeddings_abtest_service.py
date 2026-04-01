@@ -617,7 +617,10 @@ async def run_vector_search_and_score(
     """
     search_mode = (config.retrieval.search_mode or "vector").lower()
     if search_mode == "fts":
-        raise ValueError("fts search_mode is not supported by the embeddings A/B vector retrieval path.")
+        raise EmbeddingsABTestRunError(
+            "fts search_mode is not supported by the embeddings A/B vector retrieval path.",
+            retryable=False,
+        )
 
     from tldw_Server_API.app.core.config import settings as app_settings
     embedding_config = _resolve_abtest_embedding_config(app_settings)
@@ -701,6 +704,7 @@ async def run_vector_search_and_score(
             else:
                 qvec = qvecs[q_idx]
                 collection = manager.get_or_create_collection(collection_name)
+                ranked: list[str] = []
                 try:
                     # Chroma include: valid keys are documents, embeddings, metadatas, distances, uris, data
                     # 'ids' are returned by default and not a valid include key on some versions.

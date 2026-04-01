@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
+    RecipeDefinitionNotLaunchableError,
+)
 from tldw_Server_API.cli.evals_cli import main
+from tldw_Server_API.app.core.exceptions import RecipeEnqueueError
 
 
 class _Manifest:
@@ -97,10 +101,11 @@ class _Service:
     def list_manifests(self):
         return [_Manifest("summarization_quality", "1", ["labeled"])]
 
-    def validate_dataset(self, recipe_id: str, *, dataset_id=None, dataset=None):
+    def validate_dataset(self, recipe_id: str, *, dataset_id=None, dataset=None, run_config=None):
         assert recipe_id == "summarization_quality"
         assert dataset_id is None
         assert dataset == [{"input": "bad"}]
+        assert run_config is None
         return {
             "valid": False,
             "errors": ["dataset must include labels"],
@@ -190,14 +195,10 @@ def test_recipes_validate_dataset_command_outputs_validation_payload(monkeypatch
 def test_recipes_validate_dataset_command_fails_cleanly_for_non_launchable_stub(
     monkeypatch,
 ):
-    from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
-        RecipeDefinitionNotLaunchableError,
-    )
-
-    class _NonLaunchableService:
-        def validate_dataset(self, recipe_id: str, *, dataset_id=None, dataset=None):
-            del dataset_id, dataset
-            raise RecipeDefinitionNotLaunchableError(recipe_id)
+    class _NonLaunchableService(_Service):
+        def validate_dataset(self, recipe_id: str, *, dataset_id=None, dataset=None, run_config=None):
+            del recipe_id, dataset_id, dataset, run_config
+            raise RecipeDefinitionNotLaunchableError("stub_recipe")
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced._get_recipe_runs_service",
@@ -209,7 +210,7 @@ def test_recipes_validate_dataset_command_fails_cleanly_for_non_launchable_stub(
         [
             "recipes",
             "validate-dataset",
-            "not_launchable_recipe",
+            "stub_recipe",
             "--dataset-json",
             '[{"input":"bad"}]',
         ],
@@ -257,7 +258,7 @@ def test_recipes_run_command_marks_failed_when_enqueue_raises(monkeypatch):
 
     def _raise_enqueue(record, owner_user_id=None, job_manager=None):
         del record, owner_user_id, job_manager
-        raise RuntimeError("queue unavailable")
+        raise RecipeEnqueueError()
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced.enqueue_recipe_run",
@@ -284,7 +285,31 @@ def test_recipes_run_command_marks_failed_when_enqueue_raises(monkeypatch):
     assert getattr(service.db.updated["status"], "value", service.db.updated["status"]) == "failed"
     metadata = service.db.updated["metadata"]
     assert metadata["jobs"]["worker_state"] == "enqueue_failed"
-    assert metadata["jobs"]["error"] == "queue unavailable"
+    assert metadata["jobs"]["error"] == "recipe_run_enqueue_failed"
+    assert metadata["jobs"]["error_message"] == "Failed to enqueue recipe run."
+
+
+def test_recipes_run_command_rejects_non_object_run_config_json(monkeypatch):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.cli.evals_cli_enhanced._get_recipe_runs_service",
+        lambda user_id=None, db_path=None: _Service(),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "recipes",
+            "run",
+            "summarization_quality",
+            "--dataset-json",
+            '[{"input":"hello","expected":"hi"}]',
+            "--run-config-json",
+            '["not-an-object"]',
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--run-config-json must be a JSON object." in result.output
 
 
 def test_recipes_report_command_outputs_report_payload(monkeypatch):

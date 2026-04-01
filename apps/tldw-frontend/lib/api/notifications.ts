@@ -1,4 +1,9 @@
-import { buildAuthHeaders, getApiBaseUrl, apiClient } from "@web/lib/api"
+import {
+  buildAuthHeaders,
+  getApiBaseUrl,
+  apiClient,
+  hasExplicitAuthHeaders
+} from "@web/lib/api"
 import { streamStructuredSSE } from "@web/lib/sse"
 import {
   buildNotificationsQuery as buildNotificationsQueryShared,
@@ -79,38 +84,34 @@ export async function listNotifications(params?: {
   offset?: number
   include_archived?: boolean
 }): Promise<NotificationsListResponse> {
-  const headers = buildAuthHeaders("GET")
   return apiClient.get<NotificationsListResponse>(
     `/notifications${buildNotificationsQueryShared({
       limit: params?.limit ?? 100,
       offset: params?.offset ?? 0,
       include_archived: params?.include_archived ?? false
     })}`,
-    { withCredentials: shouldUseCookieCredentials(headers) }
+    { withCredentials: !hasExplicitAuthHeaders() }
   )
 }
 
 export async function getUnreadCount(): Promise<NotificationsUnreadCountResponse> {
-  const headers = buildAuthHeaders("GET")
   return apiClient.get<NotificationsUnreadCountResponse>("/notifications/unread-count", {
-    withCredentials: shouldUseCookieCredentials(headers)
+    withCredentials: !hasExplicitAuthHeaders()
   })
 }
 
 export async function markNotificationsRead(ids: number[]): Promise<{ updated: number }> {
-  const headers = buildAuthHeaders("POST")
   return apiClient.post<{ updated: number }>("/notifications/mark-read", { ids }, {
-    withCredentials: shouldUseCookieCredentials(headers)
+    withCredentials: !hasExplicitAuthHeaders()
   })
 }
 
 export async function dismissNotification(notificationId: number): Promise<{ dismissed: boolean }> {
-  const headers = buildAuthHeaders("POST")
   return apiClient.post<{ dismissed: boolean }>(
     `/notifications/${notificationId}/dismiss`,
     undefined,
     {
-      withCredentials: shouldUseCookieCredentials(headers)
+      withCredentials: !hasExplicitAuthHeaders()
     }
   )
 }
@@ -119,10 +120,9 @@ export async function snoozeNotification(
   notificationId: number,
   minutes: number
 ): Promise<NotificationSnoozeResponse> {
-  const headers = buildAuthHeaders("POST")
   return apiClient.post<NotificationSnoozeResponse>(`/notifications/${notificationId}/snooze`, {
     minutes
   }, {
-    withCredentials: shouldUseCookieCredentials(headers)
+    withCredentials: !hasExplicitAuthHeaders()
   })
 }

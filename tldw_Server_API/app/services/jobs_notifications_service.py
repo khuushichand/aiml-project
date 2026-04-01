@@ -268,7 +268,10 @@ class JobsNotificationsService:
 
 
 async def start_jobs_notifications_service() -> asyncio.Task | None:
-    if not env_flag_enabled("JOBS_NOTIFICATIONS_BRIDGE_ENABLED"):
+    # Bridge is ON by default. Set JOBS_NOTIFICATIONS_BRIDGE_DISABLED=true to opt out.
+    _bridge_var = os.getenv("JOBS_NOTIFICATIONS_BRIDGE_ENABLED")
+    _bridge_disabled = env_flag_enabled("JOBS_NOTIFICATIONS_BRIDGE_DISABLED")
+    if _bridge_disabled or (_bridge_var is not None and not env_flag_enabled("JOBS_NOTIFICATIONS_BRIDGE_ENABLED")):
         return None
     service = JobsNotificationsService(
         consumer_name=(os.getenv("JOBS_NOTIFICATIONS_CONSUMER_NAME") or "jobs_notifications_bridge").strip(),

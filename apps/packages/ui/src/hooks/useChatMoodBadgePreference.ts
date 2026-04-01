@@ -78,10 +78,15 @@ export const useChatMoodBadgePreference = () => {
 
     const applyMigration = async () => {
       try {
-        await moodBadgeStorage.set(
-          CHAT_MOOD_BADGE_STORAGE_KEY,
-          CHAT_MOOD_BADGE_DEFAULT
+        const currentValue = await moodBadgeStorage.get(
+          CHAT_MOOD_BADGE_STORAGE_KEY
         )
+        if (typeof currentValue !== "boolean") {
+          await moodBadgeStorage.set(
+            CHAT_MOOD_BADGE_STORAGE_KEY,
+            CHAT_MOOD_BADGE_DEFAULT
+          )
+        }
         await moodBadgeStorage.set(CHAT_MOOD_BADGE_MIGRATION_STORAGE_KEY, true)
       } catch {
         // Ignore storage failures and keep the default hidden render state.

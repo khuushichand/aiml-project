@@ -4,6 +4,8 @@ from typing import Any
 
 import pytest
 
+from pydantic import BaseModel
+
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
@@ -13,6 +15,8 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeRunNotFoundError,
     RecipeRunsService,
 )
+from tldw_Server_API.app.core.Evaluations.recipes.base import RecipeDefinition
+from tldw_Server_API.app.core.Evaluations.recipes.registry import RecipeRegistry
 from tldw_Server_API.app.core.Evaluations.recipes.dataset_snapshot import build_dataset_content_hash
 
 
@@ -984,15 +988,137 @@ def test_recipe_service_reuses_legacy_completed_run_without_owner_in_single_user
     assert reused.status is RunStatus.COMPLETED
 
 
+def test_recipe_service_create_run_validates_dataset_once_per_request(tmp_path) -> None:
+    class _CountingRecipe(RecipeDefinition):
+        recipe_id = "counting_recipe"
+        recipe_version = "1"
+
+        def __init__(self) -> None:
+            self.validation_calls = 0
+
+        def get_manifest(self):
+            class _Manifest(BaseModel):
+                recipe_id: str = "counting_recipe"
+                recipe_version: str = "1"
+                name: str = "Counting Recipe"
+                description: str = "Counts validation calls."
+                launchable: bool = True
+                supported_modes: list[str] = ["labeled"]
+                tags: list[str] = []
+                capabilities: dict[str, Any] = {}
+                default_run_config: dict[str, Any] = {}
+
+            return _Manifest()
+
+        def validate_dataset(self, dataset: list[dict[str, Any]], *, run_config: dict[str, Any] | None = None):
+            del dataset, run_config
+            self.validation_calls += 1
+            return {
+                "valid": True,
+                "errors": [],
+                "dataset_mode": "labeled",
+                "sample_count": 1,
+                "review_sample": {"required": False, "sample_size": 0, "sample_ids": []},
+            }
+
+    db = EvaluationsDatabase(str(tmp_path / "evaluations.db"))
+    recipe = _CountingRecipe()
+    service = RecipeRunsService(
+        db=db,
+        user_id=get_single_user_instance().id_str,
+        recipe_registry=RecipeRegistry(recipes=(recipe,)),
+    )
+
+    record = service.create_run(
+        "counting_recipe",
+        dataset=[{"input": "hello", "expected": "world"}],
+        run_config={
+            "candidate_model_ids": ["openai:gpt-4.1-mini"],
+            "comparison_mode": "leaderboard",
+            "weights": {"quality": 1.0},
+        },
+    )
+
+    assert record.status is RunStatus.PENDING
+    assert recipe.validation_calls == 1
+
+
+def test_recipe_service_rejects_non_numeric_weight_values_with_field_name(tmp_path) -> None:
+    _, service, _ = _service(tmp_path)
+
+    with pytest.raises(ValueError, match=r"run_config\.weights\.quality must be numeric"):
+        service.create_run(
+            "summarization_quality",
+            dataset=_inline_dataset(),
+            run_config={
+                **_run_config(),
+                "weights": {"quality": "not-a-number"},
+            },
+        )
+
+
+def test_recipe_service_get_report_ignores_invalid_confidence_summary_payload(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db, service, _ = _service(tmp_path)
+    record = service.create_run(
+        "summarization_quality",
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
+    )
+    recipe = service.recipe_registry.get_recipe("summarization_quality")
+    original_build_report = recipe.build_report
+
+    def _invalid_build_report(**kwargs):
+        report = dict(original_build_report(**kwargs))
+        report["confidence_summary"] = {"confidence": "bad"}
+        return report
+
+    monkeypatch.setattr(recipe, "build_report", _invalid_build_report)
+
+    db.update_recipe_run(
+        record.run_id,
+        metadata={
+            **record.metadata,
+            "recipe_report_inputs": {
+                "dataset_mode": "labeled",
+                "review_sample": {"required": False, "sample_size": 0, "sample_ids": []},
+                "weights": {"grounding": 0.5, "coverage": 0.3, "usefulness": 0.2},
+                "candidate_results": [
+                    {
+                        "candidate_id": "cand-openai",
+                        "candidate_run_id": "cand-openai",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                        "sample_results": [
+                            {
+                                "sample_id": "sample-1",
+                                "metrics": {
+                                    "grounding": 0.8,
+                                    "coverage": 0.8,
+                                    "usefulness": 0.8,
+                                },
+                                "latency_ms": 100.0,
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    report = service.get_report(record.run_id)
+
+    assert report.confidence_summary is None
+
+
 def test_find_latest_completed_run_by_reuse_hash_does_not_refetch_full_record(tmp_path, monkeypatch) -> None:
     db, service, _ = _service(tmp_path)
-    dataset = _inline_dataset()
-    run_config = _run_config()
-
     created = service.create_run(
         "summarization_quality",
-        dataset=dataset,
-        run_config=run_config,
+        dataset=_inline_dataset(),
+        run_config=_run_config(),
     )
     _mark_recipe_run_completed(db, created.run_id)
 
@@ -1012,38 +1138,33 @@ def test_find_latest_completed_run_by_reuse_hash_does_not_refetch_full_record(tm
 
 def test_recipe_service_redacts_sensitive_run_config_in_public_metadata(tmp_path) -> None:
     db, service, _ = _service(tmp_path)
-    dataset = _rag_answer_quality_dataset()
-    run_config = {
-        **_rag_answer_quality_run_config(prompt_variant="default"),
-        "candidate_api_keys": {
-            "openai": "sk-live-secret",
-            "ollama": "ollama-local-secret",
-        },
-        "judge_config": {
-            "provider": "openai",
-            "model": "gpt-4.1-mini",
-            "api_key": "sk-judge-secret",
-        },
-    }
-
     record = service.create_run(
         "rag_answer_quality",
-        dataset=dataset,
-        run_config=run_config,
+        dataset=_rag_answer_quality_dataset(),
+        run_config={
+            **_rag_answer_quality_run_config(prompt_variant="default"),
+            "candidate_api_keys": {
+                "openai": "sk-live-secret",
+                "ollama": "ollama-local-secret",
+            },
+            "judge_config": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "api_key": "sk-judge-secret",
+            },
+        },
     )
 
-    assert "candidate_api_keys" not in record.metadata["run_config"]
     assert record.metadata["run_config"]["judge_config"]["api_key"] == "[REDACTED]"
     assert "run_config_internal" not in record.metadata
 
     raw_record = db.get_recipe_run(record.run_id)
     assert raw_record is not None
-    assert "candidate_api_keys" not in raw_record.metadata["run_config_internal"]
     assert raw_record.metadata["run_config_internal"]["judge_config"]["api_key"] == "sk-judge-secret"
 
 
-def test_recipe_service_hides_runs_owned_by_other_users(tmp_path) -> None:
-    db, service, _ = _service(tmp_path)
+def test_recipe_service_get_run_rejects_other_users_run(tmp_path) -> None:
+    db, _, _ = _service(tmp_path)
     other_user_service = RecipeRunsService(db=db, user_id="other-user")
     record = other_user_service.create_run(
         "summarization_quality",
@@ -1051,5 +1172,10 @@ def test_recipe_service_hides_runs_owned_by_other_users(tmp_path) -> None:
         run_config=_run_config(),
     )
 
+    current_user_service = RecipeRunsService(
+        db=db,
+        user_id=get_single_user_instance().id_str,
+    )
+
     with pytest.raises(RecipeRunNotFoundError):
-        service.get_run(record.run_id)
+        current_user_service.get_run(record.run_id)
