@@ -26,10 +26,14 @@ services:
       - NODE_ENV=production
       - HOSTNAME=0.0.0.0
       - PORT=3001
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_SECONDARY_SECRET=${JWT_SECONDARY_SECRET:-}
       - AUTH_MODE=${AUTH_MODE:-multi_user}
+      # Set to 'true' when running behind a reverse proxy that sets
+      # X-Forwarded-For / X-Real-IP. Without this, per-IP rate limiting
+      # is disabled (all clients share one bucket).
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
     depends_on:
       app:
         condition: service_healthy

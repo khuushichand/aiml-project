@@ -23,17 +23,21 @@ function pruneStore(): void {
 }
 
 /**
- * Extract client IP from standard proxy headers.
- * Falls back to 'unknown' if no headers present (e.g., direct localhost access).
+ * Extract client IP with an explicit proxy trust model.
+ * Only reads x-forwarded-for / x-real-ip when TRUST_PROXY_HEADERS=true.
+ * Without a trusted proxy, all clients share the 'unknown' bucket —
+ * deploy behind a reverse proxy (nginx, traefik, etc.) for per-IP limiting.
  */
 export function extractClientIp(headers: {
   get(name: string): string | null;
 }): string {
-  return (
-    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    headers.get('x-real-ip') ??
-    'unknown'
-  );
+  if (process.env.TRUST_PROXY_HEADERS === 'true') {
+    const forwarded = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+    if (forwarded) return forwarded;
+    const realIp = headers.get('x-real-ip');
+    if (realIp) return realIp;
+  }
+  return 'unknown';
 }
 
 export function checkRateLimit(ip: string): {
@@ -41,7 +45,7 @@ export function checkRateLimit(ip: string): {
   retryAfterSeconds?: number;
 } {
   const now = Date.now();
-  pruneStore();
+  if (Math.random() < 0.01) pruneStore();
 
   const timestamps = pruneEntry(store.get(ip) ?? [], now);
 
