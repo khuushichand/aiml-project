@@ -20,7 +20,11 @@ def test_resolve_chat_run_first_rollout_mode_defaults_off(
     monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
 
+    monkeypatch.setattr(config, "load_comprehensive_config", lambda: configparser.ConfigParser())
+
     assert config.resolve_chat_run_first_rollout_mode() == "off"
+    assert config.resolve_chat_run_first_provider_allowlist() == []
+    assert config.resolve_chat_run_first_presentation_variant() == "chat_phase2a_v1"
 
 
 def test_resolve_chat_run_first_provider_allowlist_parses_csv(

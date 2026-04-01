@@ -3458,11 +3458,6 @@ async def execute_streaming_call(
             },
         )
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
-        _emit_chat_run_first_completion_metric(
-            metrics,
-            context=run_first_metric_context,
-            outcome="error",
-        )
         metrics.track_llm_call(
             selected_provider,
             model,
@@ -3470,6 +3465,7 @@ async def execute_streaming_call(
             success=False,
             error_type=type(e).__name__,
         )
+        _fallback_stream_ok = False
         if provider_manager and not queue_enabled:
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
@@ -3521,6 +3517,7 @@ async def execute_streaming_call(
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
                         llm_call_func = llm_call_func_fb
+                        _fallback_stream_ok = True
                         # Explicit telemetry for direct (non-queued) streaming fallback success
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
@@ -3532,53 +3529,51 @@ async def execute_streaming_call(
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
                         raise
-                else:
-                    # No fallback available: stream SSE error (200) instead of raising
-                    pass
-            else:
-                # Client/config errors in streaming mode: stream SSE error (200)
-                pass
-        else:
-            # Queue path: stream SSE error as well
-            pass
 
-        # Safely capture exception details for streaming outside the closure
-        _err_message = str(e)
-        _err_type = type(e).__name__
+        if not _fallback_stream_ok:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
 
-        # New safe variant that does not reference the except-scope variable directly
-        async def _safe_err_stream():
-            try:
-                import json as _json
-                payload = {"error": {"message": _err_message, "type": _err_type}}
-                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
-                    payload["conversation_id"] = final_conversation_id
-                    payload["tldw_conversation_id"] = final_conversation_id
-                    if system_message_id:
-                        payload["tldw_system_message_id"] = system_message_id
-                    if normalized_continuation_metadata:
-                        payload["tldw_continuation"] = normalized_continuation_metadata
-                yield f"data: {_json.dumps(payload)}\n\n"
-            except _CHAT_NONCRITICAL_EXCEPTIONS:
-                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
-                    yield (
-                        f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
-                        f"\"conversation_id\":\"{final_conversation_id}\","
-                        f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
-                    )
-                else:
-                    yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
-            yield "data: [DONE]\n\n"
+            # Safely capture exception details for streaming outside the closure
+            _err_message = str(e)
+            _err_type = type(e).__name__
 
-        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
-        return StreamingResponse(
-            _safe_err_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
+            # New safe variant that does not reference the except-scope variable directly
+            async def _safe_err_stream():
+                try:
+                    import json as _json
+                    payload = {"error": {"message": _err_message, "type": _err_type}}
+                    if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                        payload["conversation_id"] = final_conversation_id
+                        payload["tldw_conversation_id"] = final_conversation_id
+                        if system_message_id:
+                            payload["tldw_system_message_id"] = system_message_id
+                        if normalized_continuation_metadata:
+                            payload["tldw_continuation"] = normalized_continuation_metadata
+                    yield f"data: {_json.dumps(payload)}\n\n"
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                        yield (
+                            f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
+                            f"\"conversation_id\":\"{final_conversation_id}\","
+                            f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
+                        )
+                    else:
+                        yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
+                yield "data: [DONE]\n\n"
+
+            await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
+            return StreamingResponse(
+                _safe_err_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
@@ -4488,11 +4483,6 @@ async def execute_non_stream_call(
             raise
         raise
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
-        _emit_chat_run_first_completion_metric(
-            metrics,
-            context=run_first_metric_context,
-            outcome="error",
-        )
         llm_latency = time.time() - llm_start_time
         if not queue_failure_recorded:
             metrics.track_llm_call(
@@ -4543,6 +4533,9 @@ async def execute_non_stream_call(
                         )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
+                        _emit_chat_run_first_completion_metric(
+                            metrics, context=run_first_metric_context, outcome="error",
+                        )
                         raise
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
@@ -4563,12 +4556,24 @@ async def execute_non_stream_call(
                             )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
+                        _emit_chat_run_first_completion_metric(
+                            metrics, context=run_first_metric_context, outcome="error",
+                        )
                         raise
                 else:
+                    _emit_chat_run_first_completion_metric(
+                        metrics, context=run_first_metric_context, outcome="error",
+                    )
                     raise
             else:
+                _emit_chat_run_first_completion_metric(
+                    metrics, context=run_first_metric_context, outcome="error",
+                )
                 raise
         else:
+            _emit_chat_run_first_completion_metric(
+                metrics, context=run_first_metric_context, outcome="error",
+            )
             raise
 
     if isinstance(llm_response, str) and should_force_normalize_string_responses():

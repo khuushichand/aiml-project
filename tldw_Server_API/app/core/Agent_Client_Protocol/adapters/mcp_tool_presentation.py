@@ -79,11 +79,12 @@ def _normalize_tools(tools: list[dict[str, Any]] | None) -> tuple[list[dict[str,
             continue
         seen_names.add(tool_name)
         effective_tool_names.append(tool_name)
+        raw_schema = tool.get("inputSchema")
         normalized_tools.append(
             {
                 **tool,
                 "description": str(tool.get("description") or ""),
-                "inputSchema": tool.get("inputSchema", {"type": "object"}),
+                "inputSchema": raw_schema if isinstance(raw_schema, dict) else {"type": "object"},
             }
         )
 

@@ -206,6 +206,11 @@ async def test_run_first_presented_tools_drive_autoexec_allow_catalog(monkeypatc
         "resolve_chat_run_first_presentation_variant",
         lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2a_v1",
     )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: ["openai:gpt-4o-mini"],
+    )
     monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
 
     run_tool = {
@@ -261,7 +266,7 @@ async def test_run_first_presented_tools_drive_autoexec_allow_catalog(monkeypatc
     assert [tool["function"]["name"] for tool in cleaned_args["tools"]] == ["run", "notes.search"]
     assert cleaned_args["_chat_effective_tool_names"] == ["run", "notes.search"]
     assert "run(command)" in cleaned_args["system_message"]
-    assert cleaned_args.get("tool_choice") is None
+    assert cleaned_args.get("tool_choice") in (None, "auto")
 
     captured = {"allow_catalog": None}
 

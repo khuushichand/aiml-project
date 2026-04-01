@@ -844,6 +844,7 @@ class ChatMetricsCollector:
         model: str,
         streaming: bool,
         eligible: bool,
+        ineligible_reason: str | None = None,
         first_tool: str,
     ) -> None:
         labels = self._run_first_base_labels(
@@ -853,7 +854,7 @@ class ChatMetricsCollector:
             model=model,
             streaming=streaming,
             eligible=eligible,
-            ineligible_reason=None,
+            ineligible_reason=ineligible_reason,
         )
         labels[ChatMetricLabels.FIRST_TOOL.value] = str(first_tool or "").strip() or "unknown"
         self.metrics.run_first_first_tool.add(1, labels)
@@ -867,6 +868,7 @@ class ChatMetricsCollector:
         model: str,
         streaming: bool,
         eligible: bool,
+        ineligible_reason: str | None = None,
         fallback_tool: str,
     ) -> None:
         labels = self._run_first_base_labels(
@@ -876,7 +878,7 @@ class ChatMetricsCollector:
             model=model,
             streaming=streaming,
             eligible=eligible,
-            ineligible_reason=None,
+            ineligible_reason=ineligible_reason,
         )
         labels[ChatMetricLabels.FALLBACK_TOOL.value] = str(fallback_tool or "").strip() or "unknown"
         self.metrics.run_first_fallback_after_run.add(1, labels)
@@ -890,6 +892,7 @@ class ChatMetricsCollector:
         model: str,
         streaming: bool,
         eligible: bool,
+        ineligible_reason: str | None = None,
         outcome: str,
     ) -> None:
         labels = self._run_first_base_labels(
@@ -899,7 +902,7 @@ class ChatMetricsCollector:
             model=model,
             streaming=streaming,
             eligible=eligible,
-            ineligible_reason=None,
+            ineligible_reason=ineligible_reason,
         )
         labels[ChatMetricLabels.OUTCOME.value] = str(outcome or "").strip() or "unknown"
         self.metrics.run_first_completion_proxy.add(1, labels)

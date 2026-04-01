@@ -84,15 +84,15 @@ def test_present_acp_tools_leaves_tools_untouched_when_run_missing() -> None:
 def test_present_acp_tools_ignores_rollout_when_provider_not_in_cohort() -> None:
     presented = present_acp_tools(
         session_id="s4",
-        tools=[RUN_TOOL, NOTES_TOOL],
+        tools=[NOTES_TOOL, RUN_TOOL],
         rollout_mode="gated",
         provider_key="anthropic:claude-3-7-sonnet",
         provider_allowlist=["openai:gpt-4o-mini"],
     )
 
     assert [tool["function"]["name"] for tool in presented.openai_tools] == [
-        "run",
         "notes.search",
+        "run",
     ]
     assert presented.prompt_fragment is None
     assert presented.eligible is False
