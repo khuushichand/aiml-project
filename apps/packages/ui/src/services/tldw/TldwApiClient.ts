@@ -1792,28 +1792,24 @@ export class TldwApiClient {
   // ── BYOK Provider Keys ──────────────────────────────────────────────
 
   async listUserProviderKeys(): Promise<{
-    keys: Array<{
+    items: Array<{
       provider: string
-      status: string
-      api_key_hint: string | null
-      has_api_key: boolean
-      credential_fields: Record<string, unknown> | null
-      created_at: string | null
-      updated_at: string | null
+      has_key: boolean
+      source: string
+      key_hint: string | null
+      auth_source: string | null
+      last_used_at: string | null
     }>
-    configured_providers: string[]
   }> {
     return await this.request<{
-      keys: Array<{
+      items: Array<{
         provider: string
-        status: string
-        api_key_hint: string | null
-        has_api_key: boolean
-        credential_fields: Record<string, unknown> | null
-        created_at: string | null
-        updated_at: string | null
+        has_key: boolean
+        source: string
+        key_hint: string | null
+        auth_source: string | null
+        last_used_at: string | null
       }>
-      configured_providers: string[]
     }>({
       path: "/api/v1/users/keys",
       method: "GET"
@@ -1823,18 +1819,18 @@ export class TldwApiClient {
   async upsertUserProviderKey(
     provider: string,
     apiKey: string,
-    opts?: { credential_fields?: Record<string, string>; display_name?: string }
+    opts?: { credential_fields?: Record<string, unknown>; metadata?: Record<string, unknown> }
   ): Promise<{
     provider: string
     status: string
-    api_key_hint: string | null
-    message: string
+    key_hint: string
+    updated_at: string
   }> {
     return await this.request<{
       provider: string
       status: string
-      api_key_hint: string | null
-      message: string
+      key_hint: string
+      updated_at: string
     }>({
       path: "/api/v1/users/keys",
       method: "POST",
@@ -1849,33 +1845,26 @@ export class TldwApiClient {
 
   async testUserProviderKey(
     provider: string,
-    apiKey: string,
-    opts?: { credential_fields?: Record<string, string>; base_url?: string }
+    model?: string
   ): Promise<{
-    success: boolean
-    message: string
     provider: string
-    details?: Record<string, unknown>
+    status: string
+    model: string | null
   }> {
     return await this.request<{
-      success: boolean
-      message: string
       provider: string
-      details?: Record<string, unknown>
+      status: string
+      model: string | null
     }>({
       path: "/api/v1/users/keys/test",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: {
-        provider,
-        api_key: apiKey,
-        ...opts,
-      }
+      body: { provider, model }
     })
   }
 
-  async deleteUserProviderKey(provider: string): Promise<{ deleted: boolean; message: string }> {
-    return await this.request<{ deleted: boolean; message: string }>({
+  async deleteUserProviderKey(provider: string): Promise<void> {
+    await this.request<void>({
       path: `/api/v1/users/keys/${encodeURIComponent(provider)}`,
       method: "DELETE"
     })

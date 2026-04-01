@@ -14,7 +14,7 @@ generate_key() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr -d '\n'
   else
-    python -c "import secrets; print(secrets.token_urlsafe(32))"
+    python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
   fi
 }
 

@@ -53,7 +53,7 @@ export const SETTINGS_ROUTE_NAV_ITEMS: SettingsNavRouteMeta[] = [
     group: "server",
     labelToken: "settings:providerKeys.navTitle",
     icon: ServerIcon,
-    order: 3
+    order: 2
   },
   {
     path: "/settings/model",
