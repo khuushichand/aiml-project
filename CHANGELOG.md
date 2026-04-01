@@ -17,7 +17,7 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 
-## [0.1.30] 2026-03-31
+## [0.1.30] - 2026-03-31
 
 ### Added
 

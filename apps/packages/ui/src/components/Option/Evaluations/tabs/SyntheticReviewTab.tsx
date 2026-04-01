@@ -75,10 +75,13 @@ export const SyntheticReviewTab: React.FC = () => {
   const promoteMutation = usePromoteSyntheticEvalSamples()
 
   const rawQueueItems = Array.isArray(data?.data?.data) ? data.data.data : []
-  const queueItems =
-    !storedBatchId && storedSampleIds.length > 0
-      ? rawQueueItems.filter((sample) => storedSampleIds.includes(sample.sample_id))
-      : rawQueueItems
+  const queueItems = React.useMemo(
+    () =>
+      !storedBatchId && storedSampleIds.length > 0
+        ? rawQueueItems.filter((sample) => storedSampleIds.includes(sample.sample_id))
+        : rawQueueItems,
+    [rawQueueItems, storedBatchId, storedSampleIds]
+  )
   const totalQueueItems = typeof data?.data?.total === "number" ? data.data.total : queueItems.length
 
   React.useEffect(() => {
