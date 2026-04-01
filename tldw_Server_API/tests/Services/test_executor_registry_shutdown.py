@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from concurrent.futures import Executor
 
 import pytest
@@ -10,28 +9,14 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-class _BlockingExecutor(Executor):
-    def __init__(
-        self,
-        expected_starts: int,
-        started_all: threading.Event,
-        release: threading.Event,
-        started_count: list[int],
-        started_lock: threading.Lock,
-    ) -> None:
-        self._expected_starts = expected_starts
-        self._started_all = started_all
-        self._release = release
-        self._started_count = started_count
-        self._started_lock = started_lock
+class _RecordingExecutor(Executor):
+    def __init__(self, name: str, shutdown_order: list[str]) -> None:
+        self._name = name
+        self._shutdown_order = shutdown_order
 
     def shutdown(self, wait: bool = True, cancel_futures: bool = True) -> None:
         del wait, cancel_futures
-        with self._started_lock:
-            self._started_count[0] += 1
-            if self._started_count[0] >= self._expected_starts:
-                self._started_all.set()
-        self._release.wait()
+        self._shutdown_order.append(self._name)
 
 
 def test_snapshot_registered_executors_exposes_registered_names() -> None:
@@ -41,10 +26,9 @@ def test_snapshot_registered_executors_exposes_registered_names() -> None:
         unregister_executor,
     )
 
-    started_lock = threading.Lock()
-    started_all = threading.Event()
-    first = _BlockingExecutor(1, started_all, threading.Event(), [0], started_lock)
-    second = _BlockingExecutor(1, started_all, threading.Event(), [0], started_lock)
+    shutdown_order: list[str] = []
+    first = _RecordingExecutor("alpha", shutdown_order)
+    second = _RecordingExecutor("beta", shutdown_order)
     register_executor("alpha", first)
     register_executor("beta", second)
 
@@ -59,29 +43,25 @@ def test_snapshot_registered_executors_exposes_registered_names() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shutdown_all_registered_executors_runs_shutdowns_concurrently() -> None:
+async def test_shutdown_all_registered_executors_shuts_db_pool_down_last() -> None:
     from tldw_Server_API.app.core.Utils.executor_registry import (
         register_executor,
         shutdown_all_registered_executors,
         unregister_executor,
     )
 
-    started_all = threading.Event()
-    release = threading.Event()
-    started_count = [0]
-    started_lock = threading.Lock()
-    first = _BlockingExecutor(2, started_all, release, started_count, started_lock)
-    second = _BlockingExecutor(2, started_all, release, started_count, started_lock)
-    register_executor("alpha", first)
-    register_executor("beta", second)
+    shutdown_order: list[str] = []
+    db_executor = _RecordingExecutor("db_thread_pool", shutdown_order)
+    cpu_thread_executor = _RecordingExecutor("cpu_thread_pool", shutdown_order)
+    cpu_process_executor = _RecordingExecutor("cpu_process_pool", shutdown_order)
+    register_executor("db_thread_pool", db_executor)
+    register_executor("cpu_thread_pool", cpu_thread_executor)
+    register_executor("cpu_process_pool", cpu_process_executor)
 
     try:
-        shutdown_task = asyncio.create_task(shutdown_all_registered_executors())
-        await asyncio.wait_for(asyncio.to_thread(started_all.wait), timeout=1.5)
-        assert started_count[0] == 2
-
-        release.set()
-        await shutdown_task
+        await shutdown_all_registered_executors()
+        assert shutdown_order == ["cpu_thread_pool", "cpu_process_pool", "db_thread_pool"]
     finally:
-        unregister_executor("alpha")
-        unregister_executor("beta")
+        unregister_executor("db_thread_pool")
+        unregister_executor("cpu_thread_pool")
+        unregister_executor("cpu_process_pool")

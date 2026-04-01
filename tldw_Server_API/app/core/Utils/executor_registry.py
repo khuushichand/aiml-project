@@ -9,6 +9,9 @@ from loguru import logger
 
 _registry_lock = RLock()
 _executors: dict[str, Executor] = {}
+_EXECUTOR_SHUTDOWN_PRIORITIES: dict[str, int] = {
+    "db_thread_pool": 100,
+}
 
 
 def register_executor(name: str, executor: Executor) -> None:
@@ -34,6 +37,12 @@ def unregister_executor(name: str) -> None:
 def _snapshot() -> Iterable[tuple[str, Executor]]:
     with _registry_lock:
         return list(_executors.items())
+
+
+def _ordered_shutdown_snapshot() -> list[tuple[str, Executor]]:
+    snapshot = list(_snapshot())
+    snapshot.sort(key=lambda item: _EXECUTOR_SHUTDOWN_PRIORITIES.get(item[0], 0))
+    return snapshot
 
 
 def snapshot_registered_executors() -> tuple[tuple[str, Executor], ...]:
@@ -67,16 +76,12 @@ async def shutdown_executor(name: str, wait: bool = True, cancel_futures: bool =
 
 
 async def shutdown_all_registered_executors(wait: bool = True, cancel_futures: bool = True) -> None:
-    """Shutdown all registered executors concurrently."""
-    snapshot = list(_snapshot())
+    """Shutdown all registered executors in dependency-aware order."""
+    snapshot = _ordered_shutdown_snapshot()
     if not snapshot:
         return
-    await asyncio.gather(
-        *(
-            asyncio.to_thread(_shutdown_executor_blocking, name, executor, wait, cancel_futures)
-            for name, executor in snapshot
-        )
-    )
+    for name, executor in snapshot:
+        await asyncio.to_thread(_shutdown_executor_blocking, name, executor, wait, cancel_futures)
 
 
 def shutdown_executor_sync(name: str, wait: bool = True, cancel_futures: bool = True) -> None:
@@ -90,5 +95,5 @@ def shutdown_executor_sync(name: str, wait: bool = True, cancel_futures: bool = 
 
 def shutdown_all_registered_executors_sync(wait: bool = True, cancel_futures: bool = True) -> None:
     """Synchronous shutdown for environments without an event loop."""
-    for name, executor in _snapshot():
+    for name, executor in _ordered_shutdown_snapshot():
         _shutdown_executor_blocking(name, executor, wait, cancel_futures)

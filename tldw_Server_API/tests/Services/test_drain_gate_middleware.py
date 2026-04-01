@@ -38,12 +38,15 @@ def draining_client(test_app):
 def test_drain_gate_allows_health_and_liveness_but_rejects_mutation(test_app, draining_client):
     ok = draining_client.get("/health")
     head_ok = draining_client.head("/health")
+    api_health_ok = draining_client.get("/api/v1/health")
     liveness_ok = draining_client.get("/api/v1/healthz")
     blocked = draining_client.post("/api/v1/chat/completions", json={"messages": []})
     if ok.status_code != 200:
         raise AssertionError(f"expected /health to stay open, got {ok.status_code}")
     if head_ok.status_code != 200:
         raise AssertionError(f"expected HEAD /health to stay open, got {head_ok.status_code}")
+    if api_health_ok.status_code != 200:
+        raise AssertionError(f"expected /api/v1/health to stay open, got {api_health_ok.status_code}")
     if liveness_ok.status_code != 200:
         raise AssertionError(f"expected /api/v1/healthz to stay open, got {liveness_ok.status_code}")
     if blocked.status_code != 503:
@@ -124,8 +127,16 @@ def test_drain_gate_rejects_guarded_request_before_llm_budget_runs(test_app, dra
         ("HEAD", "/health/ready"),
         ("GET", "/healthz"),
         ("HEAD", "/healthz"),
+        ("GET", "/api/v1/health"),
+        ("HEAD", "/api/v1/health"),
+        ("GET", "/api/v1/health/live"),
+        ("HEAD", "/api/v1/health/live"),
+        ("GET", "/api/v1/health/ready"),
+        ("HEAD", "/api/v1/health/ready"),
         ("GET", "/api/v1/healthz"),
         ("HEAD", "/api/v1/healthz"),
+        ("GET", "/api/v1/readyz"),
+        ("HEAD", "/api/v1/readyz"),
     ],
 )
 def test_control_plane_probe_paths_are_allowlisted(method, path):

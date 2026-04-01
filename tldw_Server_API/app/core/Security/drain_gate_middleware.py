@@ -15,8 +15,11 @@ CONTROL_PLANE_DRAIN_PATHS: frozenset[str] = frozenset(
         "/ready",
         "/health/ready",
         "/healthz",
+        "/api/v1/health",
         "/api/v1/healthz",
         "/api/v1/health/live",
+        "/api/v1/health/ready",
+        "/api/v1/readyz",
     }
 )
 CONTROL_PLANE_DRAIN_ALLOWLIST: frozenset[tuple[str, str]] = frozenset(

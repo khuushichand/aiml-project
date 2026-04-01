@@ -41,8 +41,10 @@ def test_ready_endpoint_returns_non_success_when_dependency_raises(monkeypatch) 
         raise AssertionError(f"expected 503, got {response.status_code}")
     if payload["status"] != "not_ready":
         raise AssertionError(f"unexpected status: {payload['status']!r}")
-    if "boom" not in payload["error"]:
-        raise AssertionError(f"unexpected error: {payload['error']!r}")
+    if payload["reason"] != "dependency_check_failed":
+        raise AssertionError(f"unexpected reason: {payload['reason']!r}")
+    if "error" in payload:
+        raise AssertionError(f"readiness probe should not echo raw errors: {payload!r}")
 
 
 @pytest.mark.integration
@@ -65,5 +67,7 @@ def test_ready_endpoint_returns_503_for_import_error(monkeypatch) -> None:
         raise AssertionError(f"expected 503, got {response.status_code}")
     if payload["status"] != "not_ready":
         raise AssertionError(f"unexpected status: {payload['status']!r}")
-    if "missing readiness dependency" not in payload["error"]:
-        raise AssertionError(f"unexpected error: {payload['error']!r}")
+    if payload["reason"] != "dependency_check_failed":
+        raise AssertionError(f"unexpected reason: {payload['reason']!r}")
+    if "error" in payload:
+        raise AssertionError(f"readiness probe should not echo raw errors: {payload!r}")

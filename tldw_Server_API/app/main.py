@@ -7250,8 +7250,12 @@ async def readiness_check(request: Request) -> JSONResponse:
         except _REQUEST_GUARD_EXCEPTIONS:
             pass
         return JSONResponse(body, status_code=(200 if ready else 503))
-    except _READINESS_GUARD_EXCEPTIONS as e:
-        return JSONResponse({"status": "not_ready", "error": str(e)}, status_code=503)
+    except _READINESS_GUARD_EXCEPTIONS as exc:
+        logger.debug(f"Readiness check failed: {type(exc).__name__}: {exc}")
+        return JSONResponse(
+            {"status": "not_ready", "reason": "dependency_check_failed"},
+            status_code=503,
+        )
 
 
 # /health/ready alias for some orchestrators (registered conditionally below)
