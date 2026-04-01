@@ -1,3 +1,4 @@
+
 ## Stage 1: Auth And Recipe Load States
 **Goal**: Fix the API key placeholder mismatch and make recipe manifest failures visible instead of falling back to a false empty state.
 **Success Criteria**: Demo/local keys accepted consistently; recipe fetch errors render actionable UI; targeted unit tests cover both behaviors.

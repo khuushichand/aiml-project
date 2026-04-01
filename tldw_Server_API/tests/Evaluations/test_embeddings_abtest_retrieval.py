@@ -11,6 +11,7 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
 )
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
+    EmbeddingsABTestRunError,
     _compute_collection_hash,
     build_collections_vector_only,
     get_collection_manager,
@@ -262,7 +263,7 @@ async def test_abtest_rejects_fts_search_mode(tmp_path) -> None:
         queries=[ABTestQuery(text="hello", expected_ids=[1])],
     )
 
-    with pytest.raises(ValueError, match="fts search_mode"):
+    with pytest.raises(EmbeddingsABTestRunError, match="fts search_mode") as exc:
         await run_vector_search_and_score(
             db=db,
             config=config,
@@ -270,3 +271,5 @@ async def test_abtest_rejects_fts_search_mode(tmp_path) -> None:
             user_id="user-1",
             arm_collections=[{"arm_id": "arm_test-fts_0", "collection_name": "ignored"}],
         )
+
+    assert exc.value.retryable is False

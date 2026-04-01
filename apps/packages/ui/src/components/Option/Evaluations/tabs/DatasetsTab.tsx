@@ -70,10 +70,7 @@ export const DatasetsTab: React.FC = () => {
   const datasets: DatasetResponse[] = datasetListResp?.data?.data || []
   const samplesJsonValue = Form.useWatch("samplesJson", form) || ""
   const metadataJsonValue = Form.useWatch("metadataJson", form) || ""
-  const pagedSamples = React.useMemo(() => {
-    const start = (datasetSamplesPage - 1) * datasetSamplesPageSize
-    return datasetSamples.slice(start, start + datasetSamplesPageSize)
-  }, [datasetSamples, datasetSamplesPage, datasetSamplesPageSize])
+  const pagedSamples = datasetSamples
 
   const handleSubmitCreate = async () => {
     try {
@@ -210,7 +207,11 @@ export const DatasetsTab: React.FC = () => {
                       size="small"
                       loading={loadDatasetMutation.isPending}
                       onClick={() =>
-                        loadDatasetMutation.mutate({ datasetId: ds.id })
+                        loadDatasetMutation.mutate({
+                          datasetId: ds.id,
+                          page: 1,
+                          pageSize: datasetSamplesPageSize
+                        })
                       }
                     >
                       {t("common:view", { defaultValue: "View" })}
@@ -425,7 +426,17 @@ export const DatasetsTab: React.FC = () => {
                   pageSize={datasetSamplesPageSize}
                   total={datasetSamplesTotal}
                   size="small"
-                  onChange={(page) => setDatasetSamplesPage(page)}
+                  onChange={(page) => {
+                    if (!viewingDataset?.id) {
+                      setDatasetSamplesPage(page)
+                      return
+                    }
+                    loadDatasetMutation.mutate({
+                      datasetId: viewingDataset.id,
+                      page,
+                      pageSize: datasetSamplesPageSize
+                    })
+                  }}
                 />
               )}
           </div>

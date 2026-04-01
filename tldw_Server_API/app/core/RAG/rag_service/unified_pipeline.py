@@ -47,7 +47,26 @@ from tldw_Server_API.app.core.testing import (
 def _serialize_result_document(doc: Any) -> dict[str, Any]:
     """Serialize a pipeline document into the response-compatible document shape."""
     if isinstance(doc, dict):
-        return dict(doc)
+        metadata = dict(doc.get("metadata") or {})
+        source = doc.get("source")
+        if source is not None:
+            metadata.setdefault(
+                "source",
+                source.value if hasattr(source, "value") else str(source),
+            )
+        for field_name in ("media_id", "note_id", "chunk_id", "record_id", "start", "end"):
+            value = doc.get(field_name)
+            if value is not None:
+                metadata.setdefault(field_name, value)
+        doc_id = doc.get("id")
+        if doc_id is not None:
+            metadata.setdefault("chunk_id", str(doc_id))
+        return {
+            "id": doc_id,
+            "content": doc.get("content") or doc.get("text") or doc.get("body"),
+            "score": doc.get("score", 0.0),
+            "metadata": metadata,
+        }
 
     metadata = dict(getattr(doc, "metadata", {}) or {})
     try:

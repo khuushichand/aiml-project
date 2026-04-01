@@ -147,7 +147,7 @@ describe("DatasetsTab sample pagination", () => {
         created: 0,
         created_by: "user_123"
       },
-      datasetSamples: Array.from({ length: 6 }, (_, index) => ({
+      datasetSamples: Array.from({ length: 5 }, (_, index) => ({
         input: `sample-${index + 1}`
       })),
       datasetSamplesPage: 1,
@@ -156,7 +156,7 @@ describe("DatasetsTab sample pagination", () => {
     })
   })
 
-  it("paginates loaded samples client-side instead of refetching the dataset", async () => {
+  it("requests the next dataset page from the API instead of slicing the cached samples client-side", async () => {
     render(<DatasetsTab />)
 
     expect(screen.getByText(/sample-1/i)).toBeInTheDocument()
@@ -165,9 +165,14 @@ describe("DatasetsTab sample pagination", () => {
     fireEvent.click(screen.getByRole("button", { name: "Page 2" }))
 
     await waitFor(() => {
-      expect(loadSpy).not.toHaveBeenCalled()
-      expect(screen.getByText(/sample-6/i)).toBeInTheDocument()
+      expect(loadSpy).toHaveBeenCalledWith({
+        datasetId: "dataset-1",
+        page: 2,
+        pageSize: 5
+      })
     })
-    expect(screen.queryByText(/sample-1/i)).not.toBeInTheDocument()
+
+    expect(screen.getByText(/sample-1/i)).toBeInTheDocument()
+    expect(screen.queryByText(/sample-6/i)).not.toBeInTheDocument()
   })
 })

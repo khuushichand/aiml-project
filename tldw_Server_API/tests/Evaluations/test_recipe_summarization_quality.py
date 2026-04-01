@@ -97,3 +97,33 @@ def test_summarization_recipe_builds_weighted_report_from_geval_metrics() -> Non
     assert report["candidates"][0]["metrics"]["quality_score"] > report["candidates"][1]["metrics"]["quality_score"]
     assert report["confidence_summary"]["sample_count"] == 2
     assert report["confidence_inputs"]["winner_margin"] > 0.0
+
+
+def test_summarization_recipe_single_candidate_has_zero_winner_margin() -> None:
+    recipe = SummarizationQualityRecipe()
+
+    report = recipe.build_report(
+        dataset_mode="labeled",
+        review_sample={"required": False, "sample_size": 0, "sample_ids": []},
+        weights={"grounding": 0.5, "coverage": 0.3, "usefulness": 0.2},
+        candidate_results=[
+            {
+                "candidate_id": "candidate-openai",
+                "candidate_run_id": "candidate-openai",
+                "model": "gpt-4.1-mini",
+                "provider": "openai",
+                "sample_results": [
+                    {
+                        "sample_id": "sample-0",
+                        "metrics": {
+                            "grounding": 0.90,
+                            "coverage": 0.85,
+                            "usefulness": 0.80,
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert report["confidence_inputs"]["winner_margin"] == 0.0

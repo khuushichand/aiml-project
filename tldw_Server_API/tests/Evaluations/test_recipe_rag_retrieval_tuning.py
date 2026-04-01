@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.Evaluations.recipes.rag_retrieval_tuning import (
 from tldw_Server_API.app.core.Evaluations.recipes.rag_retrieval_tuning_candidates import (
     SUPPORTED_V1_KNOBS,
     build_auto_sweep,
+    normalize_candidate_config,
 )
 from tldw_Server_API.app.core.Evaluations.recipes.rag_retrieval_tuning_execution import (
     build_unified_rag_request,
@@ -398,6 +399,47 @@ def test_normalize_run_config_parses_string_false_for_enable_reranking() -> None
     assert normalized["candidates"][0]["retrieval_config"]["enable_reranking"] is False
 
 
+def test_manual_candidate_normalization_rejects_non_mapping_metadata_and_string_tags() -> None:
+    with pytest.raises(ValueError, match="candidate.metadata"):
+        normalize_candidate_config(
+            {
+                "metadata": "not-a-mapping",
+                "retrieval_config": {"search_mode": "hybrid"},
+            }
+        )
+
+    with pytest.raises(ValueError, match="candidate.tags"):
+        normalize_candidate_config(
+            {
+                "tags": "tag-1",
+                "retrieval_config": {"search_mode": "hybrid"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("top_k", "bad"),
+        ("hybrid_alpha", "bad"),
+        ("rerank_top_k", "bad"),
+    ],
+)
+def test_manual_candidate_normalization_reports_field_specific_numeric_errors(
+    field_name: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        normalize_candidate_config(
+            {
+                "retrieval_config": {
+                    "search_mode": "hybrid",
+                    field_name: value,
+                }
+            }
+        )
+
+
 def test_index_affecting_candidates_receive_isolated_index_keys() -> None:
     plan = plan_candidate_indexes(
         corpus_scope={
@@ -501,6 +543,17 @@ def test_execution_report_clamps_out_of_range_grades_to_scale_ceiling() -> None:
     )
 
     assert result["metrics"]["pre_rerank_recall_at_k"] == 1.0
+    assert result["post_rerank_quality_score"] == 1.0
+
+
+def test_execution_report_falls_back_to_first_pass_quality_when_no_rerank_hits() -> None:
+    result = summarize_candidate_metrics(
+        first_pass_hits=[{"grade": 3}, {"grade": 1}],
+        reranked_hits=[],
+    )
+
+    assert result["metrics"]["pre_rerank_recall_at_k"] == pytest.approx(2 / 3, rel=1e-6)
+    assert result["metrics"]["post_rerank_ndcg_at_k"] == 1.0
     assert result["post_rerank_quality_score"] == 1.0
 
 

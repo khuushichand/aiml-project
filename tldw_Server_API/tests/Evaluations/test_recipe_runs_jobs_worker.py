@@ -699,7 +699,8 @@ def test_handle_recipe_run_job_fails_rag_answer_quality_live_mode_when_baseline_
 
     assert refreshed is not None
     assert refreshed.status is RunStatus.FAILED
-    assert "retrieval_baseline_ref" in refreshed.metadata["jobs"]["error"]
+    assert refreshed.metadata["jobs"]["error"] == "recipe_run_failed"
+    assert refreshed.metadata["jobs"]["error_type"] == "ValueError"
 
 
 def test_handle_recipe_run_job_executes_rag_answer_quality_fixed_mode_with_run_level_contexts(
@@ -877,7 +878,7 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
     monkeypatch.setattr(worker, "_execute_summarization_recipe_run", _fake_execute)
 
     try:
-        try:
+        with pytest.raises(RuntimeError, match="boom"):
             handle_recipe_run_job(
                 {
                     "id": "job-99",
@@ -891,18 +892,15 @@ def test_handle_recipe_run_job_marks_run_failed_when_report_building_errors(tmp_
                 user_id=user_id,
                 service=_BrokenService(),
             )
-        finally:
-            monkeypatch.undo()
-    except RuntimeError as exc:
-        assert str(exc) == "boom"
-    else:
-        raise AssertionError("expected RuntimeError")
+    finally:
+        monkeypatch.undo()
 
     refreshed = db.get_recipe_run(record.run_id)
     assert refreshed is not None
     assert refreshed.status is RunStatus.FAILED
     assert refreshed.metadata["jobs"]["worker_state"] == "failed"
-    assert refreshed.metadata["jobs"]["error"] == "boom"
+    assert refreshed.metadata["jobs"]["error"] == "recipe_run_failed"
+    assert refreshed.metadata["jobs"]["error_type"] == "RuntimeError"
 
 
 def test_handle_recipe_run_job_executes_summarization_recipe_and_persists_artifacts(

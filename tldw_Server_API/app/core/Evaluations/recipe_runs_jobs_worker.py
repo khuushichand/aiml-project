@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_chacha_db_path,
     get_user_media_db_path,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import run_abtest_full
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.recipes.rag_retrieval_tuning_execution import (
@@ -74,16 +74,6 @@ def _get_service(*, user_id: str | None, db: EvaluationsDatabase | None = None) 
     if db is not None:
         return RecipeRunsService(db=db, user_id=user_id)
     return get_recipe_runs_service_for_user(user_id)
-
-
-def _build_media_db(user_id: str) -> Any:
-    backend = get_content_backend_instance()
-    db_path = get_user_media_db_path(user_id)
-    return create_media_database(
-        client_id=f"recipe_runs_jobs_worker:{user_id}",
-        db_path=db_path,
-        backend=backend,
-    )
 
 
 def _parse_json_list(value: Any) -> list[Any]:
@@ -173,6 +163,7 @@ def _coerce_media_ids(run_config: dict[str, Any], dataset: list[dict[str, Any]])
             try:
                 derived_media_ids.add(int(expected_id))
             except (TypeError, ValueError):
+                logger.debug("Skipping non-integer embeddings expected_id while deriving media_ids: {}", expected_id)
                 continue
     if derived_media_ids:
         return sorted(derived_media_ids)
@@ -634,8 +625,14 @@ def _execute_embeddings_recipe_run(
         )
     db.insert_abtest_queries(test_id, [query.model_dump() for query in config.queries])
 
-    media_db = _build_media_db(resolved_user_id)
-    asyncio.run(run_abtest_full(db, config, test_id, resolved_user_id, media_db))
+    backend = get_content_backend_instance()
+    db_path = get_user_media_db_path(resolved_user_id)
+    with managed_media_database(
+        client_id=f"recipe_runs_jobs_worker:{resolved_user_id}",
+        db_path=db_path,
+        backend=backend,
+    ) as media_db:
+        asyncio.run(run_abtest_full(db, config, test_id, resolved_user_id, media_db))
     candidate_results = _collect_embeddings_candidate_results(
         db=db,
         test_id=test_id,
@@ -968,11 +965,14 @@ def handle_recipe_run_job(
             metadata=completed_metadata,
         )
     except Exception as exc:
+        logger.exception("Recipe run job failed: run_id={} job_id={}", run_id, job_id)
         failed_metadata = dict(service.get_run(run_id).metadata)
         failed_metadata["jobs"] = {
             "job_id": job_id,
             "worker_state": "failed",
-            "error": str(exc),
+            "error": "recipe_run_failed",
+            "error_type": type(exc).__name__,
+            "error_message": "Recipe run execution failed.",
         }
         db.update_recipe_run(
             run_id,
@@ -1017,7 +1017,7 @@ def recipe_run_jobs_worker_enabled() -> bool:
     )
 
 
-async def start_recipe_run_jobs_worker() -> asyncio.Task[None]:
+async def start_recipe_run_jobs_worker() -> asyncio.Task[None] | None:
     """Start the recipe-run worker as a background task."""
     if not recipe_run_jobs_worker_enabled():
         return None

@@ -423,10 +423,16 @@ export async function listDatasets(params?: {
 
 export async function getDataset(
   datasetId: string,
-  params?: { include_samples?: boolean }
+  params?: {
+    include_samples?: boolean
+    limit?: number
+    offset?: number
+  }
 ) {
   const search = new URLSearchParams()
   if (params?.include_samples) search.set("include_samples", "true")
+  if (params?.limit != null) search.set("limit", String(params.limit))
+  if (params?.offset != null) search.set("offset", String(params.offset))
   const path =
     `/api/v1/evaluations/datasets/${encodeURIComponent(datasetId)}` +
     (search.toString() ? `?${search.toString()}` : "")

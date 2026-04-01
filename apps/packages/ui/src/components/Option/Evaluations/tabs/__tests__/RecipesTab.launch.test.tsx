@@ -168,20 +168,22 @@ const datasetsState = {
   isError: false
 }
 
-const renderRecipesTab = () => {
-  const queryClient = new QueryClient({
+const createTestQueryClient = () =>
+  new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false }
     }
   })
 
-  return render(
+const renderRecipesTab = (queryClient = createTestQueryClient()) => ({
+  queryClient,
+  ...render(
     <QueryClientProvider client={queryClient}>
       <RecipesTab />
     </QueryClientProvider>
   )
-}
+})
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -370,9 +372,12 @@ vi.mock("../../hooks/useRecipes", () => ({
                 }
               }
             }
-        : null,
+        : runId === "report-error-run"
+          ? undefined
+          : null,
     isLoading: false,
-    isError: false
+    isError: runId === "report-error-run",
+    error: runId === "report-error-run" ? new Error("HTTP 503") : null
   })
 }))
 
@@ -656,6 +661,59 @@ describe("RecipesTab recipe launch flow", () => {
       ).toBeInTheDocument()
       expect(screen.getByText("gpt-4.1-mini")).toBeInTheDocument()
     })
+  })
+
+  it("surfaces recipe report polling failures instead of the pending placeholder", async () => {
+    createSpy.mockResolvedValue({
+      data: {
+        run_id: "report-error-run",
+        recipe_id: "summarization_quality",
+        status: "pending"
+      }
+    })
+
+    renderRecipesTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Run recipe" }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Unable to load the recipe report")
+      ).toBeInTheDocument()
+      expect(screen.getByText("HTTP 503")).toBeInTheDocument()
+    })
+
+    expect(
+      screen.queryByText("Waiting for the recipe report.")
+    ).not.toBeInTheDocument()
+  })
+
+  it("does not fall back to inline dataset JSON when the saved selection disappears", async () => {
+    const queryClient = createTestQueryClient()
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RecipesTab />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Saved dataset" }))
+
+    datasetsState.data.data.data = []
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <RecipesTab />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Validate dataset" }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Select a saved dataset before continuing.")
+      ).toBeInTheDocument()
+    })
+
+    expect(validateSpy).not.toHaveBeenCalled()
   })
 
   it("serializes guided summarization inputs into dataset and run config payloads", async () => {

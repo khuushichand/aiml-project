@@ -80,5 +80,9 @@ def migrate_to_evaluation_recipes(db_path: str) -> bool:
             logger.info("Applied evaluation recipe schema migration")
             return True
     except Exception as exc:  # pragma: no cover - defensive migration wrapper
-        logger.error("Failed to migrate evaluation recipe schema: {}", exc)
+        logger.error(
+            "Failed to migrate evaluation recipe schema ({}): {}",
+            type(exc).__name__,
+            exc,
+        )
         return False

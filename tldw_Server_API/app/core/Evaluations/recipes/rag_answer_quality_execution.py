@@ -466,6 +466,17 @@ def _build_frozen_live_retrieval_request(
         "enable_streaming": False,
         "track_cost": False,
     }
+    include_media_ids = run_config.get("include_media_ids")
+    if include_media_ids is not None:
+        request_payload["include_media_ids"] = [int(item) for item in list(include_media_ids)]
+    include_note_ids = run_config.get("include_note_ids")
+    if include_note_ids is not None:
+        request_payload["include_note_ids"] = [
+            str(item).strip() for item in list(include_note_ids) if str(item).strip()
+        ]
+    index_namespace = str(run_config.get("index_namespace") or "").strip()
+    if index_namespace:
+        request_payload["index_namespace"] = index_namespace
     for key, value in _LIVE_RETRIEVAL_FROZEN_FLAGS.items():
         request_payload[key] = value
     return request_payload
@@ -487,7 +498,7 @@ def _resolve_live_retrieval_request(
             baseline_record = service.get_run(baseline_ref)
         except Exception:
             baseline_record = None
-    if baseline_record is None and db is not None:
+    elif db is not None:
         baseline_record = db.get_recipe_run(baseline_ref)
     if baseline_record is None:
         raise ValueError(
@@ -533,6 +544,17 @@ def _resolve_live_retrieval_request(
     corpus_scope = dict(baseline_run_config.get("corpus_scope") or {})
     if "retrieval_sources" not in merged_run_config and corpus_scope.get("sources"):
         merged_run_config["retrieval_sources"] = list(corpus_scope.get("sources") or [])
+    if "include_media_ids" not in merged_run_config and corpus_scope.get("media_ids"):
+        merged_run_config["include_media_ids"] = list(corpus_scope.get("media_ids") or [])
+    if "include_note_ids" not in merged_run_config and corpus_scope.get("note_ids"):
+        merged_run_config["include_note_ids"] = list(corpus_scope.get("note_ids") or [])
+    if "index_namespace" not in merged_run_config:
+        index_namespace = (
+            baseline_candidate.get("index_namespace")
+            or corpus_scope.get("index_namespace")
+        )
+        if index_namespace is not None and str(index_namespace).strip():
+            merged_run_config["index_namespace"] = str(index_namespace).strip()
 
     return _build_frozen_live_retrieval_request(query="", run_config=merged_run_config)
 
@@ -895,8 +917,14 @@ def _extract_contexts(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
         raw_contexts = [sample.get("context")]
     if raw_contexts is None:
         return []
+    if isinstance(raw_contexts, Mapping):
+        raw_contexts = [raw_contexts]
+    elif isinstance(raw_contexts, str):
+        raw_contexts = [raw_contexts]
+    elif not isinstance(raw_contexts, list):
+        return []
     contexts: list[dict[str, Any]] = []
-    for item in list(raw_contexts):
+    for item in raw_contexts:
         if isinstance(item, Mapping):
             contexts.append(
                 {

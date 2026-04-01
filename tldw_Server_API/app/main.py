@@ -2797,7 +2797,7 @@ async def lifespan(app: FastAPI):
                     "(ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED != true)"
                 )
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.warning(f"Failed to start Admin maintenance rotation Jobs worker: {e}")
+        logger.warning("Failed to start Admin maintenance rotation Jobs worker: {}", e)
 
     # Evaluations recipe-run Jobs worker
     try:
@@ -2817,7 +2817,7 @@ async def lifespan(app: FastAPI):
                     "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
                 )
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.warning(f"Failed to start evaluation recipe-run Jobs worker: {e}")
+        logger.warning("Failed to start evaluation recipe-run Jobs worker: {}", e)
 
     # Jobs notifications bridge worker
     try:

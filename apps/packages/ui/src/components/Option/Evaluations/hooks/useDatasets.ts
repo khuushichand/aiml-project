@@ -35,7 +35,7 @@ export function useDatasetsList(params?: { limit?: number; offset?: number }) {
 
 export function useDatasetDetail(
   datasetId: string | null,
-  params?: { include_samples?: boolean }
+  params?: { include_samples?: boolean; limit?: number; offset?: number }
 ) {
   return useQuery({
     queryKey: ["evaluations", "dataset", datasetId, params],
@@ -145,10 +145,18 @@ export function useLoadDatasetSamples() {
   }))
 
   return useMutation({
-    mutationFn: async (args: { datasetId: string }) => {
+    mutationFn: async (args: {
+      datasetId: string
+      page?: number
+      pageSize?: number
+    }) => {
+      const page = Math.max(1, Number(args.page || 1))
+      const pageSize = Math.max(1, Number(args.pageSize || 20))
       return ensureOk<{ data: DatasetResponse }>(
         await getDataset(args.datasetId, {
-          include_samples: true
+          include_samples: true,
+          limit: pageSize,
+          offset: (page - 1) * pageSize
         })
       )
     },
@@ -156,7 +164,7 @@ export function useLoadDatasetSamples() {
       const data = resp?.data || null
       setViewingDataset(data)
       setDatasetSamples(data?.samples || [])
-      setDatasetSamplesPage(1)
+      setDatasetSamplesPage(Math.max(1, Number(variables.page || 1)))
       setDatasetSamplesTotal(
         typeof data?.sample_count === "number" ? data.sample_count : null
       )

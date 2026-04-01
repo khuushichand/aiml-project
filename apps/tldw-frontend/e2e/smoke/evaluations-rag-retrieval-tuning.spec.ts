@@ -24,7 +24,7 @@ test.describe("RAG retrieval tuning recipe smoke", () => {
       await fulfillJson(route, 200, {
         status: "ok",
         auth_mode: "single_user",
-        test_api_key: "THIS-IS-A-SECURE-KEY-123-LOCAL-TEST"
+        test_api_key: "local-smoke-test-auth-token"
       })
     })
 
@@ -189,9 +189,11 @@ test.describe("RAG retrieval tuning recipe smoke", () => {
         return
       }
 
-      if (method === "GET" && pathname === "/api/v1/evaluations/history") {
+      if (method === "POST" && pathname === "/api/v1/evaluations/history") {
         await fulfillJson(route, 200, {
-          data: []
+          total_count: 0,
+          items: [],
+          aggregations: {}
         })
         return
       }
