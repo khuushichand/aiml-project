@@ -148,7 +148,10 @@ from tldw_Server_API.app.core.Persona.policy_evaluator import (
     evaluate_canonical_policy,
     normalize_policy_rules,
 )
-from tldw_Server_API.app.core.Persona.buddy import ensure_persona_buddy_for_profile
+from tldw_Server_API.app.core.Persona.buddy import (
+    build_persona_buddy_summary,
+    ensure_persona_buddy_for_profile,
+)
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.Skills.context_integration import handle_skill_tool_call
@@ -1484,6 +1487,7 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),
+        buddy_summary=_persona_buddy_summary_from_profile(profile),
     )
 
 
@@ -1570,9 +1574,9 @@ def _ensure_persona_buddy_after_profile_mutation(
     *,
     db: CharactersRAGDB,
     profile: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     """Keep buddy state aligned after a committed profile mutation."""
-    _ = ensure_persona_buddy_for_profile(db, profile)
+    return ensure_persona_buddy_for_profile(db, profile)
 
 
 def _persona_exemplar_to_response(exemplar: dict[str, Any]) -> PersonaExemplarResponse:
@@ -1863,6 +1867,7 @@ def _persona_info_from_profile(
     profile: dict[str, Any],
     *,
     policy_rules: list[dict[str, Any]] | None = None,
+    buddy_row: dict[str, Any] | None = None,
 ) -> PersonaInfo:
     mcp_tools = sorted(
         {
@@ -1899,6 +1904,46 @@ def _persona_info_from_profile(
         avatar_url=None,
         capabilities=capabilities,
         default_tools=default_tools,
+        buddy_summary=_persona_buddy_summary_from_profile(profile, buddy_row=buddy_row),
+    )
+
+
+def _persona_buddy_summary_from_profile(
+    profile: dict[str, Any],
+    *,
+    buddy_row: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    attached_buddy_row = buddy_row
+    if attached_buddy_row is None and isinstance(profile.get("buddy_row"), dict):
+        attached_buddy_row = profile["buddy_row"]
+
+    description = str(profile.get("system_prompt") or "").strip()
+    role_summary = description[:300] if description else _DEFAULT_PERSONA_DESCRIPTION
+    return build_persona_buddy_summary(
+        persona_name=str(profile.get("name") or _DEFAULT_PERSONA_NAME),
+        role_summary=role_summary,
+        buddy_row=attached_buddy_row,
+    )
+
+
+def _load_persona_buddy_row_for_projection(
+    db: CharactersRAGDB,
+    *,
+    profile: dict[str, Any],
+) -> dict[str, Any] | None:
+    attached_buddy_row = profile.get("buddy_row")
+    if isinstance(attached_buddy_row, dict):
+        return attached_buddy_row
+
+    persona_id = str(profile.get("id") or "").strip()
+    user_id = str(profile.get("user_id") or "").strip()
+    if not persona_id or not user_id:
+        return None
+
+    return db.get_persona_buddy(
+        persona_id=persona_id,
+        user_id=user_id,
+        include_deleted_personas=bool(profile.get("deleted", False)),
     )
 
 
@@ -2531,6 +2576,8 @@ async def list_persona_profiles(
         )
         if not profiles and not include_deleted:
             profiles = [_ensure_default_persona_profile(db, user_id=user_id)]
+        for profile in profiles:
+            profile["buddy_row"] = _load_persona_buddy_row_for_projection(db, profile=profile)
         return [_persona_profile_to_response(profile) for profile in profiles]
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="list persona profiles") from exc
@@ -2559,7 +2606,7 @@ async def create_persona_profile(
         if profile is None:
             raise HTTPException(status_code=500, detail="Failed to load created persona profile")
         try:
-            _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+            profile["buddy_row"] = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
             _rollback_created_persona_profile_after_buddy_failure(
                 db,
@@ -2593,6 +2640,7 @@ async def get_persona_profile(
         profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
+        profile["buddy_row"] = _load_persona_buddy_row_for_projection(db, profile=profile)
         return _persona_profile_to_response(profile)
     except HTTPException:
         raise
@@ -2635,7 +2683,7 @@ async def update_persona_profile(
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
         try:
-            _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+            profile["buddy_row"] = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
             _rollback_updated_persona_profile_after_buddy_failure(
                 db,
@@ -4407,7 +4455,13 @@ async def persona_catalog(
                 user_id=user_id,
                 include_deleted=False,
             )
-            catalog.append(_persona_info_from_profile(profile, policy_rules=policy_rules))
+            catalog.append(
+                _persona_info_from_profile(
+                    profile,
+                    policy_rules=policy_rules,
+                    buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+                )
+            )
         return catalog
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="list persona catalog") from exc
@@ -4438,7 +4492,11 @@ async def persona_session(
             profile = _ensure_default_persona_profile(db, user_id=user_id)
         persona_id = str(profile.get("id") or _DEFAULT_PERSONA_ID)
         policy_rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
-        persona = _persona_info_from_profile(profile, policy_rules=policy_rules)
+        persona = _persona_info_from_profile(
+            profile,
+            policy_rules=policy_rules,
+            buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+        )
 
         # Preserve scaffold ownership/persona binding semantics for resume IDs in process-local session manager
         # without creating new local entries before DB validation succeeds.
