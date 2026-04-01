@@ -97,8 +97,11 @@ const normalizeDataset = (
           : "answer"
     }
 
-    if (Object.prototype.hasOwnProperty.call(record, "retrieved_contexts")) {
-      normalized.retrieved_contexts = normalizeRetrievedContexts(record.retrieved_contexts)
+    if (evaluationMode === "fixed_context") {
+      const retrievedContexts = normalizeRetrievedContexts(record.retrieved_contexts)
+      if (retrievedContexts.length > 0) {
+        normalized.retrieved_contexts = retrievedContexts
+      }
     }
 
     if (typeof record.reference_answer === "string" && record.reference_answer.trim()) {

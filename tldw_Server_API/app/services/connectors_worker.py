@@ -776,14 +776,17 @@ async def _process_import_job(
 
         while not stop_event.is_set():
             try:
-                jm.renew_job_lease(
+                renewed = jm.renew_job_lease(
                     jid,
                     seconds=120,
                     worker_id=worker_id,
                     lease_id=lease_id,
                 )
-            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
-                pass
+                if not renewed:
+                    logger.warning("Lease renewal failed for job {}, stopping heartbeat", jid)
+                    return
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Lease renewal error for job {}: {}", jid, exc)
 
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=30)

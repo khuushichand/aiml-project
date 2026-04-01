@@ -6,7 +6,7 @@ import {
   classifySmokeIssues,
   SMOKE_LOAD_TIMEOUT
 } from "./smoke.setup"
-import { waitForAppShell } from "../utils/helpers"
+import { getAntdSelectTrigger, waitForAppShell } from "../utils/helpers"
 import type { Route } from "@playwright/test"
 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
@@ -253,9 +253,9 @@ test.describe("Stage 7 audio regression gate", () => {
     await page.goto("/speech", { waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
     await waitForAppShell(page, LOAD_TIMEOUT)
 
-    const inputSourcePicker = page
-      .locator('[aria-label="Speech playground input source"]')
-      .first()
+    const inputSourcePicker = getAntdSelectTrigger(page, {
+      ariaLabel: "Speech playground input source"
+    })
     await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
     await inputSourcePicker.click()
     await expect(page.getByRole("option", { name: /Default microphone/i })).toBeVisible()

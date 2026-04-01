@@ -135,7 +135,7 @@ describe("HistoryTab filters and rendering", () => {
     fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "rag" }
     })
-    fireEvent.change(screen.getByPlaceholderText("user_123"), {
+    fireEvent.change(screen.getByTestId("history-user-filter"), {
       target: { value: "user_123" }
     })
     fireEvent.click(screen.getByRole("button", { name: "Fetch history" }))

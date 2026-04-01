@@ -203,8 +203,8 @@ def _unprotect_oauth_state_metadata(metadata: Any) -> dict[str, Any]:
         decrypted = decrypt_json_blob(parsed_metadata)
         if isinstance(decrypted, dict):
             return decrypted
-    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to decrypt oauth state metadata: {}", exc)
     return {}
 
 

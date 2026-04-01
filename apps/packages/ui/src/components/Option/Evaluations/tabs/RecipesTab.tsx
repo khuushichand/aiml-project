@@ -307,7 +307,12 @@ export const RecipesTab: React.FC = () => {
   const createRunMutation = useCreateRecipeRun()
   const { data: readinessResp, isLoading: readinessLoading } =
     useRecipeLaunchReadiness(selectedRecipeId)
-  const { data: reportResp, isLoading: reportLoading } = useRecipeRunReport(currentRunId)
+  const {
+    data: reportResp,
+    isLoading: reportLoading,
+    isError: reportError,
+    error: reportErrorValue
+  } = useRecipeRunReport(currentRunId)
 
   const manifests = Array.isArray(manifestsResp?.data) ? manifestsResp.data : []
   const datasets = datasetsResp?.data?.data || []
@@ -393,7 +398,10 @@ export const RecipesTab: React.FC = () => {
     datasetId?: string
     dataset?: DatasetSample[]
   } => {
-    if (datasetSource === "saved" && selectedDatasetId) {
+    if (datasetSource === "saved") {
+      if (!selectedDatasetId) {
+        throw new Error("Select a saved dataset before continuing.")
+      }
       return { datasetId: selectedDatasetId }
     }
     return {
@@ -899,9 +907,9 @@ export const RecipesTab: React.FC = () => {
               onChange={(event) =>
                 updateRunConfig((current) => ({
                   ...current,
-                  media_ids: normalizeCsvList(event.target.value)
-                    .map((value) => Number.parseInt(value, 10))
-                    .filter((id) => !Number.isNaN(id))
+                  media_ids: normalizeCsvList(event.target.value).map((value) =>
+                    Number.parseInt(value, 10)
+                  )
                 }))
               }
             />
@@ -1514,8 +1522,8 @@ export const RecipesTab: React.FC = () => {
                               })}
                         </div>
                       )}
-                      {(validationResult.errors || []).map((error) => (
-                        <div key={error}>{error}</div>
+                      {(validationResult.errors || []).map((error, index) => (
+                        <div key={`${error}-${index}`}>{error}</div>
                       ))}
                     </div>
                   }
@@ -1576,6 +1584,15 @@ export const RecipesTab: React.FC = () => {
               <div className="flex justify-center py-4">
                 <Spin />
               </div>
+            ) : reportError ? (
+              <Alert
+                type="error"
+                showIcon
+                title={t("evaluations:recipeReportLoadErrorTitle", {
+                  defaultValue: "Unable to load the recipe report"
+                })}
+                description={(reportErrorValue as Error | null)?.message || undefined}
+              />
             ) : report ? (
               <div className="space-y-4">
                 {report.confidence_summary && (

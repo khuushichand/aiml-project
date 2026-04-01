@@ -79,6 +79,10 @@ def migrate_to_evaluation_recipes(db_path: str) -> bool:
             conn.commit()
             logger.info("Applied evaluation recipe schema migration")
             return True
-    except sqlite3.Error as exc:  # pragma: no cover - defensive migration wrapper
-        logger.error("Failed to migrate evaluation recipe schema: {}", exc)
+    except Exception as exc:  # pragma: no cover - defensive migration wrapper
+        logger.error(
+            "Failed to migrate evaluation recipe schema ({}): {}",
+            type(exc).__name__,
+            exc,
+        )
         return False

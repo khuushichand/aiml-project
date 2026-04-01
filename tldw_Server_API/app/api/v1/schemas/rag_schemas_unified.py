@@ -1295,7 +1295,7 @@ class UnifiedRAGRequest(BaseModel):
 
     include_rerank_debug_documents: Optional[bool] = Field(
         default=None,
-        description="Override whether rerank debug metadata may include truncated document previews when debug_mode is enabled",
+        description="Override whether pre_rerank_documents and reranked_documents debug snapshots are attached when debug_mode is enabled",
         example=False,
     )
 

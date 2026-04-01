@@ -117,11 +117,12 @@ class RAGAnswerQualityRecipe(RecipeDefinition):
                 )
 
             expected_behavior = self._extract_expected_behavior(sample)
-            if expected_behavior is None:
+            has_reference_answer = self._sample_has_reference_answer(sample)
+            if expected_behavior is None and not has_reference_answer:
                 labeled_flags.append(False)
             else:
                 labeled_flags.append(True)
-                if expected_behavior not in {"answer", "hedge", "abstain"}:
+                if expected_behavior is not None and expected_behavior not in {"answer", "hedge", "abstain"}:
                     errors.append(
                         f"Dataset sample {index} expected_behavior must be one of: answer, hedge, abstain."
                     )
@@ -510,7 +511,9 @@ class RAGAnswerQualityRecipe(RecipeDefinition):
                 index=index,
             )
             if candidate_id in seen_candidate_ids:
-                continue
+                raise ValueError(
+                    f"run_config.candidates candidate_id values must be unique; duplicate {candidate_id!r}."
+                )
             seen_candidate_ids.add(candidate_id)
             normalized.append(
                 {
@@ -601,11 +604,11 @@ class RAGAnswerQualityRecipe(RecipeDefinition):
             value = sample.get(field_name)
             if value is None:
                 continue
-            if isinstance(value, str) and value.strip():
-                return True
-            if isinstance(value, list) and value:
-                return True
-            if isinstance(value, Mapping) and bool(value):
+            try:
+                normalized = self._normalize_contexts_for_storage(value)
+            except ValueError:
+                continue
+            if normalized:
                 return True
         return False
 
