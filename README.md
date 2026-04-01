@@ -81,7 +81,7 @@ Good fit for:
 
 ## Start Here
 
-1. **Check prerequisites:** `make quickstart-prereqs` (or verify Python 3.10+, ffmpeg, and Docker manually)
+1. **Check prerequisites:** `make quickstart-prereqs` (or verify Python 3.10+ and ffmpeg manually; Docker is only required for the Docker-based profiles)
 2. **Pick your setup profile:**
 
 | Profile | Best for | Command |
