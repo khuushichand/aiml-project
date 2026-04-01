@@ -849,7 +849,6 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
               data-testid="sidebar-new-chat"
               onClick={() => {
                 clearChat()
-                navigate("/chat")
                 onClose()
               }}
             />
