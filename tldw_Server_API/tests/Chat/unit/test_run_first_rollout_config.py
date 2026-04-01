@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import configparser
+from pathlib import Path
 
 import pytest
 
 
 pytestmark = pytest.mark.unit
+
+_PHASE2C_RUN_FIRST_COHORT = [
+    "openai:gpt-4o-mini",
+    "anthropic:claude-3-7-sonnet",
+    "openai:gpt-4o",
+    "google:gemini-2.5-flash",
+]
 
 
 def test_resolve_chat_run_first_rollout_mode_defaults_off_without_config(
@@ -89,6 +97,27 @@ def test_resolve_chat_run_first_provider_allowlist_uses_chat_module_config(
         "openai:gpt-4o",
         "google:gemini-2.5-flash",
     ]
+
+
+def test_phase2c_shipped_run_first_defaults_match_config_and_env_examples() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    config_path = repo_root / "tldw_Server_API" / "Config_Files" / "config.txt"
+    env_example_path = repo_root / "tldw_Server_API" / "Config_Files" / ".env.example"
+
+    parser = configparser.ConfigParser()
+    assert parser.read(config_path) == [str(config_path)]
+
+    assert parser.get("Chat-Module", "run_first_provider_allowlist").split(",") == (
+        _PHASE2C_RUN_FIRST_COHORT
+    )
+    assert parser.get("ACP", "run_first_provider_allowlist").split(",") == (
+        _PHASE2C_RUN_FIRST_COHORT
+    )
+
+    env_lines = env_example_path.read_text(encoding="utf-8").splitlines()
+    expected_csv = ",".join(_PHASE2C_RUN_FIRST_COHORT)
+    assert f"#CHAT_RUN_FIRST_PROVIDER_ALLOWLIST={expected_csv}" in env_lines
+    assert f"#ACP_RUN_FIRST_PROVIDER_ALLOWLIST={expected_csv}" in env_lines
 
 
 def test_resolve_chat_run_first_presentation_variant_uses_chat_module_config(
