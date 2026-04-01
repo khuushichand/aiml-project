@@ -104,7 +104,7 @@ if [ "$AUTH_MODE" = "single_user" ]; then
 fi
 
 # Auto-generate MCP secrets if missing or placeholder (min 32 chars each)
-for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT; do
+for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT BYOK_ENCRYPTION_KEY; do
   eval current_val="\${$mcp_var:-}"
   case "$current_val" in
     ""|CHANGE_ME*)
