@@ -16,6 +16,7 @@ from tldw_Server_API.app.services.shutdown_models import (
 
 
 _TRANSPORT_CLOSE_GRACE_SECONDS = 1.0
+TransportDrainHook = Callable[[float | None], Awaitable[None] | None]
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class RegisteredTransportFamily:
         *,
         name: str,
         active_count: Callable[[], int],
-        drain: Callable[[float | None], Awaitable[None] | None] | None,
+        drain: TransportDrainHook | None,
     ) -> None:
         self.name = name
         self._active_count = active_count
@@ -46,23 +47,17 @@ class RegisteredTransportFamily:
     async def drain(self, timeout_s: float | None = None) -> None:
         if self._drain is None:
             return
-        if inspect.iscoroutinefunction(self._drain):
-            result = self._drain(timeout_s)
-            if timeout_s is None:
-                await result
-            else:
-                await asyncio.wait_for(result, timeout=timeout_s)
+        result = self._drain(timeout_s)
+        if result is None:
             return
-
-        async def _run_sync_drain() -> None:
-            result = await asyncio.to_thread(self._drain, timeout_s)
-            if inspect.isawaitable(result):
-                await result
-
+        if not inspect.isawaitable(result):
+            raise TypeError(
+                f"Shutdown transport drain hook {self.name!r} must be async and return an awaitable"
+            )
         if timeout_s is None:
-            await _run_sync_drain()
+            await result
         else:
-            await asyncio.wait_for(_run_sync_drain(), timeout=timeout_s)
+            await asyncio.wait_for(result, timeout=timeout_s)
 
     def snapshot(self) -> TransportFamilySnapshot:
         return TransportFamilySnapshot(
@@ -82,8 +77,12 @@ class ShutdownTransportRegistry:
         name: str,
         *,
         active_count: Callable[[], int],
-        drain: Callable[[float | None], Awaitable[None] | None] | None,
+        drain: TransportDrainHook | None,
     ) -> RegisteredTransportFamily:
+        if drain is not None and not inspect.iscoroutinefunction(drain):
+            raise TypeError(
+                f"Shutdown transport drain hook {name!r} must be declared with async def"
+            )
         family = RegisteredTransportFamily(name=name, active_count=active_count, drain=drain)
         with self._lock:
             if name in self._families:
@@ -121,7 +120,7 @@ def register_shutdown_transport_family(
     name: str,
     *,
     active_count: Callable[[], int],
-    drain: Callable[[float | None], Awaitable[None] | None] | None,
+    drain: TransportDrainHook | None,
 ) -> RegisteredTransportFamily:
     return _shutdown_transport_registry.register_family(
         name,

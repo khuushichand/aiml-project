@@ -123,7 +123,10 @@ def test_drain_gate_rejects_guarded_request_before_llm_budget_runs(test_app, dra
     [
         ("GET", "/health"),
         ("HEAD", "/health"),
+        ("GET", "/ready"),
         ("HEAD", "/ready"),
+        ("GET", "/readyz"),
+        ("HEAD", "/readyz"),
         ("HEAD", "/health/ready"),
         ("GET", "/healthz"),
         ("HEAD", "/healthz"),

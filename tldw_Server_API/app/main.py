@@ -4072,9 +4072,11 @@ async def lifespan(app: FastAPI):
                     )
 
                     await _stop_usage(usage_task)
+                    usage_task = None
         except _STARTUP_GUARD_EXCEPTIONS:
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 usage_task.cancel()
+                usage_task = None
         try:
             if "llm_usage_aggregator" not in coordinated_legacy_component_names:
                 if "llm_usage_task" in locals() and llm_usage_task:
@@ -4531,6 +4533,7 @@ async def lifespan(app: FastAPI):
 
                 await stop_usage_aggregator(usage_task)
                 logger.info("Usage aggregator stopped")
+                usage_task = None
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping usage aggregator: {e}")
 

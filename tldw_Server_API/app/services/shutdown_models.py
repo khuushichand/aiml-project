@@ -54,6 +54,7 @@ class ShutdownComponentSummary:
     duration_ms: int
     timeout_ms: int
     error: str | None = None
+    budget_exhausted: bool = False
 
 
 @dataclass(slots=True)

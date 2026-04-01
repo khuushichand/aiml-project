@@ -327,6 +327,33 @@ async def test_register_legacy_shutdown_components_keeps_authnz_in_inventory_but
     assert summary.phases[ShutdownPhase.FINALIZERS].component_names == ["storage_cleanup_service"]
 
 
+def test_register_legacy_shutdown_components_skips_effective_transition_overrides() -> None:
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+        register_legacy_shutdown_components,
+    )
+
+    class _Coordinator:
+        def __init__(self) -> None:
+            self.registered: list[ShutdownComponent] = []
+
+        def register(self, component: ShutdownComponent) -> ShutdownComponent:
+            self.registered.append(component)
+            return component
+
+    coordinator = _Coordinator()
+    registered = register_legacy_shutdown_components(
+        coordinator,
+        [
+            component("chatbooks_cleanup", phase=ShutdownPhase.WORKERS, stop=lambda: None),
+        ],
+        component_names=("chatbooks_cleanup",),
+        phase_overrides={"chatbooks_cleanup": ShutdownPhase.TRANSITION},
+    )
+
+    assert registered == []
+    assert coordinator.registered == []
+
+
 @pytest.mark.asyncio
 async def test_coordinator_runs_same_phase_components_in_parallel() -> None:
     coordinator = ShutdownCoordinator(profile="dev_fast")
@@ -398,16 +425,24 @@ async def test_transport_registry_components_are_visible_to_shutdown_coordinator
     )
 
     events: list[str] = []
+    async def _drain_mcp(timeout_s: float | None = None) -> None:
+        del timeout_s
+        events.append("mcp")
+
+    async def _drain_prompt_studio(timeout_s: float | None = None) -> None:
+        del timeout_s
+        events.append("prompt_studio")
+
     registry = ShutdownTransportRegistry()
     registry.register_family(
         "mcp.websocket",
         active_count=lambda: 2,
-        drain=lambda timeout_s=None: events.append("mcp"),
+        drain=_drain_mcp,
     )
     registry.register_family(
         "prompt_studio.websocket",
         active_count=lambda: 1,
-        drain=lambda timeout_s=None: events.append("prompt_studio"),
+        drain=_drain_prompt_studio,
     )
 
     coordinator = ShutdownCoordinator(profile="dev_fast")
@@ -422,7 +457,7 @@ async def test_transport_registry_components_are_visible_to_shutdown_coordinator
     ]
     assert summary.components["transport:mcp.websocket"].result == "stopped"
     assert summary.components["transport:prompt_studio.websocket"].result == "stopped"
-    assert events == ["mcp", "prompt_studio"]
+    assert sorted(events) == ["mcp", "prompt_studio"]
 
 
 def test_main_shutdown_path_registers_transport_registry_components() -> None:
@@ -432,15 +467,22 @@ def test_main_shutdown_path_registers_transport_registry_components() -> None:
     from tldw_Server_API.app.services.shutdown_transport_registry import ShutdownTransportRegistry
 
     registry = ShutdownTransportRegistry()
+
+    async def _drain_mcp(timeout_s: float | None = None) -> None:
+        del timeout_s
+
+    async def _drain_prompt_studio(timeout_s: float | None = None) -> None:
+        del timeout_s
+
     registry.register_family(
         "mcp.websocket",
         active_count=lambda: 2,
-        drain=lambda timeout_s=None: None,
+        drain=_drain_mcp,
     )
     registry.register_family(
         "prompt_studio.websocket",
         active_count=lambda: 1,
-        drain=lambda timeout_s=None: None,
+        drain=_drain_prompt_studio,
     )
 
     coordinator, legacy_components, transport_components = _build_coordinated_shutdown_coordinator(
@@ -470,15 +512,24 @@ async def test_main_shutdown_path_drains_transport_components_with_empty_legacy_
     app = FastAPI()
     events: list[str] = []
     registry = ShutdownTransportRegistry()
+
+    async def _drain_mcp(timeout_s: float | None = None) -> None:
+        del timeout_s
+        events.append("mcp")
+
+    async def _drain_prompt_studio(timeout_s: float | None = None) -> None:
+        del timeout_s
+        events.append("prompt_studio")
+
     registry.register_family(
         "mcp.websocket",
         active_count=lambda: 2,
-        drain=lambda timeout_s=None: events.append("mcp"),
+        drain=_drain_mcp,
     )
     registry.register_family(
         "prompt_studio.websocket",
         active_count=lambda: 1,
-        drain=lambda timeout_s=None: events.append("prompt_studio"),
+        drain=_drain_prompt_studio,
     )
 
     suppressed = await _run_coordinated_shutdown(
@@ -496,7 +547,25 @@ async def test_main_shutdown_path_drains_transport_components_with_empty_legacy_
         "transport:mcp.websocket",
         "transport:prompt_studio.websocket",
     ]
-    assert events == ["mcp", "prompt_studio"]
+    assert sorted(events) == ["mcp", "prompt_studio"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_synthesizes_failed_summary_for_unexpected_component_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = ShutdownCoordinator(profile="dev_fast")
+    coordinator.register(component("producer-a", phase="producers", stop=lambda: None))
+
+    async def _boom(*args, **kwargs) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(coordinator, "_run_component", _boom)
+
+    summary = await coordinator.shutdown()
+
+    assert summary.components["producer-a"].result == "failed"
+    assert summary.components["producer-a"].error == "boom"
 
 
 @pytest.mark.asyncio
@@ -774,6 +843,39 @@ async def test_coordinator_records_timeout_when_stop_swallows_cancellation() -> 
 
     assert summary.components["producer-a"].result in {"timed_out", "cancelled"}
     assert summary.components["producer-a"].result != "stopped"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_preserves_completed_result_after_timeout_quiescence() -> None:
+    coordinator = ShutdownCoordinator(
+        profile="custom",
+        deadline_ms=10,
+        soft_overrun_ms=100,
+    )
+    cancelled = asyncio.Event()
+
+    async def _stop() -> None:
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            cancelled.set()
+            return
+
+    coordinator.register(
+        component(
+            "producer-a",
+            phase="producers",
+            stop=_stop,
+            policy=ShutdownPolicy.DEV_FAST,
+            default_timeout_ms=1_000,
+        )
+    )
+
+    summary = await coordinator.shutdown()
+
+    assert cancelled.is_set()
+    assert summary.components["producer-a"].result == "stopped"
+    assert summary.components["producer-a"].budget_exhausted is True
 
 
 @pytest.mark.asyncio

@@ -250,13 +250,14 @@ class ConnectionManager:
         """Close all active Prompt Studio sockets and clear tracking state."""
         with self._connections_lock:
             sockets = [socket for sockets in self.active_connections.values() for socket in sockets]
-            self.active_connections.clear()
-            self.connection_metadata.clear()
         if sockets:
             await asyncio.gather(
                 *(socket.close(code=1001, reason="Server shutdown") for socket in sockets),
                 return_exceptions=True,
             )
+        with self._connections_lock:
+            self.active_connections.clear()
+            self.connection_metadata.clear()
 
 # NOTE: A single, shared connection manager is defined later as
 # `connection_manager` and imported by the job processor for broadcasts.

@@ -183,13 +183,55 @@ class ShutdownCoordinator:
             return_exceptions=True,
         )
 
-        for outcome in outcomes:
-            if isinstance(outcome, ShutdownComponentSummary):
-                summary.components[outcome.name] = outcome
+        for component, outcome in zip(components, outcomes):
+            component_summary = self._coerce_component_outcome(
+                component,
+                outcome,
+                phase_started_at=phase_started,
+            )
+            summary.components[component_summary.name] = component_summary
 
         phase_finished = float(self._clock())
         phase_summary.finished_at = phase_finished
         phase_summary.duration_ms = max(0, int((phase_finished - phase_started) * 1000))
+
+    def _coerce_component_outcome(
+        self,
+        component: ShutdownComponent,
+        outcome: object,
+        *,
+        phase_started_at: float,
+    ) -> ShutdownComponentSummary:
+        if isinstance(outcome, ShutdownComponentSummary):
+            return outcome
+
+        finished_at = float(self._clock())
+        duration_ms = max(0, int((finished_at - phase_started_at) * 1000))
+        if isinstance(outcome, asyncio.CancelledError):
+            return ShutdownComponentSummary(
+                name=component.name,
+                phase=component.phase,
+                policy=component.policy,
+                result="cancelled",
+                started_at=phase_started_at,
+                finished_at=finished_at,
+                duration_ms=duration_ms,
+                timeout_ms=component.default_timeout_ms,
+                error=str(outcome) or outcome.__class__.__name__,
+            )
+        if isinstance(outcome, Exception):
+            return ShutdownComponentSummary(
+                name=component.name,
+                phase=component.phase,
+                policy=component.policy,
+                result="failed",
+                started_at=phase_started_at,
+                finished_at=finished_at,
+                duration_ms=duration_ms,
+                timeout_ms=component.default_timeout_ms,
+                error=str(outcome) or outcome.__class__.__name__,
+            )
+        raise TypeError(f"Unexpected shutdown component outcome for {component.name!r}: {outcome!r}")
 
     def _phase_budget_ms(
         self,
@@ -289,6 +331,7 @@ class ShutdownCoordinator:
                 finished_at=finished_at,
                 duration_ms=max(0, int((finished_at - started_at) * 1000)),
                 timeout_ms=0,
+                budget_exhausted=True,
             )
 
         if started_at >= summary.hard_cutoff_at:
@@ -303,6 +346,7 @@ class ShutdownCoordinator:
                 finished_at=finished_at,
                 duration_ms=0,
                 timeout_ms=timeout_ms,
+                budget_exhausted=True,
             )
 
         if timeout_ms <= 0:
@@ -316,6 +360,7 @@ class ShutdownCoordinator:
                 finished_at=started_at,
                 duration_ms=0,
                 timeout_ms=timeout_ms,
+                budget_exhausted=True,
             )
 
         stop_task = asyncio.create_task(self._invoke_stop(component, timeout_ms=timeout_ms))
@@ -330,6 +375,18 @@ class ShutdownCoordinator:
             await self._wait_for_task_quiescence(stop_task, deadline_at=summary.hard_cutoff_at)
             finished_at = float(self._clock())
             result = "timed_out" if finished_at < summary.hard_cutoff_at else "cancelled"
+            error: str | None = None
+            if stop_task.done():
+                if stop_task.cancelled():
+                    result = "cancelled"
+                else:
+                    try:
+                        stop_task.result()
+                    except Exception as exc:
+                        result = "failed"
+                        error = str(exc) or exc.__class__.__name__
+                    else:
+                        result = "stopped"
             return ShutdownComponentSummary(
                 name=component.name,
                 phase=component.phase,
@@ -339,6 +396,8 @@ class ShutdownCoordinator:
                 finished_at=finished_at,
                 duration_ms=max(0, int((finished_at - started_at) * 1000)),
                 timeout_ms=timeout_ms,
+                error=error,
+                budget_exhausted=True,
             )
         except asyncio.CancelledError:
             stop_task.cancel()

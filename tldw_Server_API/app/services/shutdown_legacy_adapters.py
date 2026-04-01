@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -87,6 +87,8 @@ def register_legacy_shutdown_components(
         phase = overrides.get(component_name)
         if phase is not None:
             component = replace(component, phase=phase)
+        if component.phase == ShutdownPhase.TRANSITION:
+            continue
         coordinator.register(component)
         registered_components.append(component)
 

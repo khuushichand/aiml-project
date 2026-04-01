@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -41,6 +40,25 @@ class _BlockingPromptStudioSocket:
         self.sent_messages.append(message)
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.closed.append((code, reason))
+
+
+class _BlockingClosePromptStudioSocket:
+    def __init__(
+        self,
+        *,
+        started: asyncio.Event | None = None,
+        release: asyncio.Event | None = None,
+    ) -> None:
+        self.started = started
+        self.release = release
+        self.closed: list[tuple[int, str]] = []
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        if self.started is not None:
+            self.started.set()
+        if self.release is not None:
+            await self.release.wait()
         self.closed.append((code, reason))
 
 
@@ -115,12 +133,12 @@ def test_transport_registry_snapshot_reports_active_counts() -> None:
     registry.register_family(
         "alpha",
         active_count=lambda: 2,
-        drain=lambda timeout_s=None: None,
+        drain=None,
     )
     registry.register_family(
         "beta",
         active_count=lambda: 5,
-        drain=lambda timeout_s=None: None,
+        drain=None,
     )
 
     snapshot = {item.name: item for item in registry.snapshot()}
@@ -147,12 +165,12 @@ def test_transport_registry_duplicate_registration_logs_and_replaces(
     first = registry.register_family(
         "alpha",
         active_count=lambda: 1,
-        drain=lambda timeout_s=None: None,
+        drain=None,
     )
     second = registry.register_family(
         "alpha",
         active_count=lambda: 2,
-        drain=lambda timeout_s=None: None,
+        drain=None,
     )
 
     assert first is not second
@@ -197,27 +215,20 @@ async def test_prompt_studio_transport_registry_hook_tracks_and_drains_connectio
         prompt_studio_websocket.connection_manager.connection_metadata = original_metadata
 
 
-@pytest.mark.asyncio
-async def test_transport_registry_offloads_sync_drain_hooks() -> None:
-    from tldw_Server_API.app.services.shutdown_transport_registry import RegisteredTransportFamily
+def test_transport_registry_rejects_sync_drain_hooks() -> None:
+    from tldw_Server_API.app.services.shutdown_transport_registry import ShutdownTransportRegistry
 
-    main_thread_id = threading.get_ident()
-    seen_thread_ids: list[int] = []
+    registry = ShutdownTransportRegistry()
 
     def _sync_drain(timeout_s: float | None = None) -> None:
         del timeout_s
-        seen_thread_ids.append(threading.get_ident())
 
-    family = RegisteredTransportFamily(
-        name="alpha",
-        active_count=lambda: 0,
-        drain=_sync_drain,
-    )
-
-    await family.drain(timeout_s=0.2)
-
-    assert seen_thread_ids
-    assert seen_thread_ids[0] != main_thread_id
+    with pytest.raises(TypeError, match="must be declared with async def"):
+        registry.register_family(
+            "alpha",
+            active_count=lambda: 0,
+            drain=_sync_drain,
+        )
 
 
 @pytest.mark.asyncio
@@ -228,11 +239,15 @@ async def test_transport_components_forward_runtime_timeout_budget() -> None:
     )
 
     observed_timeout_s: list[float | None] = []
+
+    async def _drain(timeout_s: float | None = None) -> None:
+        observed_timeout_s.append(timeout_s)
+
     registry = ShutdownTransportRegistry()
     registry.register_family(
         "alpha",
         active_count=lambda: 0,
-        drain=lambda timeout_s=None: observed_timeout_s.append(timeout_s),
+        drain=_drain,
     )
 
     component = build_shutdown_components(registry, default_timeout_ms=1000)[0]
@@ -380,6 +395,36 @@ async def test_prompt_studio_connect_rechecks_drain_after_accept() -> None:
     assert websocket.accepted == 1
     assert websocket.closed == [(1013, "shutdown_draining")]
     assert manager.get_connection_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_studio_close_all_keeps_tracking_when_cancelled_mid_close() -> None:
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import (
+        ConnectionManager,
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    first = _BlockingClosePromptStudioSocket(started=started, release=release)
+    second = _BlockingClosePromptStudioSocket()
+    manager = ConnectionManager()
+    manager.active_connections = {
+        "client-a": {first, second},
+    }
+    manager.connection_metadata = {
+        first: {"client_id": "client-a"},
+        second: {"client_id": "client-a"},
+    }
+
+    close_task = asyncio.create_task(manager.close_all(timeout_s=0.2))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    assert manager.get_connection_count() == 2
+    assert len(manager.connection_metadata) == 2
+    release.set()
 
 
 class _UnexpectedPromptStudioStream:

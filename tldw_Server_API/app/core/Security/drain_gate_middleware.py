@@ -13,6 +13,7 @@ CONTROL_PLANE_DRAIN_PATHS: frozenset[str] = frozenset(
     {
         "/health",
         "/ready",
+        "/readyz",
         "/health/ready",
         "/healthz",
         "/api/v1/health",
