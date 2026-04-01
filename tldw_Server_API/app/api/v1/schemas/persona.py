@@ -45,6 +45,23 @@ class PersonaInfo(BaseModel):
     avatar_url: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     default_tools: list[str] = Field(default_factory=list)
+    buddy_summary: PersonaBuddySummary | None = None
+
+
+class PersonaBuddyVisualSummary(BaseModel):
+    species_id: str
+    silhouette_id: str
+    palette_id: str
+    accessory_id: str | None = None
+    eye_style: str | None = None
+    expression_profile: str | None = None
+
+
+class PersonaBuddySummary(BaseModel):
+    has_buddy: bool = False
+    persona_name: str
+    role_summary: str | None = None
+    visual: PersonaBuddyVisualSummary | None = None
 
 
 class PersonaSessionRequest(BaseModel):
@@ -272,6 +289,7 @@ class PersonaProfileResponse(BaseModel):
     created_at: str
     last_modified: str
     version: int = 1
+    buddy_summary: PersonaBuddySummary | None = None
 
 
 class PersonaBuddyResolvedProfile(BaseModel):

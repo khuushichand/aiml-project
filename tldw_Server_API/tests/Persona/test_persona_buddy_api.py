@@ -37,6 +37,11 @@ def test_get_buddy_lazily_creates_for_preexisting_persona_without_row(persona_db
     with _client_for_user(1, persona_db) as client:
         before_profile = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert before_profile.status_code == 200, before_profile.text
+        before_payload = before_profile.json()
+        before_buddy_summary = before_payload["buddy_summary"]
+        assert before_buddy_summary is not None
+        assert before_buddy_summary["has_buddy"] is False
+        assert before_buddy_summary["persona_name"] == "Lazy Buddy Persona"
 
         buddy_response = client.get(f"/api/v1/persona/profiles/{persona_id}/buddy")
         assert buddy_response.status_code == 200, buddy_response.text
@@ -46,7 +51,14 @@ def test_get_buddy_lazily_creates_for_preexisting_persona_without_row(persona_db
 
         after_profile = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert after_profile.status_code == 200, after_profile.text
-        assert after_profile.json()["version"] == before_profile.json()["version"]
+        after_payload = after_profile.json()
+        assert after_payload["version"] == before_payload["version"]
+        after_buddy_summary = after_payload["buddy_summary"]
+        assert after_buddy_summary is not None
+        assert after_buddy_summary["has_buddy"] is True
+        assert after_buddy_summary["persona_name"] == "Lazy Buddy Persona"
+        assert after_buddy_summary["role_summary"]
+        assert after_buddy_summary["visual"]["species_id"]
 
     persisted = persona_db.get_persona_buddy(persona_id=persona_id, user_id="1")
     assert persisted is not None

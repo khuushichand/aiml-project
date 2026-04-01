@@ -46,10 +46,21 @@ def test_persona_profile_scope_policy_crud(persona_db: CharactersRAGDB):
         persona_id = profile["id"]
         assert profile["mode"] == "persistent_scoped"
         assert profile["use_persona_state_context_default"] is True
+        buddy_summary = profile["buddy_summary"]
+        assert buddy_summary is not None
+        assert buddy_summary["has_buddy"] is True
+        assert buddy_summary["persona_name"] == "Ops Assistant"
+        assert buddy_summary["role_summary"]
+        assert buddy_summary["visual"]["species_id"]
 
         fetched = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert fetched.status_code == 200
-        assert fetched.json()["name"] == "Ops Assistant"
+        fetched_payload = fetched.json()
+        assert fetched_payload["name"] == "Ops Assistant"
+        fetched_buddy_summary = fetched_payload["buddy_summary"]
+        assert fetched_buddy_summary is not None
+        assert fetched_buddy_summary["persona_name"] == "Ops Assistant"
+        assert fetched_buddy_summary["has_buddy"] is True
 
         scope_replace = client.put(
             f"/api/v1/persona/profiles/{persona_id}/scope-rules",
@@ -100,8 +111,14 @@ def test_persona_profile_scope_policy_crud(persona_db: CharactersRAGDB):
 
         listed = client.get("/api/v1/persona/profiles")
         assert listed.status_code == 200
-        listed_ids = {item["id"] for item in listed.json()}
+        listed_payload = listed.json()
+        listed_ids = {item["id"] for item in listed_payload}
         assert persona_id in listed_ids
+        listed_item = next(item for item in listed_payload if item["id"] == persona_id)
+        listed_buddy_summary = listed_item["buddy_summary"]
+        assert listed_buddy_summary is not None
+        assert listed_buddy_summary["has_buddy"] is True
+        assert listed_buddy_summary["persona_name"] == "Ops Assistant"
 
         deleted = client.delete(f"/api/v1/persona/profiles/{persona_id}")
         assert deleted.status_code == 200
@@ -132,6 +149,10 @@ def test_create_persona_from_character_snapshots_origin_without_live_dependency(
         assert payload["origin_character_id"] == character_id
         assert payload["origin_character_name"] == "Source Character"
         assert payload["origin_character_snapshot_at"]
+        buddy_summary = payload["buddy_summary"]
+        assert buddy_summary is not None
+        assert buddy_summary["has_buddy"] is True
+        assert buddy_summary["visual"]["species_id"]
 
     fastapi_app.dependency_overrides.clear()
 
