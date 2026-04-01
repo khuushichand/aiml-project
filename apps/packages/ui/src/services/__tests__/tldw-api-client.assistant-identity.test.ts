@@ -131,7 +131,17 @@ describe("TldwApiClient assistant identity helpers", () => {
               id: 17,
               name: "Garden Helper",
               character_card_id: 42,
-              origin_character_id: 42
+              origin_character_id: 42,
+              buddy_summary: {
+                has_buddy: 1,
+                persona_name: " Garden Helper ",
+                role_summary: " Research organizer ",
+                visual: {
+                  species_id: " owl ",
+                  silhouette_id: " owl_round ",
+                  palette_id: " moss "
+                }
+              }
             }
           ]
         }
@@ -144,12 +154,22 @@ describe("TldwApiClient assistant identity helpers", () => {
     const profiles = await client.listPersonaProfiles()
 
     expect(profiles).toEqual([
-      expect.objectContaining({
+      {
         id: "17",
         name: "Garden Helper",
         character_card_id: 42,
-        origin_character_id: 42
-      })
+        origin_character_id: 42,
+        buddy_summary: {
+          has_buddy: true,
+          persona_name: "Garden Helper",
+          role_summary: "Research organizer",
+          visual: {
+            species_id: "owl",
+            silhouette_id: "owl_round",
+            palette_id: "moss"
+          }
+        }
+      }
     ])
   })
 
@@ -164,7 +184,17 @@ describe("TldwApiClient assistant identity helpers", () => {
             id: "garden-helper",
             name: "Garden Helper",
             system_prompt: "Stay focused on the garden.",
-            use_persona_state_context_default: true
+            use_persona_state_context_default: true,
+            buddy_summary: {
+              has_buddy: 1,
+              persona_name: " Garden Helper ",
+              role_summary: " Research organizer ",
+              visual: {
+                species_id: " owl ",
+                silhouette_id: " owl_round ",
+                palette_id: " moss "
+              }
+            }
           }
         }
 
@@ -175,11 +205,21 @@ describe("TldwApiClient assistant identity helpers", () => {
     const client = createConfiguredClient()
     const profile = await client.getPersonaProfile("garden-helper")
 
-    expect(profile).toMatchObject({
+    expect(profile).toEqual({
       id: "garden-helper",
       name: "Garden Helper",
       system_prompt: "Stay focused on the garden.",
-      use_persona_state_context_default: true
+      use_persona_state_context_default: true,
+      buddy_summary: {
+        has_buddy: true,
+        persona_name: "Garden Helper",
+        role_summary: "Research organizer",
+        visual: {
+          species_id: "owl",
+          silhouette_id: "owl_round",
+          palette_id: "moss"
+        }
+      }
     })
   })
 })

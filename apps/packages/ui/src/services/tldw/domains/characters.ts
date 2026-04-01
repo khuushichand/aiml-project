@@ -20,12 +20,16 @@ import type {
   PersonaExemplarImportInput,
   PersonaExemplarReviewInput,
 } from '../TldwApiClient'
+import type { PersonaBuddySummary } from '@/types/persona-buddy'
 import {
   normalizePersonaProfile,
   normalizePersonaExemplar,
 } from '../TldwApiClient'
 
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
+type PersonaProfileWithBuddy = PersonaProfileSummary & {
+  buddy_summary?: PersonaBuddySummary | null
+}
 
 export const characterMethods = {
   normalizeCharacterListResponse(this: TldwApiClientCore, payload: unknown): any[] {
@@ -962,7 +966,7 @@ export const characterMethods = {
     })
     const list = Array.isArray(payload) ? payload : []
     return list.map((item) =>
-      normalizePersonaProfile(item as Record<string, unknown>)
+      normalizePersonaProfile(item as PersonaProfileWithBuddy)
     )
   },
 
@@ -973,7 +977,7 @@ export const characterMethods = {
       method: "GET"
     })
     return normalizePersonaProfile(
-      payload as Record<string, unknown> | null | undefined
+      payload as PersonaProfileWithBuddy | null | undefined
     )
   },
 

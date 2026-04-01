@@ -1,0 +1,99 @@
+export type PersonaBuddyPositionBucket =
+  | "web-desktop"
+  | "sidepanel-desktop"
+
+export interface PersonaBuddyVisualSummary {
+  species_id: string
+  silhouette_id: string
+  palette_id: string
+}
+
+export interface PersonaBuddySummary {
+  has_buddy: boolean
+  persona_name: string
+  role_summary: string | null
+  visual: PersonaBuddyVisualSummary | null
+}
+
+export interface PersonaBuddyRenderContext {
+  surface_id: string
+  surface_active: boolean
+  active_persona_id: string | null
+  position_bucket: PersonaBuddyPositionBucket
+  persona_source:
+    | "route-local"
+    | "route-bootstrap"
+    | "catalog"
+    | "selected-assistant-fallback"
+    | null
+}
+
+const normalizeText = (value: unknown): string | null => {
+  if (value == null) {
+    return null
+  }
+  const text = String(value).trim()
+  return text.length > 0 ? text : null
+}
+
+const normalizeBoolean = (value: unknown): boolean => {
+  if (typeof value === "boolean") {
+    return value
+  }
+  if (typeof value === "number") {
+    return value !== 0
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === "true" || normalized === "1" || normalized === "yes") {
+      return true
+    }
+    if (normalized === "false" || normalized === "0" || normalized === "no") {
+      return false
+    }
+  }
+  return Boolean(value)
+}
+
+export const normalizePersonaBuddySummary = (
+  value: unknown
+): PersonaBuddySummary | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null
+  }
+
+  const candidate = value as Record<string, unknown>
+  const personaName = normalizeText(
+    candidate.persona_name ?? candidate.personaName ?? candidate.name
+  )
+
+  if (!personaName) {
+    return null
+  }
+
+  const visualValue =
+    candidate.visual && typeof candidate.visual === "object" && !Array.isArray(candidate.visual)
+      ? (candidate.visual as Record<string, unknown>)
+      : null
+  const speciesId = normalizeText(visualValue?.species_id ?? visualValue?.speciesId)
+  const silhouetteId = normalizeText(
+    visualValue?.silhouette_id ?? visualValue?.silhouetteId
+  )
+  const paletteId = normalizeText(visualValue?.palette_id ?? visualValue?.paletteId)
+
+  return {
+    has_buddy: normalizeBoolean(candidate.has_buddy ?? candidate.hasBuddy),
+    persona_name: personaName,
+    role_summary: normalizeText(
+      candidate.role_summary ?? candidate.roleSummary
+    ),
+    visual:
+      speciesId && silhouetteId && paletteId
+        ? {
+            species_id: speciesId,
+            silhouette_id: silhouetteId,
+            palette_id: paletteId
+          }
+        : null
+  }
+}
