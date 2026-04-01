@@ -230,28 +230,7 @@ export const OverviewTab: React.FC = () => {
     }
   }, [loadOverview])
 
-  // Auto-open Quick Setup for first-time users with no sources
   const quickSetupAutoShownRef = useRef(false)
-  useEffect(() => {
-    if (
-      data &&
-      data.sources.total === 0 &&
-      !quickSetupOpen &&
-      !quickSetupAutoShownRef.current &&
-      onboardingPath === "beginner"
-    ) {
-      const autoShownKey = "watchlists:quickSetup:autoshown:v1"
-      try {
-        if (!localStorage.getItem(autoShownKey)) {
-          localStorage.setItem(autoShownKey, "1")
-          quickSetupAutoShownRef.current = true
-          openQuickSetup()
-        }
-      } catch {
-        // localStorage unavailable
-      }
-    }
-  }, [data, quickSetupOpen, onboardingPath, openQuickSetup])
 
   useLayoutEffect(() => {
     if (quickSetupOpen) {
@@ -340,6 +319,44 @@ export const OverviewTab: React.FC = () => {
     setQuickSetupOpen(true)
     void trackWatchlistsOnboardingTelemetry({ type: "quick_setup_opened" })
   }, [quickSetupForm])
+
+  // Auto-open Quick Setup for first-time users with no sources
+  useEffect(() => {
+    const autoShownKey = "watchlists:quickSetup:autoshown:v1"
+
+    // If the wizard is already open, mark as shown to prevent re-opening after close
+    if (quickSetupOpen) {
+      quickSetupAutoShownRef.current = true
+      try {
+        localStorage.setItem(autoShownKey, "1")
+      } catch {
+        // ignore
+      }
+      return
+    }
+
+    if (
+      !data ||
+      data.sources.total !== 0 ||
+      quickSetupAutoShownRef.current ||
+      onboardingPath !== "beginner"
+    ) {
+      return
+    }
+
+    try {
+      if (localStorage.getItem(autoShownKey)) {
+        quickSetupAutoShownRef.current = true
+        return
+      }
+      localStorage.setItem(autoShownKey, "1")
+      quickSetupAutoShownRef.current = true
+      openQuickSetup()
+    } catch {
+      quickSetupAutoShownRef.current = true
+      openQuickSetup()
+    }
+  }, [data, quickSetupOpen, onboardingPath, openQuickSetup])
 
   const closeQuickSetup = useCallback(() => {
     quickSetupPreviewRequestRef.current += 1
