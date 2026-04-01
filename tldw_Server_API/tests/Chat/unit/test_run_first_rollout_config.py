@@ -31,12 +31,14 @@ def test_resolve_chat_run_first_provider_allowlist_parses_csv(
 
     monkeypatch.setenv(
         "CHAT_RUN_FIRST_PROVIDER_ALLOWLIST",
-        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash",
     )
 
     assert config.resolve_chat_run_first_provider_allowlist() == [
         "openai:gpt-4o-mini",
         "anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o",
+        "google:gemini-2.5-flash",
     ]
 
 
@@ -77,13 +79,15 @@ def test_resolve_chat_run_first_provider_allowlist_uses_chat_module_config(
     parser.set(
         "Chat-Module",
         "run_first_provider_allowlist",
-        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash",
     )
     monkeypatch.setattr(config, "load_comprehensive_config", lambda: parser)
 
     assert config.resolve_chat_run_first_provider_allowlist() == [
         "openai:gpt-4o-mini",
         "anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o",
+        "google:gemini-2.5-flash",
     ]
 
 

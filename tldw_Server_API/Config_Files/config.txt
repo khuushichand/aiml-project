@@ -111,7 +111,7 @@ runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_A
 startup_timeout_ms = 10000
 # Phase 2b default-on rollout for the stable provider:model cohort.
 run_first_rollout_mode = default_on
-run_first_provider_allowlist = openai:gpt-4o-mini,anthropic:claude-3-7-sonnet
+run_first_provider_allowlist = openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash
 run_first_presentation_variant = acp_phase2b_v1
 
 [ACP-WORKSPACE]
@@ -230,7 +230,7 @@ rate_limit_per_conversation_per_minute = 20
 rate_limit_tokens_per_minute = 100000
 # Phase 2b default-on rollout for the stable provider:model cohort.
 run_first_rollout_mode = default_on
-run_first_provider_allowlist = openai:gpt-4o-mini,anthropic:claude-3-7-sonnet
+run_first_provider_allowlist = openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash
 run_first_presentation_variant = chat_phase2b_v1
 # Controls how much historical context is loaded for each chat request.
 # Accepts 1-500; values outside range are clamped. Default: 20.

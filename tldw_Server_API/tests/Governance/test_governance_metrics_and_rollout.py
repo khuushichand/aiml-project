@@ -42,12 +42,14 @@ def test_run_first_rollout_resolvers_accept_default_on(monkeypatch):
 def test_run_first_rollout_provider_allowlist_parses_csv(monkeypatch):
     monkeypatch.setenv(
         "ACP_RUN_FIRST_PROVIDER_ALLOWLIST",
-        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash",
     )
 
     assert app_config.resolve_acp_run_first_provider_allowlist() == [
         "openai:gpt-4o-mini",
         "anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o",
+        "google:gemini-2.5-flash",
     ]
 
 
@@ -62,7 +64,7 @@ def test_run_first_rollout_acp_mode_uses_acp_config_section(monkeypatch):
     parser.set(
         "ACP",
         "run_first_provider_allowlist",
-        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash",
     )
     parser.set("ACP", "run_first_presentation_variant", "acp_phase2a_v2")
     monkeypatch.setattr(app_config, "load_comprehensive_config", lambda: parser)
@@ -71,6 +73,8 @@ def test_run_first_rollout_acp_mode_uses_acp_config_section(monkeypatch):
     assert app_config.resolve_acp_run_first_provider_allowlist() == [
         "openai:gpt-4o-mini",
         "anthropic:claude-3-7-sonnet",
+        "openai:gpt-4o",
+        "google:gemini-2.5-flash",
     ]
     assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2a_v2"
 
