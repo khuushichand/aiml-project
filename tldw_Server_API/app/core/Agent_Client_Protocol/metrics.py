@@ -95,13 +95,72 @@ def _ensure_registered() -> None:
             description="Total orchestration runs dispatched",
             labels=["status"],
         ),
+        MetricDefinition(
+            name="acp_run_first_rollout_total",
+            type=MetricType.COUNTER,
+            description="Total ACP run-first rollout exposures",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+            ],
+        ),
+        MetricDefinition(
+            name="acp_run_first_first_tool_total",
+            type=MetricType.COUNTER,
+            description="Total first-tool selections under ACP run-first rollout",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+                "first_tool",
+            ],
+        ),
+        MetricDefinition(
+            name="acp_run_first_fallback_after_run_total",
+            type=MetricType.COUNTER,
+            description="Total typed-tool fallbacks after run under ACP rollout",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+                "fallback_tool",
+            ],
+        ),
+        MetricDefinition(
+            name="acp_run_first_completion_proxy_total",
+            type=MetricType.COUNTER,
+            description="Total ACP run-first completion proxy outcomes",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+                "outcome",
+            ],
+        ),
     ]
 
     for d in defs:
         try:
             registry.register_metric(d)
-        except Exception:
-            pass  # Already registered
+        except Exception as exc:
+            logger.debug("ACP metric registration skipped for {}: {}", d.name, exc)
 
     _ACP_METRICS_REGISTERED = True
     logger.debug("ACP metrics registered with MetricsRegistry")
@@ -176,3 +235,124 @@ def record_orchestration_task(status: str = "created") -> None:
 def record_orchestration_run(status: str = "dispatched") -> None:
     _ensure_registered()
     increment_counter("acp_orchestration_runs_total", labels={"status": status})
+
+
+def _run_first_base_labels(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+) -> dict[str, str]:
+    return {
+        "agent_type": str(agent_type or "").strip() or "unknown",
+        "presentation_variant": str(presentation_variant or "").strip() or "unknown",
+        "cohort": str(cohort or "").strip() or "unknown",
+        "provider": str(provider or "").strip() or "unknown",
+        "model": str(model or "").strip() or "unknown",
+        "eligible": str(bool(eligible)).lower(),
+        "ineligible_reason": str(ineligible_reason or "").strip() or "none",
+    }
+
+
+def record_run_first_rollout(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+) -> None:
+    _ensure_registered()
+    increment_counter(
+        "acp_run_first_rollout_total",
+        labels=_run_first_base_labels(
+            agent_type=agent_type,
+            presentation_variant=presentation_variant,
+            cohort=cohort,
+            provider=provider,
+            model=model,
+            eligible=eligible,
+            ineligible_reason=ineligible_reason,
+        ),
+    )
+
+
+def record_run_first_first_tool(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+    first_tool: str,
+) -> None:
+    _ensure_registered()
+    labels = _run_first_base_labels(
+        agent_type=agent_type,
+        presentation_variant=presentation_variant,
+        cohort=cohort,
+        provider=provider,
+        model=model,
+        eligible=eligible,
+        ineligible_reason=ineligible_reason,
+    )
+    labels["first_tool"] = str(first_tool or "").strip() or "unknown"
+    increment_counter("acp_run_first_first_tool_total", labels=labels)
+
+
+def record_run_first_fallback_after_run(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+    fallback_tool: str,
+) -> None:
+    _ensure_registered()
+    labels = _run_first_base_labels(
+        agent_type=agent_type,
+        presentation_variant=presentation_variant,
+        cohort=cohort,
+        provider=provider,
+        model=model,
+        eligible=eligible,
+        ineligible_reason=ineligible_reason,
+    )
+    labels["fallback_tool"] = str(fallback_tool or "").strip() or "unknown"
+    increment_counter("acp_run_first_fallback_after_run_total", labels=labels)
+
+
+def record_run_first_completion_proxy(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+    outcome: str,
+) -> None:
+    _ensure_registered()
+    labels = _run_first_base_labels(
+        agent_type=agent_type,
+        presentation_variant=presentation_variant,
+        cohort=cohort,
+        provider=provider,
+        model=model,
+        eligible=eligible,
+        ineligible_reason=ineligible_reason,
+    )
+    labels["outcome"] = str(outcome or "").strip() or "unknown"
+    increment_counter("acp_run_first_completion_proxy_total", labels=labels)

@@ -127,6 +127,29 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 
 ---
 
+## Phase 2b Run-First Posture
+- Chat and ACP now share a phase-2b rollout posture for `run(command)`:
+  - `default_on` is the normal presentation for the stable `provider:model` cohort shipped in config
+  - `gated` remains available for controlled experiments on narrower cohorts
+  - `off` is the rollback posture; typed tools stay visible and executable as fallback in all three modes
+  - `tool_choice` stays unset or `auto`; the surface is biased, not forced
+- Effective-tool-set invariant:
+  - chat resolves one effective tool set before the provider call
+  - the model-visible `llm_tools` list and local auto-exec eligibility both derive from that same resolved set
+  - ACP applies the same idea through the session-aware MCP presenter before `LLMDrivenRunner` is constructed
+- Rollout labels:
+  - chat emits `presentation_variant`, `cohort`, `eligible`, `ineligible_reason`, `first_tool`, `fallback_tool`, and `outcome`
+  - ACP emits the same run-first labels, plus `agent_type`
+  - `cohort` remains the label name in phase 2b; current values include `default_on`, `out_of_cohort`, `override_off`, and `gated`
+  - use `presentation_variant` to separate prompt/tool-surface experiments over time
+- Completion proxy:
+  - rollout metrics use a completion proxy, not judged task success
+  - chat treats terminal request outcomes like `success`, `blocked`, and `error` as proxy outcomes
+  - ACP treats `end_turn`, `max_iterations`, `error`, and `cancelled` as proxy outcomes
+  - compare these metrics across matched cohorts; do not interpret them as direct quality scores
+
+---
+
 ## Testing
 Recommended suites after modifying chat logic:
 ```bash

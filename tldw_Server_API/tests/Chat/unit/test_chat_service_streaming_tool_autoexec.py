@@ -6,6 +6,7 @@ import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from starlette.responses import StreamingResponse
@@ -28,6 +29,18 @@ class _DummyStreamTracker:
 
 class _DummyMetrics:
     def track_llm_call(self, *_args, **_kwargs):
+        return None
+
+    def track_run_first_rollout(self, *_args, **_kwargs):
+        return None
+
+    def track_run_first_first_tool(self, *_args, **_kwargs):
+        return None
+
+    def track_run_first_fallback_after_run(self, *_args, **_kwargs):
+        return None
+
+    def track_run_first_completion_proxy(self, *_args, **_kwargs):
         return None
 
     def track_provider_fallback_success(self, *_args, **_kwargs):
@@ -81,6 +94,42 @@ def _tool_call_stream() -> Any:
                                     "arguments": "{}",
                                 },
                             }
+                        ]
+                    }
+                }
+            ]
+        }
+        yield f"data: {json.dumps(tool_delta)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return _stream()
+
+
+def _run_then_notes_stream() -> Any:
+    def _stream() -> Any:
+        tool_delta = {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "c1",
+                                "type": "function",
+                                "function": {
+                                    "name": "run",
+                                    "arguments": "{\"command\":\"ls\"}",
+                                },
+                            },
+                            {
+                                "index": 1,
+                                "id": "c2",
+                                "type": "function",
+                                "function": {
+                                    "name": "notes.search",
+                                    "arguments": "{\"query\":\"todo\"}",
+                                },
+                            },
                         ]
                     }
                 }
@@ -296,3 +345,179 @@ async def test_streaming_autoexec_disabled_does_not_emit_tool_results_event(
     assert len(save_payloads) == 1
     assert save_payloads[0]["role"] == "assistant"
     assert not any(msg.startswith("event: tool_results") for msg in chunks)
+
+
+class _RunFirstMetrics(_DummyMetrics):
+    def __init__(self) -> None:
+        self.rollout_calls: list[dict[str, Any]] = []
+        self.first_tool_calls: list[dict[str, Any]] = []
+        self.fallback_calls: list[dict[str, Any]] = []
+        self.completion_calls: list[dict[str, Any]] = []
+
+    def track_run_first_rollout(self, **kwargs):
+        self.rollout_calls.append(kwargs)
+
+    def track_run_first_first_tool(self, **kwargs):
+        self.first_tool_calls.append(kwargs)
+
+    def track_run_first_fallback_after_run(self, **kwargs):
+        self.fallback_calls.append(kwargs)
+
+    def track_run_first_completion_proxy(self, **kwargs):
+        self.completion_calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_streaming_autoexec_records_run_first_rollout_and_tool_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+    monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: False)
+    monkeypatch.setattr(chat_service, "resolve_chat_run_first_rollout_mode", lambda raw_mode=None, default="off": "default_on")
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_presentation_variant",
+        lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2b_v1",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: ["openai:gpt-4o-mini"],
+    )
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
+
+    run_tool = {
+        "type": "function",
+        "function": {
+            "name": "run",
+            "description": "Execute shell commands.",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+        },
+    }
+    notes_tool = {
+        "type": "function",
+        "function": {
+            "name": "notes.search",
+            "description": "Search notes for relevant passages.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    }
+    request_data = SimpleNamespace(
+        model="gpt-4o-mini",
+        stream=True,
+        tools=[run_tool, notes_tool],
+        tool_choice=None,
+        temperature=0.2,
+    )
+
+    def _model_dump(*, exclude_none=True, exclude=None):
+        payload = {
+            "model": request_data.model,
+            "stream": request_data.stream,
+            "tools": request_data.tools,
+            "temperature": request_data.temperature,
+        }
+        if exclude:
+            payload = {k: v for k, v in payload.items() if k not in exclude}
+        if exclude_none:
+            payload = {k: v for k, v in payload.items() if v is not None}
+        return payload
+
+    request_data.model_dump = _model_dump  # type: ignore[attr-defined]
+
+    cleaned_args = chat_service.build_call_params_from_request(
+        request_data=request_data,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message="Base system prompt.",
+        app_config=None,
+        grammar_record=None,
+    )
+
+    metrics = _RunFirstMetrics()
+    save_payloads: list[dict[str, Any]] = []
+
+    async def save_message_fn(_db, _conv_id, payload, use_transaction=True):
+        save_payloads.append(payload)
+        return f"m-{len(save_payloads)}"
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=9, api_key_id=None, team_ids=None, org_ids=None),
+    )
+
+    response = await execute_streaming_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            **cleaned_args,
+            "api_endpoint": "openai",
+            "api_key": "test-key",
+            "messages_payload": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4o-mini",
+            "streaming": True,
+        },
+        selected_provider="openai",
+        provider="openai",
+        model="gpt-4o-mini",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=None,
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        should_persist=True,
+        final_conversation_id="conv-stream-run-first",
+        character_card_for_context={"name": "Test"},
+        chat_db=SimpleNamespace(),
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client-3",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=_run_then_notes_stream,
+        refresh_provider_params=lambda *_args, **_kwargs: ({}, None),
+        moderation_getter=lambda: _NoModeration(),
+    )
+
+    assert isinstance(response, StreamingResponse)
+    await _collect_sse_chunks(response)
+
+    assert metrics.rollout_calls[0]["presentation_variant"] == "chat_phase2b_v1"
+    assert metrics.rollout_calls[0]["cohort"] == "default_on"
+    assert metrics.rollout_calls[0]["streaming"] is True
+    assert metrics.rollout_calls[0]["eligible"] is True
+    assert metrics.first_tool_calls[0]["first_tool"] == "run"
+    assert metrics.fallback_calls[0]["fallback_tool"] == "notes.search"
+    assert metrics.completion_calls[0]["outcome"] == "success"
+    assert save_payloads[0]["role"] == "assistant"
+
+
+@pytest.mark.unit
+def test_emit_chat_run_first_rollout_metrics_logs_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    metrics = SimpleNamespace(track_run_first_rollout=Mock(side_effect=RuntimeError("metrics down")))
+    warning = Mock()
+    monkeypatch.setattr(chat_service, "logger", SimpleNamespace(warning=warning))
+
+    context = chat_service._emit_chat_run_first_rollout_metrics(
+        metrics,
+        cleaned_args={
+            "_chat_run_first_presentation_variant": "chat_phase2b_v1",
+            "_chat_run_first_cohort": "default_on",
+            "_chat_run_first_eligible": True,
+        },
+        provider="openai",
+        model="gpt-4o-mini",
+        streaming=False,
+    )
+
+    assert context is not None
+    assert context["cohort"] == "default_on"
+    warning.assert_called_once()

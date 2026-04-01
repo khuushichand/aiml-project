@@ -190,6 +190,352 @@ async def test_non_stream_loop_mode_disables_legacy_autoexec(monkeypatch: pytest
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_run_first_presented_tools_drive_autoexec_allow_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+    monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: True)
+    monkeypatch.setattr(chat_service, "get_chat_max_tool_calls", lambda: 2)
+    monkeypatch.setattr(chat_service, "get_chat_tool_timeout_ms", lambda: 3210)
+    monkeypatch.setattr(chat_service, "should_attach_tool_idempotency", lambda: False)
+    monkeypatch.setattr(chat_service, "resolve_chat_run_first_rollout_mode", lambda raw_mode=None, default="off": "gated")
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_presentation_variant",
+        lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2a_v1",
+    )
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
+
+    run_tool = {
+        "type": "function",
+        "function": {
+            "name": "run",
+            "description": "Execute shell commands.",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+        },
+    }
+    notes_tool = {
+        "type": "function",
+        "function": {
+            "name": "notes.search",
+            "description": "Search notes for relevant passages.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    }
+
+    request_data = SimpleNamespace(
+        model="gpt-4o-mini",
+        stream=False,
+        tools=[run_tool, notes_tool],
+        tool_choice=None,
+        temperature=0.2,
+    )
+
+    def _model_dump(*, exclude_none=True, exclude=None):
+        payload = {
+            "model": request_data.model,
+            "stream": request_data.stream,
+            "tools": request_data.tools,
+            "temperature": request_data.temperature,
+        }
+        if exclude:
+            payload = {k: v for k, v in payload.items() if k not in exclude}
+        if exclude_none:
+            payload = {k: v for k, v in payload.items() if v is not None}
+        return payload
+
+    request_data.model_dump = _model_dump  # type: ignore[attr-defined]
+
+    cleaned_args = chat_service.build_call_params_from_request(
+        request_data=request_data,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message="Base system prompt.",
+        app_config=None,
+        grammar_record=None,
+    )
+
+    assert [tool["function"]["name"] for tool in cleaned_args["tools"]] == ["run", "notes.search"]
+    assert cleaned_args["_chat_effective_tool_names"] == ["run", "notes.search"]
+    assert "run(command)" in cleaned_args["system_message"]
+    assert cleaned_args.get("tool_choice") is None
+
+    captured = {"allow_catalog": None}
+
+    async def fake_autoexec(**kwargs):
+        captured["allow_catalog"] = kwargs.get("allow_catalog")
+        rec = ToolExecutionRecord(
+            tool_call_id="c1",
+            tool_name="notes.search",
+            ok=True,
+            result={"echo": {"q": "hello"}},
+            module="notes",
+            content='{"ok":true}',
+        )
+        return ToolExecutionBatchResult(
+            requested_calls=1,
+            processed_calls=1,
+            execution_attempts=1,
+            executed_calls=1,
+            truncated=False,
+            results=[rec],
+        )
+
+    monkeypatch.setattr(chat_service, "execute_assistant_tool_calls", fake_autoexec)
+
+    saved_payloads: list[dict[str, Any]] = []
+
+    async def save_message_fn(_db, _conv_id, payload, use_transaction=True):
+        saved_payloads.append(payload)
+        return f"m-{len(saved_payloads)}"
+
+    response = await _run_execute_non_stream_call(
+        llm_call_func=_build_llm_response_with_tool_calls,
+        save_message_fn=save_message_fn,
+        cleaned_args_overrides=cleaned_args,
+    )
+
+    assert captured["allow_catalog"] == ["run", "notes.search"]
+    assert response["tldw_tool_results"][0]["tool_call_id"] == "c1"
+    assert [payload["role"] for payload in saved_payloads] == ["assistant", "tool"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_build_call_params_marks_run_first_ineligible_when_provider_not_in_rollout_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_rollout_mode",
+        lambda raw_mode=None, default="off": "default_on",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_presentation_variant",
+        lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2b_v1",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: ["anthropic:claude-3-7-sonnet"],
+    )
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
+
+    run_tool = {
+        "type": "function",
+        "function": {
+            "name": "run",
+            "description": "Execute shell commands.",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+        },
+    }
+    notes_tool = {
+        "type": "function",
+        "function": {
+            "name": "notes.search",
+            "description": "Search notes for relevant passages.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    }
+
+    request_data = SimpleNamespace(
+        model="gpt-4o-mini",
+        stream=False,
+        tools=[run_tool, notes_tool],
+        tool_choice=None,
+        temperature=0.2,
+    )
+
+    def _model_dump(*, exclude_none=True, exclude=None):
+        payload = {
+            "model": request_data.model,
+            "stream": request_data.stream,
+            "tools": request_data.tools,
+            "temperature": request_data.temperature,
+        }
+        if exclude:
+            payload = {k: v for k, v in payload.items() if k not in exclude}
+        if exclude_none:
+            payload = {k: v for k, v in payload.items() if v is not None}
+        return payload
+
+    request_data.model_dump = _model_dump  # type: ignore[attr-defined]
+
+    cleaned_args = chat_service.build_call_params_from_request(
+        request_data=request_data,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message="Base system prompt.",
+        app_config=None,
+        grammar_record=None,
+    )
+
+    assert cleaned_args["_chat_run_first_eligible"] is False
+    assert cleaned_args["_chat_run_first_ineligible_reason"] == "provider_not_in_rollout_allowlist"
+    assert cleaned_args["_chat_run_first_cohort"] == "out_of_cohort"
+    assert "run(command)" not in cleaned_args["system_message"]
+    assert cleaned_args["_chat_effective_tool_names"] == ["run", "notes.search"]
+    assert [tool["function"]["name"] for tool in cleaned_args["tools"]] == ["run", "notes.search"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_build_call_params_marks_default_on_cohort_when_provider_is_in_rollout_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_rollout_mode",
+        lambda raw_mode=None, default="off": "default_on",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_presentation_variant",
+        lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2b_v1",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: ["openai:gpt-4o-mini"],
+    )
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
+
+    request_data = SimpleNamespace(
+        model="gpt-4o-mini",
+        stream=False,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "run",
+                    "description": "Execute shell commands.",
+                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "notes.search",
+                    "description": "Search notes for relevant passages.",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                },
+            },
+        ],
+        tool_choice=None,
+        temperature=0.2,
+    )
+
+    def _model_dump(*, exclude_none=True, exclude=None):
+        payload = {
+            "model": request_data.model,
+            "stream": request_data.stream,
+            "tools": request_data.tools,
+            "temperature": request_data.temperature,
+        }
+        if exclude:
+            payload = {k: v for k, v in payload.items() if k not in exclude}
+        if exclude_none:
+            payload = {k: v for k, v in payload.items() if v is not None}
+        return payload
+
+    request_data.model_dump = _model_dump  # type: ignore[attr-defined]
+
+    cleaned_args = chat_service.build_call_params_from_request(
+        request_data=request_data,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message="Base system prompt.",
+        app_config=None,
+        grammar_record=None,
+    )
+
+    assert cleaned_args["_chat_run_first_eligible"] is True
+    assert cleaned_args["_chat_run_first_cohort"] == "default_on"
+    assert "run(command)" in cleaned_args["system_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_build_call_params_tracks_all_gemini_native_tool_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chat_service, "resolve_chat_run_first_rollout_mode", lambda raw_mode=None, default="off": "gated")
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_presentation_variant",
+        lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2a_v1",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: ["openai:gpt-4o-mini"],
+    )
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
+
+    gemini_tools = {
+        "function_declarations": [
+            {
+                "name": "notes.search",
+                "description": "Search notes for relevant passages.",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+            },
+            {
+                "name": "run",
+                "description": "Execute shell commands.",
+                "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+            },
+        ]
+    }
+
+    request_data = SimpleNamespace(
+        model="gpt-4o-mini",
+        stream=False,
+        tools=[gemini_tools],
+        tool_choice=None,
+        temperature=0.2,
+    )
+
+    def _model_dump(*, exclude_none=True, exclude=None):
+        payload = {
+            "model": request_data.model,
+            "stream": request_data.stream,
+            "tools": request_data.tools,
+            "temperature": request_data.temperature,
+        }
+        if exclude:
+            payload = {k: v for k, v in payload.items() if k not in exclude}
+        if exclude_none:
+            payload = {k: v for k, v in payload.items() if v is not None}
+        return payload
+
+    request_data.model_dump = _model_dump  # type: ignore[attr-defined]
+
+    cleaned_args = chat_service.build_call_params_from_request(
+        request_data=request_data,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message="Base system prompt.",
+        app_config=None,
+        grammar_record=None,
+    )
+
+    assert cleaned_args["_chat_effective_tool_names"] == ["run", "notes.search"]
+    assert [decl["name"] for decl in cleaned_args["tools"][0]["function_declarations"]] == [
+        "run",
+        "notes.search",
+    ]
+    assert "run(command)" in cleaned_args["system_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_non_stream_autoexec_enabled_persists_tool_messages_and_response_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
