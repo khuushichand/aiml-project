@@ -152,6 +152,10 @@ _OPS_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _public_exception_label(exc: Exception) -> str:
+    return exc.__class__.__name__ or "operation_failed"
+
+
 def _require_platform_admin(principal: AuthPrincipal) -> None:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
@@ -1648,17 +1652,17 @@ async def send_report_now(
                         error="delivery returned false",
                     )
             except Exception as send_exc:
-                errors.append(f"{recipient}: {send_exc}")
+                errors.append(f"{recipient}: delivery failed")
                 svc_record_email_delivery(
                     recipient=recipient,
                     subject="Compliance Report",
                     template="compliance_report",
                     status="failed",
-                    error=str(send_exc),
+                    error=_public_exception_label(send_exc),
                 )
     except Exception as exc:
         logger.warning("Compliance report send-now: email service unavailable: {}", exc)
-        errors.append(f"email service: {exc}")
+        errors.append("email service: unavailable")
 
     # Mark as sent
     try:

@@ -659,10 +659,15 @@ class EmailService:
             with open(file_path, "w") as f:
                 json.dump(email_data, f, indent=2)
 
-            # Also save HTML for viewing
+            # Persist a stub HTML artifact instead of the rendered body so local
+            # mock mailboxes do not store sensitive message content at rest.
             html_path = self.mock_file_path / f"{email_id}.html"
             with open(html_path, "w") as f:
-                f.write(stored_html_body)
+                f.write(
+                    "<!DOCTYPE html><html><body>"
+                    "<p>Mock email body omitted from persisted mock output for security.</p>"
+                    "</body></html>"
+                )
 
             logger.debug(f"Mock email saved to: {file_path}")
 

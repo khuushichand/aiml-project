@@ -7,6 +7,7 @@ Ensures consistent database file locations across the application.
 import hashlib
 import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Callable, Optional, Union
@@ -114,6 +115,62 @@ def _ensure_dir(path: Path, *, label: str) -> None:
     except OSError as e:
         logger.error(f"Failed to create {label} directory {path}: {e}")
         raise StorageUnavailableError(f"Failed to create {label} directory") from e
+
+
+def resolve_trusted_database_path(
+    db_path: str | Path,
+    *,
+    label: str = "database",
+    extra_roots: Optional[list[Path]] = None,
+) -> Path:
+    """Resolve a database path and require containment within trusted roots."""
+    raw_path = str(db_path or "").strip()
+    if not raw_path:
+        raise InvalidStoragePathError("invalid_path")
+
+    try:
+        resolved = Path(raw_path).expanduser().resolve(strict=False)
+    except Exception as exc:
+        raise InvalidStoragePathError("invalid_path") from exc
+
+    trusted_roots: list[Path] = []
+    project_root = Path(get_project_root()).resolve()
+    trusted_roots.append(project_root)
+
+    try:
+        user_db_base_dir = DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True).resolve()
+    except Exception as exc:
+        logger.debug("Skipping user database trusted root discovery: {}", exc)
+    else:
+        trusted_roots.append(user_db_base_dir)
+
+    if extra_roots:
+        for root in extra_roots:
+            try:
+                resolved_root = Path(root).expanduser().resolve(strict=False)
+            except Exception as exc:
+                logger.debug("Skipping invalid trusted root {}: {}", root, exc)
+            else:
+                trusted_roots.append(resolved_root)
+
+    if _is_test_context():
+        trusted_roots.append(Path(tempfile.gettempdir()).resolve())
+        trusted_roots.append(Path.cwd().resolve())
+
+    unique_roots: list[Path] = []
+    for root in trusted_roots:
+        if root not in unique_roots:
+            unique_roots.append(root)
+
+    for root in unique_roots:
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            continue
+
+    logger.warning("Rejected {} path outside trusted roots: {}", label, resolved)
+    raise InvalidStoragePathError("invalid_path")
 
 
 def _build_user_dir(base_path: Path, user_id: Optional[UserId]) -> Path:

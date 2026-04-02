@@ -36,6 +36,7 @@ const { Text } = Typography
 export const WebhooksTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
   const [form] = Form.useForm()
+  const [deletingWebhookUrl, setDeletingWebhookUrl] = React.useState<string | null>(null)
   const isOnline = useServerOnline()
 
   // Store state
@@ -74,7 +75,14 @@ export const WebhooksTab: React.FC = () => {
           "This will stop sending events to this URL. You can re-register it later."
       }),
       okButtonProps: { danger: true },
-      onOk: () => deleteMutation.mutateAsync(url)
+      onOk: async () => {
+        setDeletingWebhookUrl(url)
+        try {
+          await deleteMutation.mutateAsync(url)
+        } finally {
+          setDeletingWebhookUrl((current) => (current === url ? null : current))
+        }
+      }
     })
   }
 
@@ -233,7 +241,7 @@ export const WebhooksTab: React.FC = () => {
                   <Button
                     size="small"
                     danger
-                    loading={deleteMutation.isPending}
+                    loading={deletingWebhookUrl === hook.url}
                     onClick={() => handleDelete(hook.url)}
                   >
                     {t("common:delete", { defaultValue: "Delete" })}
