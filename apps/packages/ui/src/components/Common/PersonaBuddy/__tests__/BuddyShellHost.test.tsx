@@ -190,7 +190,7 @@ describe("BuddyShellHost", () => {
     expect(screen.getByTestId("persona-buddy-dock")).toBeInTheDocument()
   })
 
-  it("stays dormant when the resolved persona has no buddy summary", () => {
+  it("renders a dormant shell when the resolved persona has no buddy summary", () => {
     renderHost({
       context: {
         surface_id: "chat",
@@ -205,6 +205,12 @@ describe("BuddyShellHost", () => {
       })
     })
 
-    expect(screen.queryByTestId("persona-buddy-dock")).not.toBeInTheDocument()
+    expect(screen.getByTestId("persona-buddy-dock")).toHaveAttribute(
+      "data-dormant",
+      "true"
+    )
+    expect(
+      screen.queryByTestId("persona-buddy-popover")
+    ).not.toBeInTheDocument()
   })
 })

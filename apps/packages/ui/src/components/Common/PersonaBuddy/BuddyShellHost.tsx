@@ -27,7 +27,7 @@ type DragState = {
 
 const ensurePortalRoot = () => {
   if (typeof document === "undefined") return null
-  return document.getElementById("tldw-portal-root") || document.body
+  return document.getElementById("tldw-portal-root")
 }
 
 const isPersonaSelection = (
@@ -165,6 +165,7 @@ export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
   )
 
   const buddySummary = resolvedPersona?.buddy_summary ?? null
+  const isDormant = Boolean(resolvedPersona && !buddySummary?.has_buddy)
   const portalRoot = ensurePortalRoot()
 
   if (!isSupportedViewport) {
@@ -175,7 +176,7 @@ export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
     return null
   }
 
-  if (!buddySummary?.has_buddy) {
+  if (!resolvedPersona) {
     return null
   }
 
@@ -183,10 +184,23 @@ export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
     return null
   }
 
+  const dockSummary: PersonaBuddySummary =
+    buddySummary?.has_buddy
+      ? buddySummary
+      : {
+          has_buddy: false,
+          persona_name:
+            (resolvedPersona as { name?: string | null }).name ||
+            "Persona Buddy",
+          role_summary: null,
+          visual: null
+        }
+
   return createPortal(
     <BuddyShellDock
-      buddySummary={buddySummary}
+      buddySummary={dockSummary}
       isOpen={isOpen}
+      isDormant={isDormant}
       position={position}
       onToggle={() => setOpen(!isOpen)}
       onDragHandlePointerDown={handleDragHandlePointerDown}

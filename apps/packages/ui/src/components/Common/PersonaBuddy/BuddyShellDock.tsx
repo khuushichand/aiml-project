@@ -10,6 +10,7 @@ import { BuddyShellPopover } from "./BuddyShellPopover"
 type BuddyShellDockProps = {
   buddySummary: PersonaBuddySummary
   isOpen: boolean
+  isDormant?: boolean
   position: PersonaBuddyShellPosition
   onToggle: () => void
   onDragHandlePointerDown: (event: React.PointerEvent<HTMLDivElement>) => void
@@ -19,6 +20,7 @@ type BuddyShellDockProps = {
 export const BuddyShellDock: React.FC<BuddyShellDockProps> = ({
   buddySummary,
   isOpen,
+  isDormant = false,
   position,
   onToggle,
   onDragHandlePointerDown,
@@ -27,6 +29,7 @@ export const BuddyShellDock: React.FC<BuddyShellDockProps> = ({
   <div
     ref={dockRef}
     data-testid="persona-buddy-dock"
+    data-dormant={isDormant ? "true" : "false"}
     className="fixed z-[1100] flex flex-col gap-2"
     style={{
       left: position.x,
@@ -44,6 +47,7 @@ export const BuddyShellDock: React.FC<BuddyShellDockProps> = ({
     <button
       type="button"
       onClick={onToggle}
+      disabled={isDormant}
       aria-expanded={isOpen}
       aria-label={`Toggle buddy for ${buddySummary.persona_name}`}
       className="flex min-w-[160px] items-center justify-between gap-3 rounded-2xl border border-border bg-bg/95 px-4 py-3 text-left shadow-xl backdrop-blur"
@@ -53,15 +57,17 @@ export const BuddyShellDock: React.FC<BuddyShellDockProps> = ({
           {buddySummary.persona_name}
         </div>
         <div className="truncate text-xs text-text-muted">
-          {buddySummary.visual?.species_id ?? "buddy"}
+          {buddySummary.visual?.species_id ?? "buddy unavailable"}
         </div>
       </div>
       <div className="text-lg leading-none text-text">
-        {isOpen ? "−" : "+"}
+        {isDormant ? "·" : isOpen ? "−" : "+"}
       </div>
     </button>
 
-    {isOpen ? <BuddyShellPopover buddySummary={buddySummary} /> : null}
+    {isOpen && !isDormant ? (
+      <BuddyShellPopover buddySummary={buddySummary} />
+    ) : null}
   </div>
 )
 
