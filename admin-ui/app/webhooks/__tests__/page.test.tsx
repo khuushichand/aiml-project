@@ -183,15 +183,8 @@ describe('WebhooksPage', () => {
 
     await screen.findByText('https://example.com/hook');
 
-    // Find the first delete button (trash icon)
-    const deleteButtons = screen.getAllByRole('button', { name: '' }).filter(
-      (btn) => btn.querySelector('svg.text-destructive') || btn.querySelector('.text-destructive')
-    );
-
-    // Use a more reliable selector - get buttons in the actions column
-    const trashButtons = screen.getAllByRole('button').filter(
-      (btn) => btn.querySelector('.text-destructive')
-    );
+    // Find the first delete button by its accessible label
+    const trashButtons = screen.getAllByRole('button', { name: 'Delete webhook' });
     expect(trashButtons.length).toBeGreaterThan(0);
     await user.click(trashButtons[0]);
 

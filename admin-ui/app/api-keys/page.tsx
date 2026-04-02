@@ -653,7 +653,13 @@ function ApiKeysPageContent() {
           </Card>
 
           {/* Create Key Dialog */}
-          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+          <Dialog open={createDialogOpen} onOpenChange={(open) => {
+            if (!open && newKeyValue) {
+              // Don't allow silent dismissal when secret is displayed — force confirmation via Done button
+              return;
+            }
+            setCreateDialogOpen(open);
+          }}>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Create API Key</DialogTitle>

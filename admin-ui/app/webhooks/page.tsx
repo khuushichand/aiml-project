@@ -84,7 +84,7 @@ function DeliveryHistory({
             <Activity className="h-3.5 w-3.5" />
             Delivery History
           </h4>
-          <Button variant="ghost" size="sm" onClick={fetchDeliveries} disabled={loading}>
+          <Button variant="ghost" size="sm" onClick={fetchDeliveries} disabled={loading} aria-label="Refresh delivery history">
             <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
@@ -393,6 +393,7 @@ function WebhooksPageContent() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleDelete(webhook)}
+                              aria-label="Delete webhook"
                             >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
@@ -484,7 +485,7 @@ function WebhooksPageContent() {
                 className="font-mono text-sm"
                 data-testid="webhook-secret-value"
               />
-              <Button variant="outline" size="sm" onClick={handleCopySecret}>
+              <Button variant="outline" size="sm" onClick={handleCopySecret} aria-label="Copy webhook secret">
                 <Copy className="h-4 w-4" />
               </Button>
             </div>

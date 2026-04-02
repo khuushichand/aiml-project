@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Pagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -959,87 +960,68 @@ function IncidentsPageContent() {
           />
 
           {/* Notify Stakeholders Dialog */}
-          {notifyIncidentId && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-              data-testid="notify-dialog-overlay"
-              onClick={(e) => {
-                if (e.target === e.currentTarget) closeNotifyDialog();
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Notify stakeholders"
-            >
-              <div className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold">Notify Stakeholders</h2>
+          <Dialog open={!!notifyIncidentId} onOpenChange={(open) => { if (!open) closeNotifyDialog(); }}>
+            <DialogContent data-testid="notify-dialog-overlay">
+              <DialogHeader>
+                <DialogTitle>Notify Stakeholders</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <Label htmlFor="notify-recipients">Recipients (comma-separated emails)</Label>
+                  <Input
+                    id="notify-recipients"
+                    data-testid="notify-recipients-input"
+                    placeholder="alice@example.com, bob@example.com"
+                    value={notifyRecipients}
+                    onChange={(e) => setNotifyRecipients(e.target.value)}
+                    disabled={notifying}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="notify-message">Message (optional)</Label>
+                  <textarea
+                    id="notify-message"
+                    data-testid="notify-message-input"
+                    className="flex min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    placeholder="Optional custom message for stakeholders"
+                    value={notifyMessage}
+                    onChange={(e) => setNotifyMessage(e.target.value)}
+                    disabled={notifying}
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={closeNotifyDialog} disabled={notifying}>
+                    Cancel
+                  </Button>
                   <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={closeNotifyDialog}
-                    aria-label="Close notify dialog"
+                    onClick={() => {
+                      void handleNotifyStakeholders();
+                    }}
+                    disabled={notifying}
+                    loading={notifying}
+                    loadingText="Sending..."
+                    data-testid="notify-send-button"
                   >
-                    <X className="h-4 w-4" />
+                    <Mail className="mr-2 h-4 w-4" />
+                    Send Notification
                   </Button>
                 </div>
-                <div className="space-y-4">
-                  <div className="space-y-1">
-                    <Label htmlFor="notify-recipients">Recipients (comma-separated emails)</Label>
-                    <Input
-                      id="notify-recipients"
-                      data-testid="notify-recipients-input"
-                      placeholder="alice@example.com, bob@example.com"
-                      value={notifyRecipients}
-                      onChange={(e) => setNotifyRecipients(e.target.value)}
-                      disabled={notifying}
-                    />
+                {notifyResults && (
+                  <div className="space-y-2 rounded-md border p-3" data-testid="notify-results">
+                    <div className="text-sm font-medium">Delivery Results</div>
+                    {notifyResults.notifications.map((result, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-sm">
+                        <span className="truncate mr-2">{result.email}</span>
+                        <Badge variant={result.status === 'sent' ? 'secondary' : 'destructive'}>
+                          {result.status}
+                        </Badge>
+                      </div>
+                    ))}
                   </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="notify-message">Message (optional)</Label>
-                    <textarea
-                      id="notify-message"
-                      data-testid="notify-message-input"
-                      className="flex min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      placeholder="Optional custom message for stakeholders"
-                      value={notifyMessage}
-                      onChange={(e) => setNotifyMessage(e.target.value)}
-                      disabled={notifying}
-                    />
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={closeNotifyDialog} disabled={notifying}>
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        void handleNotifyStakeholders();
-                      }}
-                      disabled={notifying}
-                      loading={notifying}
-                      loadingText="Sending..."
-                      data-testid="notify-send-button"
-                    >
-                      <Mail className="mr-2 h-4 w-4" />
-                      Send Notification
-                    </Button>
-                  </div>
-                  {notifyResults && (
-                    <div className="space-y-2 rounded-md border p-3" data-testid="notify-results">
-                      <div className="text-sm font-medium">Delivery Results</div>
-                      {notifyResults.notifications.map((result, idx) => (
-                        <div key={idx} className="flex items-center justify-between text-sm">
-                          <span className="truncate mr-2">{result.email}</span>
-                          <Badge variant={result.status === 'sent' ? 'secondary' : 'destructive'}>
-                            {result.status}
-                          </Badge>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
-            </div>
-          )}
+            </DialogContent>
+          </Dialog>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>

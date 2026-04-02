@@ -23,7 +23,7 @@ RUN mkdir -p public
 # Build-time configuration baked into client bundle
 ARG NEXT_PUBLIC_API_URL=
 ARG NEXT_PUBLIC_API_VERSION=v1
-ARG NEXT_PUBLIC_DEFAULT_AUTH_MODE=password
+ARG NEXT_PUBLIC_DEFAULT_AUTH_MODE=multi_user
 ARG NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN=false
 ARG NEXT_PUBLIC_BILLING_ENABLED=false
 
@@ -38,10 +38,12 @@ RUN bun run build
 
 FROM node:20-bookworm-slim AS runtime
 
+ARG APP_VERSION=0.0.0
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
-    PORT=3001
+    PORT=3001 \
+    APP_VERSION=${APP_VERSION}
 
 WORKDIR /app
 

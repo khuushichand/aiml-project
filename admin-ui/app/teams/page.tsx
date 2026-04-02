@@ -285,7 +285,7 @@ function TeamsPageContent() {
   };
 
   const handleBulkDeleteTeams = async () => {
-    if (!selectedOrgId) return;
+    if (!selectedOrgId || selectedOrgId === '__all__') return;
     const ids = Array.from(selectedTeamIds);
     if (ids.length === 0) return;
     const approval = await promptPrivilegedAction({
