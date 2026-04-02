@@ -148,6 +148,15 @@ async function assertCardOrder(page: Page) {
   expect((mediaBox?.y ?? 0) < (chatBox?.y ?? 0)).toBeTruthy()
 }
 
+async function clearOnboardingBlockingOverlays(page: Page): Promise<void> {
+  const splash = page.getByRole("dialog", { name: "Splash screen" }).first()
+  if (await splash.isVisible().catch(() => false)) {
+    await splash.click({ force: true })
+    await splash.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
+  }
+  await dismissConnectionModals(page)
+}
+
 async function openOnboardingSuccessScreen(
   page: Page
 ): Promise<"connected-now" | "already-connected"> {
@@ -163,6 +172,7 @@ async function openOnboardingSuccessScreen(
 
   const needsConnect = await connect.isVisible().catch(() => false)
   if (needsConnect) {
+    await clearOnboardingBlockingOverlays(page)
     await connect.click()
   }
 
@@ -182,20 +192,11 @@ async function clickOnboardingCtaAndExpectRoute(
   ctaTestId: string,
   expectedUrl: RegExp
 ): Promise<void> {
-  const clearBlockingOverlays = async () => {
-    const splash = page.getByRole("dialog", { name: "Splash screen" }).first()
-    if (await splash.isVisible().catch(() => false)) {
-      await splash.click({ force: true })
-      await splash.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
-    }
-    await dismissConnectionModals(page)
-  }
-
   const cta = page.getByTestId(ctaTestId)
   let lastError: unknown
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    await clearBlockingOverlays()
+    await clearOnboardingBlockingOverlays(page)
     await expect(cta).toBeVisible({ timeout: 15_000 })
     await cta.click()
     try {

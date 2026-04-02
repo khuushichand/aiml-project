@@ -18,6 +18,12 @@ import { formatRelativeTime } from '@web/lib/utils';
 
 const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_SNOOZE_MINUTES = 15;
+const NOTIFICATIONS_FETCH_LIMIT = 100;
+
+function deriveSnoozedItems(activeItems: NotificationItem[], archivedItems: NotificationItem[]): NotificationItem[] {
+  const activeIds = new Set(activeItems.map((item) => item.id));
+  return archivedItems.filter((item) => item.dismissed_at && !activeIds.has(item.id));
+}
 
 function resolveRouteForLinkType(linkType: string | null | undefined): string | undefined {
   if (!linkType) return undefined
@@ -58,18 +64,17 @@ export default function NotificationsPage() {
   const [showPrefs, setShowPrefs] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [prefsLoading, setPrefsLoading] = useState(false);
+  const [prefsUnavailable, setPrefsUnavailable] = useState(false);
 
   const refreshInbox = useCallback(async () => {
     try {
       const [list, archived, unread] = await Promise.all([
-        listNotifications({ limit: 100, offset: 0, include_archived: false }),
-        listNotifications({ limit: 50, offset: 0, include_archived: true }),
+        listNotifications({ limit: NOTIFICATIONS_FETCH_LIMIT, offset: 0, include_archived: false }),
+        listNotifications({ limit: NOTIFICATIONS_FETCH_LIMIT, offset: 0, include_archived: true }),
         getUnreadCount(),
       ]);
       setItems(list.items);
-      // Snoozed = archived items that have dismissed_at set (snoozed, not just dismissed)
-      const activeIds = new Set(list.items.map((i) => i.id));
-      setSnoozedItems(archived.items.filter((i) => i.dismissed_at && !activeIds.has(i.id)));
+      setSnoozedItems(deriveSnoozedItems(list.items, archived.items));
       setUnreadCount(unread.unread_count);
       const maxSeen = list.items.reduce((maxId, item) => Math.max(maxId, item.id), cursorRef.current);
       cursorRef.current = maxSeen;
@@ -85,7 +90,23 @@ export default function NotificationsPage() {
   const handleSnooze = useCallback(
     async (notificationId: number, minutes: number = DEFAULT_SNOOZE_MINUTES) => {
       try {
-        await snoozeNotification(notificationId, minutes);
+        const result = await snoozeNotification(notificationId, minutes);
+        const target = items.find((item) => item.id === notificationId);
+        if (target) {
+          const dismissedAt = new Date().toISOString();
+          setItems((previous) => previous.filter((item) => item.id !== notificationId));
+          setSnoozedItems((previous) => [
+            {
+              ...target,
+              dismissed_at: dismissedAt,
+              snooze_until: result.run_at,
+            },
+            ...previous.filter((item) => item.id !== notificationId),
+          ]);
+          if (!target.read_at && !target.dismissed_at) {
+            setUnreadCount((count) => Math.max(0, count - 1));
+          }
+        }
         show({
           title: 'Snoozed',
           description: `We will remind you again in ${minutes} minutes.`,
@@ -100,16 +121,18 @@ export default function NotificationsPage() {
         });
       }
     },
-    [show]
+    [items, show]
   );
 
   const loadPrefs = useCallback(async () => {
     setPrefsLoading(true);
+    setPrefsUnavailable(false);
     try {
       const p = await getNotificationPreferences();
       setPrefs(p);
     } catch {
-      // Preferences may not be available (e.g., single-user mode without auth)
+      setPrefs(null);
+      setPrefsUnavailable(true);
     } finally {
       setPrefsLoading(false);
     }
@@ -219,6 +242,7 @@ export default function NotificationsPage() {
   }, [show]);
 
   const hasNotifications = items.length > 0;
+  const hasAnyNotifications = hasNotifications || snoozedItems.length > 0;
   const unreadLabel = useMemo(() => `Unread: ${unreadCount}`, [unreadCount]);
 
   return (
@@ -251,8 +275,10 @@ export default function NotificationsPage() {
           {showPrefs && (
             <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
               <h3 className="mb-3 text-sm font-semibold">Notification Preferences</h3>
-              {prefsLoading || !prefs ? (
+              {prefsLoading || (!prefs && !prefsUnavailable) ? (
                 <p className="text-sm text-muted-foreground">Loading preferences...</p>
+              ) : prefsUnavailable ? (
+                <p className="text-sm text-muted-foreground">Notifications unavailable.</p>
               ) : (
                 <div className="space-y-3">
                   {([
@@ -284,11 +310,11 @@ export default function NotificationsPage() {
             </div>
           )}
 
-          {isLoading && !hasNotifications ? (
+          {isLoading && !hasAnyNotifications ? (
             <div className="py-8 text-center text-sm text-muted-foreground">Loading notifications...</div>
-          ) : !hasNotifications ? (
+          ) : !hasAnyNotifications ? (
             <div className="py-8 text-center text-sm text-muted-foreground">No notifications yet.</div>
-          ) : (
+          ) : hasNotifications ? (
             <ul className="space-y-3">
               {items.map((item) => (
                 <li key={item.id} className="rounded border border-border/70 bg-card/80 p-3">
@@ -353,7 +379,7 @@ export default function NotificationsPage() {
                 </li>
               ))}
             </ul>
-          )}
+          ) : null}
 
           {snoozedItems.length > 0 && (
             <div className="mt-6 border-t border-border pt-4">
@@ -367,15 +393,16 @@ export default function NotificationsPage() {
               {showSnoozed && (
                 <ul className="space-y-2">
                   {snoozedItems.map((item) => (
-                    <li key={item.id} className="rounded border border-border/50 bg-muted/20 p-3 opacity-70">
+                    <li key={item.id} className="rounded border border-border/50 bg-muted/30 p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <h2 className="text-sm font-medium text-muted-foreground">{item.title}</h2>
+                          <h2 className="text-sm font-medium text-foreground">{item.title}</h2>
                           <p className="mt-1 text-xs text-muted-foreground">{item.message}</p>
                         </div>
-                        <span className="whitespace-nowrap text-xs text-muted-foreground">
-                          Snoozed {item.dismissed_at ? formatRelativeTime(item.dismissed_at) : ''}
-                        </span>
+                        <div className="text-right text-xs text-muted-foreground">
+                          <div>Snoozed {item.dismissed_at ? formatRelativeTime(item.dismissed_at) : 'recently'}</div>
+                          {item.snooze_until ? <div>Returns {formatRelativeTime(item.snooze_until)}</div> : null}
+                        </div>
                       </div>
                     </li>
                   ))}

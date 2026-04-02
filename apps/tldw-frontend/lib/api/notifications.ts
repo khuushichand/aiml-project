@@ -29,6 +29,20 @@ export type {
   SubscribeNotificationsOptions
 } from "@/services/notifications"
 
+export type NotificationPreferences = {
+  user_id: string
+  reminder_enabled: boolean
+  job_completed_enabled: boolean
+  job_failed_enabled: boolean
+  updated_at: string
+}
+
+export type NotificationPreferencesUpdate = {
+  reminder_enabled?: boolean
+  job_completed_enabled?: boolean
+  job_failed_enabled?: boolean
+}
+
 const shouldUseCookieCredentials = (headers: Record<string, string>): boolean => {
   return !headers.Authorization && !headers["X-API-KEY"]
 }
@@ -123,6 +137,24 @@ export async function snoozeNotification(
   return apiClient.post<NotificationSnoozeResponse>(`/notifications/${notificationId}/snooze`, {
     minutes
   }, {
+    withCredentials: !hasExplicitAuthHeaders()
+  })
+}
+
+export async function getNotificationPreferences(): Promise<NotificationPreferences> {
+  const headers = buildAuthHeaders("GET")
+  return apiClient.get<NotificationPreferences>("/notifications/preferences", {
+    headers,
+    withCredentials: !hasExplicitAuthHeaders()
+  })
+}
+
+export async function updateNotificationPreferences(
+  update: NotificationPreferencesUpdate
+): Promise<NotificationPreferences> {
+  const headers = buildAuthHeaders("PATCH")
+  return apiClient.patch<NotificationPreferences>("/notifications/preferences", update, {
+    headers,
     withCredentials: !hasExplicitAuthHeaders()
   })
 }

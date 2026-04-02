@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
+  apiPatch: vi.fn(),
   buildAuthHeaders: vi.fn(),
   hasExplicitAuthHeaders: vi.fn(),
   getApiBaseUrl: vi.fn(),
@@ -16,7 +17,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@web/lib/api", () => ({
   apiClient: {
     get: (...args: unknown[]) => mocks.apiGet(...args),
-    post: (...args: unknown[]) => mocks.apiPost(...args)
+    post: (...args: unknown[]) => mocks.apiPost(...args),
+    patch: (...args: unknown[]) => mocks.apiPatch(...args)
   },
   buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
   hasExplicitAuthHeaders: (...args: unknown[]) =>
@@ -35,11 +37,13 @@ vi.mock("@/services/background-proxy", () => ({
 
 import {
   dismissNotification,
+  getNotificationPreferences,
   getUnreadCount,
   listNotifications,
   markNotificationsRead,
   snoozeNotification,
-  subscribeNotificationsStream
+  subscribeNotificationsStream,
+  updateNotificationPreferences
 } from "../api/notifications"
 
 describe("web notifications adapter", () => {
@@ -53,6 +57,13 @@ describe("web notifications adapter", () => {
     mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
     mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
     mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
+    mocks.apiPatch.mockResolvedValue({
+      user_id: "user-1",
+      reminder_enabled: true,
+      job_completed_enabled: true,
+      job_failed_enabled: true,
+      updated_at: "2026-03-20T00:00:00Z"
+    })
     mocks.streamStructuredSSE.mockImplementation(async (_url, _options, onEvent) => {
       onEvent({
         event: "notification",
@@ -82,6 +93,8 @@ describe("web notifications adapter", () => {
     await markNotificationsRead([1])
     await dismissNotification(1)
     await snoozeNotification(1, 15)
+    await getNotificationPreferences()
+    await updateNotificationPreferences({ reminder_enabled: false })
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
       "/notifications?limit=20&offset=0&include_archived=false",
@@ -99,6 +112,22 @@ describe("web notifications adapter", () => {
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/snooze", {
       minutes: 15
     }, { withCredentials: false })
+    expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/preferences", {
+      headers: expect.objectContaining({
+        Authorization: "Bearer web-token",
+        "X-CSRF-Token": "csrf-token"
+      }),
+      withCredentials: false
+    })
+    expect(mocks.apiPatch).toHaveBeenCalledWith("/notifications/preferences", {
+      reminder_enabled: false
+    }, {
+      headers: expect.objectContaining({
+        Authorization: "Bearer web-token",
+        "X-CSRF-Token": "csrf-token"
+      }),
+      withCredentials: false
+    })
   })
 
   it("omits cookie credentials for the notification stream when header auth is present", async () => {

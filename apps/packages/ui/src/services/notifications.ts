@@ -20,6 +20,7 @@ export type NotificationItem = {
   created_at: string
   read_at?: string | null
   dismissed_at?: string | null
+  snooze_until?: string | null
 }
 
 export type NotificationsListResponse = {
