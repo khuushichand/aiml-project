@@ -10,7 +10,8 @@ import {
   Button,
   Select,
   Collapse,
-  Tag
+  Tag,
+  Tabs
 } from "antd"
 import { Link, useNavigate } from "react-router-dom"
 import React, { useEffect, useState } from "react"
@@ -1115,6 +1116,22 @@ export const TldwSettings = () => {
             <Button type="primary" onClick={() => { void testConnection() }} loading={testingConnection}>{t('settings:tldw.buttons.recheck', 'Recheck')}</Button>
           </Space>
         </div>
+        <Tabs
+          size="small"
+          className="mb-4"
+          items={[
+            { key: 'connection', label: t('settings:tldw.tabs.connection', 'Connection') },
+            { key: 'timeouts', label: t('settings:tldw.tabs.timeouts', 'Timeouts') },
+            ...(authMode === 'multi-user' && isLoggedIn ? [
+              { key: 'billing', label: t('settings:tldw.tabs.billing', 'Billing') },
+            ] : []),
+          ]}
+          onChange={(key) => {
+            const el = document.getElementById(`tldw-settings-${key}`)
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+        />
+        <div id="tldw-settings-connection" />
         <h2 className="text-base font-semibold mb-4 text-text">{t('settings:tldw.serverConfigTitle', 'tldw Server Configuration')}</h2>
         
         <Form
@@ -1388,6 +1405,7 @@ export const TldwSettings = () => {
               </div>
             </div>
           </Space>
+          <div id="tldw-settings-timeouts" />
           <Collapse
             className="mt-4"
             items={[
@@ -1718,7 +1736,7 @@ export const TldwSettings = () => {
         </Form>
 
         {authMode === 'multi-user' && isLoggedIn && (
-          <div className="mt-6 rounded-lg border border-border bg-surface2 p-4">
+          <div id="tldw-settings-billing" className="mt-6 rounded-lg border border-border bg-surface2 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-text">
