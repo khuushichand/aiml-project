@@ -10,6 +10,7 @@ import {
   User,
   Lock,
   AlertCircle,
+  Info,
   ExternalLink,
   Copy,
   ChevronDown,
@@ -43,6 +44,7 @@ import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { cn } from "@/libs/utils"
+import { isExtensionRuntime } from "@/utils/browser-runtime"
 import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-registry"
 import {
   trackOnboardingFirstIngestSuccess,
@@ -167,6 +169,10 @@ interface Props {
 const QUICK_INGEST_OPEN_DELAY_MS = 120
 const QUICK_INGEST_OPEN_RETRY_INTERVAL_MS = 120
 const QUICK_INGEST_OPEN_MAX_ATTEMPTS = 25
+const LOCALHOST_PROBE_URL = "http://localhost:8000/health"
+const LOCALHOST_PROBE_TIMEOUT_MS = 2_000
+const TROUBLESHOOTING_URL =
+  "https://github.com/rmusser01/tldw/blob/main/Docs/Getting_Started/TROUBLESHOOTING.md"
 
 /**
  * Single-step onboarding form for the new UX redesign.
@@ -342,7 +348,29 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
         if (!cfg?.serverUrl) {
           const fallback = await getTldwServerURL()
-          if (fallback) setServerUrl(fallback)
+          if (fallback) {
+            setServerUrl(fallback)
+          } else if (isExtensionRuntime()) {
+            // B1: Auto-probe localhost when no URL is configured (extension only)
+            try {
+              const controller = new AbortController()
+              const timer = setTimeout(
+                () => controller.abort(),
+                LOCALHOST_PROBE_TIMEOUT_MS
+              )
+              const resp = await fetch(LOCALHOST_PROBE_URL, {
+                signal: controller.signal,
+                mode: "no-cors",
+              })
+              clearTimeout(timer)
+              // mode: "no-cors" yields opaque response (status 0) on success
+              if (resp.ok || resp.type === "opaque") {
+                setServerUrl("http://localhost:8000")
+              }
+            } catch {
+              // Server not reachable - leave URL empty for manual entry
+            }
+          }
         }
       } catch {
         // Ignore config load errors
@@ -1369,6 +1397,22 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                   "Multi-user mode: log in with the credentials your administrator provided."
                 )}
           </p>
+          {/* B2: Multi-user mode notice for extension context */}
+          {authMode === "multi-user" && isExtensionRuntime() && (
+            <div
+              className="mt-2 flex items-start gap-2 rounded-xl border border-amber-300/40 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-950/30"
+              data-testid="onboarding-multi-user-extension-notice"
+              role="note"
+            >
+              <Info className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                {t(
+                  "settings:onboarding.authMode.multiUserExtensionNotice",
+                  "Multi-user mode detected. The browser extension currently supports API key authentication only. Ask your admin for an API key."
+                )}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Auth Fields */}
@@ -1698,6 +1742,20 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                 )}
               </div>
             </div>
+            {/* B4: Troubleshooting docs link */}
+            <a
+              href={TROUBLESHOOTING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1 text-xs text-danger/80 underline decoration-danger/40 underline-offset-2 hover:text-danger"
+              data-testid="onboarding-troubleshooting-link"
+            >
+              {t(
+                "settings:onboarding.errors.troubleshootingLink",
+                "Having trouble? See setup guide"
+              )}
+              <ExternalLink className="size-3" />
+            </a>
           </div>
         )}
 
