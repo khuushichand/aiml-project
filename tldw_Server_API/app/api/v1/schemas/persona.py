@@ -288,7 +288,7 @@ class PersonaBuddyResolvedProfile(BaseModel):
 
 class PersonaBuddyResponse(BaseModel):
     persona_id: str
-    resolved_profile: PersonaBuddyResolvedProfile
+    resolved_profile: PersonaBuddyResolvedProfile | None = None
     created_at: str
     last_modified: str
 

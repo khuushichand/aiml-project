@@ -3307,7 +3307,28 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 40;
 """
-    _MIGRATION_SQL_V39_TO_V40_POSTGRES = _MIGRATION_SQL_V39_TO_V40
+    _MIGRATION_SQL_V39_TO_V40_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31) [Postgres]
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -7854,7 +7875,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V38_TO_V39_POSTGRES, conn, expected_version=39)
                 current_version = 39
             if current_version < 40:
-                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40, conn, expected_version=40)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40_POSTGRES, conn, expected_version=40)
                 current_version = 40
 
             if current_version > target_version:
@@ -10370,7 +10391,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "Unable to resolve persona buddy profile for persona_id={}.",
                 buddy_label,
             )
-            item["resolved_profile"] = {}
+            item["resolved_profile"] = None
         return item
 
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
@@ -11124,6 +11145,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         now = self._get_current_utc_timestamp_iso()
         expected_version_value = self._parse_version_input(expected_version)
         deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        deleted_true = True if self.backend_type == BackendType.POSTGRESQL else 1
         is_active_true = True if self.backend_type == BackendType.POSTGRESQL else 1
 
         with self.transaction() as conn:
@@ -11151,7 +11173,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             query = (
                 "UPDATE persona_profiles "
                 "SET deleted = ?, is_active = ?, last_modified = ?, version = version + 1 "
-                "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 1"
+                "WHERE id = ? AND user_id = ? AND version = ? AND deleted = ?"
             )
             params = (
                 deleted_false,
@@ -11160,6 +11182,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 persona_id,
                 user_id,
                 expected_version_value,
+                deleted_true,
             )
             prepared_query, prepared_params = self._prepare_backend_statement(query, params)
             cursor = conn.execute(prepared_query, prepared_params or ())
@@ -11170,9 +11193,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
                 (persona_id, user_id),
             ).fetchone()
-            if final_state and not self._as_bool(final_state["deleted"]):
-                return True
-            return False
+            return bool(final_state and not self._as_bool(final_state["deleted"]))
 
     def get_persona_buddy(
         self,
@@ -11182,6 +11203,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted_personas: bool = False,
     ) -> dict[str, Any] | None:
         """Fetch one persona buddy row for a user-owned persona profile."""
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
         query = """
             SELECT pb.*
               FROM persona_buddies pb
@@ -11190,13 +11212,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND pp.user_id = pb.user_id
              WHERE pb.persona_id = ?
                AND pb.user_id = ?
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = ?)
              LIMIT 1
         """
         params = (
             persona_id,
             user_id,
             bool(include_deleted_personas),
+            deleted_false,
         )
         cursor = self.execute_query(query, params)
         return self._persona_buddy_row_to_dict(cursor.fetchone())

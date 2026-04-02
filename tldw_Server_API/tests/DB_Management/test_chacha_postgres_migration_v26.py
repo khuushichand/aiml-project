@@ -141,10 +141,12 @@ def test_postgres_statement_conversion_includes_persona_buddy_migration(
 ) -> None:
     """Verify v40 conversion output uses a de-duplicated migration artifact and expected contract columns."""
 
-    assert char_rag_db._MIGRATION_SQL_V39_TO_V40_POSTGRES == char_rag_db._MIGRATION_SQL_V39_TO_V40
-    sql = char_rag_db._MIGRATION_SQL_V39_TO_V40
+    assert char_rag_db._MIGRATION_SQL_V39_TO_V40_POSTGRES != char_rag_db._MIGRATION_SQL_V39_TO_V40
+    sql = char_rag_db._MIGRATION_SQL_V39_TO_V40_POSTGRES
     stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
 
     full = "\n".join(stmts)
     assert "CREATE TABLE IF NOT EXISTS persona_buddies" in full
     assert "source_fingerprint TEXT NOT NULL" in full
+    assert "TIMESTAMP" in full
+    assert re.search(r"SET\s+version\s*=\s*40", full, flags=re.IGNORECASE)
