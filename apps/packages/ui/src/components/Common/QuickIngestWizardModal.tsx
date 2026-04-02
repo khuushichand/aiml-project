@@ -844,6 +844,7 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     /** Percent increment per tick. */
     const PERCENT_STEP = 5
 
+    // TODO(i18n): extract STAGE_LABELS to i18n resources
     const STAGE_LABELS: Record<string, string> = {
       uploading: "Uploading",
       processing: "Processing your file... This may take a few minutes for large files.",

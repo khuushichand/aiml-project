@@ -80,6 +80,7 @@ export const buildServerLogHint = (
  * Map common backend error patterns to user-friendly messages.
  * Returns null if no known pattern is matched.
  */
+// TODO(i18n): extract user-facing strings to i18n resources
 export const humanizeBackendError = (error: unknown): string | null => {
   const raw = normalizeRawError(error)
   if (!raw) return null

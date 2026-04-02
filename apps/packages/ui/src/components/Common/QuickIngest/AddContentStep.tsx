@@ -155,6 +155,7 @@ const validateQueueItem = (
 // Component
 // ---------------------------------------------------------------------------
 
+// Warning uses >= (show at boundary); validation uses > (allow exactly at limit)
 const LARGE_FILE_WARNING_THRESHOLD = 500 * 1024 * 1024 // 500 MB
 
 type AddContentStepProps = {

@@ -14,6 +14,7 @@ import {
   BookOpen,
   FileQuestion,
   File,
+  AlertTriangle,
 } from "lucide-react"
 import type { ItemProgress, ItemProgressStatus, WizardQueueItem } from "./types"
 import { useIngestWizard } from "./IngestWizardContext"
@@ -473,7 +474,7 @@ export const ProcessingStep: React.FC = () => {
             className="flex items-start gap-2.5 rounded-md border border-warn/30 bg-warn/5 px-3 py-2.5"
             role="alert"
           >
-            <FileText
+            <AlertTriangle
               className="mt-0.5 h-4 w-4 flex-shrink-0 text-warn"
               aria-hidden="true"
             />

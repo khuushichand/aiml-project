@@ -50,9 +50,13 @@ async def create_admin_user_non_interactive(
         print(f"[create-admin] Invalid username: {exc}")
         return False
 
-    # Validate password length (matches PasswordService.min_length default of 10)
-    if len(password) < 10:
-        print("[create-admin] Password must be at least 10 characters.")
+    # Validate password length against configured minimum
+    try:
+        _min_pw_len = PasswordService().min_length
+    except Exception:
+        _min_pw_len = 10  # Safe fallback if settings unavailable
+    if len(password) < _min_pw_len:
+        print(f"[create-admin] Password must be at least {_min_pw_len} characters.")
         return False
 
     # Default email if not provided

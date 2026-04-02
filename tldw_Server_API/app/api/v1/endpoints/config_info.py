@@ -767,9 +767,8 @@ async def _validate_provider_http(
         return True, None
 
     # Any other status -- report it
+    from contextlib import suppress
     detail = ""
-    try:
+    with suppress(Exception):
         detail = resp.text[:200]
-    except Exception:
-        pass
     return False, f"Unexpected HTTP {resp.status_code}: {detail}"

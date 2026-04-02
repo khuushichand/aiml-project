@@ -362,6 +362,7 @@ type SubtypeCopy = {
  * Determines the error subtype and corresponding user-facing copy from the
  * matched pattern, raw message, and HTTP status.
  */
+// TODO(i18n): extract user-facing strings (title, message, fixHint) to i18n resources
 const resolveSubtype = (
   matchedPatternId: string,
   rawMessage: string,
