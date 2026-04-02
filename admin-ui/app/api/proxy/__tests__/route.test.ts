@@ -10,12 +10,17 @@ const mockBuildApiUrlForRequest = vi.fn(
 );
 
 const mockGetBackendAuthHeaders = vi.fn(() => new Headers());
-const mockAppendProxyHeaders = vi.fn();
+const mockAppendProxyHeaders = vi.fn((_req: unknown, headers: Headers) => {
+  // Real implementation ensures x-request-id is always set
+  if (!headers.has('x-request-id')) {
+    headers.set('x-request-id', 'test-request-id');
+  }
+});
 const mockGetRequestBody = vi.fn(() => Promise.resolve(undefined));
 const mockBuildProxyResponse = vi.fn(async (response: Response) => {
   // Return a lightweight object that mimics NextResponse enough for assertions
   const body = await response.text().catch(() => '');
-  return { __proxy: true, body, status: response.status };
+  return { __proxy: true, body, status: response.status, headers: new Headers() };
 });
 
 vi.mock('@/lib/api-config', () => ({
@@ -135,6 +140,26 @@ describe('Proxy route – forward()', () => {
     await GET(req);
 
     expect(mockAppendProxyHeaders).toHaveBeenCalledWith(req, authHeaders);
+  });
+
+  // 3b. x-request-id is set on success response
+  it('sets x-request-id on successful proxy response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse()));
+
+    const { GET } = await import('@/app/api/proxy/[...path]/route');
+    const result = await GET(makeRequest('/data'));
+
+    expect((result as unknown as { headers: Headers }).headers.get('x-request-id')).toBe('test-request-id');
+  });
+
+  // 3c. x-request-id is set on error response
+  it('sets x-request-id on error proxy response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+
+    const { POST } = await import('@/app/api/proxy/[...path]/route');
+    const result = await POST(makeRequest('/data', 'POST'));
+
+    expect(result).toMatchObject({ __errorResponse: true, status: 502 });
   });
 
   // 4. Timeout returns 504

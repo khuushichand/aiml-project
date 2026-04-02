@@ -17,6 +17,7 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
 
   const headers = getBackendAuthHeaders(request);
   appendProxyHeaders(request, headers);
+  const requestId = headers.get('x-request-id')!;
   const body = await getRequestBody(request);
   const isGet = request.method === 'GET';
 
@@ -38,14 +39,18 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
 
   try {
     const response = await attemptFetch();
-    return buildProxyResponse(response);
+    const proxyResponse = await buildProxyResponse(response);
+    proxyResponse.headers.set('x-request-id', requestId);
+    return proxyResponse;
   } catch (error) {
     // Retry once for GET requests on network errors (not timeouts)
     if (isGet && error instanceof Error && error.name !== 'AbortError') {
       try {
         await new Promise((r) => setTimeout(r, 500));
         const response = await attemptFetch();
-        return buildProxyResponse(response);
+        const proxyResponse = await buildProxyResponse(response);
+        proxyResponse.headers.set('x-request-id', requestId);
+        return proxyResponse;
       } catch {
         // Fall through to error handling
       }
@@ -56,13 +61,14 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
       component: 'proxy',
       path: backendPath,
       method: request.method,
+      requestId,
       error: error instanceof Error ? error.message : String(error),
       timeout: isTimeout,
     });
 
     return NextResponse.json(
       { detail: isTimeout ? 'Backend request timed out' : 'Backend unavailable' },
-      { status: isTimeout ? 504 : 502 },
+      { status: isTimeout ? 504 : 502, headers: { 'x-request-id': requestId } },
     );
   }
 };
