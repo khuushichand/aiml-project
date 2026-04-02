@@ -920,7 +920,7 @@ export interface PersonaProfileSummary {
   character_card_id?: number | null
   origin_character_id?: number | null
   buddy_summary?: PersonaBuddySummary | null
-  [key: string]: unknown
+  metadata?: Record<string, unknown> | null
 }
 
 export interface PersonaProfile extends PersonaProfileSummary {
@@ -1040,12 +1040,16 @@ export const normalizePersonaProfile = <T extends Record<string, unknown>>(
   input: T | null | undefined
 ): PersonaProfile => {
   const candidate = input && typeof input === "object" ? input : ({} as T)
+  const rawBuddySummary = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "buddy_summary"
+  )
+    ? candidate.buddy_summary
+    : candidate?.buddySummary
   return {
     ...candidate,
     id: String(candidate?.id ?? candidate?.persona_id ?? ""),
-    buddy_summary: normalizePersonaBuddySummary(
-      candidate?.buddy_summary ?? candidate?.buddySummary
-    )
+    buddy_summary: normalizePersonaBuddySummary(rawBuddySummary)
   }
 }
 

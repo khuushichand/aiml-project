@@ -229,7 +229,7 @@ export const CharacterSelect: React.FC<Props> = ({
     queryKey: ["persona-profiles", "sidepanel-character-select"],
     queryFn: async () => {
       await tldwClient.initialize().catch(() => null)
-      const result = await tldwClient.listPersonaProfiles().catch(() => [])
+      const result = await tldwClient.listPersonaProfiles()
       return Array.isArray(result) ? (result as PersonaInfo[]) : []
     },
     enabled: !!hasPersona,

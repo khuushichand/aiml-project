@@ -1,10 +1,16 @@
 import sqlite3
+from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    BackendType,
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+)
 from tldw_Server_API.app.core.Persona.buddy import ensure_persona_buddy_for_profile
 
 
@@ -189,6 +195,57 @@ def test_ensure_persona_buddy_preserves_overlay_preferences_on_rederive(
     assert repaired["overlay_preferences"] == overlay_preferences
 
 
+def test_get_persona_buddy_surfaces_resolver_failures(
+    db_instance: CharactersRAGDB,
+    monkeypatch,
+) -> None:
+    persona_id = db_instance.create_persona_profile(
+        {"user_id": "user-1", "name": "Broken Buddy Persona"}
+    )
+    profile = db_instance.get_persona_profile(persona_id, user_id="user-1")
+    assert profile is not None
+    ensure_persona_buddy_for_profile(db_instance, profile)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB.resolve_persona_buddy_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid resolved profile")),
+    )
+
+    with pytest.raises(CharactersRAGDBError, match="Unable to resolve persona buddy profile"):
+        db_instance.get_persona_buddy(persona_id=persona_id, user_id="user-1")
+
+
+def test_get_persona_buddy_uses_backend_aware_deleted_filter_for_postgres(
+    db_instance: CharactersRAGDB,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Cursor:
+        def fetchone(self):
+            return None
+
+    def _fake_execute_query(query: str, params: tuple[object, ...]):
+        captured["query"] = query
+        captured["params"] = params
+        return _Cursor()
+
+    monkeypatch.setattr(db_instance, "backend_type", BackendType.POSTGRESQL)
+    monkeypatch.setattr(db_instance, "execute_query", _fake_execute_query)
+
+    assert (
+        db_instance.get_persona_buddy(
+            persona_id="persona-1",
+            user_id="user-1",
+            include_deleted_personas=False,
+        )
+        is None
+    )
+
+    assert "pp.deleted = ?" in str(captured["query"])
+    assert captured["params"] == ("persona-1", "user-1", False, False)
+
+
 def test_soft_delete_hides_buddy_and_restore_reuses_same_row(
     db_instance: CharactersRAGDB,
 ) -> None:
@@ -227,6 +284,52 @@ def test_soft_delete_hides_buddy_and_restore_reuses_same_row(
     assert restored_buddy is not None
     assert int(restored_buddy["version"]) == int(buddy_before_delete["version"])
     assert restored_buddy["resolved_profile"] == buddy_before_delete["resolved_profile"]
+
+
+def test_restore_persona_profile_uses_backend_aware_deleted_filter_for_postgres(
+    db_instance: CharactersRAGDB,
+    monkeypatch,
+) -> None:
+    executed: list[tuple[str, tuple[object, ...]]] = []
+
+    class _Cursor:
+        def __init__(self, row: dict[str, object] | None = None, rowcount: int = 0):
+            self._row = row
+            self.rowcount = rowcount
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn:
+        def execute(self, query: str, params: tuple[object, ...]):
+            executed.append((query, params))
+            if query.startswith("SELECT version, deleted FROM persona_profiles"):
+                return _Cursor({"version": 3, "deleted": True})
+            if query.startswith("UPDATE persona_profiles"):
+                return _Cursor(rowcount=1)
+            raise AssertionError(f"Unexpected query: {query}")
+
+    @contextmanager
+    def _fake_transaction():
+        yield _Conn()
+
+    monkeypatch.setattr(db_instance, "backend_type", BackendType.POSTGRESQL)
+    monkeypatch.setattr(db_instance, "transaction", _fake_transaction)
+    monkeypatch.setattr(db_instance, "_prepare_backend_statement", lambda query, params: (query, params))
+
+    assert db_instance.restore_persona_profile(
+        persona_id="persona-1",
+        user_id="user-1",
+        expected_version=3,
+    )
+
+    update_query, update_params = next(
+        (query, params)
+        for query, params in executed
+        if query.startswith("UPDATE persona_profiles")
+    )
+    assert "deleted = ?" in update_query
+    assert update_params[-1] is True
 
 
 def test_restore_persona_profile_with_stale_expected_version_raises_conflict(

@@ -6,11 +6,15 @@ const mocks = vi.hoisted(() => {
   const useQuery = vi.fn()
   const setSelectedAssistant = vi.fn(async () => undefined)
   const setSelectedCharacter = vi.fn(async () => undefined)
+  const initialize = vi.fn(async () => null)
+  const listPersonaProfiles = vi.fn(async () => [])
 
   return {
     useQuery,
     setSelectedAssistant,
-    setSelectedCharacter
+    setSelectedCharacter,
+    initialize,
+    listPersonaProfiles
   }
 })
 
@@ -81,7 +85,9 @@ vi.mock("antd", async () => {
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    initialize: vi.fn(async () => null)
+    initialize: (...args: unknown[]) => mocks.initialize(...args),
+    listPersonaProfiles: (...args: unknown[]) =>
+      mocks.listPersonaProfiles(...args)
   }
 }))
 
@@ -218,5 +224,40 @@ describe("CharacterSelect persona avatar", () => {
     const avatar = within(trigger).getByTestId("persona-avatar")
 
     expect(avatar).toHaveAttribute("src", "https://example.com/guide.png")
+  })
+
+  it("lets persona profile loading errors reject instead of caching an empty catalog", async () => {
+    const queryConfigs: Array<{
+      queryKey: string[]
+      queryFn?: () => Promise<unknown>
+    }> = []
+
+    mocks.listPersonaProfiles.mockRejectedValueOnce(
+      new Error("persona catalog unavailable")
+    )
+    mocks.useQuery.mockImplementation((config: { queryKey: string[] }) => {
+      queryConfigs.push(config)
+      return {
+        data: [],
+        isLoading: false,
+        refetch: vi.fn()
+      }
+    })
+
+    render(
+      <CharacterSelect
+        selectedCharacterId={null}
+        setSelectedCharacterId={vi.fn()}
+      />
+    )
+
+    const personaQuery = queryConfigs.find(
+      (config) => config.queryKey[0] === "persona-profiles"
+    )
+
+    expect(personaQuery?.queryFn).toBeTypeOf("function")
+    await expect(personaQuery!.queryFn!()).rejects.toThrow(
+      "persona catalog unavailable"
+    )
   })
 })

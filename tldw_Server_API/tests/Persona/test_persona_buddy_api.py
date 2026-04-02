@@ -91,7 +91,8 @@ def test_api_create_rolls_back_visible_profile_when_buddy_upkeep_fails(persona_d
             "/api/v1/persona/profiles",
             json={"name": "Create Best Effort Persona", "mode": "session_scoped"},
         )
-        assert created.status_code == 500, created.text
+        assert created.status_code == 400, created.text
+        assert created.json()["detail"] == "Persona buddy validation failed"
 
     active_profiles = persona_db.list_persona_profiles(user_id="1", include_deleted=False, limit=20, offset=0)
     assert not any(profile["name"] == "Create Best Effort Persona" for profile in active_profiles)
@@ -185,7 +186,8 @@ def test_api_update_reverts_profile_when_buddy_upkeep_fails(persona_db: Characte
             params={"expected_version": int(created_payload["version"])},
             json={"name": "Update Best Effort Persona Renamed"},
         )
-        assert updated.status_code == 500, updated.text
+        assert updated.status_code == 400, updated.text
+        assert updated.json()["detail"] == "Persona buddy validation failed"
 
     refreshed = persona_db.get_persona_profile(persona_id, user_id="1")
     buddy_after = persona_db.get_persona_buddy(persona_id=persona_id, user_id="1")
@@ -193,6 +195,71 @@ def test_api_update_reverts_profile_when_buddy_upkeep_fails(persona_db: Characte
     assert refreshed["name"] == "Update Best Effort Persona"
     assert buddy_after is not None
     assert buddy_after["source_fingerprint"] == buddy_before["source_fingerprint"]
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_api_create_surfaces_rollback_failures_after_buddy_validation_error(
+    persona_db: CharactersRAGDB,
+    monkeypatch,
+):
+    def _raise_buddy_failure(*_args, **_kwargs):
+        raise ValueError("buddy unavailable")
+
+    monkeypatch.setattr(persona_ep, "ensure_persona_buddy_for_profile", _raise_buddy_failure)
+    monkeypatch.setattr(
+        persona_db,
+        "soft_delete_persona_profile",
+        lambda **_kwargs: False,
+    )
+
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Create Rollback Failure Persona", "mode": "session_scoped"},
+        )
+        assert created.status_code == 500, created.text
+        assert "rollback" in created.json()["detail"].lower()
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_api_update_surfaces_rollback_failures_after_buddy_validation_error(
+    persona_db: CharactersRAGDB,
+    monkeypatch,
+):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Update Rollback Failure Persona"},
+        )
+        assert created.status_code == 201, created.text
+        created_payload = created.json()
+        persona_id = created_payload["id"]
+
+    def _raise_buddy_failure(*_args, **_kwargs):
+        raise ValueError("buddy unavailable")
+
+    real_update = persona_db.update_persona_profile
+    update_calls = {"count": 0}
+
+    def _fail_second_update(*args, **kwargs):
+        update_calls["count"] += 1
+        if update_calls["count"] == 1:
+            return real_update(*args, **kwargs)
+        return False
+
+    monkeypatch.setattr(persona_ep, "ensure_persona_buddy_for_profile", _raise_buddy_failure)
+    monkeypatch.setattr(persona_db, "update_persona_profile", _fail_second_update)
+
+    with _client_for_user(1, persona_db) as client:
+        updated = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            params={"expected_version": int(created_payload["version"])},
+            json={"name": "Update Rollback Failure Persona Renamed"},
+        )
+        assert updated.status_code == 500, updated.text
+        assert "rollback" in updated.json()["detail"].lower()
+
     fastapi_app.dependency_overrides.clear()
 
 

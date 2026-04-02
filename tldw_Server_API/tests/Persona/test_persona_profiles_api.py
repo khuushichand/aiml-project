@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 from tldw_Server_API.tests.Characters.test_character_functionality_db import sample_card_data
 
 
@@ -127,6 +127,86 @@ def test_persona_profile_scope_policy_crud(persona_db: CharactersRAGDB):
         missing = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert missing.status_code == 404
 
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_profile_projection_fails_open_when_buddy_lookup_breaks(
+    persona_db: CharactersRAGDB,
+    monkeypatch,
+):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Projection Recovery Persona", "mode": "session_scoped"},
+        )
+        assert created.status_code == 201, created.text
+        persona_id = created.json()["id"]
+
+        monkeypatch.setattr(
+            persona_db,
+            "get_persona_buddy",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                CharactersRAGDBError("buddy projection exploded")
+            ),
+        )
+
+        fetched = client.get(f"/api/v1/persona/profiles/{persona_id}")
+        assert fetched.status_code == 200, fetched.text
+        payload = fetched.json()
+        assert payload["id"] == persona_id
+        assert payload["buddy_summary"]["persona_name"] == "Projection Recovery Persona"
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_list_persona_profiles_uses_bulk_buddy_lookup_for_profile_collections(
+    persona_db: CharactersRAGDB,
+    monkeypatch,
+):
+    with _client_for_user(1, persona_db) as client:
+        first = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Bulk Buddy Persona One", "mode": "session_scoped"},
+        )
+        second = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Bulk Buddy Persona Two", "mode": "session_scoped"},
+        )
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+
+        first_id = first.json()["id"]
+        second_id = second.json()["id"]
+
+        real_get_persona_buddy = persona_db.get_persona_buddy
+        bulk_calls: list[tuple[str, tuple[str, ...], bool]] = []
+
+        def _bulk_lookup(*, user_id: str, persona_ids: list[str], include_deleted_personas: bool):
+            bulk_calls.append((user_id, tuple(persona_ids), include_deleted_personas))
+            return {
+                persona_id: real_get_persona_buddy(
+                    persona_id=persona_id,
+                    user_id=user_id,
+                    include_deleted_personas=include_deleted_personas,
+                )
+                for persona_id in persona_ids
+            }
+
+        monkeypatch.setattr(persona_db, "list_persona_buddies", _bulk_lookup, raising=False)
+        monkeypatch.setattr(
+            persona_db,
+            "get_persona_buddy",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("profile list should use bulk buddy lookup")
+            ),
+        )
+
+        listed = client.get("/api/v1/persona/profiles")
+        assert listed.status_code == 200, listed.text
+        listed_ids = {item["id"] for item in listed.json()}
+        assert {first_id, second_id}.issubset(listed_ids)
+
+    assert bulk_calls == [("1", (first_id, second_id), False)]
     fastapi_app.dependency_overrides.clear()
 
 

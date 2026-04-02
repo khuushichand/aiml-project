@@ -15,7 +15,7 @@ export type AssistantSelection = {
   system_prompt?: string | null
   extensions?: Record<string, unknown> | null
   buddy_summary?: PersonaBuddySummary | null
-  [key: string]: unknown
+  metadata?: Record<string, unknown> | null
 }
 
 type StoredSelectionRecord = Record<string, unknown>
@@ -63,6 +63,13 @@ export const normalizeAssistantSelection = (
 
   const name = resolveAssistantName(candidate.name ?? candidate.title, kind)
 
+  const rawBuddySummary = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "buddy_summary"
+  )
+    ? candidate.buddy_summary
+    : candidate.buddySummary
+
   return {
     ...rest,
     kind,
@@ -71,9 +78,7 @@ export const normalizeAssistantSelection = (
     avatar_url: normalizeOptionalText(candidate.avatar_url),
     greeting: normalizeOptionalText(candidate.greeting),
     system_prompt: normalizeOptionalText(candidate.system_prompt),
-    buddy_summary: normalizePersonaBuddySummary(
-      candidate.buddy_summary ?? candidate.buddySummary
-    ),
+    buddy_summary: normalizePersonaBuddySummary(rawBuddySummary),
     extensions:
       candidate.extensions &&
       typeof candidate.extensions === "object" &&

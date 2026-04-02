@@ -21,7 +21,7 @@ export type PersonaInfo = {
   greeting?: string | null
   extensions?: Record<string, unknown> | null
   buddy_summary?: PersonaBuddySummary | null
-  [key: string]: unknown
+  metadata?: Record<string, unknown> | null
 }
 
 export type PersonaPlanStep = {

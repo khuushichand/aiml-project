@@ -215,6 +215,8 @@ const SidepanelPersona = ({
       isCompanionMode ||
       capsLoading ||
       !capabilities?.hasPersona ||
+      !isOnline ||
+      uxState !== "connected_ok" ||
       !activePersonaId
     ) {
       setBuddyShellRenderContext(null)
@@ -245,12 +247,14 @@ const SidepanelPersona = ({
     capabilities?.hasPersona,
     capsLoading,
     isCompanionMode,
+    isOnline,
     selectedPersonaId,
     selectedCatalogPersona,
     savedPersonaBuddySummary,
     savedPersonaBuddySummaryPersonaId,
     setBuddyShellRenderContext,
-    shell
+    shell,
+    uxState
   ])
 
   // ── Profile fetch ──

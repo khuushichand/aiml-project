@@ -49,6 +49,8 @@ class PersonaInfo(BaseModel):
 
 
 class PersonaBuddyVisualSummary(BaseModel):
+    """Compact visual traits used to render a persona buddy preview."""
+
     species_id: str
     silhouette_id: str
     palette_id: str
@@ -58,6 +60,8 @@ class PersonaBuddyVisualSummary(BaseModel):
 
 
 class PersonaBuddySummary(BaseModel):
+    """Small buddy summary embedded into persona profile and catalog responses."""
+
     has_buddy: bool = False
     persona_name: str
     role_summary: str | None = None
@@ -293,6 +297,8 @@ class PersonaProfileResponse(BaseModel):
 
 
 class PersonaBuddyResolvedProfile(BaseModel):
+    """Fully resolved buddy configuration returned by the dedicated buddy endpoint."""
+
     derivation_version: int
     species_id: str
     silhouette_id: str
@@ -305,6 +311,8 @@ class PersonaBuddyResolvedProfile(BaseModel):
 
 
 class PersonaBuddyResponse(BaseModel):
+    """API response for one resolved persona buddy."""
+
     persona_id: str
     resolved_profile: PersonaBuddyResolvedProfile
     created_at: str

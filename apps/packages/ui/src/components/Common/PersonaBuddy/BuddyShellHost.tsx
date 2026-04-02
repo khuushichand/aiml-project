@@ -43,13 +43,18 @@ const isPersonaSelection = (
 ): value is {
   kind: "persona"
   id: string
-      buddy_summary?: PersonaBuddySummary | null
+  name: string
+  buddy_summary?: PersonaBuddySummary | null
 } => {
   if (!value || typeof value !== "object") {
     return false
   }
   const candidate = value as Record<string, unknown>
-  return candidate.kind === "persona" && typeof candidate.id === "string"
+  return (
+    candidate.kind === "persona" &&
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string"
+  )
 }
 
 const hasExplicitBuddySummary = (
@@ -90,10 +95,15 @@ const resolveActivePersonaSelection = ({
   const selectedPersona = isPersonaSelection(selectedAssistant)
     ? selectedAssistant
     : null
+  const canUseSelectedAssistantFallback =
+    renderContext.persona_source === "selected-assistant-fallback" &&
+    selectedPersona
   const selectionMatches =
-    selectedPersona &&
+    canUseSelectedAssistantFallback &&
     (!renderContext.active_persona_id ||
       selectedPersona.id === renderContext.active_persona_id)
+  const hasExplicitTargetPersona =
+    Boolean(renderContext.active_persona_id) || Boolean(selectionMatches)
 
   if (hasExplicitBuddySummary(renderContext)) {
     if (renderContext.buddy_summary) {
@@ -105,7 +115,7 @@ const resolveActivePersonaSelection = ({
     }
 
     return {
-      hasTargetPersona: Boolean(selectionMatches),
+      hasTargetPersona: hasExplicitTargetPersona,
       fallbackName: selectionMatches ? selectedPersona.name : null,
       buddySummary: null
     }
@@ -196,6 +206,40 @@ const BuddyShellHostInner: React.FC<BuddyShellHostInnerProps> = ({
       window.removeEventListener("pointerup", handlePointerUp)
     }
   }, [positionBucket, setPosition])
+
+  React.useEffect(() => {
+    const clampPersistedPosition = () => {
+      if (!dockRef.current) {
+        return
+      }
+
+      const rect = dockRef.current.getBoundingClientRect()
+      const clampedPosition = clampPersonaBuddyShellPosition(
+        position,
+        positionBucket,
+        {
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          shellWidth: rect.width,
+          shellHeight: rect.height,
+          margin: 16
+        }
+      )
+
+      if (
+        clampedPosition.x !== position.x ||
+        clampedPosition.y !== position.y
+      ) {
+        setPosition(positionBucket, clampedPosition)
+      }
+    }
+
+    clampPersistedPosition()
+    window.addEventListener("resize", clampPersistedPosition)
+    return () => {
+      window.removeEventListener("resize", clampPersistedPosition)
+    }
+  }, [position, positionBucket, setPosition])
 
   const handleDragHandlePointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {

@@ -37,7 +37,10 @@ vi.mock("@/utils/safe-storage", () => ({
   }
 }))
 
-import { TldwApiClient } from "@/services/tldw/TldwApiClient"
+import {
+  TldwApiClient,
+  normalizePersonaProfile
+} from "@/services/tldw/TldwApiClient"
 
 const createConfiguredClient = (): TldwApiClient => {
   mocks.storedConfig = {
@@ -219,6 +222,52 @@ describe("TldwApiClient assistant identity helpers", () => {
           silhouette_id: "owl_round",
           palette_id: "moss"
         }
+      }
+    })
+  })
+
+  it("preserves an explicit null buddy_summary over legacy camelCase fallback data", () => {
+    const normalized = normalizePersonaProfile({
+      id: "garden-helper",
+      name: "Garden Helper",
+      buddy_summary: null,
+      buddySummary: {
+        hasBuddy: true,
+        personaName: "Stale Buddy",
+        roleSummary: "Should not win",
+        visual: {
+          speciesId: "owl",
+          silhouetteId: "perch",
+          paletteId: "dawn"
+        }
+      }
+    })
+
+    expect(normalized.buddy_summary).toBeNull()
+  })
+
+  it("defaults has_buddy to true when a summary object exists without an explicit flag", () => {
+    const normalized = normalizePersonaProfile({
+      id: "garden-helper",
+      name: "Garden Helper",
+      buddy_summary: {
+        persona_name: "Garden Helper",
+        role_summary: "Keeps the route on track",
+        visual: {
+          species_id: "owl",
+          silhouette_id: "perch",
+          palette_id: "dawn"
+        }
+      }
+    })
+
+    expect(normalized.buddy_summary).toMatchObject({
+      has_buddy: true,
+      persona_name: "Garden Helper",
+      visual: {
+        species_id: "owl",
+        silhouette_id: "perch",
+        palette_id: "dawn"
       }
     })
   })

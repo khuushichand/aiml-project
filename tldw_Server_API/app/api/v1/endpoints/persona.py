@@ -1498,10 +1498,14 @@ def _persona_profile_to_response(
 def _persona_buddy_to_response(buddy: dict[str, Any]) -> PersonaBuddyResponse:
     return PersonaBuddyResponse(
         persona_id=str(buddy.get("persona_id") or ""),
-        resolved_profile=buddy.get("resolved_profile") or {},
+        resolved_profile=buddy.get("resolved_profile"),
         created_at=str(buddy.get("created_at") or _utc_now_iso()),
         last_modified=str(buddy.get("last_modified") or buddy.get("created_at") or _utc_now_iso()),
     )
+
+
+class PersonaBuddyRollbackError(RuntimeError):
+    """Raised when profile rollback fails after persona buddy validation errors."""
 
 
 def _rollback_created_persona_profile_after_buddy_failure(
@@ -1523,17 +1527,19 @@ def _rollback_created_persona_profile_after_buddy_failure(
                 "Rolled back newly created persona profile {} after buddy sync failure.",
                 persona_id,
             )
-        else:
-            logger.error(
-                "Failed to roll back newly created persona profile {} after buddy sync failure.",
-                persona_id,
-            )
+            return
+        raise PersonaBuddyRollbackError(
+            "Persona buddy validation failed and rollback did not complete."
+        )
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         logger.error(
             "Error rolling back newly created persona profile {} after buddy sync failure: {}",
             persona_id,
             exc,
         )
+        raise PersonaBuddyRollbackError(
+            "Persona buddy validation failed and rollback did not complete."
+        ) from exc
 
 
 def _rollback_updated_persona_profile_after_buddy_failure(
@@ -1561,17 +1567,19 @@ def _rollback_updated_persona_profile_after_buddy_failure(
                 "Rolled back persona profile {} after buddy sync failure.",
                 persona_id,
             )
-        else:
-            logger.error(
-                "Failed to roll back persona profile {} after buddy sync failure.",
-                persona_id,
-            )
+            return
+        raise PersonaBuddyRollbackError(
+            "Persona buddy validation failed and rollback did not complete."
+        )
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         logger.error(
             "Error rolling back persona profile {} after buddy sync failure: {}",
             persona_id,
             exc,
         )
+        raise PersonaBuddyRollbackError(
+            "Persona buddy validation failed and rollback did not complete."
+        ) from exc
 
 
 def _ensure_persona_buddy_after_profile_mutation(
@@ -1936,11 +1944,65 @@ def _load_persona_buddy_row_for_projection(
     if not persona_id or not user_id:
         return None
 
-    return db.get_persona_buddy(
-        persona_id=persona_id,
-        user_id=user_id,
-        include_deleted_personas=bool(profile.get("deleted", False)),
+    try:
+        return db.get_persona_buddy(
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted_personas=bool(profile.get("deleted", False)),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to load persona buddy projection for persona_hash {}: {}",
+            _redacted_id_for_logs(persona_id),
+            exc,
+        )
+        return None
+
+
+def _load_persona_buddy_rows_for_projection(
+    db: CharactersRAGDB,
+    *,
+    profiles: list[dict[str, Any]],
+) -> dict[str, dict[str, Any] | None]:
+    normalized_profiles = [profile for profile in profiles if isinstance(profile, dict)]
+    if not normalized_profiles:
+        return {}
+
+    sorted_profiles = sorted(
+        normalized_profiles,
+        key=lambda profile: (
+            str(profile.get("name") or "").strip().lower(),
+            str(profile.get("id") or "").strip(),
+        ),
     )
+    persona_ids = [
+        str(profile.get("id") or "").strip()
+        for profile in sorted_profiles
+        if str(profile.get("id") or "").strip()
+    ]
+    user_ids = {
+        str(profile.get("user_id") or "").strip()
+        for profile in normalized_profiles
+        if str(profile.get("user_id") or "").strip()
+    }
+    if not persona_ids or len(user_ids) != 1:
+        return {}
+
+    user_id = next(iter(user_ids))
+    include_deleted_personas = any(bool(profile.get("deleted", False)) for profile in normalized_profiles)
+    try:
+        return db.list_persona_buddies(
+            user_id=user_id,
+            persona_ids=persona_ids,
+            include_deleted_personas=include_deleted_personas,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed bulk persona buddy projection load for user_hash {}: {}",
+            _redacted_id_for_logs(user_id),
+            exc,
+        )
+        return {}
 
 
 def _ensure_default_persona_profile(db: CharactersRAGDB, *, user_id: str) -> dict[str, Any]:
@@ -2572,10 +2634,11 @@ async def list_persona_profiles(
         )
         if not profiles and not include_deleted:
             profiles = [_ensure_default_persona_profile(db, user_id=user_id)]
+        buddy_rows = _load_persona_buddy_rows_for_projection(db, profiles=profiles)
         return [
             _persona_profile_to_response(
                 profile,
-                buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+                buddy_row=buddy_rows.get(str(profile.get("id") or "").strip()),
             )
             for profile in profiles
         ]
@@ -2608,13 +2671,16 @@ async def create_persona_profile(
         try:
             buddy_row = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
-            _rollback_created_persona_profile_after_buddy_failure(
-                db,
-                persona_id=persona_id,
-                user_id=user_id,
-                expected_version=int(profile.get("version") or 1),
-            )
-            raise HTTPException(status_code=500, detail="Persona buddy sync failed after profile create") from exc
+            try:
+                _rollback_created_persona_profile_after_buddy_failure(
+                    db,
+                    persona_id=persona_id,
+                    user_id=user_id,
+                    expected_version=int(profile.get("version") or 1),
+                )
+            except PersonaBuddyRollbackError as rollback_exc:
+                raise HTTPException(status_code=500, detail=str(rollback_exc)) from rollback_exc
+            raise HTTPException(status_code=400, detail="Persona buddy validation failed") from exc
         return _persona_profile_to_response(profile, buddy_row=buddy_row)
     except HTTPException:
         raise
@@ -2687,15 +2753,18 @@ async def update_persona_profile(
         try:
             buddy_row = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
-            _rollback_updated_persona_profile_after_buddy_failure(
-                db,
-                persona_id=persona_id,
-                user_id=user_id,
-                update_data=update_data,
-                previous_profile=previous_profile,
-                expected_version=int(profile.get("version") or 1),
-            )
-            raise HTTPException(status_code=500, detail="Persona buddy sync failed after profile update") from exc
+            try:
+                _rollback_updated_persona_profile_after_buddy_failure(
+                    db,
+                    persona_id=persona_id,
+                    user_id=user_id,
+                    update_data=update_data,
+                    previous_profile=previous_profile,
+                    expected_version=int(profile.get("version") or 1),
+                )
+            except PersonaBuddyRollbackError as rollback_exc:
+                raise HTTPException(status_code=500, detail=str(rollback_exc)) from rollback_exc
+            raise HTTPException(status_code=400, detail="Persona buddy validation failed") from exc
         return _persona_profile_to_response(profile, buddy_row=buddy_row)
     except HTTPException:
         raise
@@ -2714,6 +2783,7 @@ async def get_persona_buddy(
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> PersonaBuddyResponse:
+    """Return the resolved buddy profile for one active persona profile."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
@@ -2780,6 +2850,7 @@ async def restore_persona_profile(
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> PersonaProfileResponse:
+    """Restore a soft-deleted persona profile and resume its buddy projection."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
@@ -4453,6 +4524,7 @@ async def persona_catalog(
         profiles = db.list_persona_profiles(user_id=user_id, active_only=True, limit=200)
         if not profiles:
             profiles = [_ensure_default_persona_profile(db, user_id=user_id)]
+        buddy_rows = _load_persona_buddy_rows_for_projection(db, profiles=profiles)
         catalog: list[PersonaInfo] = []
         for profile in profiles:
             policy_rules = db.list_persona_policy_rules(
@@ -4464,7 +4536,7 @@ async def persona_catalog(
                 _persona_info_from_profile(
                     profile,
                     policy_rules=policy_rules,
-                    buddy_row=_load_persona_buddy_row_for_projection(db, profile=profile),
+                    buddy_row=buddy_rows.get(str(profile.get("id") or "").strip()),
                 )
             )
         return catalog

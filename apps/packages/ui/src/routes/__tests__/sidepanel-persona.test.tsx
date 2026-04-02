@@ -551,6 +551,15 @@ describe("SidepanelPersona", () => {
           json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
         })
       }
+      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
+          })
+        })
+      }
       if (path.includes("/persona/profiles/garden-helper")) {
         return Promise.resolve({
           ok: true,
@@ -567,15 +576,6 @@ describe("SidepanelPersona", () => {
                 palette_id: "dawn"
               }
             }
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "garden-helper",
-            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
           })
         })
       }
@@ -741,6 +741,139 @@ describe("SidepanelPersona", () => {
           persona_name: "Builder Bot"
         }
       })
+    })
+  })
+
+  it("clears buddy shell context when the persona route drops offline", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: 1,
+            buddy_summary: {
+              has_buddy: true,
+              persona_name: "Garden Helper",
+              role_summary: "Keeps the route on track",
+              visual: {
+                species_id: "owl",
+                silhouette_id: "perch",
+                palette_id: "dawn"
+              }
+            }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    const view = render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toMatchObject({
+        active_persona_id: "garden-helper",
+        buddy_summary: {
+          persona_name: "Garden Helper"
+        }
+      })
+    })
+
+    mocks.isOnline = false
+    view.rerender(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toBeNull()
+    })
+  })
+
+  it("clears buddy shell context when the persona route enters a non-interactive UX state", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: 1,
+            buddy_summary: {
+              has_buddy: true,
+              persona_name: "Garden Helper",
+              role_summary: "Keeps the route on track",
+              visual: {
+                species_id: "owl",
+                silhouette_id: "perch",
+                palette_id: "dawn"
+              }
+            }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    const view = render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toMatchObject({
+        active_persona_id: "garden-helper"
+      })
+    })
+
+    mocks.uxState = "error_auth"
+    view.rerender(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toBeNull()
     })
   })
 

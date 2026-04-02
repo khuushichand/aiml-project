@@ -1,5 +1,5 @@
 import React from "react"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -208,7 +208,8 @@ describe("BuddyShellHost", () => {
         surface_active: true,
         active_persona_id: "persona-1",
         position_bucket: "sidepanel-desktop",
-        persona_source: "route-local"
+        persona_source: "route-local",
+        buddy_summary: buildBuddySummary("persona-1")
       }
     })
 
@@ -245,6 +246,39 @@ describe("BuddyShellHost", () => {
     })
 
     expect(screen.getByTestId("persona-buddy-dock")).toBeInTheDocument()
+  })
+
+  it("does not use selected-assistant fallback for route-local surfaces without an explicit fallback source", () => {
+    renderHost({
+      context: {
+        surface_id: "persona-garden",
+        surface_active: true,
+        active_persona_id: null,
+        position_bucket: "web-desktop",
+        persona_source: "route-local"
+      },
+      selectedAssistant: buildPersonaSelection({ id: "persona-1" })
+    })
+
+    expect(screen.queryByTestId("persona-buddy-dock")).not.toBeInTheDocument()
+  })
+
+  it("ignores malformed persona selections that do not include a name", () => {
+    renderHost({
+      context: {
+        surface_id: "chat",
+        surface_active: true,
+        active_persona_id: null,
+        position_bucket: "web-desktop",
+        persona_source: "selected-assistant-fallback"
+      },
+      selectedAssistant: {
+        kind: "persona",
+        id: "persona-1"
+      }
+    })
+
+    expect(screen.queryByTestId("persona-buddy-dock")).not.toBeInTheDocument()
   })
 
   it("prefers route-local buddy summary over stale selected-assistant persona data", () => {
@@ -298,12 +332,9 @@ describe("BuddyShellHost", () => {
         surface_active: true,
         active_persona_id: "persona-1",
         position_bucket: "web-desktop",
-        persona_source: "route-local"
-      },
-      selectedAssistant: buildPersonaSelection({
-        id: "persona-1",
-        hasBuddy: false
-      })
+        persona_source: "route-local",
+        buddy_summary: null
+      }
     })
 
     expect(screen.getByTestId("persona-buddy-dock")).toHaveAttribute(
@@ -313,6 +344,75 @@ describe("BuddyShellHost", () => {
     expect(
       screen.queryByTestId("persona-buddy-popover")
     ).not.toBeInTheDocument()
+  })
+
+  it("clamps persisted positions back into the viewport after mount", async () => {
+    const rectSpy = vi
+      .spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 120,
+        width: 200,
+        height: 120,
+        toJSON: () => ({})
+      } as DOMRect)
+
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 320
+    })
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 240
+    })
+
+    usePersonaBuddyShellStore.setState((state) => ({
+      ...state,
+      positions: {
+        ...state.positions,
+        "web-desktop": {
+          x: 9999,
+          y: 9999
+        }
+      }
+    }))
+
+    renderHost({
+      context: {
+        surface_id: "chat",
+        surface_active: true,
+        active_persona_id: "persona-1",
+        position_bucket: "web-desktop",
+        persona_source: "route-local",
+        buddy_summary: buildBuddySummary("persona-1")
+      }
+    })
+
+    await waitFor(() => {
+      expect(
+        usePersonaBuddyShellStore.getState().positions["web-desktop"]
+      ).toEqual({
+        x: 104,
+        y: 104
+      })
+    })
+
+    rectSpy.mockRestore()
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalWidth
+    })
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: originalHeight
+    })
   })
 
   it("stays dormant when an active chat surface does not have a persona selected", () => {

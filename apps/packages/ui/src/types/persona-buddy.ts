@@ -81,9 +81,14 @@ export const normalizePersonaBuddySummary = (
     visualValue?.silhouette_id ?? visualValue?.silhouetteId
   )
   const paletteId = normalizeText(visualValue?.palette_id ?? visualValue?.paletteId)
+  const rawHasBuddy =
+    candidate.has_buddy !== undefined
+      ? candidate.has_buddy
+      : candidate.hasBuddy
 
   return {
-    has_buddy: normalizeBoolean(candidate.has_buddy ?? candidate.hasBuddy),
+    has_buddy:
+      rawHasBuddy === undefined ? true : normalizeBoolean(rawHasBuddy),
     persona_name: personaName,
     role_summary: normalizeText(
       candidate.role_summary ?? candidate.roleSummary
