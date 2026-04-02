@@ -1357,6 +1357,18 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               {t("settings:onboarding.authMode.multi", "Login")}
             </button>
           </div>
+          {/* Auth-mode-aware contextual hint */}
+          <p className="mt-1.5 text-xs text-text-muted" data-testid="onboarding-auth-mode-hint">
+            {authMode === "single-user"
+              ? t(
+                  "settings:onboarding.authMode.singleHint",
+                  "Single-user mode: paste your API key to connect. Best for personal or local setups."
+                )
+              : t(
+                  "settings:onboarding.authMode.multiHint",
+                  "Multi-user mode: log in with the credentials your administrator provided."
+                )}
+          </p>
         </div>
 
         {/* Auth Fields */}
@@ -1364,7 +1376,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           <div>
             <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
               <Key className="size-4" />
-              {t("settings:onboarding.apiKey.label", "API Key")}
+              {t("settings:onboarding.apiKey.label", "Paste your API key")}
             </label>
             <Input.Password
               data-testid="onboarding-api-key"
@@ -1401,7 +1413,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               <p className="mt-1 text-xs text-text-subtle">
                 {t(
                   "settings:onboarding.apiKeyHelp",
-                  "Docker quickstart? The WebUI connects automatically, and no key is needed there. For API or extension access, run: make show-api-key. Local install? Check your .env file for SINGLE_USER_API_KEY."
+                  "Find your API key by running `make show-api-key` or checking your .env file for SINGLE_USER_API_KEY. Docker quickstart users connect automatically."
                 )}
               </p>
             )}
@@ -1613,6 +1625,12 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                     </p>
                   )}
                 </div>
+                <p className="text-xs text-text-subtle" data-testid="onboarding-multi-user-hint">
+                  {t(
+                    "settings:onboarding.multiUserHelp",
+                    "Ask your administrator for your username and password. If you don't have an account yet, contact your server admin."
+                  )}
+                </p>
               </div>
             )}
           </div>
