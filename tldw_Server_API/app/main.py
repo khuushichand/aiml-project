@@ -5523,6 +5523,40 @@ else:
             "Using local browser defaults (localhost/127.0.0.1) so self-hosted setup keeps working. "
             "Set ALLOWED_ORIGINS only if you need a different browser origin."
         )
+
+    # C1: Auto-add common localhost origins in single-user mode when no explicit
+    # ALLOWED_ORIGINS env var is set. In multi-user mode, require explicit origins.
+    _env_allowed_origins_set = os.getenv("ALLOWED_ORIGINS") is not None
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_cors_settings
+        _cors_auth_mode = _get_cors_settings().AUTH_MODE
+    except Exception:
+        _cors_auth_mode = os.getenv("AUTH_MODE", "single_user")
+
+    _SINGLE_USER_LOCALHOST_ORIGINS = [
+        "http://localhost:8080",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:8080",
+    ]
+
+    if str(_cors_auth_mode) == "single_user" and not _env_allowed_origins_set:
+        _auto_added = []
+        for _origin in _SINGLE_USER_LOCALHOST_ORIGINS:
+            if _origin not in origins:
+                origins.append(_origin)
+                _auto_added.append(_origin)
+        if _auto_added:
+            logger.info(
+                f"CORS single-user auto-detect: added localhost origins {_auto_added}"
+            )
+        else:
+            logger.info("CORS single-user auto-detect: all common localhost origins already present.")
+    elif str(_cors_auth_mode) == "multi_user" and not origins:
+        logger.warning(
+            "CORS multi-user mode: ALLOWED_ORIGINS is empty. "
+            "Set ALLOWED_ORIGINS explicitly for multi-user deployments."
+        )
     origins = _resolve_cors_origins_or_raise(origins)
     _cors_allow_credentials = should_allow_cors_credentials()
     _cors_enforce_explicit_origins = is_production_environment()

@@ -17,7 +17,9 @@ help:
 	@echo "  make quickstart-local        Start local server (after install)"
 	@echo "  make server-up-dev           Start server in mock/dev mode"
 	@echo "  make verify                  Health-check a running server"
+	@echo "  make check                   Run sanity checks (health, keys, ffmpeg)"
 	@echo "  make show-api-key            Print your SINGLE_USER_API_KEY"
+	@echo "  make generate-secrets        Generate fresh secrets for .env"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make tooling-install         Install test/smoke extras"
@@ -496,6 +498,33 @@ stt-golden:
 	TLDW_STT_GOLDEN_ENABLE=1 \
 	TLDW_STT_GOLDEN_AUDIO_DIR="$(STT_GOLDEN_AUDIO_DIR)" \
 	python -m pytest tldw_Server_API/tests/Audio/test_stt_adapters_golden.py -m "stt_golden" -v
+
+# -----------------------------------------------------------------------------
+# Sanity check (C2)
+# -----------------------------------------------------------------------------
+.PHONY: check
+
+check:
+	@echo "Running tldw sanity checks..."
+	@echo -n "  Server health:    " && curl -sf http://localhost:8000/health > /dev/null && echo "✓" || echo "✗ (not running)"
+	@echo -n "  API key set:      " && (grep -q '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null && echo "✓") || echo "✗ (check .env)"
+	@echo -n "  FFmpeg available:  " && command -v ffmpeg > /dev/null && echo "✓" || echo "✗ (install ffmpeg)"
+	@echo -n "  Provider keys:    " && curl -sf -H "X-API-KEY: $$(grep '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null | cut -d= -f2-)" http://localhost:8000/api/v1/config/providers 2>/dev/null | grep -q '"any_configured":true' && echo "✓" || echo "✗ (add a provider key to .env)"
+	@echo "Done."
+
+# -----------------------------------------------------------------------------
+# Secret generation helper (C3)
+# -----------------------------------------------------------------------------
+.PHONY: generate-secrets
+
+generate-secrets:
+	@echo "Generated secrets (copy to your .env):"
+	@echo ""
+	@echo "JWT_SECRET_KEY=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+	@echo "MCP_JWT_SECRET=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+	@echo "MCP_API_KEY_SALT=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+	@echo "BYOK_ENCRYPTION_KEY=$$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+	@echo "SINGLE_USER_API_KEY=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 # -----------------------------------------------------------------------------
 # Bandit (project-scoped)
