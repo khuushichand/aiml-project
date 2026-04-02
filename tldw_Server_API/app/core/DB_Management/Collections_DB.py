@@ -308,6 +308,7 @@ class UserNotificationRow:
     created_at: str
     read_at: str | None
     dismissed_at: str | None
+    snooze_task_id: str | None = None
     delivery_status: str = "pending"
     delivered_at: str | None = None
 
@@ -716,6 +717,7 @@ class CollectionsDatabase:
                 created_at TEXT NOT NULL,
                 read_at TEXT,
                 dismissed_at TEXT,
+                snooze_task_id TEXT,
                 delivery_status TEXT NOT NULL DEFAULT 'pending',
                 delivered_at TEXT
             );
@@ -967,6 +969,7 @@ class CollectionsDatabase:
                 created_at TEXT NOT NULL,
                 read_at TEXT,
                 dismissed_at TEXT,
+                snooze_task_id TEXT,
                 delivery_status TEXT NOT NULL DEFAULT 'pending',
                 delivered_at TEXT
             );
@@ -1591,6 +1594,17 @@ class CollectionsDatabase:
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: user_notifications.delivered_at already exists or skipped")
+                else:
+                    raise
+        if notif_columns and "snooze_task_id" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN snooze_task_id TEXT",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.snooze_task_id already exists or skipped")
                 else:
                     raise
 
@@ -4408,6 +4422,7 @@ class CollectionsDatabase:
             created_at=str(row.get("created_at") or ""),
             read_at=row.get("read_at"),
             dismissed_at=row.get("dismissed_at"),
+            snooze_task_id=row.get("snooze_task_id"),
             delivery_status=str(row.get("delivery_status") or "pending"),
             delivered_at=row.get("delivered_at"),
         )
@@ -4611,6 +4626,13 @@ class CollectionsDatabase:
             "WHERE id = ? AND user_id = ? AND dismissed_at IS NULL"
         )
         res = self.backend.execute(q, (_utcnow_iso(), notification_id, self.user_id))
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def set_user_notification_snooze_task(self, notification_id: int, task_id: str | None) -> bool:
+        res = self.backend.execute(
+            "UPDATE user_notifications SET snooze_task_id = ? WHERE id = ? AND user_id = ?",
+            (task_id, notification_id, self.user_id),
+        )
         return bool(res.rowcount and res.rowcount > 0)
 
     def delete_user_notifications_by_link(

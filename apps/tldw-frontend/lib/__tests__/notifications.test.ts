@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
+  apiDelete: vi.fn(),
   apiPatch: vi.fn(),
   buildAuthHeaders: vi.fn(),
   hasExplicitAuthHeaders: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@web/lib/api", () => ({
   apiClient: {
     get: (...args: unknown[]) => mocks.apiGet(...args),
     post: (...args: unknown[]) => mocks.apiPost(...args),
+    delete: (...args: unknown[]) => mocks.apiDelete(...args),
     patch: (...args: unknown[]) => mocks.apiPatch(...args)
   },
   buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
@@ -36,6 +38,7 @@ vi.mock("@/services/background-proxy", () => ({
 }))
 
 import {
+  cancelNotificationSnooze,
   dismissNotification,
   getNotificationPreferences,
   getUnreadCount,
@@ -57,6 +60,7 @@ describe("web notifications adapter", () => {
     mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
     mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
     mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
+    mocks.apiDelete.mockResolvedValue({ cancelled: true, deleted_tasks: 1 })
     mocks.apiPatch.mockResolvedValue({
       user_id: "user-1",
       reminder_enabled: true,
@@ -92,6 +96,7 @@ describe("web notifications adapter", () => {
     await getUnreadCount()
     await markNotificationsRead([1])
     await dismissNotification(1)
+    await cancelNotificationSnooze(1)
     await snoozeNotification(1, 15)
     await getNotificationPreferences()
     await updateNotificationPreferences({ reminder_enabled: false })
@@ -107,6 +112,9 @@ describe("web notifications adapter", () => {
       ids: [1]
     }, { withCredentials: false })
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/dismiss", undefined, {
+      withCredentials: false
+    })
+    expect(mocks.apiDelete).toHaveBeenCalledWith("/notifications/1/snooze", {
       withCredentials: false
     })
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/snooze", {

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getUnreadCount: vi.fn(),
   markNotificationsRead: vi.fn(),
   dismissNotification: vi.fn(),
+  cancelNotificationSnooze: vi.fn(),
   snoozeNotification: vi.fn(),
   getNotificationPreferences: vi.fn(),
   updateNotificationPreferences: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('@web/lib/api/notifications', () => ({
   getUnreadCount: (...args: unknown[]) => mocks.getUnreadCount(...args),
   markNotificationsRead: (...args: unknown[]) => mocks.markNotificationsRead(...args),
   dismissNotification: (...args: unknown[]) => mocks.dismissNotification(...args),
+  cancelNotificationSnooze: (...args: unknown[]) => mocks.cancelNotificationSnooze(...args),
   snoozeNotification: (...args: unknown[]) => mocks.snoozeNotification(...args),
   getNotificationPreferences: (...args: unknown[]) => mocks.getNotificationPreferences(...args),
   updateNotificationPreferences: (...args: unknown[]) => mocks.updateNotificationPreferences(...args),
@@ -60,6 +62,7 @@ describe('NotificationsPage', () => {
     mocks.getUnreadCount.mockResolvedValue({ unread_count: 2 });
     mocks.markNotificationsRead.mockResolvedValue({ updated: 1 });
     mocks.dismissNotification.mockResolvedValue({ dismissed: true });
+    mocks.cancelNotificationSnooze.mockResolvedValue({ cancelled: true, deleted_tasks: 1 });
     mocks.snoozeNotification.mockResolvedValue({
       task_id: 'task-123',
       run_at: '2026-02-26T00:15:00+00:00',
@@ -138,6 +141,7 @@ describe('NotificationsPage', () => {
                 created_at: '2026-02-26T00:00:00+00:00',
                 read_at: null,
                 dismissed_at: '2026-02-26T00:05:00+00:00',
+                snooze_until: '2026-02-26T00:20:00+00:00',
               },
             ]
           : [],
@@ -157,6 +161,35 @@ describe('NotificationsPage', () => {
     expect(await screen.findByText('Snoozed item')).toBeInTheDocument();
   });
 
+  it('does not treat dismissed-only archived notifications as snoozed without an active reminder', async () => {
+    mocks.listNotifications.mockImplementation(({ include_archived }: { include_archived?: boolean } = {}) =>
+      Promise.resolve({
+        items: include_archived
+          ? [
+              {
+                id: 301,
+                kind: 'job_failed',
+                title: 'Dismissed only',
+                message: 'Already dealt with.',
+                severity: 'error',
+                created_at: '2026-02-26T00:00:00+00:00',
+                read_at: null,
+                dismissed_at: '2026-02-26T00:05:00+00:00',
+                snooze_until: null,
+              },
+            ]
+          : [],
+        total: 1,
+      })
+    );
+    mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('No notifications yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show snoozed (1)' })).not.toBeInTheDocument();
+  });
+
   it('moves a notification into the snoozed section immediately after snoozing', async () => {
     const user = userEvent.setup();
 
@@ -172,6 +205,41 @@ describe('NotificationsPage', () => {
     expect(screen.queryByText('Job failed')).not.toBeInTheDocument();
     expect(screen.getByText('Unread: 1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show snoozed (1)' })).toBeInTheDocument();
+  });
+
+  it('cancels a snoozed reminder from the snoozed view', async () => {
+    mocks.listNotifications.mockImplementation(({ include_archived }: { include_archived?: boolean } = {}) =>
+      Promise.resolve({
+        items: include_archived
+          ? [
+              {
+                id: 401,
+                kind: 'reminder_due',
+                title: 'Cancel me',
+                message: 'This should go away.',
+                severity: 'info',
+                created_at: '2026-02-26T00:00:00+00:00',
+                read_at: null,
+                dismissed_at: '2026-02-26T00:05:00+00:00',
+                snooze_until: '2026-02-26T00:20:00+00:00',
+              },
+            ]
+          : [],
+        total: 1,
+      })
+    );
+    mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
+    const user = userEvent.setup();
+
+    render(<NotificationsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Show snoozed (1)' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel snooze' }));
+
+    await waitFor(() => {
+      expect(mocks.cancelNotificationSnooze).toHaveBeenCalledWith(401);
+    });
+    expect(screen.queryByText('Cancel me')).not.toBeInTheDocument();
   });
 
   it('shows an unavailable message when preferences cannot be loaded', async () => {

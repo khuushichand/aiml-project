@@ -162,3 +162,130 @@ def test_notification_snooze_reconciles_scheduler(notifications_app, monkeypatch
     assert task.link_id == source.link_id
     assert task.run_at is not None
     assert reconcile_calls == [(task_id, 881)]
+
+
+def test_notification_snooze_persists_archived_state_and_supports_cancel(notifications_app, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import notifications as notifications_endpoint
+
+    cdb = CollectionsDatabase.for_user(user_id=881)
+    source = cdb.create_user_notification(
+        kind="reminder_due",
+        title="Follow up later",
+        message="Bring this back after lunch",
+        severity="info",
+        link_type="note",
+        link_id="note-77",
+        link_url="/notes/note-77",
+    )
+
+    reconcile_calls: list[tuple[str, int]] = []
+    unschedule_calls: list[str] = []
+
+    class _FakeScheduler:
+        async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+            reconcile_calls.append((task_id, user_id))
+
+        async def unschedule_task(self, task_id: str) -> None:
+            unschedule_calls.append(task_id)
+
+    monkeypatch.setattr(notifications_endpoint, "get_reminders_scheduler", lambda: _FakeScheduler(), raising=False)
+
+    with TestClient(notifications_app) as client:
+        snooze_response = client.post(f"/api/v1/notifications/{source.id}/snooze", json={"minutes": 15})
+        assert snooze_response.status_code == 200, snooze_response.text
+        snooze_payload = snooze_response.json()
+        task_id = snooze_payload["task_id"]
+
+        active_response = client.get("/api/v1/notifications")
+        assert active_response.status_code == 200, active_response.text
+        active_ids = {item["id"] for item in active_response.json()["items"]}
+        assert source.id not in active_ids
+
+        archived_response = client.get("/api/v1/notifications?include_archived=true")
+        assert archived_response.status_code == 200, archived_response.text
+        archived_item = next(item for item in archived_response.json()["items"] if item["id"] == source.id)
+        assert archived_item["dismissed_at"] is not None
+        assert archived_item["snooze_until"] == snooze_payload["run_at"]
+
+        cancel_response = client.delete(f"/api/v1/notifications/{source.id}/snooze")
+        assert cancel_response.status_code == 200, cancel_response.text
+        assert cancel_response.json() == {"cancelled": True, "deleted_tasks": 1}
+
+        archived_after_cancel = client.get("/api/v1/notifications?include_archived=true")
+        assert archived_after_cancel.status_code == 200, archived_after_cancel.text
+        archived_item_after_cancel = next(
+            item for item in archived_after_cancel.json()["items"] if item["id"] == source.id
+        )
+        assert archived_item_after_cancel["snooze_until"] is None
+
+    with pytest.raises(KeyError):
+        cdb.get_reminder_task(task_id)
+
+    assert reconcile_calls == [(task_id, 881)]
+    assert unschedule_calls == [task_id]
+
+
+def test_duplicate_notifications_keep_distinct_snooze_tasks(notifications_app, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import notifications as notifications_endpoint
+
+    cdb = CollectionsDatabase.for_user(user_id=881)
+    first = cdb.create_user_notification(
+        kind="reminder_due",
+        title="Duplicate reminder",
+        message="Check the same note later",
+        severity="info",
+        link_type="note",
+        link_id="note-88",
+        link_url="/notes/note-88",
+    )
+    second = cdb.create_user_notification(
+        kind="reminder_due",
+        title="Duplicate reminder",
+        message="Check the same note later",
+        severity="info",
+        link_type="note",
+        link_id="note-88",
+        link_url="/notes/note-88",
+    )
+
+    unschedule_calls: list[str] = []
+
+    class _FakeScheduler:
+        async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+            return None
+
+        async def unschedule_task(self, task_id: str) -> None:
+            unschedule_calls.append(task_id)
+
+    monkeypatch.setattr(notifications_endpoint, "get_reminders_scheduler", lambda: _FakeScheduler(), raising=False)
+
+    with TestClient(notifications_app) as client:
+        first_snooze = client.post(f"/api/v1/notifications/{first.id}/snooze", json={"minutes": 15})
+        assert first_snooze.status_code == 200, first_snooze.text
+        first_payload = first_snooze.json()
+
+        second_snooze = client.post(f"/api/v1/notifications/{second.id}/snooze", json={"minutes": 45})
+        assert second_snooze.status_code == 200, second_snooze.text
+        second_payload = second_snooze.json()
+
+        archived = client.get("/api/v1/notifications?include_archived=true")
+        assert archived.status_code == 200, archived.text
+        archived_by_id = {item["id"]: item for item in archived.json()["items"]}
+        assert archived_by_id[first.id]["snooze_until"] == first_payload["run_at"]
+        assert archived_by_id[second.id]["snooze_until"] == second_payload["run_at"]
+
+        cancel_first = client.delete(f"/api/v1/notifications/{first.id}/snooze")
+        assert cancel_first.status_code == 200, cancel_first.text
+        assert cancel_first.json() == {"cancelled": True, "deleted_tasks": 1}
+
+        archived_after_cancel = client.get("/api/v1/notifications?include_archived=true")
+        assert archived_after_cancel.status_code == 200, archived_after_cancel.text
+        archived_after_cancel_by_id = {item["id"]: item for item in archived_after_cancel.json()["items"]}
+        assert archived_after_cancel_by_id[first.id]["snooze_until"] is None
+        assert archived_after_cancel_by_id[second.id]["snooze_until"] == second_payload["run_at"]
+
+    with pytest.raises(KeyError):
+        cdb.get_reminder_task(first_payload["task_id"])
+
+    assert cdb.get_reminder_task(second_payload["task_id"]).run_at == second_payload["run_at"]
+    assert unschedule_calls == [first_payload["task_id"]]

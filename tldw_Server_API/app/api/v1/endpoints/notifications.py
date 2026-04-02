@@ -14,6 +14,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.api.v1.schemas.reminders_schemas import (
+    NotificationCancelSnoozeResponse,
     NotificationDismissResponse,
     NotificationPreferencesResponse,
     NotificationPreferencesUpdateRequest,
@@ -60,7 +61,22 @@ async def _reconcile_snooze_task_best_effort(*, task_id: str, user_id: int) -> N
         )
 
 
-def _notification_to_response(row: UserNotificationRow) -> NotificationResponse:
+async def _unschedule_snooze_task_best_effort(*, task_id: str) -> None:
+    try:
+        await get_reminders_scheduler().unschedule_task(task_id=task_id)
+    except _NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "notifications snooze unschedule_task failed task_id={} error={}",
+            task_id,
+            exc,
+        )
+
+
+def _notification_to_response(
+    row: UserNotificationRow,
+    *,
+    snooze_until: str | None = None,
+) -> NotificationResponse:
     return NotificationResponse(
         id=row.id,
         user_id=row.user_id,
@@ -82,6 +98,7 @@ def _notification_to_response(row: UserNotificationRow) -> NotificationResponse:
         created_at=row.created_at,
         read_at=row.read_at,
         dismissed_at=row.dismissed_at,
+        snooze_until=snooze_until,
     )
 
 
@@ -152,7 +169,20 @@ async def list_notifications(
     """List notifications for the authenticated user."""
 
     rows = db.list_user_notifications(include_archived=include_archived, limit=limit, offset=offset)
-    return NotificationsListResponse(items=[_notification_to_response(row) for row in rows], total=len(rows))
+    snooze_matches = {}
+    if include_archived and rows:
+        service = RemindersService(user_id=db.user_id, collections_db=db)
+        snooze_matches = service.list_notification_snoozes(notifications=rows)
+    return NotificationsListResponse(
+        items=[
+            _notification_to_response(
+                row,
+                snooze_until=snooze_matches.get(row.id).run_at if row.id in snooze_matches else None,
+            )
+            for row in rows
+        ],
+        total=len(rows),
+    )
 
 
 @router.get(
@@ -225,6 +255,33 @@ async def snooze_notification(
     if not task.run_at:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="snooze_task_invalid")
     return NotificationSnoozeResponse(task_id=task.id, run_at=task.run_at)
+
+
+@router.delete(
+    "/{notification_id}/snooze",
+    response_model=NotificationCancelSnoozeResponse,
+    dependencies=[Depends(rbac_rate_limit("notifications.control"))],
+)
+async def cancel_notification_snooze(
+    notification_id: int = Path(..., ge=1),
+    db: CollectionsDatabase = Depends(get_collections_db_for_user),
+    _principal=Depends(require_permissions(NOTIFICATIONS_CONTROL)),  # noqa: B008
+) -> NotificationCancelSnoozeResponse:
+    """Cancel any active snooze reminder derived from an existing notification."""
+
+    service = RemindersService(user_id=db.user_id, collections_db=db)
+    try:
+        deleted_task_ids = service.cancel_notification_snooze(notification_id=notification_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="notification_not_found") from exc
+
+    for task_id in deleted_task_ids:
+        await _unschedule_snooze_task_best_effort(task_id=task_id)
+
+    return NotificationCancelSnoozeResponse(
+        cancelled=bool(deleted_task_ids),
+        deleted_tasks=len(deleted_task_ids),
+    )
 
 
 @router.get(

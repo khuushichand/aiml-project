@@ -12,6 +12,7 @@ vi.mock("@/services/background-proxy", () => ({
 
 import {
   buildNotificationsQuery,
+  cancelNotificationSnooze,
   createNotificationStreamSubscription,
   dismissNotification,
   getUnreadCount,
@@ -170,16 +171,18 @@ describe("notifications service", () => {
     }
   })
 
-  it("dismisses and snoozes notifications through shared UI services", async () => {
+  it("dismisses, cancels snoozes, and snoozes notifications through shared UI services", async () => {
     mocks.bgRequest.mockResolvedValueOnce({ dismissed: true })
+    mocks.bgRequest.mockResolvedValueOnce({ cancelled: true, deleted_tasks: 1 })
     mocks.bgRequest.mockResolvedValueOnce({
       task_id: "task-123",
       run_at: "2026-03-20T00:15:00Z"
     })
 
     await dismissNotification(1)
+    await cancelNotificationSnooze(1)
     await snoozeNotification(1, 15)
 
-    expect(mocks.bgRequest).toHaveBeenCalledTimes(2)
+    expect(mocks.bgRequest).toHaveBeenCalledTimes(3)
   })
 })

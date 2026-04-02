@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/router';
 import { useToast } from '@web/components/ui/ToastProvider';
 import {
+  cancelNotificationSnooze,
   dismissNotification,
   getUnreadCount,
   getNotificationPreferences,
@@ -20,9 +21,8 @@ const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_SNOOZE_MINUTES = 15;
 const NOTIFICATIONS_FETCH_LIMIT = 100;
 
-function deriveSnoozedItems(activeItems: NotificationItem[], archivedItems: NotificationItem[]): NotificationItem[] {
-  const activeIds = new Set(activeItems.map((item) => item.id));
-  return archivedItems.filter((item) => item.dismissed_at && !activeIds.has(item.id));
+function extractSnoozedItems(archivedItems: NotificationItem[]): NotificationItem[] {
+  return archivedItems.filter((item) => Boolean(item.snooze_until));
 }
 
 function resolveRouteForLinkType(linkType: string | null | undefined): string | undefined {
@@ -74,7 +74,7 @@ export default function NotificationsPage() {
         getUnreadCount(),
       ]);
       setItems(list.items);
-      setSnoozedItems(deriveSnoozedItems(list.items, archived.items));
+      setSnoozedItems(extractSnoozedItems(archived.items));
       setUnreadCount(unread.unread_count);
       const maxSeen = list.items.reduce((maxId, item) => Math.max(maxId, item.id), cursorRef.current);
       cursorRef.current = maxSeen;
@@ -123,6 +123,21 @@ export default function NotificationsPage() {
     },
     [items, show]
   );
+
+  const handleCancelSnooze = useCallback(async (notificationId: number) => {
+    try {
+      await cancelNotificationSnooze(notificationId);
+      setSnoozedItems((previous) => previous.filter((item) => item.id !== notificationId));
+      show({
+        title: 'Snooze cancelled',
+        description: 'This reminder will not return.',
+        variant: 'success',
+      });
+    } catch (cancelError) {
+      const message = cancelError instanceof Error ? cancelError.message : 'Failed to cancel snooze';
+      show({ title: 'Cancel snooze failed', description: message, variant: 'danger' });
+    }
+  }, [show]);
 
   const loadPrefs = useCallback(async () => {
     setPrefsLoading(true);
@@ -403,6 +418,15 @@ export default function NotificationsPage() {
                           <div>Snoozed {item.dismissed_at ? formatRelativeTime(item.dismissed_at) : 'recently'}</div>
                           {item.snooze_until ? <div>Returns {formatRelativeTime(item.snooze_until)}</div> : null}
                         </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-muted"
+                          onClick={() => void handleCancelSnooze(item.id)}
+                        >
+                          Cancel snooze
+                        </button>
                       </div>
                     </li>
                   ))}

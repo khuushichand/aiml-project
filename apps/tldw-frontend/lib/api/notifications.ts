@@ -10,6 +10,7 @@ import {
   createNotificationStreamSubscription as createNotificationStreamSubscriptionShared
 } from "@/services/notifications"
 import type {
+  NotificationCancelSnoozeResponse,
   NotificationItem,
   NotificationSeverity,
   NotificationSnoozeResponse,
@@ -20,6 +21,7 @@ import type {
 } from "@/services/notifications"
 
 export type {
+  NotificationCancelSnoozeResponse,
   NotificationItem,
   NotificationSeverity,
   NotificationSnoozeResponse,
@@ -124,6 +126,17 @@ export async function dismissNotification(notificationId: number): Promise<{ dis
   return apiClient.post<{ dismissed: boolean }>(
     `/notifications/${notificationId}/dismiss`,
     undefined,
+    {
+      withCredentials: !hasExplicitAuthHeaders()
+    }
+  )
+}
+
+export async function cancelNotificationSnooze(
+  notificationId: number
+): Promise<NotificationCancelSnoozeResponse> {
+  return apiClient.delete<NotificationCancelSnoozeResponse>(
+    `/notifications/${notificationId}/snooze`,
     {
       withCredentials: !hasExplicitAuthHeaders()
     }

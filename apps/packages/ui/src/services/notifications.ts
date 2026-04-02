@@ -37,6 +37,11 @@ export type NotificationSnoozeResponse = {
   run_at: string
 }
 
+export type NotificationCancelSnoozeResponse = {
+  cancelled: boolean
+  deleted_tasks: number
+}
+
 export type NotificationStreamEvent = {
   event: string
   id?: number
@@ -266,6 +271,15 @@ export async function dismissNotification(notificationId: number): Promise<{ dis
     path: `/api/v1/notifications/${notificationId}/dismiss` as any,
     method: "POST",
     headers: { "Content-Type": "application/json" }
+  })
+}
+
+export async function cancelNotificationSnooze(
+  notificationId: number
+): Promise<NotificationCancelSnoozeResponse> {
+  return bgRequest<NotificationCancelSnoozeResponse>({
+    path: `/api/v1/notifications/${notificationId}/snooze` as any,
+    method: "DELETE"
   })
 }
 
