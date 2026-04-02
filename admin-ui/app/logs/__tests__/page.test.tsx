@@ -17,8 +17,9 @@ vi.mock('@/components/ResponsiveLayout', () => ({
   ),
 }));
 
+let mockSearchParams = new URLSearchParams();
 vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => mockSearchParams,
 }));
 
 vi.mock('@/lib/use-url-state', async () => {
@@ -84,6 +85,7 @@ const mockLogsResponse = {
 };
 
 beforeEach(() => {
+  mockSearchParams = new URLSearchParams();
   apiMock.getSystemLogs.mockResolvedValue(mockLogsResponse);
 });
 

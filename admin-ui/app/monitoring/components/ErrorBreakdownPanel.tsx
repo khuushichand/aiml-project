@@ -38,7 +38,9 @@ const getStatusBadgeVariant = (statusCode: number): 'destructive' | 'secondary' 
   return 'default';
 };
 
-export default function ErrorBreakdownPanel() {
+const DEFAULT_HOURS = '24';
+
+export default function ErrorBreakdownPanel({ hours = DEFAULT_HOURS }: { hours?: string }) {
   const [data, setData] = useState<ErrorBreakdownData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -47,7 +49,7 @@ export default function ErrorBreakdownPanel() {
     setLoading(true);
     setError('');
     try {
-      const result = await api.getErrorBreakdown({ hours: '24' });
+      const result = await api.getErrorBreakdown({ hours });
       const record = result && typeof result === 'object' ? (result as Record<string, unknown>) : {};
       setData({
         items: Array.isArray(record.items) ? (record.items as ErrorBreakdownItem[]) : [],
@@ -59,7 +61,7 @@ export default function ErrorBreakdownPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hours]);
 
   useEffect(() => {
     void loadData();

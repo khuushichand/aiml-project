@@ -303,6 +303,37 @@ describe('ByokDashboardPage', () => {
     }, { timeout: 5000 });
   }, 10000);
 
+  it('deletes a shared key through privileged action dialog', async () => {
+    promptPrivilegedActionMock.mockResolvedValue({ reason: 'test' });
+    apiMock.deleteSharedProviderKey.mockResolvedValue({});
+    apiMock.getSharedProviderKeys.mockResolvedValue({
+      items: [
+        {
+          scope_type: 'global',
+          scope_id: '*',
+          provider: 'openai',
+          key_hint: 'sk-abc...xyz',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+
+    render(<ByokDashboardPage />);
+
+    const deleteButton = await screen.findByRole('button', { name: /delete/i });
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      expect(promptPrivilegedActionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Delete Shared Key' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(apiMock.deleteSharedProviderKey).toHaveBeenCalledWith('global', '*', 'openai');
+    });
+  });
+
   it('does not create fake validation history when create fails', async () => {
     apiMock.getByokValidationRuns.mockResolvedValue({
       items: [],

@@ -152,4 +152,36 @@ describe('TeamsPage edit and delete flows', () => {
       expect(apiMock.deleteTeam).toHaveBeenCalledWith('10', '5');
     });
   });
+
+  it('bulk delete uses privileged action dialog and passes real org_id', async () => {
+    const user = userEvent.setup();
+    render(<TeamsPage />);
+
+    // Wait for teams to load
+    await screen.findByText('Team One');
+
+    // Select the team checkbox (first checkbox in the table body row)
+    const checkboxes = screen.getAllByRole('checkbox');
+    const teamCheckbox = checkboxes.find(
+      (cb) => cb.closest('tr')?.textContent?.includes('Team One'),
+    );
+    expect(teamCheckbox).toBeDefined();
+    await user.click(teamCheckbox!);
+
+    // Bulk actions bar should appear — find the Delete button within it
+    const deleteButtons = await screen.findAllByRole('button', { name: /delete/i });
+    const bulkDeleteBtn = deleteButtons.find((btn) => btn.textContent?.match(/delete/i) && !btn.closest('tr'));
+    expect(bulkDeleteBtn).toBeDefined();
+    await user.click(bulkDeleteBtn!);
+
+    await waitFor(() => {
+      expect(privilegedActionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Delete selected teams' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(apiMock.deleteTeam).toHaveBeenCalledWith('10', '5');
+    });
+  });
 });

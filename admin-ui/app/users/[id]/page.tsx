@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -276,6 +276,15 @@ export default function UserDetailPage() {
   const [newOverrideGrant, setNewOverrideGrant] = useState(true);
   const [permSearchQuery, setPermSearchQuery] = useState('');
   const [permSourceFilter, setPermSourceFilter] = useState<'all' | EffectivePermissionSource>('all');
+
+  const filteredPerms = useMemo(() =>
+    effectivePermissions.filter((perm) => {
+      const matchesSearch = !permSearchQuery || perm.name.toLowerCase().includes(permSearchQuery.toLowerCase());
+      const matchesSource = permSourceFilter === 'all' || perm.source === permSourceFilter;
+      return matchesSearch && matchesSource;
+    }),
+    [effectivePermissions, permSearchQuery, permSourceFilter],
+  );
 
   const applyRateLimits = useCallback((limits?: UserRateLimits | null) => {
     if (!limits) {
@@ -1011,13 +1020,7 @@ export default function UserDetailPage() {
                   )}
 
                   {/* Effective Permissions */}
-                  {effectivePermissions.length > 0 && (() => {
-                    const filteredPerms = effectivePermissions.filter((perm) => {
-                      const matchesSearch = !permSearchQuery || perm.name.toLowerCase().includes(permSearchQuery.toLowerCase());
-                      const matchesSource = permSourceFilter === 'all' || perm.source === permSourceFilter;
-                      return matchesSearch && matchesSource;
-                    });
-                    return (
+                  {effectivePermissions.length > 0 && (
                     <details className="text-sm">
                       <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                         View effective permissions ({effectivePermissions.length})
@@ -1070,8 +1073,7 @@ export default function UserDetailPage() {
                         </div>
                       </div>
                     </details>
-                    );
-                  })()}
+                  )}
                 </CardContent>
               </Card>
 

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, within, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import WebhooksPage from '../page';
 import { api } from '@/lib/api-client';
@@ -245,11 +245,17 @@ describe('WebhooksPage', () => {
     // Fill in the create form
     await user.type(screen.getByLabelText('Endpoint URL'), 'https://new.com/hook');
 
-    // Select at least one event by clicking the native checkbox inside the dialog
+    // Select at least one event inside the dialog
     const dialog = screen.getByRole('dialog');
-    const eventCheckboxes = dialog.querySelectorAll('input[type="checkbox"]');
-    expect(eventCheckboxes.length).toBeGreaterThan(0);
-    await user.click(eventCheckboxes[0]);
+    const eventCheckboxes = within(dialog).queryAllByRole('checkbox');
+    if (eventCheckboxes.length > 0) {
+      await user.click(eventCheckboxes[0]);
+    } else {
+      // Fall back to native checkbox selector if ARIA roles aren't set
+      const nativeCheckboxes = dialog.querySelectorAll('input[type="checkbox"]');
+      expect(nativeCheckboxes.length).toBeGreaterThan(0);
+      await user.click(nativeCheckboxes[0] as HTMLElement);
+    }
 
     await user.click(screen.getByRole('button', { name: /create webhook/i }));
 

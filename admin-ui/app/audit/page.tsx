@@ -83,6 +83,8 @@ const ADMIN_ACTIONS_FILTER_PREFIXES = [
  * Client-side predicate to check whether an audit log entry looks like an
  * admin-originated action, based on well-known action name prefixes.
  */
+const ADMIN_ACTIONS_GLOB = ADMIN_ACTIONS_FILTER_PREFIXES.map((p) => `${p}*`).join(',');
+
 const isAdminAction = (action: string): boolean => {
   const lower = action.toLowerCase();
   return ADMIN_ACTIONS_FILTER_PREFIXES.some((prefix) => lower.startsWith(prefix));
@@ -1060,12 +1062,12 @@ function AuditPageContent() {
                     Clear Filters
                   </Button>
                   <Button
-                    variant={filters.action === 'admin*' ? 'default' : 'outline'}
+                    variant={filters.action === ADMIN_ACTIONS_GLOB ? 'default' : 'outline'}
                     onClick={() => {
-                      if (filters.action === 'admin*') {
+                      if (filters.action === ADMIN_ACTIONS_GLOB) {
                         handleFilterChange({ action: '' });
                       } else {
-                        handleFilterChange({ action: 'admin*' });
+                        handleFilterChange({ action: ADMIN_ACTIONS_GLOB });
                       }
                     }}
                     data-testid="admin-actions-filter"

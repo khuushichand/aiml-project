@@ -327,6 +327,11 @@ describe('DependenciesPage', () => {
 
     render(<DependenciesPage />);
 
+    // Verify the API was actually called (not just rendering initial empty state)
+    await waitFor(() => {
+      expect(apiMock.getSystemDependencies).toHaveBeenCalledTimes(1);
+    });
+
     await waitFor(() => {
       expect(screen.getByText(/no system dependency data available/i)).toBeInTheDocument();
     });

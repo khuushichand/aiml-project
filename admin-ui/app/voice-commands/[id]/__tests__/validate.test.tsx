@@ -83,11 +83,16 @@ const MOCK_COMMAND = {
 
 /**
  * Create a pre-resolved promise that React.use() can consume synchronously.
- * React caches the resolved status on the promise object itself via status/value.
+ *
+ * NOTE: React's `use()` hook inspects `.status` and `.value` on promise
+ * objects to avoid suspending when the result is already available.  This
+ * is an *internal* implementation detail (not public API) but is the only
+ * reliable way to test components that call `use()` without wrapping every
+ * render in a Suspense boundary.  If a future React version changes this
+ * mechanism, this helper will need to be updated accordingly.
  */
 function resolvedPromise<T>(value: T): Promise<T> {
   const p = Promise.resolve(value);
-  // React use() reads these fields synchronously to avoid suspending
   (p as unknown as Record<string, unknown>).status = 'fulfilled';
   (p as unknown as Record<string, unknown>).value = value;
   return p;
