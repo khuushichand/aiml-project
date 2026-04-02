@@ -250,6 +250,11 @@ test.describe("Stage 7 audio regression gate", () => {
 
   test("speech keeps mic-only input source options", async ({ page }) => {
     await seedAuth(page)
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("speechPlaygroundMode", "roundtrip")
+      } catch {}
+    })
     await page.goto("/speech", { waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
     await waitForAppShell(page, LOAD_TIMEOUT)
 

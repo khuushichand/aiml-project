@@ -322,19 +322,22 @@ test.describe("Onboarding Ingestion-First Journey", () => {
 
       await openOnboardingSuccessScreen(authedPage)
 
-      await authedPage
-        .getByTestId("onboarding-success-ingest")
-        .evaluate((el: HTMLElement) => el.click())
+      await clickOnboardingCtaAndExpectRoute(
+        authedPage,
+        "onboarding-success-ingest",
+        /\/media(?:[/?#].*)?$/
+      )
+      await waitForConnection(authedPage)
       const quickIngestDialog = authedPage
         .getByRole("dialog", { name: /quick ingest/i })
         .first()
-      await expect(quickIngestDialog).toBeVisible({ timeout: 15_000 })
+      await expect(quickIngestDialog).toBeVisible({ timeout: 20_000 })
       await captureStep(
         authedPage,
         evidenceRows,
         viewport.label,
         "05-quick-ingest-modal",
-        "Quick Ingest modal reachable from onboarding ingest CTA."
+        "Onboarding ingest CTA navigates to Media and opens Quick Ingest there."
       )
 
       const quickIngestClose = quickIngestDialog
@@ -347,7 +350,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await expect(authedPage).toHaveURL(/\/(?:[/?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/media(?:[/?#].*)?$/, {
         timeout: 20_000,
       })
       await openOnboardingSuccessScreen(authedPage)
