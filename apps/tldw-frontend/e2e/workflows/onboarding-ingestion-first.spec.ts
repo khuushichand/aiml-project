@@ -163,6 +163,12 @@ async function openOnboardingSuccessScreen(
 
   const needsConnect = await connect.isVisible().catch(() => false)
   if (needsConnect) {
+    const splash = page.getByRole("dialog", { name: "Splash screen" }).first()
+    if (await splash.isVisible().catch(() => false)) {
+      await splash.click({ force: true })
+      await splash.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
+    }
+    await dismissConnectionModals(page)
     await connect.click()
   }
 

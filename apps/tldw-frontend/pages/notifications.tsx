@@ -18,6 +18,7 @@ import { formatRelativeTime } from '@web/lib/utils';
 
 const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_SNOOZE_MINUTES = 15;
+type PreferenceKey = 'reminder_enabled' | 'job_completed_enabled' | 'job_failed_enabled';
 
 function resolveRouteForLinkType(linkType: string | null | undefined): string | undefined {
   if (!linkType) return undefined
@@ -56,6 +57,8 @@ export default function NotificationsPage() {
   const [showPrefs, setShowPrefs] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [prefsLoading, setPrefsLoading] = useState(false);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
+  const [prefsSavingKey, setPrefsSavingKey] = useState<PreferenceKey | null>(null);
 
   const refreshInbox = useCallback(async () => {
     try {
@@ -98,29 +101,41 @@ export default function NotificationsPage() {
   );
 
   const loadPrefs = useCallback(async () => {
+    if (prefsLoading) return;
     setPrefsLoading(true);
+    setPrefsError(null);
     try {
       const p = await getNotificationPreferences();
       setPrefs(p);
     } catch {
-      // Preferences may not be available (e.g., single-user mode without auth)
+      setPrefs(null);
+      setPrefsError('Notification preferences are currently unavailable.');
     } finally {
       setPrefsLoading(false);
     }
-  }, []);
+  }, [prefsLoading]);
 
   const togglePref = useCallback(
-    async (key: 'reminder_enabled' | 'job_completed_enabled' | 'job_failed_enabled') => {
-      if (!prefs) return;
-      const updated = { [key]: !prefs[key] };
+    async (key: PreferenceKey) => {
+      if (!prefs || prefsSavingKey) return;
+      const nextValue = !prefs[key];
+      const updated =
+        key === 'reminder_enabled'
+          ? { reminder_enabled: nextValue }
+          : key === 'job_completed_enabled'
+            ? { job_completed_enabled: nextValue }
+            : { job_failed_enabled: nextValue };
+      setPrefsSavingKey(key);
       try {
         const result = await updateNotificationPreferences(updated);
         setPrefs(result);
       } catch {
         show({ title: 'Failed to update preference', variant: 'danger' });
+      } finally {
+        setPrefsSavingKey(null);
       }
     },
-    [prefs, show]
+    [prefs, prefsSavingKey, show]
   );
 
   const applyIncomingNotification = useCallback(
@@ -234,7 +249,13 @@ export default function NotificationsPage() {
               <button
                 type="button"
                 className="rounded border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
-                onClick={() => { setShowPrefs(!showPrefs); if (!prefs) void loadPrefs(); }}
+                onClick={() => {
+                  const nextShowPrefs = !showPrefs;
+                  setShowPrefs(nextShowPrefs);
+                  if (nextShowPrefs && !prefs && !prefsLoading) {
+                    void loadPrefs();
+                  }
+                }}
                 aria-expanded={showPrefs}
               >
                 {showPrefs ? 'Hide Preferences' : 'Preferences'}
@@ -245,8 +266,23 @@ export default function NotificationsPage() {
           {showPrefs && (
             <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
               <h3 className="mb-3 text-sm font-semibold">Notification Preferences</h3>
-              {prefsLoading || !prefs ? (
+              {prefsLoading ? (
                 <p className="text-sm text-muted-foreground">Loading preferences...</p>
+              ) : prefsError ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">{prefsError}</p>
+                  <button
+                    type="button"
+                    className="rounded border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                    onClick={() => void loadPrefs()}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : !prefs ? (
+                <p className="text-sm text-muted-foreground">
+                  Notification preferences are currently unavailable.
+                </p>
               ) : (
                 <div className="space-y-3">
                   {([
@@ -258,8 +294,9 @@ export default function NotificationsPage() {
                       <input
                         type="checkbox"
                         checked={prefs[key]}
+                        disabled={prefsSavingKey !== null}
                         onChange={() => void togglePref(key)}
-                        className="mt-1 h-4 w-4 rounded border-border"
+                        className="mt-1 h-4 w-4 rounded border-border disabled:cursor-not-allowed disabled:opacity-50"
                       />
                       <div>
                         <span className="text-sm font-medium">{label}</span>

@@ -14,11 +14,13 @@ import {
   buildNotificationsQuery,
   createNotificationStreamSubscription,
   dismissNotification,
+  getNotificationPreferences,
   getUnreadCount,
   listNotifications,
   markNotificationsRead,
   parseNotificationStreamEvent,
-  snoozeNotification
+  snoozeNotification,
+  updateNotificationPreferences
 } from "../notifications"
 
 describe("notifications service", () => {
@@ -47,6 +49,39 @@ describe("notifications service", () => {
     mocks.bgRequest.mockResolvedValue({ unread_count: 7 })
 
     await expect(getUnreadCount()).resolves.toEqual({ unread_count: 7 })
+  })
+
+  it("gets and updates notification preferences through shared UI services", async () => {
+    const initialPreferences = {
+      user_id: "user-1",
+      reminder_enabled: true,
+      job_completed_enabled: true,
+      job_failed_enabled: true,
+      updated_at: "2026-04-02T00:00:00Z"
+    }
+    const updatedPreferences = {
+      ...initialPreferences,
+      job_completed_enabled: false,
+      updated_at: "2026-04-02T00:01:00Z"
+    }
+    mocks.bgRequest.mockResolvedValueOnce(initialPreferences)
+    mocks.bgRequest.mockResolvedValueOnce(updatedPreferences)
+
+    await expect(getNotificationPreferences()).resolves.toEqual(initialPreferences)
+    await expect(
+      updateNotificationPreferences({ job_completed_enabled: false })
+    ).resolves.toEqual(updatedPreferences)
+
+    expect(mocks.bgRequest).toHaveBeenNthCalledWith(1, {
+      path: "/api/v1/notifications/preferences",
+      method: "GET"
+    })
+    expect(mocks.bgRequest).toHaveBeenNthCalledWith(2, {
+      path: "/api/v1/notifications/preferences",
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: { job_completed_enabled: false }
+    })
   })
 
   it("shares notification query serialization for parity-sensitive paths", () => {

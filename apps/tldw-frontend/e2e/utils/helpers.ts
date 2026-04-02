@@ -370,10 +370,10 @@ export function getAntdSelectTrigger(
     ariaLabel: string | RegExp;
   }
 ): Locator {
-  const combobox = page.getByRole('combobox', { name: options.ariaLabel }).first();
+  const labeledControl = page.getByLabel(options.ariaLabel).first();
   return page
     .locator('.ant-select')
-    .filter({ has: combobox })
+    .filter({ has: labeledControl })
     .locator('.ant-select-selector')
     .first();
 }
