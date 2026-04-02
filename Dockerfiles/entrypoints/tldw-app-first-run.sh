@@ -123,8 +123,10 @@ case "$*" in
     ;;
 esac
 
-if [ "$AUTH_MODE" = "single_user" ] && [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [ "$should_run_auth_init" = "1" ]; then
+if [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [ "$should_run_auth_init" = "1" ]; then
   mkdir -p "$AUTH_MARKER_DIR"
+
+  # --- Standard AuthNZ initialization (single_user and multi_user) ---
   if [ ! -f "$AUTH_MARKER_FILE" ]; then
     echo "[entrypoint] Running first-use auth initialization..."
     # Note: `if !` suppresses set -e for this command; the explicit exit 1
@@ -135,6 +137,49 @@ if [ "$AUTH_MODE" = "single_user" ] && [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [
     fi
     touch "$AUTH_MARKER_FILE"
     echo "[entrypoint] Auth initialization complete."
+  fi
+
+  # --- Multi-user admin bootstrap via environment variables ---
+  if [ "$AUTH_MODE" = "multi_user" ]; then
+    if [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+      echo "[first-run] Creating initial admin user: $ADMIN_USERNAME"
+      # Idempotent: exits 0 if user already exists
+      python -m tldw_Server_API.app.core.AuthNZ.create_admin \
+        --username "$ADMIN_USERNAME" \
+        --password "$ADMIN_PASSWORD" \
+        ${ADMIN_EMAIL:+--email "$ADMIN_EMAIL"} \
+        --non-interactive 2>&1 || {
+          echo "[first-run] WARNING: Admin user creation returned non-zero (see above)." >&2
+        }
+    else
+      # Check if any users exist; warn if not
+      has_users=$(python -c "
+import asyncio, sys
+async def check():
+    try:
+        from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
+        db = await get_users_db()
+        users = await db.list_users(limit=1)
+        return len(users) > 0
+    except Exception:
+        return False
+sys.stdout.write('1' if asyncio.run(check()) else '0')
+" 2>/dev/null || echo "0")
+
+      if [ "$has_users" = "0" ]; then
+        echo ""
+        echo "======================================================================"
+        echo "  WARNING: Multi-user mode with no admin user configured!"
+        echo ""
+        echo "  Set ADMIN_USERNAME and ADMIN_PASSWORD env vars to create"
+        echo "  the first admin user automatically, or run:"
+        echo ""
+        echo "  docker compose exec app python -m \\"
+        echo "    tldw_Server_API.app.core.AuthNZ.initialize"
+        echo "======================================================================"
+        echo ""
+      fi
+    fi
   fi
 fi
 
