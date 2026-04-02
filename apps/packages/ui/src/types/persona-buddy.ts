@@ -20,6 +20,7 @@ export interface PersonaBuddyRenderContext {
   surface_active: boolean
   active_persona_id: string | null
   position_bucket: PersonaBuddyPositionBucket
+  buddy_summary?: PersonaBuddySummary | null
   persona_source:
     | "route-local"
     | "route-bootstrap"

@@ -391,13 +391,19 @@ export const CharacterSelect: React.FC<Props> = ({
       surface_active: true,
       active_persona_id: personaId,
       position_bucket: "sidepanel-desktop",
+      buddy_summary: selectedPersona?.buddy_summary ?? null,
       persona_source: selectedPersonaSource
     })
 
     return () => {
       setBuddyShellRenderContext(null)
     }
-  }, [selectedAssistant, selectedPersonaSource, setBuddyShellRenderContext])
+  }, [
+    selectedAssistant,
+    selectedPersona,
+    selectedPersonaSource,
+    setBuddyShellRenderContext
+  ])
   const trimmedDisplayName = userDisplayName.trim()
   const displayNameActionLabel = trimmedDisplayName
     ? (t("sidepanel:characterSelect.displayNameCurrent", {

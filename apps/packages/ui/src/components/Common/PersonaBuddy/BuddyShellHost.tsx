@@ -1,8 +1,10 @@
 import React from "react"
 import { createPortal } from "react-dom"
 
+import { useSetting } from "@/hooks/useSetting"
 import { useDesktop } from "@/hooks/useMediaQuery"
 import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
+import { PERSONA_BUDDY_SHELL_ENABLED_SETTING } from "@/services/settings/ui-settings"
 import {
   clampPersonaBuddyShellPosition,
   DEFAULT_PERSONA_BUDDY_SHELL_POSITIONS,
@@ -25,6 +27,12 @@ type DragState = {
   offsetY: number
 }
 
+type ResolvedPersonaShellState = {
+  hasTargetPersona: boolean
+  fallbackName: string | null
+  buddySummary: PersonaBuddySummary | null
+}
+
 const ensurePortalRoot = () => {
   if (typeof document === "undefined") return null
   return document.getElementById("tldw-portal-root")
@@ -35,7 +43,7 @@ const isPersonaSelection = (
 ): value is {
   kind: "persona"
   id: string
-  buddy_summary?: PersonaBuddySummary | null
+      buddy_summary?: PersonaBuddySummary | null
 } => {
   if (!value || typeof value !== "object") {
     return false
@@ -43,6 +51,19 @@ const isPersonaSelection = (
   const candidate = value as Record<string, unknown>
   return candidate.kind === "persona" && typeof candidate.id === "string"
 }
+
+const hasExplicitBuddySummary = (
+  renderContext:
+    | {
+        buddy_summary?: PersonaBuddySummary | null
+      }
+    | null
+    | undefined
+) =>
+  Boolean(
+    renderContext &&
+      Object.prototype.hasOwnProperty.call(renderContext, "buddy_summary")
+  )
 
 const resolveActivePersonaSelection = ({
   renderContext,
@@ -52,36 +73,73 @@ const resolveActivePersonaSelection = ({
     | {
         surface_active: boolean
         active_persona_id: string | null
+        buddy_summary?: PersonaBuddySummary | null
       }
     | null
     | undefined
   selectedAssistant: unknown
-}) => {
+}): ResolvedPersonaShellState => {
   if (!renderContext?.surface_active) {
-    return null
+    return {
+      hasTargetPersona: false,
+      fallbackName: null,
+      buddySummary: null
+    }
   }
 
-  if (!isPersonaSelection(selectedAssistant)) {
-    return null
+  const selectedPersona = isPersonaSelection(selectedAssistant)
+    ? selectedAssistant
+    : null
+  const selectionMatches =
+    selectedPersona &&
+    (!renderContext.active_persona_id ||
+      selectedPersona.id === renderContext.active_persona_id)
+
+  if (hasExplicitBuddySummary(renderContext)) {
+    if (renderContext.buddy_summary) {
+      return {
+        hasTargetPersona: true,
+        fallbackName: renderContext.buddy_summary.persona_name,
+        buddySummary: renderContext.buddy_summary
+      }
+    }
+
+    return {
+      hasTargetPersona: Boolean(selectionMatches),
+      fallbackName: selectionMatches ? selectedPersona.name : null,
+      buddySummary: null
+    }
   }
 
-  if (renderContext.active_persona_id) {
-    return selectedAssistant.id === renderContext.active_persona_id
-      ? selectedAssistant
-      : null
+  if (selectionMatches) {
+    return {
+      hasTargetPersona: true,
+      fallbackName: selectedPersona.name,
+      buddySummary: selectedPersona.buddy_summary ?? null
+    }
   }
 
-  return selectedAssistant
+  return {
+    hasTargetPersona: false,
+    fallbackName: null,
+    buddySummary: null
+  }
 }
 
-export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
-  const renderContext = useBuddyShellRenderContext()
-  const [selectedAssistant] = useSelectedAssistant()
-  const isDesktop = useDesktop()
+type BuddyShellHostInnerProps = {
+  root: "web" | "sidepanel"
+  renderContext: NonNullable<ReturnType<typeof useBuddyShellRenderContext>>
+  selectedAssistant: unknown
+}
+
+const BuddyShellHostInner: React.FC<BuddyShellHostInnerProps> = ({
+  root,
+  renderContext,
+  selectedAssistant
+}) => {
   const dockRef = React.useRef<HTMLDivElement | null>(null)
   const dragStateRef = React.useRef<DragState | null>(null)
 
-  const isSupportedViewport = root === "sidepanel" || isDesktop
   const positionBucket: PersonaBuddyPositionBucket =
     renderContext?.position_bucket ??
     (root === "sidepanel" ? "sidepanel-desktop" : "web-desktop")
@@ -164,19 +222,11 @@ export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
     [renderContext, selectedAssistant]
   )
 
-  const buddySummary = resolvedPersona?.buddy_summary ?? null
-  const isDormant = Boolean(resolvedPersona && !buddySummary?.has_buddy)
+  const buddySummary = resolvedPersona.buddySummary
+  const isDormant = resolvedPersona.hasTargetPersona && !buddySummary?.has_buddy
   const portalRoot = ensurePortalRoot()
 
-  if (!isSupportedViewport) {
-    return null
-  }
-
-  if (!renderContext?.surface_active) {
-    return null
-  }
-
-  if (!resolvedPersona) {
+  if (!resolvedPersona.hasTargetPersona) {
     return null
   }
 
@@ -185,13 +235,11 @@ export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
   }
 
   const dockSummary: PersonaBuddySummary =
-    buddySummary?.has_buddy
+    buddySummary
       ? buddySummary
       : {
           has_buddy: false,
-          persona_name:
-            (resolvedPersona as { name?: string | null }).name ||
-            "Persona Buddy",
+          persona_name: resolvedPersona.fallbackName || "Persona Buddy",
           role_summary: null,
           visual: null
         }
@@ -207,6 +255,33 @@ export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
       dockRef={dockRef}
     />,
     portalRoot
+  )
+}
+
+export const BuddyShellHost: React.FC<BuddyShellHostProps> = ({ root }) => {
+  const renderContext = useBuddyShellRenderContext()
+  const [selectedAssistant] = useSelectedAssistant()
+  const [buddyShellEnabled] = useSetting(PERSONA_BUDDY_SHELL_ENABLED_SETTING)
+  const isDesktop = useDesktop()
+
+  if (!buddyShellEnabled) {
+    return null
+  }
+
+  if (!renderContext?.surface_active) {
+    return null
+  }
+
+  if (root !== "sidepanel" && !isDesktop) {
+    return null
+  }
+
+  return (
+    <BuddyShellHostInner
+      root={root}
+      renderContext={renderContext}
+      selectedAssistant={selectedAssistant}
+    />
   )
 }
 

@@ -71,6 +71,7 @@ export type PersonaCompanionUsage = {
 export type PersonaProfileResponse = {
   id?: string
   version?: number
+  buddy_summary?: PersonaBuddySummary | null
   use_persona_state_context_default?: boolean
   voice_defaults?: PersonaVoiceDefaults | null
   setup?: PersonaSetupState | null

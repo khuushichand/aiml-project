@@ -44,7 +44,8 @@ const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(),
   fetchWithAuth: vi.fn(),
   buildPersonaWebSocketUrl: vi.fn(() => "ws://persona.test/api/v1/persona/stream"),
-  fetchCompanionConversationPrompts: vi.fn()
+  fetchCompanionConversationPrompts: vi.fn(),
+  buddyShellContextSnapshots: [] as Array<Record<string, any> | null>
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
@@ -198,6 +199,13 @@ import SidepanelPersona from "../sidepanel-persona"
 
 const BuddyShellContextProbe = () => {
   const context = useBuddyShellRenderContext()
+
+  React.useEffect(() => {
+    mocks.buddyShellContextSnapshots.push(
+      context ? JSON.parse(JSON.stringify(context)) : null
+    )
+  }, [context])
+
   return (
     <pre data-testid="buddy-shell-context">
       {JSON.stringify(context)}
@@ -214,14 +222,20 @@ const render = (ui: React.ReactNode) => {
     }
   })
 
-  return rtlRender(
+  const wrappedUi = (child: React.ReactNode) => (
     <QueryClientProvider client={queryClient}>
       <BuddyShellRenderContextProvider>
-        {ui}
+        {child}
         <BuddyShellContextProbe />
       </BuddyShellRenderContextProvider>
     </QueryClientProvider>
   )
+
+  const view = rtlRender(wrappedUi(ui))
+  return {
+    ...view,
+    rerender: (nextUi: React.ReactNode) => view.rerender(wrappedUi(nextUi))
+  }
 }
 
 const readBuddyShellContext = () =>
@@ -334,6 +348,7 @@ describe("SidepanelPersona", () => {
     mocks.fetchWithAuth.mockReset()
     mocks.buildPersonaWebSocketUrl.mockReset()
     mocks.fetchCompanionConversationPrompts.mockReset()
+    mocks.buddyShellContextSnapshots = []
     mocks.buildPersonaWebSocketUrl.mockReturnValue(
       "ws://persona.test/api/v1/persona/stream"
     )
@@ -585,7 +600,146 @@ describe("SidepanelPersona", () => {
         surface_active: true,
         active_persona_id: "garden-helper",
         position_bucket: "sidepanel-desktop",
-        persona_source: "route-local"
+        persona_source: "route-local",
+        buddy_summary: {
+          has_buddy: true,
+          persona_name: "Garden Helper",
+          role_summary: "Keeps the route on track",
+          visual: {
+            species_id: "owl",
+            silhouette_id: "perch",
+            palette_id: "dawn"
+          }
+        }
+      })
+    })
+  })
+
+  it("clears the previous buddy summary while the next persona profile is still loading", async () => {
+    let resolveBuilderProfile: ((value: unknown) => void) | null = null
+    const builderProfilePromise = new Promise((resolve) => {
+      resolveBuilderProfile = resolve
+    })
+
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "garden-helper", name: "Garden Helper" },
+            { id: "builder-bot", name: "Builder Bot" }
+          ]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: 1,
+            buddy_summary: {
+              has_buddy: true,
+              persona_name: "Garden Helper",
+              role_summary: "Keeps the route on track",
+              visual: {
+                species_id: "owl",
+                silhouette_id: "perch",
+                palette_id: "dawn"
+              }
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/builder-bot")) {
+        return builderProfilePromise as Promise<any>
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/setup-analytics") ||
+        path.includes("/persona/profiles/builder-bot/setup-analytics")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: path.includes("builder-bot") ? "builder-bot" : "garden-helper",
+            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/sessions?persona_id=garden-helper") ||
+        path.includes("/persona/sessions?persona_id=builder-bot")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    const view = render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toMatchObject({
+        active_persona_id: "garden-helper",
+        buddy_summary: {
+          persona_name: "Garden Helper"
+        }
+      })
+    })
+
+    mocks.location.search = "?persona_id=builder-bot&tab=profiles"
+    view.rerender(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toMatchObject({
+        active_persona_id: "builder-bot"
+      })
+      expect(readBuddyShellContext().buddy_summary).toBeNull()
+    })
+
+    expect(
+      mocks.buddyShellContextSnapshots.some(
+        (snapshot) =>
+          snapshot?.active_persona_id === "builder-bot" &&
+          snapshot?.buddy_summary?.persona_name === "Garden Helper"
+      )
+    ).toBe(false)
+
+    resolveBuilderProfile?.({
+      ok: true,
+      json: async () => ({
+        id: "builder-bot",
+        version: 2,
+        buddy_summary: {
+          has_buddy: true,
+          persona_name: "Builder Bot",
+          role_summary: "Keeps builds moving",
+          visual: {
+            species_id: "robot",
+            silhouette_id: "boxy",
+            palette_id: "steel"
+          }
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toMatchObject({
+        active_persona_id: "builder-bot",
+        buddy_summary: {
+          persona_name: "Builder Bot"
+        }
       })
     })
   })

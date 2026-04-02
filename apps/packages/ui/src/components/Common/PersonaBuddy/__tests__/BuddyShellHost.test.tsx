@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   BuddyShellRenderContextProvider
 } from "../BuddyShellRenderContext"
+import { PERSONA_BUDDY_SHELL_ENABLED_SETTING } from "@/services/settings/ui-settings"
 import {
   DEFAULT_PERSONA_BUDDY_SHELL_POSITIONS,
   usePersonaBuddyShellStore
@@ -13,7 +14,8 @@ import { BuddyShellHost } from "../BuddyShellHost"
 
 const mocks = vi.hoisted(() => ({
   isDesktop: true,
-  selectedAssistant: null as Record<string, unknown> | null
+  selectedAssistant: null as Record<string, unknown> | null,
+  buddyShellEnabled: true
 }))
 
 vi.mock("@/hooks/useMediaQuery", () => ({
@@ -29,6 +31,15 @@ vi.mock("@/hooks/useSelectedAssistant", () => ({
       setRenderValue: vi.fn()
     }
   ]
+}))
+
+vi.mock("@/hooks/useSetting", () => ({
+  useSetting: (setting: { key?: string; defaultValue: unknown }) => {
+    if (setting?.key === PERSONA_BUDDY_SHELL_ENABLED_SETTING.key) {
+      return [mocks.buddyShellEnabled, vi.fn(), { isLoading: false }]
+    }
+    return [setting.defaultValue, vi.fn(), { isLoading: false }]
+  }
 }))
 
 const buildPersonaSelection = ({
@@ -55,6 +66,19 @@ const buildPersonaSelection = ({
     : null
 })
 
+const buildBuddySummary = (id: string, hasBuddy = true) => ({
+  has_buddy: hasBuddy,
+  persona_name: `Persona ${id}`,
+  role_summary: hasBuddy ? "Keeps the route on track" : null,
+  visual: hasBuddy
+    ? {
+        species_id: "owl",
+        silhouette_id: "perch",
+        palette_id: "dawn"
+      }
+    : null
+})
+
 const renderHost = ({
   root = "web",
   context,
@@ -73,6 +97,16 @@ const renderHost = ({
       | "catalog"
       | "selected-assistant-fallback"
       | null
+    buddy_summary?: {
+      has_buddy: boolean
+      persona_name: string
+      role_summary: string | null
+      visual: {
+        species_id: string
+        silhouette_id: string
+        palette_id: string
+      } | null
+    } | null
   }
   selectedAssistant?: Record<string, unknown> | null
   isDesktop?: boolean
@@ -91,6 +125,7 @@ describe("BuddyShellHost", () => {
   beforeEach(() => {
     mocks.isDesktop = true
     mocks.selectedAssistant = null
+    mocks.buddyShellEnabled = true
     document.body.innerHTML = ""
     const portalRoot = document.createElement("div")
     portalRoot.id = "tldw-portal-root"
@@ -125,6 +160,28 @@ describe("BuddyShellHost", () => {
     })
 
     expect(screen.queryByTestId("persona-buddy-dock")).not.toBeInTheDocument()
+  })
+
+  it("unmounts the shell when the global buddy setting is disabled", () => {
+    mocks.buddyShellEnabled = false
+    usePersonaBuddyShellStore.setState((state) => ({
+      ...state,
+      isOpen: true
+    }))
+
+    renderHost({
+      context: {
+        surface_id: "chat",
+        surface_active: true,
+        active_persona_id: "persona-1",
+        position_bucket: "web-desktop",
+        persona_source: "route-local",
+        buddy_summary: buildBuddySummary("persona-1")
+      }
+    })
+
+    expect(screen.queryByTestId("persona-buddy-dock")).not.toBeInTheDocument()
+    expect(usePersonaBuddyShellStore.getState().isOpen).toBe(true)
   })
 
   it("suppresses the web host below the desktop breakpoint", () => {
@@ -188,6 +245,50 @@ describe("BuddyShellHost", () => {
     })
 
     expect(screen.getByTestId("persona-buddy-dock")).toBeInTheDocument()
+  })
+
+  it("prefers route-local buddy summary over stale selected-assistant persona data", () => {
+    renderHost({
+      context: {
+        surface_id: "persona-garden",
+        surface_active: true,
+        active_persona_id: "persona-2",
+        position_bucket: "sidepanel-desktop",
+        persona_source: "route-local",
+        buddy_summary: buildBuddySummary("persona-2")
+      },
+      root: "sidepanel",
+      selectedAssistant: buildPersonaSelection({ id: "persona-1" })
+    })
+
+    expect(screen.getByTestId("persona-buddy-dock")).toHaveTextContent(
+      "Persona persona-2"
+    )
+    expect(screen.getByTestId("persona-buddy-dock")).toHaveTextContent("owl")
+  })
+
+  it("treats an explicit null surface summary as authoritative over cached assistant buddy data", () => {
+    renderHost({
+      context: {
+        surface_id: "sidepanel-chat",
+        surface_active: true,
+        active_persona_id: "persona-1",
+        position_bucket: "sidepanel-desktop",
+        persona_source: "catalog",
+        buddy_summary: null
+      },
+      root: "sidepanel",
+      selectedAssistant: buildPersonaSelection({ id: "persona-1" })
+    })
+
+    expect(screen.getByTestId("persona-buddy-dock")).toHaveAttribute(
+      "data-dormant",
+      "true"
+    )
+    expect(screen.getByTestId("persona-buddy-dock")).toHaveTextContent(
+      "buddy unavailable"
+    )
+    expect(screen.getByTestId("persona-buddy-dock")).not.toHaveTextContent("owl")
   })
 
   it("renders a dormant shell when the resolved persona has no buddy summary", () => {

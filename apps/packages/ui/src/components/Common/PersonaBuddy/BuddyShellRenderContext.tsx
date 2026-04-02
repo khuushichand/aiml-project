@@ -1,6 +1,9 @@
 import React from "react"
 
-import type { PersonaBuddyRenderContext } from "@/types/persona-buddy"
+import type {
+  PersonaBuddyRenderContext,
+  PersonaBuddySummary
+} from "@/types/persona-buddy"
 
 type BuddyShellRenderContextValue = {
   renderContext: PersonaBuddyRenderContext | null
@@ -18,6 +21,20 @@ const BuddyShellRenderContext = React.createContext<BuddyShellRenderContextValue
   }
 )
 
+const areBuddySummariesEqual = (
+  left: PersonaBuddySummary | null | undefined,
+  right: PersonaBuddySummary | null | undefined
+) =>
+  left === right ||
+  (left != null &&
+    right != null &&
+    left.has_buddy === right.has_buddy &&
+    left.persona_name === right.persona_name &&
+    left.role_summary === right.role_summary &&
+    left.visual?.species_id === right.visual?.species_id &&
+    left.visual?.silhouette_id === right.visual?.silhouette_id &&
+    left.visual?.palette_id === right.visual?.palette_id)
+
 const areRenderContextsEqual = (
   left: PersonaBuddyRenderContext | null,
   right: PersonaBuddyRenderContext | null
@@ -29,6 +46,7 @@ const areRenderContextsEqual = (
     left.surface_active === right.surface_active &&
     left.active_persona_id === right.active_persona_id &&
     left.position_bucket === right.position_bucket &&
+    areBuddySummariesEqual(left.buddy_summary, right.buddy_summary) &&
     left.persona_source === right.persona_source)
 
 type BuddyShellRenderContextProviderProps = {
