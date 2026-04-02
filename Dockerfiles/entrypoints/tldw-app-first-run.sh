@@ -14,7 +14,7 @@ generate_key() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr -d '\n'
   else
-    python -c "import secrets; print(secrets.token_urlsafe(32))"
+    python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
   fi
 }
 
@@ -104,7 +104,7 @@ if [ "$AUTH_MODE" = "single_user" ]; then
 fi
 
 # Auto-generate MCP secrets if missing or placeholder (min 32 chars each)
-for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT; do
+for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT BYOK_ENCRYPTION_KEY; do
   eval current_val="\${$mcp_var:-}"
   case "$current_val" in
     ""|CHANGE_ME*)

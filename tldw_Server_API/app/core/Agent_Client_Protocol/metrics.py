@@ -19,6 +19,38 @@ from tldw_Server_API.app.core.Metrics import (
 
 _ACP_METRICS_REGISTERED = False
 
+# --- Cardinality bounding for run-first metric labels ---
+_KNOWN_OUTCOMES: frozenset[str] = frozenset({
+    "success", "error", "timeout", "blocked",
+    "end_turn", "max_iterations", "cancelled",
+})
+_KNOWN_INELIGIBLE_REASONS: frozenset[str] = frozenset({
+    "none", "no_tools", "rollout_off", "run_missing",
+    "provider_not_in_rollout_allowlist",
+})
+_KNOWN_PROVIDERS: frozenset[str] = frozenset({
+    "openai", "anthropic", "google", "groq", "mistral",
+    "ollama", "kobold", "tabby", "vllm", "aphrodite",
+    "deepseek", "cohere", "huggingface", "openrouter",
+    "local", "custom_openai", "unknown",
+})
+_KNOWN_TOOLS: frozenset[str] = frozenset({
+    "run", "unknown",
+})
+_LABEL_MAX_LEN = 64
+
+
+def _clamp_label(
+    value: str,
+    known: frozenset[str] | None = None,
+    max_len: int = _LABEL_MAX_LEN,
+) -> str:
+    """Normalize a metric label to a bounded set or truncate to *max_len*."""
+    normalized = str(value or "").strip().lower() or "unknown"
+    if known is not None:
+        return normalized if normalized in known else "other"
+    return normalized[:max_len]
+
 
 def _ensure_registered() -> None:
     """Lazily register ACP metrics on first use."""
@@ -95,13 +127,72 @@ def _ensure_registered() -> None:
             description="Total orchestration runs dispatched",
             labels=["status"],
         ),
+        MetricDefinition(
+            name="acp_run_first_rollout_total",
+            type=MetricType.COUNTER,
+            description="Total ACP run-first rollout exposures",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+            ],
+        ),
+        MetricDefinition(
+            name="acp_run_first_first_tool_total",
+            type=MetricType.COUNTER,
+            description="Total first-tool selections under ACP run-first rollout",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+                "first_tool",
+            ],
+        ),
+        MetricDefinition(
+            name="acp_run_first_fallback_after_run_total",
+            type=MetricType.COUNTER,
+            description="Total typed-tool fallbacks after run under ACP rollout",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+                "fallback_tool",
+            ],
+        ),
+        MetricDefinition(
+            name="acp_run_first_completion_proxy_total",
+            type=MetricType.COUNTER,
+            description="Total ACP run-first completion proxy outcomes",
+            labels=[
+                "agent_type",
+                "presentation_variant",
+                "cohort",
+                "provider",
+                "model",
+                "eligible",
+                "ineligible_reason",
+                "outcome",
+            ],
+        ),
     ]
 
     for d in defs:
         try:
             registry.register_metric(d)
-        except Exception:
-            pass  # Already registered
+        except Exception as exc:
+            logger.debug("ACP metric registration skipped for {}: {}", d.name, exc)
 
     _ACP_METRICS_REGISTERED = True
     logger.debug("ACP metrics registered with MetricsRegistry")
@@ -176,3 +267,128 @@ def record_orchestration_task(status: str = "created") -> None:
 def record_orchestration_run(status: str = "dispatched") -> None:
     _ensure_registered()
     increment_counter("acp_orchestration_runs_total", labels={"status": status})
+
+
+def _run_first_base_labels(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+) -> dict[str, str]:
+    provider_prefix = str(provider or "").strip().lower().split(":")[0] or "unknown"
+    return {
+        "agent_type": _clamp_label(agent_type),
+        "presentation_variant": _clamp_label(presentation_variant),
+        "cohort": _clamp_label(cohort),
+        "provider": _clamp_label(provider_prefix, known=_KNOWN_PROVIDERS),
+        "model": "set" if str(model or "").strip() else "unknown",
+        "eligible": str(bool(eligible)).lower(),
+        "ineligible_reason": _clamp_label(
+            str(ineligible_reason or "").strip() or "none",
+            known=_KNOWN_INELIGIBLE_REASONS,
+        ),
+    }
+
+
+def record_run_first_rollout(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+) -> None:
+    _ensure_registered()
+    increment_counter(
+        "acp_run_first_rollout_total",
+        labels=_run_first_base_labels(
+            agent_type=agent_type,
+            presentation_variant=presentation_variant,
+            cohort=cohort,
+            provider=provider,
+            model=model,
+            eligible=eligible,
+            ineligible_reason=ineligible_reason,
+        ),
+    )
+
+
+def record_run_first_first_tool(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+    first_tool: str,
+) -> None:
+    _ensure_registered()
+    labels = _run_first_base_labels(
+        agent_type=agent_type,
+        presentation_variant=presentation_variant,
+        cohort=cohort,
+        provider=provider,
+        model=model,
+        eligible=eligible,
+        ineligible_reason=ineligible_reason,
+    )
+    labels["first_tool"] = _clamp_label(first_tool, known=_KNOWN_TOOLS)
+    increment_counter("acp_run_first_first_tool_total", labels=labels)
+
+
+def record_run_first_fallback_after_run(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+    fallback_tool: str,
+) -> None:
+    _ensure_registered()
+    labels = _run_first_base_labels(
+        agent_type=agent_type,
+        presentation_variant=presentation_variant,
+        cohort=cohort,
+        provider=provider,
+        model=model,
+        eligible=eligible,
+        ineligible_reason=ineligible_reason,
+    )
+    labels["fallback_tool"] = _clamp_label(fallback_tool, known=_KNOWN_TOOLS)
+    increment_counter("acp_run_first_fallback_after_run_total", labels=labels)
+
+
+def record_run_first_completion_proxy(
+    *,
+    agent_type: str = "mcp",
+    presentation_variant: str = "unknown",
+    cohort: str = "unknown",
+    provider: str = "unknown",
+    model: str = "unknown",
+    eligible: bool = False,
+    ineligible_reason: str | None = None,
+    outcome: str,
+) -> None:
+    _ensure_registered()
+    labels = _run_first_base_labels(
+        agent_type=agent_type,
+        presentation_variant=presentation_variant,
+        cohort=cohort,
+        provider=provider,
+        model=model,
+        eligible=eligible,
+        ineligible_reason=ineligible_reason,
+    )
+    labels["outcome"] = _clamp_label(outcome, known=_KNOWN_OUTCOMES)
+    increment_counter("acp_run_first_completion_proxy_total", labels=labels)

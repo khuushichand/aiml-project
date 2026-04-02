@@ -1293,6 +1293,12 @@ class UnifiedRAGRequest(BaseModel):
         example=False
     )
 
+    include_rerank_debug_documents: Optional[bool] = Field(
+        default=None,
+        description="Override whether pre_rerank_documents and reranked_documents debug snapshots are attached when debug_mode is enabled",
+        example=False,
+    )
+
     # ========== EXPLAIN / DRY-RUN ==========
     explain_only: bool = Field(
         default=False,

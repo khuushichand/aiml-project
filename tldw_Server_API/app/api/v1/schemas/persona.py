@@ -314,7 +314,7 @@ class PersonaBuddyResponse(BaseModel):
     """API response for one resolved persona buddy."""
 
     persona_id: str
-    resolved_profile: PersonaBuddyResolvedProfile
+    resolved_profile: PersonaBuddyResolvedProfile | None = None
     created_at: str
     last_modified: str
 

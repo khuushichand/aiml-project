@@ -238,6 +238,37 @@ async def test_sync_storage_helpers_track_bindings_events_and_archive_state(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_upsert_source_sync_state_allows_explicit_none_to_clear_nullable_fields(
+    sqlite_db: aiosqlite.Connection,
+) -> None:
+    _, source = await _create_account_and_source(sqlite_db)
+
+    seeded = await svc.upsert_source_sync_state(
+        sqlite_db,
+        source_id=source["id"],
+        sync_mode="hybrid",
+        cursor="delta-token",
+        last_error="boom",
+        active_job_id="job-123",
+    )
+    cleared = await svc.upsert_source_sync_state(
+        sqlite_db,
+        source_id=source["id"],
+        cursor=None,
+        last_error=None,
+        active_job_id=None,
+    )
+
+    assert seeded["cursor"] == "delta-token"
+    assert seeded["last_error"] == "boom"
+    assert seeded["active_job_id"] == "job-123"
+    assert cleared["cursor"] is None
+    assert cleared["last_error"] is None
+    assert cleared["active_job_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_get_source_binding_health_counts_tracked_and_degraded_items(
     sqlite_db: aiosqlite.Connection,
 ) -> None:

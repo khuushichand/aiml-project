@@ -8,26 +8,41 @@ from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.connectors import ConnectorSourceCreateRequest, SyncOptions
 from tldw_Server_API.app.core.External_Sources import connectors_service as svc
+from tldw_Server_API.app.core.External_Sources import reference_manager_import as ref_import
 from tldw_Server_API.app.core.External_Sources.reference_manager_adapter import ReferenceManagerAdapter
 from tldw_Server_API.app.core.External_Sources.reference_manager_types import (
     NormalizedReferenceCollection,
     NormalizedReferenceItem,
     ReferenceAttachmentCandidate,
 )
+from tldw_Server_API.app.core.exceptions import ReferenceImportError
 
 
 class _ReferenceManagerStub:
     async def list_collections(self, account, *, cursor=None, page_size=100):  # pragma: no cover - contract stub
-        return []
+        return [], None
 
-    async def list_collection_items(self, account, collection_key, *, cursor=None, page_size=100):  # pragma: no cover - contract stub
-        return []
+    async def list_collection_items(
+        self,
+        account,
+        collection_key,
+        *,
+        collection_name=None,
+        cursor=None,
+        page_size=100,
+    ):  # pragma: no cover - contract stub
+        return [], None
 
     async def list_item_attachments(self, account, provider_item_key):  # pragma: no cover - contract stub
         return []
 
     async def resolve_attachment_download(self, account, attachment):  # pragma: no cover - contract stub
         return b""
+
+
+class _NoMediaIdRepository:
+    def add_media_with_keywords(self, **kwargs):
+        return None, None, "missing media id"
 
 
 @pytest.fixture
@@ -41,9 +56,20 @@ async def sqlite_db(tmp_path: Path):
         await db.close()
 
 
+@pytest.mark.asyncio
 @pytest.mark.unit
-def test_reference_manager_adapter_protocol_accepts_collection_item_attachment_and_download_methods() -> None:
-    assert isinstance(_ReferenceManagerStub(), ReferenceManagerAdapter)
+async def test_reference_manager_adapter_protocol_accepts_collection_item_attachment_and_download_methods() -> None:
+    stub = _ReferenceManagerStub()
+
+    assert isinstance(stub, ReferenceManagerAdapter)
+
+    collections, collections_cursor = await stub.list_collections({})
+    items, items_cursor = await stub.list_collection_items({}, "COLL1234")
+
+    assert collections == []
+    assert items == []
+    assert collections_cursor is None
+    assert items_cursor is None
 
 
 @pytest.mark.unit
@@ -166,3 +192,47 @@ async def test_reference_manager_sources_are_flat_by_default(sqlite_db: aiosqlit
     assert source["options"]["recursive"] is False
     assert forced_recursive["options"]["recursive"] is False
     assert SyncOptions(recursive=True).recursive is True
+
+
+@pytest.mark.unit
+def test_ingest_reference_attachment_raises_shared_exception_when_media_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ref_import, "get_media_repository", lambda media_db: _NoMediaIdRepository())
+
+    item = NormalizedReferenceItem(
+        provider="zotero",
+        provider_item_key="ITEM-NO-ID",
+        provider_library_id="123456",
+        collection_key="COLL1234",
+        collection_name="Language Models",
+        doi="10.9999/example",
+        title="Item Missing Media ID",
+        authors="Author",
+        publication_date="2026-03-30",
+        year="2026",
+        journal="Journal",
+        abstract="Abstract",
+        source_url="https://example.com/item",
+        attachments=[],
+        metadata={},
+    )
+    attachment = ReferenceAttachmentCandidate(
+        provider="zotero",
+        provider_item_key="ITEM-NO-ID",
+        attachment_key="ATT-NO-ID",
+        title="Item Missing Media ID.pdf",
+        source_url="https://example.com/attachment",
+        mime_type="application/pdf",
+        size_bytes=100,
+        metadata={"filename": "missing.pdf"},
+    )
+
+    with pytest.raises(ReferenceImportError):
+        ref_import._ingest_reference_attachment(
+            object(),
+            item=item,
+            selected_attachment=attachment,
+            content_text="content",
+            safe_metadata={"doi": "10.9999/example"},
+        )

@@ -1516,6 +1516,7 @@ def _rollback_created_persona_profile_after_buddy_failure(
     expected_version: int,
 ) -> None:
     """Hide a newly created profile when buddy sync fails after commit."""
+    persona_hash = _redacted_id_for_logs(persona_id)
     try:
         rolled_back = db.soft_delete_persona_profile(
             persona_id=persona_id,
@@ -1525,7 +1526,7 @@ def _rollback_created_persona_profile_after_buddy_failure(
         if rolled_back:
             logger.warning(
                 "Rolled back newly created persona profile {} after buddy sync failure.",
-                persona_id,
+                persona_hash,
             )
             return
         raise PersonaBuddyRollbackError(
@@ -1534,7 +1535,7 @@ def _rollback_created_persona_profile_after_buddy_failure(
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         logger.error(
             "Error rolling back newly created persona profile {} after buddy sync failure: {}",
-            persona_id,
+            persona_hash,
             exc,
         )
         raise PersonaBuddyRollbackError(
@@ -1552,6 +1553,7 @@ def _rollback_updated_persona_profile_after_buddy_failure(
     expected_version: int,
 ) -> None:
     """Restore the previous visible profile state when buddy sync fails after update."""
+    persona_hash = _redacted_id_for_logs(persona_id)
     rollback_data = {field: previous_profile.get(field) for field in update_data.keys()}
     if not rollback_data:
         return
@@ -1565,7 +1567,7 @@ def _rollback_updated_persona_profile_after_buddy_failure(
         if rolled_back:
             logger.warning(
                 "Rolled back persona profile {} after buddy sync failure.",
-                persona_id,
+                persona_hash,
             )
             return
         raise PersonaBuddyRollbackError(
@@ -1574,7 +1576,7 @@ def _rollback_updated_persona_profile_after_buddy_failure(
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         logger.error(
             "Error rolling back persona profile {} after buddy sync failure: {}",
-            persona_id,
+            persona_hash,
             exc,
         )
         raise PersonaBuddyRollbackError(
@@ -2658,21 +2660,23 @@ async def create_persona_profile(
     try:
         create_data = payload.model_dump(exclude_none=True)
         create_data["user_id"] = user_id
-        persona_id = db.create_persona_profile(create_data)
-        if not db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id):
-            _ = db.replace_persona_policy_rules(
+        persona_id = await _run_persona_db_call(db.create_persona_profile, create_data)
+        if not await _run_persona_db_call(db.list_persona_policy_rules, persona_id=persona_id, user_id=user_id):
+            _ = await _run_persona_db_call(
+                db.replace_persona_policy_rules,
                 persona_id=persona_id,
                 user_id=user_id,
                 rules=_DEFAULT_PERSONA_POLICY_RULES,
-        )
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+            )
+        profile = await _run_persona_db_call(db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=500, detail="Failed to load created persona profile")
         try:
-            buddy_row = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+            buddy_row = await _run_persona_db_call(_ensure_persona_buddy_after_profile_mutation, db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
             try:
-                _rollback_created_persona_profile_after_buddy_failure(
+                await _run_persona_db_call(
+                    _rollback_created_persona_profile_after_buddy_failure,
                     db,
                     persona_id=persona_id,
                     user_id=user_id,
@@ -2736,10 +2740,15 @@ async def update_persona_profile(
     if not update_data:
         raise HTTPException(status_code=400, detail="No profile fields provided for update")
     try:
-        previous_profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
-        if previous_profile is None:
-            raise HTTPException(status_code=404, detail="Persona profile not found")
-        ok = db.update_persona_profile(
+        previous_profile: dict[str, Any] | None = None
+        if expected_version is not None:
+            previous_profile = await _run_persona_db_call(
+                db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False,
+            )
+            if previous_profile is None:
+                raise HTTPException(status_code=404, detail="Persona profile not found")
+        ok = await _run_persona_db_call(
+            db.update_persona_profile,
             persona_id=persona_id,
             user_id=user_id,
             update_data=update_data,
@@ -2747,14 +2756,17 @@ async def update_persona_profile(
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        profile = await _run_persona_db_call(
+            db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False,
+        )
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
         try:
-            buddy_row = _ensure_persona_buddy_after_profile_mutation(db=db, profile=profile)
+            buddy_row = await _run_persona_db_call(_ensure_persona_buddy_after_profile_mutation, db=db, profile=profile)
         except (ValueError, InputError, ConflictError, CharactersRAGDBError) as exc:
             try:
-                _rollback_updated_persona_profile_after_buddy_failure(
+                await _run_persona_db_call(
+                    _rollback_updated_persona_profile_after_buddy_failure,
                     db,
                     persona_id=persona_id,
                     user_id=user_id,
@@ -2777,6 +2789,7 @@ async def update_persona_profile(
     response_model=PersonaBuddyResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def get_persona_buddy(
     persona_id: str,
@@ -2788,15 +2801,10 @@ async def get_persona_buddy(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        profile = await _run_persona_db_call(db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        _ = ensure_persona_buddy_for_profile(db, profile)
-        buddy = db.get_persona_buddy(
-            persona_id=persona_id,
-            user_id=user_id,
-            include_deleted_personas=False,
-        )
+        buddy = await _run_persona_db_call(ensure_persona_buddy_for_profile, db, profile)
         if buddy is None:
             raise HTTPException(status_code=500, detail="Failed to load persona buddy")
         return _persona_buddy_to_response(buddy)
@@ -2824,7 +2832,8 @@ async def delete_persona_profile(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        ok = db.soft_delete_persona_profile(
+        ok = await _run_persona_db_call(
+            db.soft_delete_persona_profile,
             persona_id=persona_id,
             user_id=user_id,
             expected_version=expected_version,
@@ -2843,6 +2852,7 @@ async def delete_persona_profile(
     response_model=PersonaProfileResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def restore_persona_profile(
     persona_id: str,
@@ -2855,14 +2865,20 @@ async def restore_persona_profile(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        ok = db.restore_persona_profile(
+        ok = await _run_persona_db_call(
+            db.restore_persona_profile,
             persona_id=persona_id,
             user_id=user_id,
             expected_version=expected_version,
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        profile = await _run_persona_db_call(
+            db.get_persona_profile,
+            persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
         return _persona_profile_to_response(

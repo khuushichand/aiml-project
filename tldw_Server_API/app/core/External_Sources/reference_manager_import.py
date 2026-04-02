@@ -1,3 +1,5 @@
+"""Reference-manager import helpers for attachment ingestion and metadata sync."""
+
 from __future__ import annotations
 
 import hashlib
@@ -25,10 +27,10 @@ from tldw_Server_API.app.core.External_Sources.reference_manager_types import (
     ReferenceAttachmentCandidate,
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import (
-    merge_missing_safe_metadata,
     normalize_safe_metadata,
     update_version_safe_metadata_in_transaction,
 )
+from tldw_Server_API.app.core.exceptions import ReferenceImportError
 
 _REFERENCE_CANONICAL_FIELDS = (
     "provider",
@@ -46,6 +48,13 @@ _REFERENCE_CANONICAL_FIELDS = (
     "journal",
     "abstract",
 )
+
+
+def _coerce_media_id(value: Any) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _canonical_reference_safe_metadata(item: NormalizedReferenceItem) -> dict[str, Any]:
@@ -101,6 +110,25 @@ def _build_binding_metadata(
     return metadata
 
 
+def _carry_forward_selected_attachment(
+    binding_metadata: dict[str, Any],
+    same_provider_item: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(same_provider_item, dict):
+        return binding_metadata
+    raw_reference_metadata = same_provider_item.get("raw_reference_metadata")
+    if not isinstance(raw_reference_metadata, dict):
+        return binding_metadata
+    selected_attachment = raw_reference_metadata.get("selected_attachment")
+    if not isinstance(selected_attachment, dict) or not selected_attachment:
+        return binding_metadata
+    preserved_attachment = dict(selected_attachment)
+    if isinstance(preserved_attachment.get("metadata"), dict):
+        preserved_attachment["metadata"] = dict(preserved_attachment["metadata"])
+    binding_metadata["selected_attachment"] = preserved_attachment
+    return binding_metadata
+
+
 def _select_best_attachment(
     attachments: list[ReferenceAttachmentCandidate],
 ) -> ReferenceAttachmentCandidate | None:
@@ -127,6 +155,41 @@ def _load_safe_metadata(raw_value: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _normalize_existing_safe_metadata_for_merge(existing_safe_metadata: dict[str, Any]) -> dict[str, Any]:
+    candidate = dict(existing_safe_metadata or {})
+    invalid_key_groups = {
+        "Invalid DOI format": ("doi", "DOI"),
+        "Invalid PMID format": ("pmid", "PMID"),
+        "Invalid PMCID format": ("pmcid", "PMCID"),
+    }
+    while True:
+        try:
+            return normalize_safe_metadata(candidate)
+        except ValueError as exc:
+            error_text = str(exc)
+            matched_group = next(
+                (
+                    keys
+                    for prefix, keys in invalid_key_groups.items()
+                    if error_text.startswith(prefix)
+                ),
+                None,
+            )
+            if not matched_group:
+                raise
+            removed = False
+            for key in matched_group:
+                if key in candidate:
+                    candidate.pop(key, None)
+                    removed = True
+            if not removed:
+                raise
+            logger.warning(
+                "Ignoring malformed legacy safe-metadata identifier while merging reference metadata: {}",
+                exc,
+            )
 
 
 def _provider_version(item: NormalizedReferenceItem) -> str | None:
@@ -213,7 +276,9 @@ def _ingest_reference_attachment(
         overwrite=False,
     )
     if media_id is None:
-        raise ValueError(f"Reference import did not return a media ID for {item.provider_item_key}")  # noqa: TRY003
+        raise ReferenceImportError(
+            f"Reference import did not return a media ID for {item.provider_item_key}"
+        )
     return int(media_id)
 
 
@@ -227,11 +292,15 @@ def _merge_missing_reference_metadata(
     if not latest_version or latest_version.get("id") is None:
         return
     existing_safe_metadata = _load_safe_metadata(latest_version.get("safe_metadata"))
-    merged_safe_metadata = merge_missing_safe_metadata(
-        existing_safe_metadata,
-        incoming_safe_metadata,
-    )
-    if merged_safe_metadata == normalize_safe_metadata(existing_safe_metadata):
+    normalized_existing_safe_metadata = _normalize_existing_safe_metadata_for_merge(existing_safe_metadata)
+    normalized_incoming_safe_metadata = normalize_safe_metadata(dict(incoming_safe_metadata or {}))
+    merged_safe_metadata = dict(normalized_existing_safe_metadata)
+    for key, value in normalized_incoming_safe_metadata.items():
+        if value in (None, ""):
+            continue
+        if merged_safe_metadata.get(key) in (None, ""):
+            merged_safe_metadata[key] = value
+    if merged_safe_metadata == normalized_existing_safe_metadata:
         return
     with media_db.transaction() as connection:
         update_version_safe_metadata_in_transaction(
@@ -283,12 +352,13 @@ async def _resolve_reference_item_match(
     *,
     item: NormalizedReferenceItem,
     same_provider_item: dict[str, Any] | None,
+    doi_match: dict[str, Any] | None,
     content_hash: str | None,
 ) -> tuple[str | None, int | None]:
     match = rank_reference_item_match(
         item,
         same_provider_item=same_provider_item,
-        doi_match=_find_doi_match(media_db, item),
+        doi_match=doi_match,
         hash_match=_find_file_hash_match(media_db, content_hash),
         metadata_match=_find_metadata_fingerprint_match(media_db, item),
     )
@@ -306,6 +376,7 @@ async def sync_reference_manager_source(
     job_id: str,
     convert_bytes_to_text: Callable[[bytes, str, str], Awaitable[str]],
 ) -> dict[str, Any]:
+    """Import one collection page and keep the cursor stable on partial failures."""
     source_id = int(source["id"])
     provider = str(source.get("provider") or "")
     collection_key = str(source.get("remote_id") or "")
@@ -317,10 +388,12 @@ async def sync_reference_manager_source(
     metadata_only = 0
     failed = 0
     total = 0
+    collection_name = str(source.get("path") or "").strip() or None
 
     items, page_cursor = await connector.list_collection_items(
         account,
         collection_key,
+        collection_name=collection_name,
         cursor=current_cursor,
         page_size=100,
     )
@@ -329,6 +402,81 @@ async def sync_reference_manager_source(
     for item in items or []:
         try:
             safe_metadata = _canonical_reference_safe_metadata(item)
+            async with connectors_pool.transaction() as db:
+                same_provider_item = await get_reference_item_binding(
+                    db,
+                    source_id=source_id,
+                    provider=provider,
+                    provider_item_key=item.provider_item_key,
+                )
+            same_provider_media_id = _coerce_media_id(
+                None if same_provider_item is None else same_provider_item.get("media_id")
+            )
+            if same_provider_media_id is not None:
+                binding_metadata = _carry_forward_selected_attachment(
+                    _build_binding_metadata(
+                        item,
+                        selected_attachment=None,
+                        safe_metadata=safe_metadata,
+                    ),
+                    same_provider_item,
+                )
+                _merge_missing_reference_metadata(
+                    media_db,
+                    media_id=same_provider_media_id,
+                    incoming_safe_metadata=safe_metadata,
+                )
+                async with connectors_pool.transaction() as db:
+                    await upsert_reference_item_binding(
+                        db,
+                        source_id=source_id,
+                        provider=provider,
+                        provider_item_key=item.provider_item_key,
+                        provider_library_id=item.provider_library_id,
+                        collection_key=item.collection_key,
+                        collection_name=item.collection_name,
+                        provider_version=_provider_version(item),
+                        provider_updated_at=None,
+                        media_id=same_provider_media_id,
+                        dedupe_match_reason="same_provider_item",
+                        raw_reference_metadata=binding_metadata,
+                    )
+                duplicates += 1
+                processed += 1
+                continue
+
+            doi_match = _find_doi_match(media_db, item)
+            doi_media_id = _coerce_media_id(None if doi_match is None else doi_match.get("media_id"))
+            if doi_media_id is not None:
+                binding_metadata = _build_binding_metadata(
+                    item,
+                    selected_attachment=None,
+                    safe_metadata=safe_metadata,
+                )
+                _merge_missing_reference_metadata(
+                    media_db,
+                    media_id=doi_media_id,
+                    incoming_safe_metadata=safe_metadata,
+                )
+                async with connectors_pool.transaction() as db:
+                    await upsert_reference_item_binding(
+                        db,
+                        source_id=source_id,
+                        provider=provider,
+                        provider_item_key=item.provider_item_key,
+                        provider_library_id=item.provider_library_id,
+                        collection_key=item.collection_key,
+                        collection_name=item.collection_name,
+                        provider_version=_provider_version(item),
+                        provider_updated_at=None,
+                        media_id=doi_media_id,
+                        dedupe_match_reason="doi",
+                        raw_reference_metadata=binding_metadata,
+                    )
+                duplicates += 1
+                processed += 1
+                continue
+
             attachments = await _load_item_attachments(connector, account, item)
             selected_attachment = _select_best_attachment(attachments)
             content_text = ""
@@ -352,18 +500,11 @@ async def sync_reference_manager_source(
                 if content_text:
                     content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
 
-            async with connectors_pool.transaction() as db:
-                same_provider_item = await get_reference_item_binding(
-                    db,
-                    source_id=source_id,
-                    provider=provider,
-                    provider_item_key=item.provider_item_key,
-                )
-
             match_reason, matched_media_id = await _resolve_reference_item_match(
                 media_db,
                 item=item,
                 same_provider_item=same_provider_item,
+                doi_match=doi_match,
                 content_hash=content_hash,
             )
             binding_metadata = _build_binding_metadata(
@@ -451,8 +592,11 @@ async def sync_reference_manager_source(
                 exc,
             )
 
-    if page_cursor not in (None, ""):
-        next_cursor = page_cursor
+    if failed == 0:
+        if page_cursor in (None, ""):
+            next_cursor = None
+        else:
+            next_cursor = str(page_cursor).strip() or None
 
     return {
         "processed": processed,

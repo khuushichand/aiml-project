@@ -140,3 +140,43 @@ async def test_reference_item_binding_clears_metadata_only_reason_when_item_late
     assert first["dedupe_match_reason"] == "metadata_only"
     assert second["media_id"] == 55
     assert second["dedupe_match_reason"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_oauth_state_metadata_is_encrypted_at_rest_when_crypto_enabled(
+    sqlite_db: aiosqlite.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", "reference-manager-test-key")
+
+    await svc.create_oauth_state(
+        sqlite_db,
+        user_id=7,
+        provider="zotero",
+        state="state-123",
+        metadata={
+            "oauth_token": "temp-token",
+            "oauth_token_secret": "temp-secret",
+        },
+    )
+
+    cur = await sqlite_db.execute(
+        "SELECT metadata FROM external_oauth_state WHERE state = ? AND user_id = ?",
+        ("state-123", 7),
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    assert isinstance(row["metadata"], str)
+    assert "temp-secret" not in row["metadata"]
+
+    consumed = await svc.consume_oauth_state(
+        sqlite_db,
+        user_id=7,
+        provider="zotero",
+        state="state-123",
+    )
+
+    assert consumed is not False
+    assert consumed["oauth_token"] == "temp-token"
+    assert consumed["oauth_token_secret"] == "temp-secret"

@@ -24,6 +24,7 @@ class ReferenceManagerAdapter(Protocol):
         account: dict[str, Any],
         collection_key: str,
         *,
+        collection_name: str | None = None,
         cursor: str | None = None,
         page_size: int = 100,
     ) -> tuple[list[NormalizedReferenceItem], str | None]: ...

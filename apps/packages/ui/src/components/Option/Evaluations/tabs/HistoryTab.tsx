@@ -28,6 +28,7 @@ export const HistoryTab: React.FC = () => {
 
   // Store state
   const historyResults = useEvaluationsStore((s) => s.historyResults)
+  const historyTotalCount = useEvaluationsStore((s) => s.historyTotalCount)
 
   // Mutations
   const fetchHistoryMutation = useFetchHistory()
@@ -50,12 +51,12 @@ export const HistoryTab: React.FC = () => {
               label={t("evaluations:historyTypeLabel", {
                 defaultValue: "Type"
               })}
-              name="type"
+              name="evaluation_type"
             >
               <Select
                 allowClear
                 placeholder={t("evaluations:historyTypePlaceholder", {
-                  defaultValue: "Filter by event type"
+                  defaultValue: "Filter by evaluation type"
                 })}
                 options={historyTypePresets}
               />
@@ -67,6 +68,7 @@ export const HistoryTab: React.FC = () => {
               name="user_id"
             >
               <Input
+                data-testid="history-user-filter"
                 placeholder={t("evaluations:historyUserPlaceholder", {
                   defaultValue: "user_123"
                 })}
@@ -128,73 +130,83 @@ export const HistoryTab: React.FC = () => {
             <Text type="secondary" className="text-xs">
               {t("evaluations:historyResultsCount", {
                 defaultValue: "{{count}} results",
-                count: historyResults.length
+                count: historyTotalCount
               })}
             </Text>
             <div className="flex flex-col gap-2">
-              {historyResults.map((item) => (
-                <Card
-                  key={item.id}
-                  size="small"
-                  className="hover:border-primary/70"
-                  bodyStyle={{ padding: "8px 12px" }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex flex-col">
-                      <div className="flex items-center gap-2">
-                        <Tag color="blue" className="text-xs">
-                          {item.type}
-                        </Tag>
-                        <Text type="secondary" className="text-[11px]">
-                          {item.created_at || ""}
-                        </Text>
+              {historyResults.map((item) => {
+                const typeLabel =
+                  item.eval_type ||
+                  item.evaluation_type ||
+                  item.type ||
+                  "unknown"
+                const evalId = item.eval_id || item.evaluation_id || item.id
+                const userId = item.user_id || item.created_by
+
+                return (
+                  <Card
+                    key={item.id}
+                    size="small"
+                    className="hover:border-primary/70"
+                    styles={{ body: { padding: "8px 12px" } }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <div className="flex items-center gap-2">
+                          <Tag color="blue" className="text-xs">
+                            {typeLabel}
+                          </Tag>
+                          <Text type="secondary" className="text-[11px]">
+                            {item.created_at || ""}
+                          </Text>
+                        </div>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {evalId && (
+                            <div className="flex items-center gap-1">
+                              <Text type="secondary" className="text-[11px]">
+                                {t("evaluations:historyEvalLabel", {
+                                  defaultValue: "Eval"
+                                })}
+                                :
+                              </Text>
+                              <code className="text-[11px]">{evalId}</code>
+                              <CopyButton text={evalId} />
+                            </div>
+                          )}
+                          {item.run_id && (
+                            <div className="flex items-center gap-1">
+                              <Text type="secondary" className="text-[11px]">
+                                {t("evaluations:historyRunLabel", {
+                                  defaultValue: "Run"
+                                })}
+                                :
+                              </Text>
+                              <code className="text-[11px]">{item.run_id}</code>
+                              <CopyButton text={item.run_id} />
+                            </div>
+                          )}
+                          {userId && (
+                            <div className="flex items-center gap-1">
+                              <Text type="secondary" className="text-[11px]">
+                                {t("evaluations:historyUserShortLabel", {
+                                  defaultValue: "User"
+                                })}
+                                :
+                              </Text>
+                              <code className="text-[11px]">{userId}</code>
+                            </div>
+                          )}
+                        </div>
+                        {item.detail && Object.keys(item.detail).length > 0 && (
+                          <pre className="mt-2 max-h-24 overflow-auto rounded bg-surface2 p-2 text-[10px] text-text">
+                            {JSON.stringify(item.detail, null, 2)}
+                          </pre>
+                        )}
                       </div>
-                      <div className="flex flex-wrap gap-2 mt-1">
-                        {item.eval_id && (
-                          <div className="flex items-center gap-1">
-                            <Text type="secondary" className="text-[11px]">
-                              {t("evaluations:historyEvalLabel", {
-                                defaultValue: "Eval"
-                              })}
-                              :
-                            </Text>
-                            <code className="text-[11px]">{item.eval_id}</code>
-                            <CopyButton text={item.eval_id} />
-                          </div>
-                        )}
-                        {item.run_id && (
-                          <div className="flex items-center gap-1">
-                            <Text type="secondary" className="text-[11px]">
-                              {t("evaluations:historyRunLabel", {
-                                defaultValue: "Run"
-                              })}
-                              :
-                            </Text>
-                            <code className="text-[11px]">{item.run_id}</code>
-                            <CopyButton text={item.run_id} />
-                          </div>
-                        )}
-                        {item.user_id && (
-                          <div className="flex items-center gap-1">
-                            <Text type="secondary" className="text-[11px]">
-                              {t("evaluations:historyUserShortLabel", {
-                                defaultValue: "User"
-                              })}
-                              :
-                            </Text>
-                            <code className="text-[11px]">{item.user_id}</code>
-                          </div>
-                        )}
-                      </div>
-                      {item.detail && Object.keys(item.detail).length > 0 && (
-                        <pre className="mt-2 max-h-24 overflow-auto rounded bg-surface2 p-2 text-[10px] text-text">
-                          {JSON.stringify(item.detail, null, 2)}
-                        </pre>
-                      )}
                     </div>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                )
+              })}
             </div>
           </div>
         )}

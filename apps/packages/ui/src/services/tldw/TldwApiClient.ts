@@ -1488,7 +1488,7 @@ export class TldwApiClient {
   }
 
   private getPlaceholderApiKeyMessage(): string {
-    return "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings → tldw server before continuing."
+    return "tldw server API key is still set to a placeholder value. Replace it with your real API key in Settings → tldw server before continuing."
   }
 
   async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
@@ -1798,6 +1798,87 @@ export class TldwApiClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: { auth_source: authSource }
+    })
+  }
+
+  // ── BYOK Provider Keys ──────────────────────────────────────────────
+
+  async listUserProviderKeys(): Promise<{
+    items: Array<{
+      provider: string
+      has_key: boolean
+      source: string
+      key_hint: string | null
+      auth_source: string | null
+      last_used_at: string | null
+    }>
+  }> {
+    return await this.request<{
+      items: Array<{
+        provider: string
+        has_key: boolean
+        source: string
+        key_hint: string | null
+        auth_source: string | null
+        last_used_at: string | null
+      }>
+    }>({
+      path: "/api/v1/users/keys",
+      method: "GET"
+    })
+  }
+
+  async upsertUserProviderKey(
+    provider: string,
+    apiKey: string,
+    opts?: { credential_fields?: Record<string, unknown>; metadata?: Record<string, unknown> }
+  ): Promise<{
+    provider: string
+    status: string
+    key_hint: string
+    updated_at: string
+  }> {
+    return await this.request<{
+      provider: string
+      status: string
+      key_hint: string
+      updated_at: string
+    }>({
+      path: "/api/v1/users/keys",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        provider,
+        api_key: apiKey,
+        ...opts,
+      }
+    })
+  }
+
+  async testUserProviderKey(
+    provider: string,
+    model?: string
+  ): Promise<{
+    provider: string
+    status: string
+    model: string | null
+  }> {
+    return await this.request<{
+      provider: string
+      status: string
+      model: string | null
+    }>({
+      path: "/api/v1/users/keys/test",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { provider, model }
+    })
+  }
+
+  async deleteUserProviderKey(provider: string): Promise<void> {
+    await this.request<void>({
+      path: `/api/v1/users/keys/${encodeURIComponent(provider)}`,
+      method: "DELETE"
     })
   }
 

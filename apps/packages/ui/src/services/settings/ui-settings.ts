@@ -338,7 +338,7 @@ export const PERSONA_BUDDY_SHELL_ENABLED_SETTING = defineSetting(
   }
 )
 
-export const SIDEBAR_SHORTCUT_MAX_COUNT = 10
+export const SIDEBAR_SHORTCUT_MAX_COUNT = 11
 
 export const HEADER_SHORTCUT_IDS = [
   "chat",
@@ -457,6 +457,7 @@ export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
   "world-books",
   "knowledge-qa",
   "media",
+  "watchlists",
   "document-workspace",
   "moderation-playground"
 ]

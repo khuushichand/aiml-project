@@ -621,6 +621,31 @@ class TestDatasetManagement:
         assert data["id"] == dataset_id
         assert data["name"] == sample_dataset_request["name"]
 
+    def test_get_dataset_supports_sample_pagination(
+        self,
+        client,
+        auth_headers,
+        sample_dataset_request,
+    ):
+        """Test getting a paginated slice of dataset samples."""
+        create_response = client.post(
+            "/api/v1/evaluations/datasets",
+            json=sample_dataset_request,
+            headers=auth_headers
+        )
+        dataset_id = create_response.json()["id"]
+
+        response = client.get(
+            f"/api/v1/evaluations/datasets/{dataset_id}?include_samples=true&limit=1&offset=1",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sample_count"] == len(sample_dataset_request["samples"])
+        assert len(data["samples"]) == 1
+        assert data["samples"][0]["input"]["question"] == "What is ML?"
+
     def test_list_datasets(self, client, auth_headers, sample_dataset_request):
 
         """Test listing datasets"""

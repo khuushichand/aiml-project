@@ -23,6 +23,8 @@ _SILHOUETTES = {
 _PALETTES = ("moss", "ember", "sky", "ink")
 _BEHAVIOR_FAMILIES = ("steady", "curious", "playful", "measured")
 _EXPRESSION_PROFILES = ("warm", "focused", "calm", "bright")
+# Accessory and eye-style compatibility is opt-in per species. Unlisted species
+# fall back to universal defaults via .get() (accessories: {None}, eyes: "dot").
 _ACCESSORY_COMPATIBILITY = {
     "owl": {None, "scarf", "halo"},
     "robot": {None, "antenna", "visor"},

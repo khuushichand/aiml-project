@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+import json
+
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     BackendType,
     CharactersRAGDB,
@@ -353,3 +355,50 @@ def test_restore_persona_profile_with_stale_expected_version_raises_conflict(
             user_id="user-1",
             expected_version=stale_version,
         )
+
+
+def test_row_to_dict_raises_on_corrupt_derived_core(db_instance: CharactersRAGDB) -> None:
+    """_persona_buddy_row_to_dict must raise CharactersRAGDBError when
+    derived_core is empty/corrupt, not silently return resolved_profile=None."""
+    fake_row = {
+        "persona_id": "test-persona-corrupt",
+        "user_id": "1",
+        "derivation_version": 1,
+        "source_fingerprint": "abc123",
+        "derived_core_json": "{}",
+        "overlay_preferences_json": "{}",
+        "created_at": "2026-03-31T00:00:00",
+        "last_modified": "2026-03-31T00:00:00",
+        "version": 1,
+    }
+    with pytest.raises(CharactersRAGDBError, match="Unable to resolve persona buddy profile"):
+        db_instance._persona_buddy_row_to_dict(fake_row)
+
+
+def test_row_to_dict_succeeds_with_valid_data(db_instance: CharactersRAGDB) -> None:
+    """Happy path: well-formed derived_core produces a resolved_profile."""
+    import json
+
+    derived_core = {
+        "species_id": "owl",
+        "silhouette_id": "owl_round",
+        "palette_id": "moss",
+        "behavior_family": "steady",
+        "expression_profile": "warm",
+    }
+    fake_row = {
+        "persona_id": "test-persona-valid",
+        "user_id": "1",
+        "derivation_version": 1,
+        "source_fingerprint": "abc123",
+        "derived_core_json": json.dumps(derived_core),
+        "overlay_preferences_json": "{}",
+        "created_at": "2026-03-31T00:00:00",
+        "last_modified": "2026-03-31T00:00:00",
+        "version": 1,
+    }
+    result = db_instance._persona_buddy_row_to_dict(fake_row)
+    assert result is not None
+    assert result["resolved_profile"] is not None
+    assert result["resolved_profile"]["species_id"] == "owl"
+    assert result["resolved_profile"]["compatibility_status"] == "exact"

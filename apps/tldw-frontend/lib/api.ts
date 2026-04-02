@@ -270,3 +270,24 @@ export function buildAuthHeaders(method: string = 'GET', contentType?: string): 
 
   return headers;
 }
+
+export function hasExplicitAuthHeaders(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const token = localStorage.getItem('access_token');
+  if (token) {
+    return true;
+  }
+
+  if (getApiBearer()) {
+    return true;
+  }
+
+  if (getApiKey()) {
+    return true;
+  }
+
+  return false;
+}

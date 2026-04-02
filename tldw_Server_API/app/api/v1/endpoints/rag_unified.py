@@ -940,7 +940,7 @@ async def get_capabilities(request: Request):
         },
         "quick_wins": {
             "supported": True,
-            "parameters": ["highlight_results", "highlight_query_terms", "track_cost", "debug_mode"]
+            "parameters": ["highlight_results", "highlight_query_terms", "track_cost", "debug_mode", "include_rerank_debug_documents"]
         },
         "user_context": {
             "supported": True,

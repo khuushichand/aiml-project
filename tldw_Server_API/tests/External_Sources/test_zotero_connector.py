@@ -143,6 +143,7 @@ async def test_zotero_collection_item_listing_is_flat_for_selected_collection_in
             "tokens": {"access_token": "api-key"},
         },
         "COLL1234",
+        collection_name="Language Models",
         cursor=None,
         page_size=50,
     )
@@ -152,6 +153,7 @@ async def test_zotero_collection_item_listing_is_flat_for_selected_collection_in
     assert items[0].provider == "zotero"
     assert items[0].provider_library_id == "123456"
     assert items[0].collection_key == "COLL1234"
+    assert items[0].collection_name == "Language Models"
     assert items[0].doi == "10.1000/example"
     assert items[0].title == "Attention Is All You Need"
     assert items[0].authors == "Ashish Vaswani, Noam Shazeer"
@@ -254,6 +256,28 @@ async def test_zotero_normalize_reference_item_extracts_year_from_free_form_date
 
     assert item.publication_date == "May 2017"
     assert item.year == "2017"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_zotero_normalize_reference_item_ignores_invalid_doi() -> None:
+    connector = ZoteroConnector(client_id="client-id", client_secret="client-secret", redirect_base="http://localhost")
+    raw_item = {
+        "key": "ITEM-BAD-DOI",
+        "data": {
+            "key": "ITEM-BAD-DOI",
+            "itemType": "journalArticle",
+            "title": "Paper With Malformed DOI",
+            "DOI": "definitely-not-a-doi",
+            "date": "2024",
+        },
+    }
+
+    item = await connector.normalize_reference_item(raw_item, [])
+
+    assert item.provider_item_key == "ITEM-BAD-DOI"
+    assert item.title == "Paper With Malformed DOI"
+    assert item.doi is None
 
 
 @pytest.mark.asyncio

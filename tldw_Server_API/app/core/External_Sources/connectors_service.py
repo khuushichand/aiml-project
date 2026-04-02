@@ -177,10 +177,42 @@ def _normalize_reference_item_row(row: Any) -> dict[str, Any] | None:
     return data
 
 
+def _protect_oauth_state_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not metadata:
+        return None
+    try:
+        from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+        envelope = encrypt_json_blob(dict(metadata))
+        if envelope:
+            return envelope
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+        pass
+    return dict(metadata)
+
+
+def _unprotect_oauth_state_metadata(metadata: Any) -> dict[str, Any]:
+    parsed_metadata = _json_loads(metadata, {})
+    if not isinstance(parsed_metadata, dict):
+        return {}
+    if parsed_metadata.get("_enc") != "aesgcm:v1":
+        return parsed_metadata
+    try:
+        from tldw_Server_API.app.core.Security.crypto import decrypt_json_blob
+
+        decrypted = decrypt_json_blob(parsed_metadata)
+        if isinstance(decrypted, dict):
+            return decrypted
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to decrypt oauth state metadata: {}", exc)
+    return {}
+
+
 def _normalize_oauth_state_row(row: Any) -> dict[str, Any] | None:
     if not row:
         return None
     data = _row_to_dict(row)
+    data["metadata"] = _unprotect_oauth_state_metadata(data.get("metadata"))
     _merge_provider_metadata(data, data.get("metadata"))
     return data
 
@@ -813,7 +845,7 @@ async def create_oauth_state(
 ) -> None:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
-    metadata_value = metadata or None
+    metadata_value = _protect_oauth_state_metadata(metadata)
     if is_pg:
         await db.execute(
             """
@@ -848,21 +880,44 @@ async def consume_oauth_state(
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
     cutoff_dt, cutoff_str = _oauth_state_cutoff(max_age_minutes)
+    row = await _fetch_oauth_state_row(
+        db,
+        is_pg=is_pg,
+        state=state,
+        user_id=user_id,
+        provider=provider,
+        cutoff_dt=cutoff_dt,
+        cutoff_str=cutoff_str,
+    )
+    if not row:
+        return False
+    await _delete_oauth_state_row(
+        db,
+        is_pg=is_pg,
+        state=state,
+        user_id=user_id,
+    )
+    return _normalize_oauth_state_row(row) or True
+
+
+async def _fetch_oauth_state_row(
+    db,
+    *,
+    is_pg: bool,
+    state: str,
+    user_id: int,
+    provider: str,
+    cutoff_dt: datetime,
+    cutoff_str: str,
+):
     if is_pg:
-        row = await db.fetchrow(
+        return await db.fetchrow(
             """
             SELECT state, provider, metadata, created_at FROM external_oauth_state
             WHERE state = $1 AND user_id = $2 AND provider = $3 AND created_at >= $4
             """,
             state, user_id, provider, cutoff_dt,
         )
-        if not row:
-            return False
-        await db.execute(
-            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
-            state, user_id,
-        )
-        return _normalize_oauth_state_row(row) or True
     cur = await db.execute(
         """
         SELECT state, provider, metadata, created_at FROM external_oauth_state
@@ -870,15 +925,27 @@ async def consume_oauth_state(
         """,
         (state, user_id, provider, cutoff_str),
     )
-    row = await cur.fetchone()
-    if not row:
-        return False
+    return await cur.fetchone()
+
+
+async def _delete_oauth_state_row(
+    db,
+    *,
+    is_pg: bool,
+    state: str,
+    user_id: int,
+) -> None:
+    if is_pg:
+        await db.execute(
+            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
+            state, user_id,
+        )
+        return
     await db.execute(
         "DELETE FROM external_oauth_state WHERE state = ? AND user_id = ?",
         (state, user_id),
     )
     await getattr(db, "commit", lambda: None)()
-    return _normalize_oauth_state_row(row) or True
 
 
 async def create_account(db, user_id: int, provider: str, display_name: str, email: str | None, tokens: dict[str, Any]) -> dict[str, Any]:
@@ -1140,7 +1207,7 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
     existing = await get_source_sync_state(db, source_id=source_id) or {}
     data = {"source_id": source_id, "sync_mode": "manual", **existing}
     for field in _SYNC_STATE_FIELDS:
-        if field in updates and updates[field] is not None:
+        if field in updates:
             data[field] = updates[field]
 
     is_pg = _is_postgres_connection(db)

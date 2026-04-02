@@ -23,6 +23,11 @@ def _client_for_user(user_id: int, db: CharactersRAGDB) -> TestClient:
     return TestClient(fastapi_app)
 
 
+@pytest.fixture(autouse=True)
+def _clear_overrides():
+    yield
+    fastapi_app.dependency_overrides.clear()
+
 @pytest.fixture()
 def persona_db(tmp_path):
     db = CharactersRAGDB(str(tmp_path / "persona_buddy_api.db"), client_id="persona-buddy-api-tests")
@@ -63,8 +68,6 @@ def test_get_buddy_lazily_creates_for_preexisting_persona_without_row(persona_db
     persisted = persona_db.get_persona_buddy(persona_id=persona_id, user_id="1")
     assert persisted is not None
     assert persisted["resolved_profile"] == payload["resolved_profile"]
-    fastapi_app.dependency_overrides.clear()
-
 
 def test_api_create_keeps_buddy_row_aligned_immediately(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as client:
@@ -77,8 +80,6 @@ def test_api_create_keeps_buddy_row_aligned_immediately(persona_db: CharactersRA
 
     buddy_row = persona_db.get_persona_buddy(persona_id=persona_id, user_id="1")
     assert buddy_row is not None
-    fastapi_app.dependency_overrides.clear()
-
 
 def test_api_create_rolls_back_visible_profile_when_buddy_upkeep_fails(persona_db: CharactersRAGDB, monkeypatch):
     def _raise_buddy_failure(*_args, **_kwargs):
@@ -101,8 +102,6 @@ def test_api_create_rolls_back_visible_profile_when_buddy_upkeep_fails(persona_d
     rolled_back = next(profile for profile in deleted_profiles if profile["name"] == "Create Best Effort Persona")
     assert rolled_back["deleted"] is True
     assert persona_db.get_persona_buddy(persona_id=rolled_back["id"], user_id="1") is None
-    fastapi_app.dependency_overrides.clear()
-
 
 def test_api_update_keeps_buddy_row_aligned_after_stable_input_change(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as client:
@@ -128,8 +127,6 @@ def test_api_update_keeps_buddy_row_aligned_after_stable_input_change(persona_db
     assert after is not None
     assert after["source_fingerprint"] != before["source_fingerprint"]
     assert int(after["version"]) > int(before["version"])
-    fastapi_app.dependency_overrides.clear()
-
 
 def test_system_prompt_only_updates_do_not_rederive_buddy(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as client:
@@ -157,8 +154,6 @@ def test_system_prompt_only_updates_do_not_rederive_buddy(persona_db: Characters
 
     assert after_payload["resolved_profile"] == before_payload["resolved_profile"]
     assert after_payload["last_modified"] == before_payload["last_modified"]
-    fastapi_app.dependency_overrides.clear()
-
 
 def test_api_update_reverts_profile_when_buddy_upkeep_fails(persona_db: CharactersRAGDB, monkeypatch):
     with _client_for_user(1, persona_db) as client:
@@ -195,8 +190,6 @@ def test_api_update_reverts_profile_when_buddy_upkeep_fails(persona_db: Characte
     assert refreshed["name"] == "Update Best Effort Persona"
     assert buddy_after is not None
     assert buddy_after["source_fingerprint"] == buddy_before["source_fingerprint"]
-    fastapi_app.dependency_overrides.clear()
-
 
 def test_api_create_surfaces_rollback_failures_after_buddy_validation_error(
     persona_db: CharactersRAGDB,
@@ -311,7 +304,36 @@ def test_deleted_persona_hides_buddy_until_restore_and_restore_preserves_buddy_r
     assert buddy_row_after_restore is not None
     assert int(buddy_row_after_restore["version"]) == int(buddy_row_before_delete["version"])
     assert before_payload == after_payload
-    fastapi_app.dependency_overrides.clear()
+
+
+def test_restore_does_not_invoke_buddy_realignment(persona_db: CharactersRAGDB, monkeypatch):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post("/api/v1/persona/profiles", json={"name": "Restore No Buddy Sync Persona"})
+        assert created.status_code == 201, created.text
+        created_payload = created.json()
+        persona_id = created_payload["id"]
+
+        deleted = client.delete(
+            f"/api/v1/persona/profiles/{persona_id}",
+            params={"expected_version": int(created_payload["version"])},
+        )
+        assert deleted.status_code == 200, deleted.text
+
+    deleted_profile = persona_db.get_persona_profile(persona_id, user_id="1", include_deleted=True)
+    assert deleted_profile is not None
+
+    def _raise_unexpected_restore_sync(*_args, **_kwargs):
+        raise AssertionError("restore should not invoke buddy realignment")
+
+    monkeypatch.setattr(persona_ep, "_ensure_persona_buddy_after_profile_mutation", _raise_unexpected_restore_sync)
+
+    with _client_for_user(1, persona_db) as client:
+        restored = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/restore",
+            params={"expected_version": int(deleted_profile["version"])},
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["is_active"] is True
 
 
 def test_non_owner_access_to_buddy_and_restore_returns_404(persona_db: CharactersRAGDB):
@@ -339,5 +361,3 @@ def test_non_owner_access_to_buddy_and_restore_returns_404(persona_db: Character
             params={"expected_version": 1},
         )
         assert denied_restore.status_code == 404, denied_restore.text
-
-    fastapi_app.dependency_overrides.clear()

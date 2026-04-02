@@ -3307,7 +3307,28 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 40;
 """
-    _MIGRATION_SQL_V39_TO_V40_POSTGRES = _MIGRATION_SQL_V39_TO_V40
+    _MIGRATION_SQL_V39_TO_V40_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31) [Postgres]
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -7854,7 +7875,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V38_TO_V39_POSTGRES, conn, expected_version=39)
                 current_version = 39
             if current_version < 40:
-                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40, conn, expected_version=40)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40_POSTGRES, conn, expected_version=40)
                 current_version = 40
 
             if current_version > target_version:
@@ -10634,7 +10655,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND pe.user_id = ?
                AND (? OR pe.enabled = 1)
                AND (? OR pe.deleted = 0)
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
              LIMIT 1
         """
         params = (
@@ -10670,7 +10691,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND (? IS NULL OR pe.persona_id = ?)
                AND (? OR pe.enabled = 1)
                AND (? OR pe.deleted = 0)
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
              ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC
              LIMIT ? OFFSET ?
         """
@@ -11175,9 +11196,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
                 (persona_id, user_id),
             ).fetchone()
-            if final_state and not self._as_bool(final_state["deleted"]):
-                return True
-            return False
+            return bool(final_state and not self._as_bool(final_state["deleted"]))
 
     def get_persona_buddy(
         self,

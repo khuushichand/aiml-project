@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/router';
 import { useToast } from '@web/components/ui/ToastProvider';
 import {
   dismissNotification,
@@ -14,6 +15,15 @@ import { formatRelativeTime } from '@web/lib/utils';
 
 const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_SNOOZE_MINUTES = 15;
+
+function resolveRouteForLinkType(linkType: string | null | undefined): string | undefined {
+  if (!linkType) return undefined
+  const lt = linkType.toLowerCase()
+  if (lt.includes("reading")) return "/collections"
+  if (lt.includes("note") || lt.includes("document")) return "/notes"
+  if (lt.includes("watchlist") || lt.includes("job")) return "/watchlists"
+  return undefined
+}
 
 function toNotificationFromStream(payload: unknown): NotificationItem | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -34,6 +44,7 @@ function toNotificationFromStream(payload: unknown): NotificationItem | null {
 
 export default function NotificationsPage() {
   const { show } = useToast();
+  const router = useRouter();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -213,6 +224,30 @@ export default function NotificationsPage() {
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {(item.link_url || resolveRouteForLinkType(item.link_type)) && (
+                      <button
+                        type="button"
+                        className="rounded bg-primary/10 border border-primary/30 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+                        onClick={async () => {
+                          if (!item.read_at) {
+                            try { await handleMarkRead(item.id) } catch { /* navigate anyway */ }
+                          }
+                          if (item.link_url) {
+                            try {
+                              const url = new URL(item.link_url, window.location.origin)
+                              if (url.origin === window.location.origin) {
+                                void router.push(url.pathname + url.search + url.hash)
+                              }
+                            } catch { /* malformed URL — ignore */ }
+                          } else {
+                            const route = resolveRouteForLinkType(item.link_type)
+                            if (route) void router.push(route)
+                          }
+                        }}
+                      >
+                        View
+                      </button>
+                    )}
                     {!item.read_at && (
                       <button
                         type="button"

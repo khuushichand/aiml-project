@@ -66,9 +66,11 @@ class _FakeZoteroConnector:
         account,
         collection_key: str,
         *,
+        collection_name: str | None = None,
         cursor: str | None = None,
         page_size: int = 100,
     ):
+        del collection_name
         assert account["tokens"]["access_token"] == "tok"
         assert account["provider_user_id"] == "123456"
         assert collection_key == "COLL1234"
@@ -307,6 +309,8 @@ async def test_reference_manager_sync_imports_new_items_merges_duplicate_metadat
         assert jm.completed["result"]["duplicates"] == 1
         assert jm.completed["result"]["metadata_only"] == 1
         assert fake_conn.list_collection_calls == [None]
+        assert fake_conn.list_item_attachment_calls == ["ITEM-NEW", "ITEM-META"]
+        assert fake_conn.download_calls == ["ATT-NEW"]
         assert sync_state is not None
         assert sync_state["cursor"] == "cursor-1"
 
@@ -372,6 +376,138 @@ async def test_reference_manager_sync_imports_new_items_merges_duplicate_metadat
             (),
         ).fetchone()["c"]
         assert media_count == 2
+    finally:
+        await connectors_db.close()
+
+
+@pytest.mark.asyncio
+async def test_reference_manager_terminal_page_clears_stored_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    import tldw_Server_API.app.core.DB_Management.db_path_utils as db_paths_mod
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    connectors_db = await aiosqlite.connect(tmp_path / "connectors-terminal.sqlite3")
+    connectors_db.row_factory = aiosqlite.Row
+    connectors_db._is_sqlite = True
+
+    try:
+        media_root = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(media_root))
+        monkeypatch.setitem(db_paths_mod.settings, "USER_DB_BASE_DIR", str(media_root))
+        _media_db_path = db_paths_mod.DatabasePaths.get_media_db_path(1)
+
+        fake_conn = _FakeZoteroConnector(
+            pages={
+                "cursor-0": (
+                    [
+                        _reference_item(
+                            provider_item_key="ITEM-NEW",
+                            doi="10.1000/new",
+                            title="Attention Is All You Need",
+                            authors="Ashish Vaswani, Noam Shazeer",
+                            year="2017",
+                            journal="NeurIPS",
+                            abstract="Transformer paper.",
+                            provider_version="1",
+                        )
+                    ],
+                    "cursor-1",
+                ),
+                "cursor-1": ([], None),
+            },
+            attachments={
+                "ITEM-NEW": [_attachment(provider_item_key="ITEM-NEW", attachment_key="ATT-NEW")],
+            },
+            downloads={
+                "ATT-NEW": b"Imported attachment body",
+            },
+        )
+
+        pool = _SqlitePool(connectors_db)
+
+        async def _fake_get_db_pool():
+            return pool
+
+        async def _fake_list_memberships_for_user(_user_id: int):
+            return []
+
+        async def _fake_convert_document_bytes_to_text(raw, name, effective_mime):
+            return raw.decode("utf-8")
+
+        monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+        monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
+        monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: fake_conn)
+        monkeypatch.setattr(
+            worker,
+            "_convert_document_bytes_to_text",
+            _fake_convert_document_bytes_to_text,
+            raising=False,
+        )
+
+        account = await svc.create_account(
+            connectors_db,
+            user_id=1,
+            provider="zotero",
+            display_name="Zotero",
+            email="researcher@example.com",
+            tokens={
+                "access_token": "tok",
+                "provider_user_id": "123456",
+                "username": "researcher",
+            },
+        )
+        source = await svc.create_source(
+            connectors_db,
+            account_id=int(account["id"]),
+            provider="zotero",
+            remote_id="COLL1234",
+            type_="collection",
+            path=None,
+            options={},
+        )
+        await svc.upsert_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+            sync_mode="poll",
+            cursor="cursor-0",
+        )
+
+        first_jm = _FakeJM()
+        await worker._process_import_job(
+            first_jm,
+            jid=9301,
+            lease_id="lease-reference-1",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+        second_jm = _FakeJM()
+        await worker._process_import_job(
+            second_jm,
+            jid=9302,
+            lease_id="lease-reference-2",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        sync_state = await svc.get_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+        )
+
+        assert first_jm.completed is not None
+        assert first_jm.completed["result"]["imported"] == 1
+        assert second_jm.completed is not None
+        assert second_jm.completed["result"]["processed"] == 0
+        assert fake_conn.list_collection_calls == ["cursor-0", "cursor-1"]
+        assert sync_state is not None
+        assert sync_state["cursor"] is None
     finally:
         await connectors_db.close()
 
@@ -536,13 +672,291 @@ async def test_reference_manager_repeat_sync_keeps_existing_media_non_destructiv
         assert first_jm.completed["result"]["imported"] == 1
         assert second_jm.completed is not None
         assert second_jm.completed["result"]["duplicates"] == 1
+        assert fake_conn.list_item_attachment_calls == ["ITEM-NEW"]
+        assert fake_conn.download_calls == ["ATT-NEW"]
         assert version_count == 1
         assert latest_version["content"] == "Original imported body"
         assert json.loads(latest_version["safe_metadata"])["title"] == "Original Imported Title"
         assert final_binding is not None
         assert final_binding["provider_version"] == "2"
         assert final_binding["dedupe_match_reason"] == "same_provider_item"
+        assert final_binding["raw_reference_metadata"]["selected_attachment"]["attachment_key"] == "ATT-NEW"
         assert sync_state is not None
         assert sync_state["cursor"] == "cursor-2"
+    finally:
+        await connectors_db.close()
+
+
+@pytest.mark.asyncio
+async def test_reference_manager_sync_merges_metadata_even_with_legacy_invalid_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    import tldw_Server_API.app.core.DB_Management.db_path_utils as db_paths_mod
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    connectors_db = await aiosqlite.connect(tmp_path / "connectors.sqlite3")
+    connectors_db.row_factory = aiosqlite.Row
+    connectors_db._is_sqlite = True
+
+    try:
+        media_root = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(media_root))
+        monkeypatch.setitem(db_paths_mod.settings, "USER_DB_BASE_DIR", str(media_root))
+        media_db_path = db_paths_mod.DatabasePaths.get_media_db_path(1)
+
+        fake_conn = _FakeZoteroConnector(
+            pages={
+                None: (
+                    [
+                        _reference_item(
+                            provider_item_key="ITEM-LEGACY",
+                            doi="10.5555/clean-doi",
+                            title="Legacy Imported Title",
+                            authors="Legacy Author",
+                            year="2024",
+                            journal="Legacy Journal",
+                            abstract="Updated metadata should still merge.",
+                            provider_version="2",
+                        ),
+                    ],
+                    "cursor-1",
+                ),
+            },
+            attachments={"ITEM-LEGACY": []},
+            downloads={},
+        )
+
+        pool = _SqlitePool(connectors_db)
+
+        async def _fake_get_db_pool():
+            return pool
+
+        async def _fake_list_memberships_for_user(_user_id: int):
+            return []
+
+        monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+        monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
+        monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: fake_conn)
+
+        account = await svc.create_account(
+            connectors_db,
+            user_id=1,
+            provider="zotero",
+            display_name="Zotero",
+            email="researcher@example.com",
+            tokens={
+                "access_token": "tok",
+                "provider_user_id": "123456",
+                "username": "researcher",
+            },
+        )
+        source = await svc.create_source(
+            connectors_db,
+            account_id=int(account["id"]),
+            provider="zotero",
+            remote_id="COLL1234",
+            type_="collection",
+            path=None,
+            options={},
+        )
+        await svc.upsert_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+            sync_mode="poll",
+        )
+
+        media_db = MediaDatabase(db_path=str(media_db_path), client_id="1")
+        legacy_media_id, _, _ = media_db.add_media_with_keywords(
+            url="seed://legacy-invalid-doi",
+            title="Legacy Imported Title",
+            media_type="document",
+            content="Existing local content",
+            keywords=[],
+            safe_metadata=json.dumps(
+                {
+                    "doi": "not-a-real-doi",
+                    "title": "Legacy Imported Title",
+                }
+            ),
+            overwrite=False,
+        )
+
+        await svc.upsert_reference_item_binding(
+            connectors_db,
+            source_id=int(source["id"]),
+            provider="zotero",
+            provider_item_key="ITEM-LEGACY",
+            provider_library_id="123456",
+            collection_key="COLL1234",
+            collection_name="Language Models",
+            provider_version="1",
+            provider_updated_at="2026-03-30T00:00:00Z",
+            media_id=int(legacy_media_id),
+            dedupe_match_reason="same_provider_item",
+            raw_reference_metadata={"title": "Legacy Imported Title"},
+        )
+
+        jm = _FakeJM()
+        await worker._process_import_job(
+            jm,
+            jid=9301,
+            lease_id="lease-reference-legacy",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        version = get_document_version(media_db, media_id=int(legacy_media_id), version_number=1)
+        safe_metadata = json.loads(version["safe_metadata"])
+
+        assert jm.completed is not None
+        assert jm.completed["result"]["duplicates"] == 1
+        assert jm.completed["result"]["failed"] == 0
+        assert safe_metadata["doi"] == "10.5555/clean-doi"
+        assert safe_metadata["authors"] == "Legacy Author"
+    finally:
+        await connectors_db.close()
+
+
+@pytest.mark.asyncio
+async def test_reference_manager_sync_does_not_advance_cursor_when_page_has_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    import tldw_Server_API.app.core.DB_Management.db_path_utils as db_paths_mod
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    connectors_db = await aiosqlite.connect(tmp_path / "connectors.sqlite3")
+    connectors_db.row_factory = aiosqlite.Row
+    connectors_db._is_sqlite = True
+
+    try:
+        media_root = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(media_root))
+        monkeypatch.setitem(db_paths_mod.settings, "USER_DB_BASE_DIR", str(media_root))
+
+        fake_conn = _FakeZoteroConnector(
+            pages={
+                None: (
+                    [
+                        _reference_item(
+                            provider_item_key="ITEM-GOOD",
+                            doi="10.7777/good",
+                            title="Good Item",
+                            authors="Good Author",
+                            year="2024",
+                            journal="Journal",
+                            abstract="Imports cleanly.",
+                            provider_version="1",
+                        ),
+                        _reference_item(
+                            provider_item_key="ITEM-FAIL",
+                            doi="10.7777/fail",
+                            title="Failing Item",
+                            authors="Fail Author",
+                            year="2024",
+                            journal="Journal",
+                            abstract="Fails conversion.",
+                            provider_version="1",
+                        ),
+                    ],
+                    "cursor-1",
+                ),
+            },
+            attachments={
+                "ITEM-GOOD": [_attachment(provider_item_key="ITEM-GOOD", attachment_key="ATT-GOOD")],
+                "ITEM-FAIL": [_attachment(provider_item_key="ITEM-FAIL", attachment_key="ATT-FAIL")],
+            },
+            downloads={
+                "ATT-GOOD": b"good content",
+                "ATT-FAIL": b"bad content",
+            },
+        )
+
+        pool = _SqlitePool(connectors_db)
+
+        async def _fake_get_db_pool():
+            return pool
+
+        async def _fake_list_memberships_for_user(_user_id: int):
+            return []
+
+        async def _fake_convert_document_bytes_to_text(raw, name, effective_mime):
+            if name == "ITEM-FAIL.pdf":
+                raise RuntimeError("conversion failed")
+            return raw.decode("utf-8")
+
+        monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+        monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
+        monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: fake_conn)
+        monkeypatch.setattr(
+            worker,
+            "_convert_document_bytes_to_text",
+            _fake_convert_document_bytes_to_text,
+            raising=False,
+        )
+
+        account = await svc.create_account(
+            connectors_db,
+            user_id=1,
+            provider="zotero",
+            display_name="Zotero",
+            email="researcher@example.com",
+            tokens={
+                "access_token": "tok",
+                "provider_user_id": "123456",
+                "username": "researcher",
+            },
+        )
+        source = await svc.create_source(
+            connectors_db,
+            account_id=int(account["id"]),
+            provider="zotero",
+            remote_id="COLL1234",
+            type_="collection",
+            path=None,
+            options={},
+        )
+        await svc.upsert_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+            sync_mode="poll",
+        )
+
+        jm = _FakeJM()
+        await worker._process_import_job(
+            jm,
+            jid=9302,
+            lease_id="lease-reference-failure",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        sync_state = await svc.get_source_sync_state(
+            connectors_db,
+            source_id=int(source["id"]),
+        )
+        imported_binding = await svc.get_reference_item_binding(
+            connectors_db,
+            source_id=int(source["id"]),
+            provider="zotero",
+            provider_item_key="ITEM-GOOD",
+        )
+
+        assert jm.completed is not None
+        assert jm.completed["result"]["processed"] == 1
+        assert jm.completed["result"]["failed"] == 1
+        assert sync_state is not None
+        assert sync_state["cursor"] is None
+        assert imported_binding is not None
+        assert imported_binding["media_id"] is not None
     finally:
         await connectors_db.close()

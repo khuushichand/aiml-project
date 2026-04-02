@@ -393,7 +393,10 @@ class ZoteroConnector(BaseConnector, ReferenceManagerAdapter):
         provider_item_key = str(data.get("key") or raw_item.get("key") or "").strip()
         if not provider_item_key:
             raise ValueError("Zotero item is missing a key.")
-        parsed_metadata = normalize_safe_metadata({"doi": data.get("DOI") or data.get("doi")})
+        try:
+            parsed_metadata = normalize_safe_metadata({"doi": data.get("DOI") or data.get("doi")})
+        except ValueError:
+            parsed_metadata = {}
         doi = parsed_metadata.get("doi")
         item_collection_key = collection_key
         if not item_collection_key:
@@ -486,6 +489,7 @@ class ZoteroConnector(BaseConnector, ReferenceManagerAdapter):
         account: dict[str, Any],
         collection_key: str,
         *,
+        collection_name: str | None = None,
         cursor: str | None = None,
         page_size: int = 100,
     ) -> tuple[list[NormalizedReferenceItem], str | None]:
@@ -513,6 +517,7 @@ class ZoteroConnector(BaseConnector, ReferenceManagerAdapter):
                 raw_item,
                 [],
                 collection_key=collection_key,
+                collection_name=collection_name,
                 provider_library_id=self._provider_user_id_from_account(account),
             )
             items.append(normalized_item)

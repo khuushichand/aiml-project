@@ -2,8 +2,8 @@
  * Evaluations Workflow E2E Tests (Tier-2 Features)
  *
  * Tests the evaluations workflow:
- * - Page loads and renders expected elements (title, tabs)
- * - New evaluation opens the create-evaluation flow
+ * - Page loads and renders expected elements (title, tabs, recipe-first entry)
+ * - Recipe validation and launch show a valid current-state outcome
  */
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../../utils/fixtures"
 import { EvaluationsPage } from "../../utils/page-objects"
@@ -19,8 +19,10 @@ test.describe("Evaluations", () => {
 
   test("page loads with expected elements", async ({ diagnostics }) => {
     await evaluations.assertPageReady()
+    await evaluations.assertRecipeCatalogVisible()
 
     // Verify all tabs are visible
+    await expect(evaluations.recipesTab).toBeVisible()
     await expect(evaluations.evaluationsTab).toBeVisible()
     await expect(evaluations.runsTab).toBeVisible()
     await expect(evaluations.datasetsTab).toBeVisible()
@@ -30,11 +32,12 @@ test.describe("Evaluations", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
-  test("new evaluation opens create modal", async ({ diagnostics }) => {
+  test("recipe validation and launch show a usable outcome", async ({ diagnostics }) => {
     await evaluations.assertPageReady()
-
-    await evaluations.openCreateEvaluation()
-    await expect(evaluations.createEvaluationModal).toBeVisible()
+    await evaluations.assertRecipeCatalogVisible()
+    await evaluations.validateCurrentRecipe()
+    await evaluations.runEvaluation()
+    await evaluations.assertRecipeRunOutcome()
 
     await assertNoCriticalErrors(diagnostics)
   })
