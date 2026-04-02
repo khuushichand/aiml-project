@@ -1651,10 +1651,24 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             <ProgressItem
               label={t("settings:onboarding.progress.server", "Server reachable")}
               status={progress.serverReachable}
+              statusText={
+                progress.serverReachable === "checking"
+                  ? t("settings:onboarding.progress.serverChecking", "Checking server...")
+                  : progress.serverReachable === "success"
+                    ? t("settings:onboarding.progress.serverOk", "Reachable")
+                    : undefined
+              }
             />
             <ProgressItem
               label={t("settings:onboarding.progress.auth", "Authentication")}
               status={progress.authentication}
+              statusText={
+                progress.authentication === "checking"
+                  ? t("settings:onboarding.progress.authChecking", "Validating credentials...")
+                  : progress.authentication === "success"
+                    ? t("settings:onboarding.progress.authOk", "Connected!")
+                    : undefined
+              }
             />
             <ProgressItem
               label={t("settings:onboarding.progress.knowledge", "Knowledge index")}

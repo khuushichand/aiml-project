@@ -9,7 +9,7 @@ import { SystemSettings } from "./system-settings"
 import { ThemePicker } from "@/components/Common/Settings/ThemePicker"
 import { getDefaultOcrLanguage, ocrLanguages } from "@/data/ocr-language"
 import { useServerOnline } from "@/hooks/useServerOnline"
-import { useConnectionActions } from "@/hooks/useConnectionState"
+import { useConnectionState, useConnectionActions } from "@/hooks/useConnectionState"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { useTutorialCompletion } from "@/store/tutorials"
@@ -48,6 +48,7 @@ export const GeneralSettings = () => {
   const { changeLocale, locale, supportLanguage } = useI18n()
   const isOnline = useServerOnline()
   const navigate = useNavigate()
+  const { serverUrl: connectedServerUrl } = useConnectionState()
   const { restartOnboarding } = useConnectionActions()
   const { completedTutorials, resetProgress: resetTutorialProgress } = useTutorialCompletion()
 
@@ -108,6 +109,35 @@ export const GeneralSettings = () => {
           />
         </div>
       )}
+      {/* Connection info (A1: read-only server URL) */}
+      <div>
+        <h2 className="text-base font-semibold leading-7 text-text">
+          {t("generalSettings.connection.title", "Connection")}
+        </h2>
+        <div className="border-b border-border mt-3 mb-3"></div>
+        <div className="flex flex-row items-center justify-between">
+          <span className="text-text">
+            {t("generalSettings.connection.serverUrl", "Server URL")}
+          </span>
+          <div className="flex items-center gap-2">
+            <code className="rounded border border-border bg-surface2 px-2 py-0.5 text-xs text-text-muted select-all">
+              {connectedServerUrl || t("generalSettings.connection.notConfigured", "Not configured")}
+            </code>
+            {isOnline ? (
+              <span className="inline-flex h-2 w-2 rounded-full bg-success" title={t("generalSettings.connection.online", "Online")} />
+            ) : (
+              <span className="inline-flex h-2 w-2 rounded-full bg-danger" title={t("generalSettings.connection.offline", "Offline")} />
+            )}
+          </div>
+        </div>
+        <p className="mt-1 text-[11px] text-text-subtle">
+          {t(
+            "generalSettings.connection.changeHint",
+            "To change, go to Settings > tldw Server, or update NEXT_PUBLIC_API_URL and rebuild."
+          )}
+        </p>
+      </div>
+
       <div>
         <h2 className="text-base font-semibold leading-7 text-text">
           {t("generalSettings.title")}

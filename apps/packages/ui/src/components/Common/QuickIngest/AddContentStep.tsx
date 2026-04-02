@@ -155,6 +155,8 @@ const validateQueueItem = (
 // Component
 // ---------------------------------------------------------------------------
 
+const LARGE_FILE_WARNING_THRESHOLD = 500 * 1024 * 1024 // 500 MB
+
 type AddContentStepProps = {
   isOnlineForIngest?: boolean
   onQuickProcess?: () => void
@@ -261,6 +263,11 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
   )
   const canProceed = validItemCount > 0
 
+  const hasLargeFiles = useMemo(
+    () => queueItems.some((item) => item.fileSize >= LARGE_FILE_WARNING_THRESHOLD),
+    [queueItems]
+  )
+
   const { capabilities } = useServerCapabilities()
   const ffmpegMissing = capabilities?.ffmpegAvailable === false
   const hasAvMediaItems = useMemo(
@@ -279,6 +286,24 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
           onFilesAdded={handleFilesAdded}
           isOnlineForIngest={isOnlineForIngest}
         />
+        <Typography.Text className="text-[11px] text-text-subtle">
+          {qi(
+            "fileSizeLimits",
+            "Supported: PDF, EPUB, DOCX, TXT, Markdown, audio, video. Max file size: 500 MB."
+          )}
+        </Typography.Text>
+
+        {hasLargeFiles && (
+          <Alert
+            type="warning"
+            showIcon
+            icon={<AlertTriangle className="h-4 w-4" />}
+            message={qi(
+              "largeFileWarning",
+              "Large file -- upload may take several minutes. Consider using a smaller file if possible."
+            )}
+          />
+        )}
 
         {/* Multi-line URL paste area */}
         <div>

@@ -113,6 +113,51 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
       "common:error.friendlyTimeoutHint",
       "The server stopped streaming responses. Try again, or open Health & diagnostics to check server status."
     )
+  } else if (
+    lower.includes("chunkererror") ||
+    lower.includes("chunker error") ||
+    lower.includes("chunking failed") ||
+    lower.includes("unable to chunk")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyChunkerSummary",
+      "This file couldn't be processed."
+    )
+    hint = i18n.t(
+      "common:error.friendlyChunkerHint",
+      "The server had trouble splitting the file into chunks. Try a different format or a smaller file."
+    )
+  } else if (
+    lower.includes("timeouterror") ||
+    lower.includes("timed out") ||
+    lower.includes("request timeout") ||
+    lower.includes("gateway timeout") ||
+    lower.includes("504")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyProcessingTimeoutSummary",
+      "Processing took too long."
+    )
+    hint = i18n.t(
+      "common:error.friendlyProcessingTimeoutHint",
+      "Try a smaller file, or increase the timeout in Settings."
+    )
+  } else if (
+    lower.includes("connectionerror") ||
+    lower.includes("connection refused") ||
+    lower.includes("econnrefused") ||
+    lower.includes("network error") ||
+    lower.includes("failed to fetch") ||
+    lower.includes("err_connection")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyConnectionSummary",
+      "Lost connection to the server."
+    )
+    hint = i18n.t(
+      "common:error.friendlyConnectionHint",
+      "Check that the server is running, then try again. Open Health & diagnostics for more details."
+    )
   } else {
     summary = i18n.t(
       "common:error.friendlyGenericSummary",
