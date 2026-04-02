@@ -235,7 +235,7 @@ COHERE_API_KEY=...
 
 ```bash
 # Docker
-docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml restart
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d
 
 # Local
 # Stop the server (Ctrl+C) and re-run:

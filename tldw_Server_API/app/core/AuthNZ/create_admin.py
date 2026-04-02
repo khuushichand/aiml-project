@@ -68,9 +68,9 @@ async def create_admin_user_non_interactive(
             if existing:
                 print(f"[create-admin] Admin user '{username}' already exists (id={existing.get('id', '?')}). Skipping.")
                 return True
-        except Exception:
+        except Exception as lookup_err:
             # get_user_by_username may raise if schema is fresh; treat as "no user"
-            pass
+            logger.debug("User lookup failed (expected on fresh schema): %s", lookup_err)
 
         # Hash password
         password_service = PasswordService()
@@ -103,7 +103,7 @@ async def create_admin_user_non_interactive(
                 scope="admin",
                 expires_in_days=365,
             )
-            print(f"[create-admin] Admin API key created (expires in 365 days).")
+            print("[create-admin] Admin API key created (expires in 365 days).")
             # Intentionally do NOT print the key to logs in Docker context for security
         except Exception as api_err:
             # Non-fatal: user can generate API keys later via the UI/API
@@ -113,8 +113,8 @@ async def create_admin_user_non_interactive(
         return True
 
     except Exception as e:
-        print(f"[create-admin] Failed to create admin user: {e}")
-        logger.opt(exception=True).error("create_admin_user_non_interactive failed")
+        print("[create-admin] Failed to create admin user. Check server logs for details.")
+        logger.opt(exception=True).error("create_admin_user_non_interactive failed: %s", e)
         return False
 
 

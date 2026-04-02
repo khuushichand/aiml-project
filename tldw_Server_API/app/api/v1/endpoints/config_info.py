@@ -707,7 +707,7 @@ async def validate_provider_key(body: ProviderValidateRequest, request: Request)
         return ProviderValidateResponse(
             provider=provider,
             valid=False,
-            error=str(exc)[:200],
+            error="Validation failed. The provider may be unreachable or the key may be invalid.",
         )
 
 

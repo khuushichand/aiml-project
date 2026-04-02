@@ -132,7 +132,7 @@ class TestListConfiguredProviders:
         assert response.any_configured is True
 
     @pytest.mark.asyncio
-    async def test_local_providers_always_configured(self, monkeypatch):
+    async def test_local_providers_always_configured(self):
         # Local providers don't require API keys
         with patch(
             "tldw_Server_API.app.api.v1.schemas.chat_request_schemas.get_api_keys",

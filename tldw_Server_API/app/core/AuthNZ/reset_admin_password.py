@@ -40,9 +40,10 @@ async def reset_user_password(
         print("[reset-password] Not in multi_user mode; password reset is only for multi-user deployments.")
         return False
 
-    # Validate password length (matches PasswordService.min_length default of 10)
-    if len(new_password) < 10:
-        print("[reset-password] Password must be at least 10 characters.")
+    # Validate password length against configured minimum
+    _pw_svc = PasswordService()
+    if len(new_password) < _pw_svc.min_length:
+        print(f"[reset-password] Password must be at least {_pw_svc.min_length} characters.")
         return False
 
     try:
@@ -68,8 +69,8 @@ async def reset_user_password(
         return True
 
     except Exception as e:
-        print(f"[reset-password] Failed to reset password: {e}")
-        logger.opt(exception=True).error("reset_user_password failed")
+        print("[reset-password] Failed to reset password. Check server logs for details.")
+        logger.opt(exception=True).error("reset_user_password failed: %s", e)
         return False
 
 
