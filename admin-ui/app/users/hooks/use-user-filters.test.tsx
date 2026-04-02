@@ -2,7 +2,7 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUserFilters } from './use-user-filters';
-import { getScopedItem } from '@/lib/scoped-storage';
+import { _scopedKeyForTesting, getScopedItem, setScopedItem } from '@/lib/scoped-storage';
 
 vi.mock('@/lib/use-url-state', async () => {
   const React = await import('react');
@@ -73,5 +73,34 @@ describe('useUserFilters', () => {
       expect(result.current.activeViewId).toBe('');
     });
     expect(getScopedItem('admin_users_saved_views')).toBe('[]');
+  });
+
+  it('reacts to scoped storage events from another tab', async () => {
+    document.cookie = 'admin_session=abcdef123456';
+    const { result } = renderHook(() => useUserFilters({ resetPagination }));
+
+    act(() => {
+      setScopedItem('admin_users_saved_views', JSON.stringify([
+        {
+          id: 'shared-view',
+          name: 'Shared view',
+          query: 'alice',
+          role: '',
+          status: '',
+          verification: '',
+          orgId: '',
+          mfaEnabled: '',
+        },
+      ]));
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: _scopedKeyForTesting('admin_users_saved_views'),
+      }));
+    });
+
+    await waitFor(() => {
+      expect(result.current.savedViews).toEqual([
+        expect.objectContaining({ id: 'shared-view', name: 'Shared view', query: 'alice' }),
+      ]);
+    });
   });
 });

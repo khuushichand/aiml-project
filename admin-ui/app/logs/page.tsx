@@ -154,6 +154,7 @@ function LogsPageContent() {
   const [requestId, setRequestId] = useState(() => searchParams.get('request_id') ?? '');
   const [orgId, setOrgId] = useState('');
   const [userId, setUserId] = useState('');
+  const requestIdParam = searchParams.get('request_id') ?? '';
   const clearLogFilters = useCallback(() => {
     setStart('');
     setEnd('');
@@ -197,6 +198,10 @@ function LogsPageContent() {
     }, 300);
     return () => window.clearTimeout(handle);
   }, [filters, resetPagination]);
+
+  useEffect(() => {
+    setRequestId(requestIdParam);
+  }, [requestIdParam]);
 
   const validationError = useMemo(() => {
     const issues: string[] = [];

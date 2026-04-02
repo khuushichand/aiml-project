@@ -582,6 +582,48 @@ describe('IncidentsPage Stage 3 workflows', () => {
     expect(screen.queryByRole('link', { name: 'Runbook' })).not.toBeInTheDocument();
   });
 
+  it('rejects unsafe runbook URLs before create and does not render unsafe links', async () => {
+    usePagedResourceMock.mockReturnValue({
+      items: [{
+        id: 'inc-unsafe',
+        title: 'Unsafe runbook test',
+        status: 'open',
+        severity: 'medium',
+        summary: 'Unsafe runbook should not render',
+        tags: [],
+        created_at: '2026-03-27T08:00:00Z',
+        updated_at: '2026-03-27T08:00:00Z',
+        resolved_at: null,
+        assigned_to_user_id: null,
+        assigned_to_label: null,
+        root_cause: null,
+        impact: null,
+        action_items: [],
+        timeline: [],
+        runbook_url: 'javascript:alert(1)',
+      }],
+      total: 1,
+      loading: false,
+      error: '',
+      reload: reloadMock,
+    });
+
+    const user = userEvent.setup();
+    render(<IncidentsPage />);
+
+    await screen.findByText('Unsafe runbook test');
+    expect(screen.queryByRole('link', { name: 'Runbook' })).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Title'), 'Queue outage');
+    await user.type(screen.getByLabelText('Runbook URL (optional)'), 'javascript:alert(1)');
+    await user.click(screen.getByRole('button', { name: 'Create Incident' }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith('Runbook URL must start with http:// or https://');
+    });
+    expect(apiMock.createIncident).not.toHaveBeenCalled();
+  });
+
   it('notify button opens dialog overlay', async () => {
     usePagedResourceMock.mockReturnValue({
       items: [{

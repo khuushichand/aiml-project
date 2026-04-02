@@ -398,6 +398,9 @@ describe('UsersPage', () => {
         admin_password: 'AdminPass123!',
       });
     });
+    await waitFor(() => {
+      expect(apiMock.getUsers).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('round-trips a saved view through save, apply, and delete', async () => {

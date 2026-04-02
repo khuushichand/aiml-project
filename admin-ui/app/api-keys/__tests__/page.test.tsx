@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ApiKeysPage from '../page';
 import { api } from '@/lib/api-client';
@@ -98,8 +98,9 @@ beforeEach(() => {
     items: [
       { id: 1, username: 'alice', email: 'alice@example.com' },
       { id: 2, username: 'bob', email: 'bob@example.com' },
+      { id: 3, username: 'charlie', email: 'charlie@example.com' },
     ],
-    total: 2,
+    total: 3,
     page: 1,
     pages: 1,
     limit: 100,
@@ -116,14 +117,17 @@ beforeEach(() => {
         last_used_at: '2026-02-16T00:00:00Z',
       }];
     }
-    return [{
-      id: 202,
-      key_prefix: 'sk-bob',
-      status: 'active',
-      created_at: '2026-02-14T00:00:00Z',
-      expires_at: null,
-      last_used_at: '2026-02-16T00:00:00Z',
-    }];
+    if (userId === '2') {
+      return [{
+        id: 202,
+        key_prefix: 'sk-bob',
+        status: 'active',
+        created_at: '2026-02-14T00:00:00Z',
+        expires_at: null,
+        last_used_at: '2026-02-16T00:00:00Z',
+      }];
+    }
+    return [];
   });
 
   apiMock.rotateApiKey.mockResolvedValue({ status: 'stored' });
@@ -189,6 +193,18 @@ describe('ApiKeysPage', () => {
       expect(screen.getByText('Create API Key')).toBeInTheDocument();
       expect(screen.getByText('Select a user and configure the new API key.')).toBeInTheDocument();
     });
+  });
+
+  it('shows users without existing keys in the Create Key owner list', async () => {
+    const user = userEvent.setup();
+    render(<ApiKeysPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Create Key/i }));
+
+    const ownerSelect = await screen.findByLabelText('User');
+    expect(within(ownerSelect).getByRole('option', { name: 'alice' })).toBeInTheDocument();
+    expect(within(ownerSelect).getByRole('option', { name: 'bob' })).toBeInTheDocument();
+    expect(within(ownerSelect).getByRole('option', { name: 'charlie' })).toBeInTheDocument();
   });
 
   it('shows expiring-soon warning banner when keys expire within 7 days', async () => {

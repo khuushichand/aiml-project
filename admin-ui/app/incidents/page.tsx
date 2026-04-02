@@ -44,6 +44,21 @@ const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 const formatIncidentDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
+const normalizeSafeRunbookUrl = (value?: string | null): string | null => {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+
+  try {
+    const parsed = new URL(normalized);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const formatMinutes = (minutes: number | null | undefined): string => {
   if (minutes == null) return '—';
   const rounded = Math.round(minutes);
@@ -221,6 +236,11 @@ function IncidentsPageContent() {
       showError('Incident title is required');
       return;
     }
+    const normalizedRunbookUrl = runbookUrl.trim() ? normalizeSafeRunbookUrl(runbookUrl) : null;
+    if (runbookUrl.trim() && !normalizedRunbookUrl) {
+      showError('Runbook URL must start with http:// or https://');
+      return;
+    }
     try {
       setCreating(true);
       await api.createIncident({
@@ -229,7 +249,7 @@ function IncidentsPageContent() {
         severity,
         summary,
         tags: tags ? tags.split(',').map((item) => item.trim()).filter(Boolean) : [],
-        ...(runbookUrl.trim() ? { runbook_url: runbookUrl.trim() } : {}),
+        ...(normalizedRunbookUrl ? { runbook_url: normalizedRunbookUrl } : {}),
       });
       success('Incident created');
       setTitle('');
@@ -761,11 +781,11 @@ function IncidentsPageContent() {
                         </Badge>
                       ))}
                     </div>
-                    {incident.runbook_url && (
+                    {normalizeSafeRunbookUrl(incident.runbook_url) && (
                       <div className="flex items-center gap-1 text-sm">
                         <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
                         <a
-                          href={incident.runbook_url}
+                          href={normalizeSafeRunbookUrl(incident.runbook_url) ?? undefined}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-primary hover:underline"

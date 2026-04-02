@@ -840,15 +840,6 @@ function UsersPageContent() {
           successIds.push(ids[index]);
         }
       });
-      if (successIds.length > 0) {
-        setMfaByUserId((prev) => {
-          const next = { ...prev };
-          successIds.forEach((id) => {
-            next[id] = requireMfa;
-          });
-          return next;
-        });
-      }
 
       if (failures > 0) {
         showError(
@@ -862,6 +853,9 @@ function UsersPageContent() {
         );
       }
       handleClearSelection();
+      if (successIds.length > 0) {
+        void loadUsers();
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to update MFA requirement';
       showError('Bulk MFA update failed', message);

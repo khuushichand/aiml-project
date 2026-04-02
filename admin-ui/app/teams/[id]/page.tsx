@@ -219,6 +219,7 @@ export default function TeamDetailPage() {
       void loadData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to update team';
+      logger.error('Failed to update team', { component: 'TeamDetailPage', error: err instanceof Error ? err.message : String(err) });
       setEditTeamError(msg);
     } finally {
       setUpdatingTeam(false);

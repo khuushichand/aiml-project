@@ -75,6 +75,7 @@ export default function ACPSessionsPage() {
     userId: '',
   });
   const loadingRef = useRef(false);
+  const latestRequestIdRef = useRef(0);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -107,6 +108,8 @@ export default function ACPSessionsPage() {
   };
 
   const loadSessions = useCallback(async () => {
+    const requestId = latestRequestIdRef.current + 1;
+    latestRequestIdRef.current = requestId;
     loadingRef.current = true;
     setLoading(true);
     setError('');
@@ -116,15 +119,19 @@ export default function ACPSessionsPage() {
       if (appliedFilters.agentType) params.agent_type = appliedFilters.agentType;
       if (appliedFilters.userId) params.user_id = appliedFilters.userId;
       const response = await api.getACPSessions(params) as ACPSessionListResponse;
+      if (latestRequestIdRef.current !== requestId) return;
       setSessions(response.sessions || []);
       setTotal(response.total || 0);
+      setLastRefreshed(new Date());
     } catch (err) {
+      if (latestRequestIdRef.current !== requestId) return;
       const message = err instanceof ApiError ? err.message : 'Failed to load ACP sessions';
       setError(message);
     } finally {
-      loadingRef.current = false;
-      setLoading(false);
-      setLastRefreshed(new Date());
+      if (latestRequestIdRef.current === requestId) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [appliedFilters]);
 

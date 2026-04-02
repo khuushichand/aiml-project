@@ -603,6 +603,10 @@ export default function JobsPage() {
       showError('Name required', 'Please enter a policy name');
       return;
     }
+    if (!slaFormJobType.trim()) {
+      showError('Job type required', 'Please enter a backend job type');
+      return;
+    }
     const maxProcessing = parseInt(slaFormMaxProcessing, 10);
     const maxWait = parseInt(slaFormMaxWait, 10);
     if (Number.isNaN(maxProcessing) || maxProcessing < 1) {
@@ -617,9 +621,10 @@ export default function JobsPage() {
     try {
       setSlaFormSaving(true);
       await api.createJobSlaPolicy({
+        name: slaFormName.trim(),
         domain: slaFormDomain.trim() || 'default',
         queue: slaFormQueue.trim() || 'default',
-        job_type: slaFormJobType.trim() || slaFormName.trim(),
+        job_type: slaFormJobType.trim(),
         max_queue_latency_seconds: maxWait,
         max_duration_seconds: maxProcessing,
         enabled: slaFormEnabled,

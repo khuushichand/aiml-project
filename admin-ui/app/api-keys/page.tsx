@@ -45,6 +45,7 @@ function ApiKeysPageContent() {
   const confirm = useConfirm();
   const { success: toastSuccess, error: toastError } = useToast();
 
+  const [availableUsers, setAvailableUsers] = useState<UserWithKeyCount[]>([]);
   const [rows, setRows] = useState<ReturnType<typeof buildUnifiedApiKeyRows>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -83,7 +84,7 @@ function ApiKeysPageContent() {
       setError('');
       setPartialLoadWarning('');
 
-      const users: UserWithKeyCount[] = [];
+      const loadedUsers: UserWithKeyCount[] = [];
       const userQuery: Record<string, string> = {
         page: '1',
         limit: String(USER_PAGE_LIMIT),
@@ -97,7 +98,7 @@ function ApiKeysPageContent() {
       while (page <= pages) {
         userQuery.page = String(page);
         const usersPage = await api.getUsersPage(userQuery);
-        users.push(...usersPage.items);
+        loadedUsers.push(...usersPage.items);
 
         pages = usersPage.pages > 0
           ? usersPage.pages
@@ -111,7 +112,7 @@ function ApiKeysPageContent() {
       }
 
       const keyResults = await Promise.allSettled(
-        users.map(async (user) => ({
+        loadedUsers.map(async (user) => ({
           userId: user.id,
           username: user.username,
           keys: await api.getUserApiKeys(String(user.id), { include_revoked: true }) as ApiKeyMetadataLike[],
@@ -122,7 +123,7 @@ function ApiKeysPageContent() {
       const failedUsers: string[] = [];
 
       keyResults.forEach((result, index) => {
-        const fallbackUser = users[index];
+        const fallbackUser = loadedUsers[index];
         if (result.status === 'fulfilled') {
           keysByUserId[result.value.userId] = Array.isArray(result.value.keys)
             ? result.value.keys
@@ -150,7 +151,8 @@ function ApiKeysPageContent() {
         // Usage data is non-critical; proceed without it
       }
 
-      setRows(buildUnifiedApiKeyRows(users, keysByUserId, usageByKeyId));
+      setAvailableUsers(loadedUsers);
+      setRows(buildUnifiedApiKeyRows(loadedUsers, keysByUserId, usageByKeyId));
 
       if (failedUsers.length > 0) {
         setPartialLoadWarning(
@@ -161,6 +163,7 @@ function ApiKeysPageContent() {
       logger.error('Failed to load unified API keys', { component: 'ApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       const message = err instanceof Error && err.message ? err.message : 'Failed to load API keys';
       setError(message);
+      setAvailableUsers([]);
       setRows([]);
     } finally {
       setLoading(false);
@@ -173,13 +176,13 @@ function ApiKeysPageContent() {
 
   const ownerOptions = useMemo(() => {
     const byOwner = new Map<number, { id: number; username: string }>();
-    rows.forEach((row) => {
-      if (!byOwner.has(row.ownerUserId)) {
-        byOwner.set(row.ownerUserId, { id: row.ownerUserId, username: row.ownerUsername });
+    availableUsers.forEach((user) => {
+      if (!byOwner.has(user.id)) {
+        byOwner.set(user.id, { id: user.id, username: user.username });
       }
     });
     return [...byOwner.values()].sort((a, b) => a.username.localeCompare(b.username));
-  }, [rows]);
+  }, [availableUsers]);
 
   const normalizedStatusFilter: 'all' | UnifiedApiKeyStatus =
     statusFilter === 'active' || statusFilter === 'revoked' || statusFilter === 'expired'

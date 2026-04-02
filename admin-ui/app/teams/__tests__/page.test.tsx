@@ -162,10 +162,8 @@ describe('TeamsPage edit and delete flows', () => {
     const user = userEvent.setup();
     render(<TeamsPage />);
 
-    // Wait for teams to load
     await screen.findByText('Team One');
 
-    // Select the team checkbox (first checkbox in the table body row)
     const checkboxes = screen.getAllByRole('checkbox');
     const teamCheckbox = checkboxes.find(
       (cb) => cb.closest('tr')?.textContent?.includes('Team One'),
@@ -173,7 +171,6 @@ describe('TeamsPage edit and delete flows', () => {
     expect(teamCheckbox).toBeDefined();
     await user.click(teamCheckbox!);
 
-    // Bulk actions bar should appear — find the Delete button within it
     const deleteButtons = await screen.findAllByRole('button', { name: /delete/i });
     const bulkDeleteBtn = deleteButtons.find((btn) => btn.textContent?.match(/delete/i) && !btn.closest('tr'));
     expect(bulkDeleteBtn).toBeDefined();
@@ -241,5 +238,51 @@ describe('TeamsPage edit and delete flows', () => {
     expect(screen.getByPlaceholderText('Search teams by name or description...').getAttribute('disabled')).toBeNull();
     expect(apiMock.getTeams).toHaveBeenCalledWith('10');
     expect(apiMock.getTeams).toHaveBeenCalledWith('12');
+  });
+
+  it('uses the row org_id for edit and delete in the all-organizations view', async () => {
+    currentSelectedOrgId = '__all__';
+    apiMock.getOrganizations.mockResolvedValue([
+      { id: 10, name: 'Acme', slug: 'acme' },
+      { id: 42, name: 'Beta', slug: 'beta' },
+    ]);
+    apiMock.getTeams.mockImplementation(async (orgId: string) => {
+      if (orgId === '42') {
+        return [{
+          id: 5,
+          org_id: 42,
+          name: 'Cross Org Team',
+          description: 'Team from beta',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        }];
+      }
+      return [];
+    });
+
+    const user = userEvent.setup();
+    render(<TeamsPage />);
+
+    const rowLabel = await screen.findByText('Cross Org Team');
+    const row = rowLabel.closest('tr');
+    expect(row).not.toBeNull();
+
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Edit' }));
+    await user.clear(screen.getByLabelText('Team Name'));
+    await user.type(screen.getByLabelText('Team Name'), 'Cross Org Team Updated');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(apiMock.updateTeam).toHaveBeenCalledWith('42', '5', {
+        name: 'Cross Org Team Updated',
+        description: 'Team from beta',
+      });
+    });
+
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(apiMock.deleteTeam).toHaveBeenCalledWith('42', '5');
+    });
   });
 });

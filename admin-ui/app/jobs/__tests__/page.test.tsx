@@ -306,4 +306,30 @@ describe('JobsPage', () => {
       expect(screen.queryByText('SLA')).not.toBeInTheDocument();
     });
   });
+
+  it('requires an explicit job type and sends name separately when creating an SLA policy', async () => {
+    const user = userEvent.setup();
+    render(<JobsPage />);
+
+    await screen.findByText('SLA Policies');
+    await user.click(screen.getByRole('button', { name: 'New Policy' }));
+
+    await user.type(screen.getByLabelText('Policy Name'), 'Standard Export');
+    await user.click(screen.getByRole('button', { name: 'Create Policy' }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith('Job type required', 'Please enter a backend job type');
+    });
+    expect(apiMock.createJobSlaPolicy).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText('Job Type'), 'export_job');
+    await user.click(screen.getByRole('button', { name: 'Create Policy' }));
+
+    await waitFor(() => {
+      expect(apiMock.createJobSlaPolicy).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'Standard Export',
+        job_type: 'export_job',
+      }));
+    });
+  });
 });

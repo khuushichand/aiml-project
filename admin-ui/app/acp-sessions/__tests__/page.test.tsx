@@ -58,6 +58,16 @@ type ApiMock = {
 
 const apiMock = api as unknown as ApiMock;
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
 beforeEach(() => {
   apiMock.getACPSessions.mockResolvedValue({
     sessions: [],
@@ -98,6 +108,45 @@ describe('ACPSessionsPage filters', () => {
     expect(apiMock.getACPSessions).toHaveBeenLastCalledWith({
       agent_type: 'assistant',
       user_id: '42',
+    });
+  });
+
+  it('ignores slower stale responses from older session loads', async () => {
+    const initialRequest = deferred<{ sessions: ReturnType<typeof makeSession>[]; total: number }>();
+    const filteredRequest = deferred<{ sessions: ReturnType<typeof makeSession>[]; total: number }>();
+    apiMock.getACPSessions
+      .mockReturnValueOnce(initialRequest.promise)
+      .mockReturnValueOnce(filteredRequest.promise);
+
+    const user = userEvent.setup();
+    render(<ACPSessionsPage />);
+
+    await waitFor(() => {
+      expect(apiMock.getACPSessions).toHaveBeenCalledTimes(1);
+    });
+
+    await user.type(screen.getByPlaceholderText('Agent type...'), 'assistant');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(apiMock.getACPSessions).toHaveBeenCalledTimes(2);
+    });
+
+    filteredRequest.resolve({
+      sessions: [makeSession({ session_id: 'sess-fresh', name: 'Fresh Session', agent_type: 'assistant' })],
+      total: 1,
+    });
+
+    await screen.findByText('Fresh Session');
+
+    initialRequest.resolve({
+      sessions: [makeSession({ session_id: 'sess-stale', name: 'Stale Session' })],
+      total: 1,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Fresh Session')).toBeInTheDocument();
+      expect(screen.queryByText('Stale Session')).not.toBeInTheDocument();
     });
   });
 });

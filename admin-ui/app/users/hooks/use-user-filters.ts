@@ -59,7 +59,11 @@ const subscribeToSavedViews = (listener: () => void) => {
   }
 
   const handleStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === SAVED_VIEWS_STORAGE_KEY) {
+    if (
+      event.key === null
+      || event.key === SAVED_VIEWS_STORAGE_KEY
+      || event.key.endsWith(SAVED_VIEWS_STORAGE_KEY)
+    ) {
       listener();
     }
   };

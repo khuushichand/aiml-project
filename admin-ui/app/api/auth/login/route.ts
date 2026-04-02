@@ -33,14 +33,28 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const body = await request.text();
-  const response = await fetch(buildApiUrlForRequest(request, '/auth/login'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': request.headers.get('content-type') ?? 'application/x-www-form-urlencoded',
-    },
-    body,
-    cache: 'no-store',
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+  let response: Response;
+  try {
+    response = await fetch(buildApiUrlForRequest(request, '/auth/login'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': request.headers.get('content-type') ?? 'application/x-www-form-urlencoded',
+      },
+      body,
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return NextResponse.json({ detail: 'Login request timed out' }, { status: 504 });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const payload = await response.json().catch(() => null) as LoginResponsePayload | null;
   if (!response.ok || !payload) {
