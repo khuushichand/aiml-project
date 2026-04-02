@@ -17,7 +17,9 @@ help:
 	@echo "  make quickstart-local        Start local server (after install)"
 	@echo "  make server-up-dev           Start server in mock/dev mode"
 	@echo "  make verify                  Health-check a running server"
+	@echo "  make check                   Run sanity checks (health, keys, ffmpeg)"
 	@echo "  make show-api-key            Print your SINGLE_USER_API_KEY"
+	@echo "  make generate-secrets        Generate fresh secrets for .env"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make tooling-install         Install test/smoke extras"
@@ -125,10 +127,13 @@ quickstart-docker: quickstart-docker-bootstrap
 	@echo "[quickstart-docker] Starting tldw_server via Docker Compose..."
 	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker] docker not found. Install Docker and retry." && exit 1)
 	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
-	@echo "[quickstart-docker] First-use auth initialization is handled automatically by the app entrypoint."
+	@echo ""
 	@echo "[quickstart-docker] Server running at http://localhost:8000"
-	@echo "[quickstart-docker] Verify with: curl http://localhost:8000/health"
-	@echo "[quickstart-docker] API docs at: http://localhost:8000/docs"
+	@echo "[quickstart-docker] API docs at:    http://localhost:8000/docs"
+	@echo "[quickstart-docker] Setup wizard:   http://localhost:8000/setup"
+	@echo "[quickstart-docker] Verify with:    curl http://localhost:8000/health"
+	@echo "[quickstart-docker] Your API key:   run 'make show-api-key' to retrieve"
+	@echo ""
 
 quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] Starting API + WebUI via Docker Compose..."
@@ -142,9 +147,34 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE="$(NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE)" \
 	TLDW_INTERNAL_API_ORIGIN="$(TLDW_INTERNAL_API_ORIGIN)" \
 	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
-	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
-	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
-	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  tldw is starting up!                                       ║"
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  API:         http://localhost:8000                          ║"
+	@echo "║  WebUI:       http://localhost:8080                          ║"
+	@echo "║  Admin Panel: http://localhost:3001                          ║"
+	@echo "║  API Docs:    http://localhost:8000/docs                     ║"
+	@echo "║  Setup:       http://localhost:8000/setup                    ║"
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  Your API Key:                                               ║"
+	@if [ -f "$(TLDW_ENV_FILE)" ]; then \
+		KEY=$$(grep '^SINGLE_USER_API_KEY=' "$(TLDW_ENV_FILE)" | cut -d= -f2-); \
+		echo "║    $$KEY"; \
+	else \
+		echo "║    (run 'make show-api-key' to retrieve)"; \
+	fi
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  Next steps:                                                 ║"
+	@echo "║  1. Open WebUI at http://localhost:8080                      ║"
+	@echo "║  2. Paste your API key when prompted                         ║"
+	@echo "║  3. Add an LLM provider key (OpenAI, Anthropic, etc.)       ║"
+	@echo "║     → Edit tldw_Server_API/Config_Files/.env                 ║"
+	@echo "║     → Add OPENAI_API_KEY=sk-... (or other provider)         ║"
+	@echo "║     → Restart: docker compose up -d                           ║"
+	@echo "║  4. Try chatting or ingesting a YouTube URL!                 ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
 
 model-cycle:
 	@command -v docker >/dev/null 2>&1 || (echo "[model-cycle] docker not found. Install Docker and retry." && exit 1)
@@ -468,6 +498,39 @@ stt-golden:
 	TLDW_STT_GOLDEN_ENABLE=1 \
 	TLDW_STT_GOLDEN_AUDIO_DIR="$(STT_GOLDEN_AUDIO_DIR)" \
 	python -m pytest tldw_Server_API/tests/Audio/test_stt_adapters_golden.py -m "stt_golden" -v
+
+# -----------------------------------------------------------------------------
+# Sanity check (C2)
+# -----------------------------------------------------------------------------
+.PHONY: check
+
+check:
+	@FAIL=0; \
+	echo "Running tldw sanity checks..."; \
+	echo -n "  Server health:    "; \
+	if curl -sf http://localhost:8000/health > /dev/null 2>&1; then echo "✓"; else echo "✗ (not running)"; FAIL=1; fi; \
+	echo -n "  API key set:      "; \
+	if grep -q '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null; then echo "✓"; else echo "✗ (check .env)"; FAIL=1; fi; \
+	echo -n "  FFmpeg available:  "; \
+	if command -v ffmpeg > /dev/null 2>&1; then echo "✓"; else echo "✗ (install ffmpeg)"; FAIL=1; fi; \
+	echo -n "  Provider keys:    "; \
+	if curl -sf -H "X-API-KEY: $$(grep '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null | cut -d= -f2-)" http://localhost:8000/api/v1/config/providers 2>/dev/null | grep -q '"any_configured":true'; then echo "✓"; else echo "✗ (add a provider key to .env)"; FAIL=1; fi; \
+	if [ "$$FAIL" -ne 0 ]; then echo "Some checks failed."; exit 1; fi; \
+	echo "All checks passed."
+
+# -----------------------------------------------------------------------------
+# Secret generation helper (C3)
+# -----------------------------------------------------------------------------
+.PHONY: generate-secrets
+
+generate-secrets:
+	@echo "Generated secrets (copy to your .env):"
+	@echo ""
+	@echo "JWT_SECRET_KEY=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+	@echo "MCP_JWT_SECRET=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+	@echo "MCP_API_KEY_SALT=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+	@echo "BYOK_ENCRYPTION_KEY=$$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+	@echo "SINGLE_USER_API_KEY=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 # -----------------------------------------------------------------------------
 # Bandit (project-scoped)

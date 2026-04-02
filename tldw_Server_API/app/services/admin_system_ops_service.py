@@ -1107,13 +1107,17 @@ def list_webhook_deliveries(
     return wh_deliveries[:limit]
 
 
+def _create_webhook_http_client(*, timeout: float):
+    from tldw_Server_API.app.core.http_client import create_client
+
+    return create_client(timeout=timeout, http2=False)
+
+
 def send_test_webhook(*, webhook_id: str) -> dict[str, Any]:
     """Send a test payload to a webhook URL with HMAC signing and record the delivery.
 
     Returns the delivery record.
     """
-    import httpx
-
     webhook = _get_webhook_with_secret(webhook_id)
     url = webhook.get("url", "")
     secret = webhook.get("secret", "")
@@ -1138,7 +1142,7 @@ def send_test_webhook(*, webhook_id: str) -> dict[str, Any]:
     start = time.monotonic()
 
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with _create_webhook_http_client(timeout=10.0) as client:
             resp = client.post(url, content=body_bytes, headers=headers)
             status_code = resp.status_code
             success = 200 <= resp.status_code < 300

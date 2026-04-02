@@ -6,11 +6,9 @@ JSON store isolation pattern established in test_admin_ops_new_endpoints.py.
 """
 
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any
-from unittest import mock
 
 import pytest
 
@@ -429,17 +427,26 @@ class TestWebhookTestSend:
             events=["user.created"],
         )
 
-        # Use mock.patch to bypass the monkeypatch guard on httpx
-        mock_response = mock.MagicMock()
-        mock_response.status_code = 200
+        class _FakeResponse:
+            status_code = 200
 
-        mock_client_cm = mock.MagicMock()
-        mock_client_cm.__enter__ = mock.MagicMock(return_value=mock_client_cm)
-        mock_client_cm.__exit__ = mock.MagicMock(return_value=False)
-        mock_client_cm.post.return_value = mock_response
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
 
-        with mock.patch("httpx.Client", return_value=mock_client_cm):
-            delivery = service.send_test_webhook(webhook_id=webhook["id"])
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+            def post(self, url, content, headers):
+                del url, content, headers
+                return _FakeResponse()
+
+        monkeypatch.setattr(service, "_create_webhook_http_client", lambda **_: _FakeClient())
+        delivery = service.send_test_webhook(webhook_id=webhook["id"])
 
         assert delivery["success"] is True
         assert delivery["status_code"] == 200
@@ -459,16 +466,26 @@ class TestWebhookTestSend:
             events=["user.created"],
         )
 
-        mock_response = mock.MagicMock()
-        mock_response.status_code = 500
+        class _FakeResponse:
+            status_code = 500
 
-        mock_client_cm = mock.MagicMock()
-        mock_client_cm.__enter__ = mock.MagicMock(return_value=mock_client_cm)
-        mock_client_cm.__exit__ = mock.MagicMock(return_value=False)
-        mock_client_cm.post.return_value = mock_response
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
 
-        with mock.patch("httpx.Client", return_value=mock_client_cm):
-            delivery = service.send_test_webhook(webhook_id=webhook["id"])
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+            def post(self, url, content, headers):
+                del url, content, headers
+                return _FakeResponse()
+
+        monkeypatch.setattr(service, "_create_webhook_http_client", lambda **_: _FakeClient())
+        delivery = service.send_test_webhook(webhook_id=webhook["id"])
 
         assert delivery["success"] is False
         assert delivery["status_code"] == 500
@@ -490,13 +507,23 @@ class TestWebhookTestSend:
             events=["user.created"],
         )
 
-        mock_client_cm = mock.MagicMock()
-        mock_client_cm.__enter__ = mock.MagicMock(return_value=mock_client_cm)
-        mock_client_cm.__exit__ = mock.MagicMock(return_value=False)
-        mock_client_cm.post.side_effect = OSError("Connection refused")
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
 
-        with mock.patch("httpx.Client", return_value=mock_client_cm):
-            delivery = service.send_test_webhook(webhook_id=webhook["id"])
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+            def post(self, url, content, headers):
+                del url, content, headers
+                raise OSError("Connection refused")
+
+        monkeypatch.setattr(service, "_create_webhook_http_client", lambda **_: _FakeClient())
+        delivery = service.send_test_webhook(webhook_id=webhook["id"])
 
         assert delivery["success"] is False
         assert delivery["status_code"] is None

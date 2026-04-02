@@ -70,15 +70,6 @@ async def debug_decode_token(
     return AdminTokenDecodeResponse(**result)
 
 
-@router.get("/billing/analytics")
-async def get_billing_analytics(
-    principal: AuthPrincipal = Depends(get_auth_principal),
-    db=Depends(get_db_transaction),
-) -> dict:
-    """Get billing analytics: MRR, subscriber counts, churn rate."""
-    return await admin_system_service.get_billing_analytics(db)
-
-
 @router.get("/dependencies/health")
 async def get_all_dependencies_health(
     principal: AuthPrincipal = Depends(get_auth_principal),

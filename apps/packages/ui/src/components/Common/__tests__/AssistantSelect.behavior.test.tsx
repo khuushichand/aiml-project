@@ -182,6 +182,64 @@ describe("AssistantSelect behavior", () => {
     window.removeEventListener("tldw:open-actor-settings", actorListener)
   })
 
+  it("lists and selects personas with canonical buddy summary payloads", async () => {
+    const user = userEvent.setup()
+    mocks.listPersonaProfiles.mockResolvedValue([
+      {
+        id: "persona-1",
+        name: "Guide Persona",
+        avatar_url: "https://example.com/guide.png",
+        buddy_summary: {
+          has_buddy: true,
+          persona_name: "Guide Persona",
+          role_summary: "Keeps the chat on course",
+          visual: {
+            species_id: "owl",
+            silhouette_id: "perch",
+            palette_id: "dawn"
+          }
+        }
+      }
+    ])
+
+    renderAssistantSelect()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Select assistant" })
+    )
+
+    await user.click(await screen.findByRole("tab", { name: "Personas" }))
+
+    const personaButton = await screen.findByRole("button", {
+      name: "Guide Persona"
+    })
+    expect(within(personaButton).getByRole("img", { name: "Guide Persona" })).toHaveAttribute(
+      "src",
+      "https://example.com/guide.png"
+    )
+
+    await user.click(personaButton)
+
+    expect(mocks.setSelectedAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "persona",
+        id: "persona-1",
+        name: "Guide Persona",
+        avatar_url: "https://example.com/guide.png",
+        buddy_summary: {
+          has_buddy: true,
+          persona_name: "Guide Persona",
+          role_summary: "Keeps the chat on course",
+          visual: {
+            species_id: "owl",
+            silhouette_id: "perch",
+            palette_id: "dawn"
+          }
+        }
+      })
+    )
+  })
+
   it("moves a favorited character ahead of other characters and closes on escape", async () => {
     const user = userEvent.setup()
     renderAssistantSelect()
