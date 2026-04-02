@@ -89,6 +89,7 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
       "Enable an image backend (e.g., Flux-Klein or ZTurbo) in your tldw server config, then try again."
     )
   } else if (
+    lower.includes("no_provider_configured") ||
     lower.includes("no llm providers are configured") ||
     lower.includes("no providers configured") ||
     lower.includes("provider_not_configured") ||
