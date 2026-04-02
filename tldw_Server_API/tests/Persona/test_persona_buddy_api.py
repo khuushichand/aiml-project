@@ -260,4 +260,3 @@ def test_non_owner_access_to_buddy_and_restore_returns_404(persona_db: Character
         )
         assert denied_restore.status_code == 404, denied_restore.text
 
-
