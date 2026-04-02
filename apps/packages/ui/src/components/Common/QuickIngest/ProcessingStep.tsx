@@ -437,6 +437,55 @@ export const ProcessingStep: React.FC = () => {
         />
       </div>
 
+      {/* Descriptive processing banner */}
+      {processingState.status === "running" && counts.processing > 0 && (
+        <div
+          className="flex items-start gap-2.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2.5"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2
+            className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin text-primary"
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-text">
+              {qi(
+                "processing.banner.title",
+                "Processing your file... This may take a few minutes for large files."
+              )}
+            </p>
+            <p className="mt-0.5 text-xs text-text-muted">
+              {qi(
+                "processing.banner.subtitle",
+                "Transcribing and indexing content"
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Timeout warning banner */}
+      {processingState.status === "running" &&
+        processingState.elapsed >= 300 &&
+        counts.processing > 0 && (
+          <div
+            className="flex items-start gap-2.5 rounded-md border border-warn/30 bg-warn/5 px-3 py-2.5"
+            role="alert"
+          >
+            <FileText
+              className="mt-0.5 h-4 w-4 flex-shrink-0 text-warn"
+              aria-hidden="true"
+            />
+            <p className="text-xs text-text-muted">
+              {qi(
+                "processing.banner.timeout",
+                "Processing is taking longer than usual. Your file will appear when ready."
+              )}
+            </p>
+          </div>
+        )}
+
       {/* Item list */}
       <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto" role="list">
         {processingState.perItemProgress.map((progress) => {
