@@ -19,6 +19,10 @@ import {
   normalizeDefaultCharacterPreferenceId
 } from "@/utils/default-character-preference"
 import {
+  normalizePersonaBuddySummary,
+  type PersonaBuddySummary
+} from "@/types/persona-buddy"
+import {
   resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
@@ -915,7 +919,8 @@ export interface PersonaProfileSummary {
   name?: string | null
   character_card_id?: number | null
   origin_character_id?: number | null
-  [key: string]: unknown
+  buddy_summary?: PersonaBuddySummary | null
+  metadata?: Record<string, unknown> | null
 }
 
 export interface PersonaProfile extends PersonaProfileSummary {
@@ -1035,9 +1040,16 @@ export const normalizePersonaProfile = <T extends Record<string, unknown>>(
   input: T | null | undefined
 ): PersonaProfile => {
   const candidate = input && typeof input === "object" ? input : ({} as T)
+  const rawBuddySummary = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "buddy_summary"
+  )
+    ? candidate.buddy_summary
+    : candidate?.buddySummary
   return {
     ...candidate,
-    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+    id: String(candidate?.id ?? candidate?.persona_id ?? ""),
+    buddy_summary: normalizePersonaBuddySummary(rawBuddySummary)
   }
 }
 

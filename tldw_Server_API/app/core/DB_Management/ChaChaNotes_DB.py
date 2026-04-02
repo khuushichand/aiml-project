@@ -10387,13 +10387,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 overlay_preferences=item["overlay_preferences"],
             )
         except (TypeError, KeyError, ValueError) as exc:
-            logger.error(
-                "Corrupt or incomplete buddy data for persona_id={}: {}",
+            logger.warning(
+                "Unable to resolve persona buddy profile for persona_id={}: {}",
                 buddy_label,
                 exc,
             )
             raise CharactersRAGDBError(
-                f"Failed to resolve buddy profile for persona {buddy_label}: {exc}"
+                f"Unable to resolve persona buddy profile for persona_id={buddy_label}."
             ) from exc
         return item
 
@@ -11226,6 +11226,54 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         cursor = self.execute_query(query, params)
         return self._persona_buddy_row_to_dict(cursor.fetchone())
+
+    def list_persona_buddies(
+        self,
+        *,
+        user_id: str,
+        persona_ids: list[str],
+        include_deleted_personas: bool = False,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Fetch buddy rows for a batch of user-owned persona profiles."""
+        normalized_persona_ids = list(
+            dict.fromkeys(
+                str(persona_id or "").strip()
+                for persona_id in persona_ids
+                if str(persona_id or "").strip()
+            )
+        )
+        if not normalized_persona_ids:
+            return {}
+
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        placeholders = ", ".join("?" for _ in normalized_persona_ids)
+        query = (
+            "SELECT pb.* "
+            "FROM persona_buddies pb "
+            "JOIN persona_profiles pp "
+            "  ON pp.id = pb.persona_id "
+            " AND pp.user_id = pb.user_id "
+            f"WHERE pb.user_id = ? AND pb.persona_id IN ({placeholders}) "  # nosec B608
+            "AND (? OR pp.deleted = ?)"
+        )
+        params: list[Any] = [
+            user_id,
+            *normalized_persona_ids,
+            bool(include_deleted_personas),
+            deleted_false,
+        ]
+        cursor = self.execute_query(query, tuple(params))
+        buddies: dict[str, dict[str, Any] | None] = {
+            persona_id: None for persona_id in normalized_persona_ids
+        }
+        for row in cursor.fetchall():
+            buddy = self._persona_buddy_row_to_dict(row)
+            if buddy is None:
+                continue
+            persona_id = str(buddy.get("persona_id") or "").strip()
+            if persona_id:
+                buddies[persona_id] = buddy
+        return buddies
 
     def upsert_persona_buddy(
         self,

@@ -1,85 +1,99 @@
 import React from "react"
 
-import type { PersonaBuddyRenderContext } from "@/types/persona-buddy"
+import type {
+  PersonaBuddyRenderContext,
+  PersonaBuddySummary
+} from "@/types/persona-buddy"
 
 type BuddyShellRenderContextValue = {
-  context: PersonaBuddyRenderContext
-  setContext: React.Dispatch<
-    React.SetStateAction<PersonaBuddyRenderContext>
-  >
-}
-
-const DEFAULT_CONTEXT: PersonaBuddyRenderContext = {
-  surface_id: "",
-  surface_active: false,
-  active_persona_id: null,
-  position_bucket: "web-desktop",
-  persona_source: null
+  renderContext: PersonaBuddyRenderContext | null
+  setRenderContext: (value: PersonaBuddyRenderContext | null) => void
+  clearRenderContext: () => void
 }
 
 const noop = () => {}
 
-const BuddyShellRenderContext = React.createContext<
-  BuddyShellRenderContextValue | null
->(null)
+const BuddyShellRenderContext = React.createContext<BuddyShellRenderContextValue>(
+  {
+    renderContext: null,
+    setRenderContext: noop,
+    clearRenderContext: noop
+  }
+)
+
+const areBuddySummariesEqual = (
+  left: PersonaBuddySummary | null | undefined,
+  right: PersonaBuddySummary | null | undefined
+) =>
+  left === right ||
+  (left != null &&
+    right != null &&
+    left.has_buddy === right.has_buddy &&
+    left.persona_name === right.persona_name &&
+    left.role_summary === right.role_summary &&
+    left.visual?.species_id === right.visual?.species_id &&
+    left.visual?.silhouette_id === right.visual?.silhouette_id &&
+    left.visual?.palette_id === right.visual?.palette_id)
+
+const areRenderContextsEqual = (
+  left: PersonaBuddyRenderContext | null,
+  right: PersonaBuddyRenderContext | null
+) =>
+  left === right ||
+  (left !== null &&
+    right !== null &&
+    left.surface_id === right.surface_id &&
+    left.surface_active === right.surface_active &&
+    left.active_persona_id === right.active_persona_id &&
+    left.position_bucket === right.position_bucket &&
+    areBuddySummariesEqual(left.buddy_summary, right.buddy_summary) &&
+    left.persona_source === right.persona_source)
 
 type BuddyShellRenderContextProviderProps = {
   children: React.ReactNode
-  value?: Partial<PersonaBuddyRenderContext>
+  initialContext?: PersonaBuddyRenderContext | null
 }
-
-const normalizeContext = (
-  value?: Partial<PersonaBuddyRenderContext>
-): PersonaBuddyRenderContext => ({
-  ...DEFAULT_CONTEXT,
-  ...value,
-  position_bucket: value?.position_bucket ?? DEFAULT_CONTEXT.position_bucket
-})
 
 export const BuddyShellRenderContextProvider: React.FC<
   BuddyShellRenderContextProviderProps
-> = ({ children, value }) => {
-  const [context, setContext] = React.useState<PersonaBuddyRenderContext>(() =>
-    normalizeContext(value)
+> = ({ children, initialContext = null }) => {
+  const [renderContext, setRenderContextState] =
+    React.useState<PersonaBuddyRenderContext | null>(initialContext)
+
+  const setRenderContext = React.useCallback(
+    (value: PersonaBuddyRenderContext | null) => {
+      setRenderContextState((current) =>
+        areRenderContextsEqual(current, value) ? current : value
+      )
+    },
+    []
   )
 
-  React.useEffect(() => {
-    if (value) {
-      setContext((current) => ({
-        ...current,
-        ...value,
-        position_bucket:
-          value.position_bucket ?? current.position_bucket ?? "web-desktop"
-      }))
-    }
-  }, [value])
+  const clearRenderContext = React.useCallback(() => {
+    setRenderContextState(null)
+  }, [])
 
-  const memoized = React.useMemo(
+  const value = React.useMemo(
     () => ({
-      context,
-      setContext
+      renderContext,
+      setRenderContext,
+      clearRenderContext
     }),
-    [context]
+    [clearRenderContext, renderContext, setRenderContext]
   )
 
   return (
-    <BuddyShellRenderContext.Provider value={memoized}>
+    <BuddyShellRenderContext.Provider value={value}>
       {children}
     </BuddyShellRenderContext.Provider>
   )
 }
 
-export const useBuddyShellRenderContext = () => {
-  const value = React.useContext(BuddyShellRenderContext)
-  return value?.context ?? DEFAULT_CONTEXT
-}
+export const useBuddyShellRenderContext = (): PersonaBuddyRenderContext | null =>
+  React.useContext(BuddyShellRenderContext).renderContext
 
-export const useBuddyShellRenderContextSetter = () => {
-  const value = React.useContext(BuddyShellRenderContext)
-  return value?.setContext ?? noop
-}
-
-export const useBuddyShellRenderContextValue = () =>
+export const useBuddyShellRenderContextController = () =>
   React.useContext(BuddyShellRenderContext)
 
-export default BuddyShellRenderContext
+export const useSetBuddyShellRenderContext = () =>
+  React.useContext(BuddyShellRenderContext).setRenderContext
