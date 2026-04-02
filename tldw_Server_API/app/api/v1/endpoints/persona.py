@@ -2738,14 +2738,20 @@ async def restore_persona_profile(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        ok = db.restore_persona_profile(
+        ok = await _run_persona_db_call(
+            db.restore_persona_profile,
             persona_id=persona_id,
             user_id=user_id,
             expected_version=expected_version,
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        profile = await _run_persona_db_call(
+            db.get_persona_profile,
+            persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
         return _persona_profile_to_response(profile)
