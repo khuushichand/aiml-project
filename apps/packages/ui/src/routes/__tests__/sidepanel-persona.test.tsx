@@ -2,6 +2,11 @@ import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  BuddyShellRenderContextProvider,
+  useBuddyShellRenderContext
+} from "@/components/Common/PersonaBuddy"
+import { SELECTED_ASSISTANT_STORAGE_KEY } from "@/utils/selected-assistant-storage"
 
 const mocks = vi.hoisted(() => ({
   isOnline: true,
@@ -191,6 +196,15 @@ vi.mock("antd", async () => {
 
 import SidepanelPersona from "../sidepanel-persona"
 
+const BuddyShellContextProbe = () => {
+  const context = useBuddyShellRenderContext()
+  return (
+    <pre data-testid="buddy-shell-context">
+      {JSON.stringify(context)}
+    </pre>
+  )
+}
+
 const render = (ui: React.ReactNode) => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -201,9 +215,19 @@ const render = (ui: React.ReactNode) => {
   })
 
   return rtlRender(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <BuddyShellRenderContextProvider>
+        {ui}
+        <BuddyShellContextProbe />
+      </BuddyShellRenderContextProvider>
+    </QueryClientProvider>
   )
 }
+
+const readBuddyShellContext = () =>
+  JSON.parse(
+    screen.getByTestId("buddy-shell-context").textContent || "null"
+  )
 
 const openPersonaTab = async (name: string) => {
   fireEvent.click(screen.getByRole("tab", { name }))
@@ -488,6 +512,82 @@ describe("SidepanelPersona", () => {
         })
       })
     )
+  })
+
+  it("publishes route-local buddy context ahead of stale persisted assistant state", async () => {
+    window.localStorage.setItem(
+      SELECTED_ASSISTANT_STORAGE_KEY,
+      JSON.stringify({
+        kind: "persona",
+        id: "stale-persona",
+        name: "Stale Persona"
+      })
+    )
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: 1,
+            buddy_summary: {
+              has_buddy: true,
+              persona_name: "Garden Helper",
+              role_summary: "Keeps the route on track",
+              visual: {
+                species_id: "owl",
+                silhouette_id: "perch",
+                palette_id: "dawn"
+              }
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(readBuddyShellContext()).toMatchObject({
+        surface_id: "persona-garden",
+        surface_active: true,
+        active_persona_id: "garden-helper",
+        position_bucket: "sidepanel-desktop",
+        persona_source: "route-local"
+      })
+    })
   })
 
   it("loads and renders setup analytics in profiles", async () => {

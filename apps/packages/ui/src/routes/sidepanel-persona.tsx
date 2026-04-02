@@ -7,6 +7,7 @@ import {
 } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
+import { useSetBuddyShellRenderContext } from "@/components/Common/PersonaBuddy"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { PersonaPolicySummary } from "@/components/Option/MCPHub"
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
@@ -191,10 +192,46 @@ const SidepanelPersona = ({
     setActiveTab,
     setSelectedPersonaId
   })
+  const setBuddyShellRenderContext = useSetBuddyShellRenderContext()
 
   React.useEffect(() => {
     activeTabRef.current = activeTab
   }, [activeTab])
+
+  React.useEffect(() => {
+    const activePersonaId = String(selectedPersonaId || "").trim() || null
+    if (
+      isCompanionMode ||
+      capsLoading ||
+      !capabilities?.hasPersona ||
+      !activePersonaId
+    ) {
+      setBuddyShellRenderContext(null)
+      return () => {
+        setBuddyShellRenderContext(null)
+      }
+    }
+
+    setBuddyShellRenderContext({
+      surface_id: "persona-garden",
+      surface_active: true,
+      active_persona_id: activePersonaId,
+      position_bucket:
+        shell === "sidepanel" ? "sidepanel-desktop" : "web-desktop",
+      persona_source: "route-local"
+    })
+
+    return () => {
+      setBuddyShellRenderContext(null)
+    }
+  }, [
+    capabilities?.hasPersona,
+    capsLoading,
+    isCompanionMode,
+    selectedPersonaId,
+    setBuddyShellRenderContext,
+    shell
+  ])
 
   // ── Profile fetch ──
   React.useEffect(() => {

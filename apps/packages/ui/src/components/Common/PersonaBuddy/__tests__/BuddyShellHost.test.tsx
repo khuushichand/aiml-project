@@ -213,4 +213,24 @@ describe("BuddyShellHost", () => {
       screen.queryByTestId("persona-buddy-popover")
     ).not.toBeInTheDocument()
   })
+
+  it("stays dormant when an active chat surface does not have a persona selected", () => {
+    renderHost({
+      root: "sidepanel",
+      context: {
+        surface_id: "sidepanel-chat",
+        surface_active: true,
+        active_persona_id: null,
+        position_bucket: "sidepanel-desktop",
+        persona_source: null
+      },
+      selectedAssistant: {
+        kind: "character",
+        id: "character-1",
+        name: "Narrator"
+      }
+    })
+
+    expect(screen.queryByTestId("persona-buddy-dock")).not.toBeInTheDocument()
+  })
 })

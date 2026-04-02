@@ -24,6 +24,7 @@ import {
 } from "@/utils/message-steering"
 import { MyChatIdentityMenu } from "@/components/Common/MyChatIdentityMenu"
 import { IconButton } from "@/components/Common/IconButton"
+import { useSetBuddyShellRenderContext } from "@/components/Common/PersonaBuddy"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useAntdModal } from "@/hooks/useAntdModal"
 import { useConfirmModal } from "@/hooks/useConfirmModal"
@@ -117,6 +118,7 @@ export const CharacterSelect: React.FC<Props> = ({
   const notification = useAntdNotification()
   const modal = useAntdModal()
   const confirmWithModal = useConfirmModal()
+  const setBuddyShellRenderContext = useSetBuddyShellRenderContext()
   const [menuDensity] = useStorage("menuDensity", "comfortable")
   const [favoriteCharacters, setFavoriteCharacters] = useStorage<FavoriteCharacter[]>(
     "favoriteCharacters",
@@ -340,6 +342,14 @@ export const CharacterSelect: React.FC<Props> = ({
       selectedAssistant
     )
   }, [personas, selectedAssistant])
+  const selectedPersonaSource = useMemo(() => {
+    if (selectedAssistant?.kind !== "persona") return null
+    return personas.some(
+      (persona) => String(persona.id ?? "") === String(selectedAssistant.id)
+    )
+      ? "catalog"
+      : "selected-assistant-fallback"
+  }, [personas, selectedAssistant])
   const selectedCharacterMoodImages = useMemo(
     () =>
       getCharacterMoodImagesFromExtensions(
@@ -359,6 +369,35 @@ export const CharacterSelect: React.FC<Props> = ({
       userPersonaImage.trim().length > 0
     )
   }, [userPersonaImage])
+
+  useEffect(() => {
+    if (selectedAssistant?.kind !== "persona") {
+      setBuddyShellRenderContext(null)
+      return () => {
+        setBuddyShellRenderContext(null)
+      }
+    }
+
+    const personaId = String(selectedAssistant.id || "").trim()
+    if (!personaId) {
+      setBuddyShellRenderContext(null)
+      return () => {
+        setBuddyShellRenderContext(null)
+      }
+    }
+
+    setBuddyShellRenderContext({
+      surface_id: "sidepanel-chat",
+      surface_active: true,
+      active_persona_id: personaId,
+      position_bucket: "sidepanel-desktop",
+      persona_source: selectedPersonaSource
+    })
+
+    return () => {
+      setBuddyShellRenderContext(null)
+    }
+  }, [selectedAssistant, selectedPersonaSource, setBuddyShellRenderContext])
   const trimmedDisplayName = userDisplayName.trim()
   const displayNameActionLabel = trimmedDisplayName
     ? (t("sidepanel:characterSelect.displayNameCurrent", {
