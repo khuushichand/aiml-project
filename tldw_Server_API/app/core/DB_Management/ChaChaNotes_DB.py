@@ -10386,12 +10386,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 derived_core=item["derived_core"],
                 overlay_preferences=item["overlay_preferences"],
             )
-        except (TypeError, KeyError, ValueError):
-            logger.warning(
-                "Unable to resolve persona buddy profile for persona_id={}.",
+        except (TypeError, KeyError, ValueError) as exc:
+            logger.error(
+                "Corrupt or incomplete buddy data for persona_id={}: {}",
                 buddy_label,
+                exc,
             )
-            item["resolved_profile"] = None
+            raise CharactersRAGDBError(
+                f"Failed to resolve buddy profile for persona {buddy_label}: {exc}"
+            ) from exc
         return item
 
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
@@ -10652,7 +10655,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND pe.user_id = ?
                AND (? OR pe.enabled = 1)
                AND (? OR pe.deleted = 0)
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
              LIMIT 1
         """
         params = (
@@ -10688,7 +10691,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND (? IS NULL OR pe.persona_id = ?)
                AND (? OR pe.enabled = 1)
                AND (? OR pe.deleted = 0)
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
              ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC
              LIMIT ? OFFSET ?
         """
