@@ -5,6 +5,8 @@ import userEvent from '@testing-library/user-event';
 const mocks = vi.hoisted(() => ({
   listNotifications: vi.fn(),
   getUnreadCount: vi.fn(),
+  getNotificationPreferences: vi.fn(),
+  updateNotificationPreferences: vi.fn(),
   markNotificationsRead: vi.fn(),
   dismissNotification: vi.fn(),
   snoozeNotification: vi.fn(),
@@ -15,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@web/lib/api/notifications', () => ({
   listNotifications: (...args: unknown[]) => mocks.listNotifications(...args),
   getUnreadCount: (...args: unknown[]) => mocks.getUnreadCount(...args),
+  getNotificationPreferences: (...args: unknown[]) => mocks.getNotificationPreferences(...args),
+  updateNotificationPreferences: (...args: unknown[]) => mocks.updateNotificationPreferences(...args),
   markNotificationsRead: (...args: unknown[]) => mocks.markNotificationsRead(...args),
   dismissNotification: (...args: unknown[]) => mocks.dismissNotification(...args),
   snoozeNotification: (...args: unknown[]) => mocks.snoozeNotification(...args),
@@ -25,11 +29,31 @@ vi.mock('@web/components/ui/ToastProvider', () => ({
   useToast: () => ({ show: mocks.showToast }),
 }));
 
+vi.mock('next/router', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+  }),
+}));
+
 import NotificationsPage from '@web/pages/notifications';
 
 describe('NotificationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getNotificationPreferences.mockResolvedValue({
+      user_id: 'user-1',
+      reminder_enabled: true,
+      job_completed_enabled: true,
+      job_failed_enabled: true,
+      updated_at: '2026-04-02T00:00:00Z',
+    });
+    mocks.updateNotificationPreferences.mockResolvedValue({
+      user_id: 'user-1',
+      reminder_enabled: true,
+      job_completed_enabled: false,
+      job_failed_enabled: true,
+      updated_at: '2026-04-02T00:01:00Z',
+    });
     mocks.listNotifications.mockResolvedValue({
       items: [
         {
@@ -96,5 +120,73 @@ describe('NotificationsPage', () => {
 
     expect(await screen.findByText('Open the report in Deep Research.')).toBeInTheDocument();
     expect(mocks.showToast).not.toHaveBeenCalled();
+  });
+
+  it('shows an unavailable state when notification preferences fail to load', async () => {
+    const user = userEvent.setup();
+    mocks.getNotificationPreferences.mockRejectedValueOnce(new Error('preferences unavailable'));
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('Unread: 2')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Preferences' }));
+
+    expect(
+      await screen.findByText('Notification preferences are currently unavailable.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Loading preferences...')).not.toBeInTheDocument();
+  });
+
+  it('disables preference toggles while a save is in flight and ignores duplicate clicks', async () => {
+    const user = userEvent.setup();
+    let resolveUpdate:
+      | ((value: {
+          user_id: string;
+          reminder_enabled: boolean;
+          job_completed_enabled: boolean;
+          job_failed_enabled: boolean;
+          updated_at: string;
+        }) => void)
+      | null = null;
+
+    mocks.updateNotificationPreferences.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        })
+    );
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('Unread: 2')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Preferences' }));
+
+    const [jobCompletedToggle] = await screen.findAllByRole('checkbox');
+
+    await user.click(jobCompletedToggle);
+
+    await waitFor(() => {
+      expect(mocks.updateNotificationPreferences).toHaveBeenCalledTimes(1);
+      expect(jobCompletedToggle).toBeDisabled();
+    });
+
+    await user.click(jobCompletedToggle);
+
+    expect(mocks.updateNotificationPreferences).toHaveBeenCalledTimes(1);
+
+    resolveUpdate?.({
+      user_id: 'user-1',
+      reminder_enabled: true,
+      job_completed_enabled: false,
+      job_failed_enabled: true,
+      updated_at: '2026-04-02T00:01:00Z',
+    });
+
+    await waitFor(() => {
+      expect(jobCompletedToggle).not.toBeDisabled();
+      expect(jobCompletedToggle).not.toBeChecked();
+    });
   });
 });
