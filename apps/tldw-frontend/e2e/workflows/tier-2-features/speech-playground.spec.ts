@@ -16,7 +16,7 @@ import {
 } from "../../utils/fixtures"
 import { SpeechPage } from "../../utils/page-objects/SpeechPage"
 import { expectApiCall } from "../../utils/api-assertions"
-import { seedAuth } from "../../utils/helpers"
+import { getAntdSelectTrigger, seedAuth } from "../../utils/helpers"
 
 test.describe("Speech Playground", () => {
   let speech: SpeechPage
@@ -54,9 +54,9 @@ test.describe("Speech Playground", () => {
       await expect(speech.stopButton).toBeVisible()
       await expect(speech.downloadButton).toBeVisible()
 
-      const inputSourcePicker = authedPage
-        .locator('[aria-label="Speech playground input source"]')
-        .first()
+      const inputSourcePicker = getAntdSelectTrigger(authedPage, {
+        ariaLabel: "Speech playground input source",
+      })
       await expect(inputSourcePicker).toBeVisible()
       await inputSourcePicker.click()
       await expect(

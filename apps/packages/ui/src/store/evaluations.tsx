@@ -20,6 +20,8 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type EvaluationsTab =
+  | "recipes"
+  | "synthetic-review"
   | "evaluations"
   | "runs"
   | "datasets"
@@ -49,6 +51,10 @@ interface FormState {
 
 interface DataState {
   historyResults: EvaluationHistoryItem[]
+  historyTotalCount: number
+  syntheticReviewRecipeKind: string | null
+  syntheticReviewBatchId: string | null
+  syntheticReviewSampleIds: string[]
   viewingDataset: DatasetResponse | null
   datasetSamples: DatasetSample[]
   datasetSamplesPage: number
@@ -101,7 +107,10 @@ interface FormActions {
 }
 
 interface DataActions {
-  setHistoryResults: (results: EvaluationHistoryItem[]) => void
+  setHistoryResults: (results: EvaluationHistoryItem[], totalCount?: number) => void
+  setSyntheticReviewRecipeKind: (recipeKind: string | null) => void
+  setSyntheticReviewBatchId: (batchId: string | null) => void
+  setSyntheticReviewSampleIds: (sampleIds: string[]) => void
   setViewingDataset: (dataset: DatasetResponse | null) => void
   setDatasetSamples: (samples: DatasetSample[]) => void
   setDatasetSamplesPage: (page: number) => void
@@ -189,6 +198,10 @@ const initialFormState: FormState = {
 
 const initialDataState: DataState = {
   historyResults: [],
+  historyTotalCount: 0,
+  syntheticReviewRecipeKind: null,
+  syntheticReviewBatchId: null,
+  syntheticReviewSampleIds: [],
   viewingDataset: null,
   datasetSamples: [],
   datasetSamplesPage: 1,
@@ -200,7 +213,7 @@ const initialDataState: DataState = {
 }
 
 const initialUIState: UIState = {
-  activeTab: "evaluations",
+  activeTab: "recipes",
   createEvalOpen: false,
   createDatasetOpen: false,
   isPolling: false
@@ -256,7 +269,13 @@ export const useEvaluationsStore = createWithEqualityFn<EvaluationsState>()((set
   // Data Actions
   // ─────────────────────────────────────────────────────────────────────────
 
-  setHistoryResults: (historyResults) => set({ historyResults }),
+  setHistoryResults: (historyResults, totalCount) => set({ historyResults, historyTotalCount: totalCount ?? historyResults.length }),
+  setSyntheticReviewRecipeKind: (syntheticReviewRecipeKind) =>
+    set({ syntheticReviewRecipeKind }),
+  setSyntheticReviewBatchId: (syntheticReviewBatchId) =>
+    set({ syntheticReviewBatchId }),
+  setSyntheticReviewSampleIds: (syntheticReviewSampleIds) =>
+    set({ syntheticReviewSampleIds }),
   setViewingDataset: (viewingDataset) => set({ viewingDataset }),
   setDatasetSamples: (datasetSamples) => set({ datasetSamples }),
   setDatasetSamplesPage: (datasetSamplesPage) => set({ datasetSamplesPage }),

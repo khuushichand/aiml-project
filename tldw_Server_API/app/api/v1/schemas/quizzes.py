@@ -65,6 +65,7 @@ class QuizUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     workspace_id: Optional[str] = None
+    workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
     source_bundle_json: Optional[list[QuizGenerateSource]] = None
     time_limit_seconds: Optional[int] = Field(None, ge=1)
@@ -281,6 +282,7 @@ class QuizGenerateRequest(BaseModel):
     difficulty: str = Field("mixed", description="easy, medium, hard, mixed")
     focus_topics: Optional[list[str]] = None
     model: Optional[str] = None
+    api_provider: Optional[str] = None
     workspace_id: Optional[str] = Field(None, description="Canonical owning workspace ID; null means general scope")
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
 

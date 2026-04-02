@@ -198,6 +198,8 @@ function UsersPageContent() {
   const [directInvitesError, setDirectInvitesError] = useState('');
   const [revokingInviteIds, setRevokingInviteIds] = useState<Set<string>>(new Set());
   const [resendingInviteIds, setResendingInviteIds] = useState<Set<string>>(new Set());
+  const [mfaByUserId, setMfaByUserId] = useState<Record<number, boolean | null>>({});
+  const [mfaLoading, setMfaLoading] = useState(false);
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(true);
   const [invitesError, setInvitesError] = useState('');
@@ -469,6 +471,62 @@ function UsersPageContent() {
     });
   }, [currentUserId, users]);
 
+  useEffect(() => {
+    if (mfaFilter === 'all') return;
+    const missingIds = users
+      .map((user) => user.id)
+      .filter((id) => mfaByUserId[id] === undefined);
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    const loadMfaStatus = async () => {
+      try {
+        setMfaLoading(true);
+        // Use bulk endpoint instead of N+1 individual calls
+        const bulkResult = await api.getUserMfaStatusBulk(missingIds);
+        if (cancelled) return;
+        setMfaByUserId((prev) => {
+          const responseEntries = Object.entries(bulkResult.mfa_status ?? {});
+          const returnedIds = new Set<number>();
+          const failedIds = new Set((bulkResult.failed_user_ids ?? []).map((id) => Number(id)));
+          let changed = false;
+          const next = { ...prev };
+          for (const [uid, enabled] of responseEntries) {
+            const userId = Number(uid);
+            if (!Number.isFinite(userId)) continue;
+            returnedIds.add(userId);
+            if (next[userId] === enabled) continue;
+            next[userId] = enabled;
+            changed = true;
+          }
+          for (const userId of missingIds) {
+            if (returnedIds.has(userId)) continue;
+            if (!failedIds.has(userId) && bulkResult.failed_user_ids && bulkResult.failed_user_ids.length > 0) {
+              continue;
+            }
+            if (next[userId] !== null) {
+              next[userId] = null;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } catch (err) {
+        console.error('Failed to load MFA status for users:', err);
+      } finally {
+        if (!cancelled) {
+          setMfaLoading(false);
+        }
+      }
+    };
+    void loadMfaStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mfaByUserId, mfaFilter, users]);
+
+
   const filteredUsers = users.filter((user) => {
     const query = (searchQuery || '').toLowerCase();
     if (
@@ -489,8 +547,10 @@ function UsersPageContent() {
     if (verifiedFilter === 'unverified' && user.is_verified) return false;
 
     if (mfaFilter !== 'all') {
-      if (mfaFilter === 'enabled' && !user.mfa_enabled) return false;
-      if (mfaFilter === 'disabled' && user.mfa_enabled) return false;
+      const hasMfa = mfaByUserId[user.id];
+      if (hasMfa === undefined || hasMfa === null) return false;
+      if (mfaFilter === 'enabled' && hasMfa !== true) return false;
+      if (mfaFilter === 'disabled' && hasMfa !== false) return false;
     }
 
     return true;
@@ -1499,7 +1559,7 @@ function UsersPageContent() {
                           <TableHead>Status</TableHead>
                           <TableHead>MFA</TableHead>
                           <TableHead>Storage</TableHead>
-                          <TableHead>Created At</TableHead>
+                          <TableHead>Created</TableHead>
                           <TableHead>Last Login</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>

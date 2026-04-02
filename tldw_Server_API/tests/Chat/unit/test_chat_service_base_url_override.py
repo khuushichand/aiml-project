@@ -41,3 +41,21 @@ def test_base_url_override_rejected_when_not_allowlisted(monkeypatch):
     args.update({"base_url": "https://example.com/v1", "trusted_base_url_override": True})
     with pytest.raises(ChatBadRequestError):
         chat_service._build_adapter_request_from_chat_args(args)
+
+
+def test_build_adapter_request_skips_chat_internal_metadata():
+    args = _base_args()
+    args.update(
+        {
+            "_chat_effective_tool_names": ["run", "notes.search"],
+            "_chat_run_first_eligible": True,
+            "_chat_run_first_cohort": "gated",
+        }
+    )
+
+    provider, request, _internal = chat_service._build_adapter_request_from_chat_args(args)
+
+    assert provider == "openai"
+    assert "_chat_effective_tool_names" not in request
+    assert "_chat_run_first_eligible" not in request
+    assert "_chat_run_first_cohort" not in request

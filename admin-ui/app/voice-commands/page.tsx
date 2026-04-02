@@ -18,12 +18,13 @@ import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { Eye, Mic, MicOff, Search, Plus, Trash2, BarChart2 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
-import { parseVoiceCommandInputs, testVoiceCommandPhraseMatch } from '@/lib/voice-commands';
-import { ExportMenu } from '@/components/ui/export-menu';
-import { exportVoiceCommands, ExportFormat } from '@/lib/export';
+import { parseVoiceCommandInputs, testVoiceCommandPhraseMatch, type VoiceCommandMatchResult } from '@/lib/voice-commands';
+import { exportVoiceCommands } from '@/lib/export';
 import type { VoiceCommand, VoiceActionType, VoiceAnalyticsSummary } from '@/types';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
@@ -52,6 +53,107 @@ const createCommandSchema = z.object({
 
 type CreateCommandFormInput = z.input<typeof createCommandSchema>;
 type CreateCommandFormData = z.output<typeof createCommandSchema>;
+
+function DryRunPanel() {
+  const [phrase, setPhrase] = useState('');
+  const [running, setRunning] = useState(false);
+  const { error: showError } = useToast();
+  const [result, setResult] = useState<{
+    dry_run: boolean;
+    phrase: string;
+    matched: boolean;
+    match_method: string;
+    matched_phrase: string | null;
+    confidence: number | null;
+    action_type: string;
+    action_config: Record<string, unknown>;
+    processing_time_ms: number;
+    alternatives: Array<{ action_type: string; confidence: number | null; raw_text: string | null }>;
+  } | null>(null);
+
+  const handleDryRun = async () => {
+    if (!phrase.trim()) return;
+    setRunning(true);
+    setResult(null);
+    try {
+      const res = await api.dryRunVoiceCommand({ phrase: phrase.trim() });
+      setResult(res);
+    } catch (err: unknown) {
+      setResult(null);
+      showError('Dry-run failed', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card className="mb-4">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Dry-Run Tester</CardTitle>
+        <CardDescription>Parse a phrase through the voice pipeline without executing the action.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-2 mb-3">
+          <Input
+            placeholder="Try a voice command phrase..."
+            value={phrase}
+            onChange={(e) => setPhrase(e.target.value)}
+            className="max-w-md"
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleDryRun(); }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleDryRun()}
+            disabled={!phrase.trim() || running}
+          >
+            {running ? 'Running...' : 'Dry-Run'}
+          </Button>
+        </div>
+        {result && (
+          <div className="rounded-md border p-3 text-sm space-y-2">
+            <div className="flex items-center gap-2">
+              <Badge variant={result.matched ? 'default' : 'secondary'}>
+                {result.matched ? 'Matched' : 'No Match'}
+              </Badge>
+              {result.confidence != null && (
+                <span className="text-muted-foreground">
+                  Confidence: {Math.round(result.confidence * 100)}%
+                </span>
+              )}
+              <span className="text-muted-foreground">
+                ({result.processing_time_ms.toFixed(1)}ms)
+              </span>
+            </div>
+            <div className="grid gap-1 text-xs">
+              <div><span className="font-medium">Match method:</span> {result.match_method}</div>
+              {result.matched_phrase && (
+                <div><span className="font-medium">Matched phrase:</span> {result.matched_phrase}</div>
+              )}
+              <div><span className="font-medium">Action type:</span> <Badge variant="outline">{result.action_type}</Badge></div>
+              <div>
+                <span className="font-medium">Action config:</span>{' '}
+                <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
+                  {JSON.stringify(result.action_config)}
+                </code>
+              </div>
+              {result.alternatives.length > 0 && (
+                <div>
+                  <span className="font-medium">Alternatives:</span>{' '}
+                  {result.alternatives.map((alt, i) => (
+                    <Badge key={i} variant="outline" className="ml-1">
+                      {alt.action_type}{alt.confidence != null ? ` (${Math.round(alt.confidence * 100)}%)` : ''}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function VoiceCommandsPageContent() {
   const promptPrivilegedAction = usePrivilegedActionDialog();
@@ -83,6 +185,9 @@ function VoiceCommandsPageContent() {
 
   // URL state for search
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
+  const [testPhrase, setTestPhrase] = useState('');
+  const [testResult, setTestResult] = useState<{ commandName: string; result: VoiceCommandMatchResult } | null>(null);
+  const [hasSearchedPhrase, setHasSearchedPhrase] = useState(false);
   const [actionTypeFilter, setActionTypeFilter] = useUrlState<string>('type', { defaultValue: '' });
 
   // URL state for pagination
@@ -173,6 +278,28 @@ function VoiceCommandsPageContent() {
     setSearchQuery(value || undefined);
     resetPagination();
   };
+
+  const runLocalPhraseTest = useCallback(() => {
+    const normalizedPhrase = testPhrase.trim();
+    if (!normalizedPhrase) {
+      setTestResult(null);
+      setHasSearchedPhrase(false);
+      return;
+    }
+
+    let bestMatch: typeof testResult = null;
+    for (const cmd of commands) {
+      const phrases = Array.isArray(cmd.phrases) ? cmd.phrases : [];
+      if (phrases.length === 0) continue;
+      const result = testVoiceCommandPhraseMatch(normalizedPhrase, phrases);
+      if (result.matched && (!bestMatch || result.confidence > bestMatch.result.confidence)) {
+        bestMatch = { commandName: cmd.name, result };
+      }
+    }
+
+    setTestResult(bestMatch);
+    setHasSearchedPhrase(true);
+  }, [commands, testPhrase]);
 
   const handleActionTypeChange = (value: string) => {
     setActionTypeFilter(value || undefined);
@@ -436,6 +563,44 @@ function VoiceCommandsPageContent() {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
+
+          {/* Test Phrase */}
+          <Card className="mb-4">
+            <CardContent className="pt-4">
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Test a phrase against all commands..."
+                  value={testPhrase}
+                  onChange={(e) => setTestPhrase(e.target.value)}
+                  className="max-w-md"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      runLocalPhraseTest();
+                    }
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={runLocalPhraseTest}
+                  disabled={!testPhrase.trim()}
+                >
+                  Test
+                </Button>
+                {testResult && (
+                  <Badge variant="default" className="bg-green-600">
+                    Matched: {testResult.commandName} ({Math.round(testResult.result.confidence * 100)}%)
+                  </Badge>
+                )}
+                {hasSearchedPhrase && testPhrase && !testResult && (
+                  <Badge variant="secondary">No match</Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Dry-Run Panel */}
+          <DryRunPanel />
 
           {/* Search & Filters */}
           <Card className="mb-6">

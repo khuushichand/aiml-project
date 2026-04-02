@@ -7,15 +7,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentConfigCreate,
     ACPAgentConfigListResponse,
     ACPAgentConfigResponse,
     ACPAgentMetrics,
     ACPAgentMetricsListResponse,
+    ACPAgentUsageItem,
+    ACPAgentUsageResponse,
     ACPPermissionPolicyCreate,
     ACPPermissionPolicyListResponse,
     ACPPermissionPolicyResponse,
@@ -148,6 +151,25 @@ async def admin_set_session_budget(
         budget_exhausted=rec.budget_exhausted,
         total_tokens=rec.usage.total_tokens,
         budget_remaining=budget_remaining,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent Usage Stats
+# ---------------------------------------------------------------------------
+
+@router.get("/acp/agents/usage", response_model=ACPAgentUsageResponse)
+async def admin_get_agent_usage(
+    range_days: int = Query(7, ge=1, le=90),
+    _: object = Depends(get_auth_principal),
+    __: None = Depends(check_rate_limit),
+) -> ACPAgentUsageResponse:
+    """Aggregated per-agent token usage from ACP sessions."""
+    store = await get_acp_session_store()
+    rows = await store.get_agent_usage_stats(range_days=range_days)
+    return ACPAgentUsageResponse(
+        agents=[ACPAgentUsageItem(**r) for r in rows],
+        range_days=range_days,
     )
 
 

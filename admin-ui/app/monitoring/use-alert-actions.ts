@@ -53,15 +53,30 @@ export const useAlertActions = ({
   onReloadRequested,
 }: UseAlertActionsArgs) => {
   const handleAcknowledgeAlert = useCallback(async (alert: SystemAlert) => {
+    setError('');
+    // Optimistic: update UI immediately
+    const acknowledgedAt = new Date().toISOString();
+    setAlerts((prev) => markAlertAcknowledged(prev, alert.id, acknowledgedAt));
     try {
-      setError('');
       await apiClient.acknowledgeAlert(alert.id);
-      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
       setSuccess('Alert acknowledged');
-      await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
+      // Rollback on failure
+      setAlerts((prev) =>
+        prev.map((a) =>
+          a.id === alert.id ? { ...a, acknowledged: false, acknowledged_at: undefined } : a,
+        ),
+      );
       logger.error('Failed to acknowledge alert', { component: 'useAlertActions', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
+      return;
+    }
+
+    try {
+      await Promise.resolve(onReloadRequested());
+    } catch (err: unknown) {
+      console.error('Failed to reload alerts after acknowledgement:', err);
+      setError('Alert acknowledged, but refresh failed');
     }
   }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 

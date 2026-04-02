@@ -14,6 +14,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw, Wallet, Pencil } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportBudgets, ExportFormat } from '@/lib/export';
@@ -35,6 +37,11 @@ type BudgetEnforcementMode = {
   per_metric?: Record<string, 'none' | 'soft' | 'hard'>;
 };
 
+type ProviderBudget = {
+  month_usd?: number | null;
+  day_usd?: number | null;
+};
+
 type BudgetSettings = {
   budget_day_usd?: number | null;
   budget_month_usd?: number | null;
@@ -42,6 +49,7 @@ type BudgetSettings = {
   budget_month_tokens?: number | null;
   alert_thresholds?: BudgetAlertThresholds | null;
   enforcement_mode?: BudgetEnforcementMode | null;
+  provider_budgets?: Record<string, ProviderBudget | null> | null;
 };
 
 type BudgetMetricKey =
@@ -73,6 +81,11 @@ type BudgetEditValidationErrors = Partial<
 type BudgetEditErrorsState = {
   caps: BudgetEditValidationErrors;
   thresholds: BudgetEditValidationErrors;
+};
+
+type ProviderBudgetDraft = {
+  month_usd: string;
+  day_usd: string;
 };
 
 type NotificationChannelSummary = {
@@ -646,6 +659,23 @@ const renderBudgetCaps = (item: OrgBudgetItem) => {
         periodDays={30}
         periodStart={item.period_start}
       />
+      {settings.provider_budgets && Object.keys(settings.provider_budgets).length > 0 && (
+        <>
+          <div className="border-t my-1 pt-1">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide">Per-Provider</span>
+          </div>
+          {Object.entries(settings.provider_budgets).map(([provider, budget]) => (
+            <div key={provider} className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">{provider}</span>
+              <span className="font-mono">
+                {budget?.month_usd != null ? `$${budget.month_usd}/mo` : ''}
+                {budget?.month_usd != null && budget?.day_usd != null ? ' · ' : ''}
+                {budget?.day_usd != null ? `$${budget.day_usd}/day` : ''}
+              </span>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 };
@@ -678,6 +708,9 @@ function BudgetsPageContent() {
   const [editForm, setEditForm] = useState<BudgetEditFormState | null>(null);
   const [editErrors, setEditErrors] = useState<BudgetEditErrorsState>({ caps: {}, thresholds: {} });
   const [savingBudget, setSavingBudget] = useState(false);
+  const [providerBudgets, setProviderBudgets] = useState<Record<string, ProviderBudgetDraft>>({});
+  const [newProviderName, setNewProviderName] = useState('');
+  const [showAddProviderInput, setShowAddProviderInput] = useState(false);
 
   const budgetParams = useMemo(() => {
     const params: Record<string, string> = {
@@ -750,6 +783,17 @@ function BudgetsPageContent() {
     setEditingBudget(item);
     setEditForm(buildBudgetEditFormState(item.budgets || {}));
     setEditErrors({ caps: {}, thresholds: {} });
+    const existing = (item.budgets || {}).provider_budgets || {};
+    const draft: Record<string, ProviderBudgetDraft> = {};
+    for (const [provider, budget] of Object.entries(existing)) {
+      draft[provider] = {
+        month_usd: budget?.month_usd != null ? String(budget.month_usd) : '',
+        day_usd: budget?.day_usd != null ? String(budget.day_usd) : '',
+      };
+    }
+    setProviderBudgets(draft);
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   const closeEditDialog = () => {
@@ -757,6 +801,9 @@ function BudgetsPageContent() {
     setEditForm(null);
     setEditErrors({ caps: {}, thresholds: {} });
     setSavingBudget(false);
+    setProviderBudgets({});
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   const updateEditCap = (key: keyof Pick<BudgetEditFormState, 'budget_day_usd' | 'budget_month_usd' | 'budget_day_tokens' | 'budget_month_tokens'>, value: string) => {
@@ -834,6 +881,24 @@ function BudgetsPageContent() {
     try {
       setSavingBudget(true);
       const budgetsPayload = buildBudgetUpdatePayload(editForm);
+      // Include provider budgets in the payload
+      const providerBudgetsPayload: Record<string, ProviderBudget | null> = {};
+      for (const [provider, draft] of Object.entries(providerBudgets)) {
+        const monthValue = draft.month_usd.trim();
+        const dayValue = draft.day_usd.trim();
+        const monthRaw = monthValue ? Number(monthValue) : null;
+        const dayRaw = dayValue ? Number(dayValue) : null;
+        const monthUsd = monthRaw != null && Number.isFinite(monthRaw) ? monthRaw : null;
+        const dayUsd = dayRaw != null && Number.isFinite(dayRaw) ? dayRaw : null;
+        if (monthUsd === null && dayUsd === null) {
+          providerBudgetsPayload[provider] = null; // Remove provider
+        } else {
+          providerBudgetsPayload[provider] = { month_usd: monthUsd, day_usd: dayUsd };
+        }
+      }
+      if (Object.keys(providerBudgetsPayload).length > 0) {
+        budgetsPayload.provider_budgets = providerBudgetsPayload;
+      }
       await api.updateBudget(String(editingBudget.org_id), {
         budgets: budgetsPayload,
       });
@@ -849,6 +914,17 @@ function BudgetsPageContent() {
     } finally {
       setSavingBudget(false);
     }
+  };
+
+  const addProviderBudgetDraft = () => {
+    const providerName = newProviderName.trim().toLowerCase();
+    if (!providerName) return;
+    setProviderBudgets((prev) => ({
+      ...prev,
+      [providerName]: prev[providerName] ?? { month_usd: '', day_usd: '' },
+    }));
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   return (
@@ -1084,6 +1160,120 @@ function BudgetsPageContent() {
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  {/* Provider Budgets */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium">Per-Provider Budgets</h3>
+                      {showAddProviderInput ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            autoFocus
+                            value={newProviderName}
+                            onChange={(e) => setNewProviderName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addProviderBudgetDraft();
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setNewProviderName('');
+                                setShowAddProviderInput(false);
+                              }
+                            }}
+                            placeholder="openai"
+                            className="w-40"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            type="button"
+                            onClick={addProviderBudgetDraft}
+                            disabled={!newProviderName.trim()}
+                          >
+                            Add
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            type="button"
+                            onClick={() => {
+                              setNewProviderName('');
+                              setShowAddProviderInput(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => setShowAddProviderInput(true)}
+                        >
+                          + Add Provider
+                        </Button>
+                      )}
+                    </div>
+                    {Object.keys(providerBudgets).length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No per-provider budgets configured.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {Object.entries(providerBudgets).map(([provider, draft]) => (
+                          <div key={provider} className="flex items-end gap-3 rounded-md border p-3">
+                            <div className="min-w-[100px]">
+                              <Label className="text-xs text-muted-foreground">{provider}</Label>
+                            </div>
+                            <div className="space-y-1 flex-1">
+                              <Label htmlFor={`pb-month-${provider}`} className="text-xs">Monthly USD</Label>
+                              <Input
+                                id={`pb-month-${provider}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="No limit"
+                                value={draft.month_usd}
+                                onChange={(e) => setProviderBudgets((prev) => ({
+                                  ...prev,
+                                  [provider]: { ...prev[provider], month_usd: e.target.value },
+                                }))}
+                              />
+                            </div>
+                            <div className="space-y-1 flex-1">
+                              <Label htmlFor={`pb-day-${provider}`} className="text-xs">Daily USD</Label>
+                              <Input
+                                id={`pb-day-${provider}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="No limit"
+                                value={draft.day_usd}
+                                onChange={(e) => setProviderBudgets((prev) => ({
+                                  ...prev,
+                                  [provider]: { ...prev[provider], day_usd: e.target.value },
+                                }))}
+                              />
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              type="button"
+                              className="text-destructive"
+                              onClick={() => setProviderBudgets((prev) => {
+                                const next = { ...prev };
+                                delete next[provider];
+                                return next;
+                              })}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>

@@ -14,6 +14,7 @@ import { ApiError, api } from '@/lib/api-client';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { KeyRound, RefreshCw, Plus, Trash2, Send, Server, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
@@ -186,6 +187,7 @@ const PROVIDER_OPTIONS = [
 
 export default function ByokDashboardPage() {
   const { selectedOrg } = useOrgContext();
+  const confirm = useConfirm();
   const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
   const [metricsLoading, setMetricsLoading] = useState(false);
@@ -655,7 +657,7 @@ export default function ByokDashboardPage() {
       title: 'Delete Shared Key',
       message: `Delete the shared key for "${key.provider}"? Users and orgs will fall back to their own keys.`,
       confirmText: 'Delete',
-      requirePassword: false,
+      requirePassword: true,
     });
     if (!result) return;
 

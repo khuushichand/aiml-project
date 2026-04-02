@@ -14,13 +14,14 @@ This module encapsulates raw SQL per project guidelines.
 """
 
 import json
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import configure_sqlite_connection
 
 
@@ -47,10 +48,20 @@ class SemanticMemory:
 
 
 class PersonalizationDB:
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
+    @classmethod
+    def for_path(cls, db_path: str | Path) -> "PersonalizationDB":
+        return cls(Path(db_path))
+
+    @classmethod
+    def for_user(cls, user_id: str | int) -> "PersonalizationDB":
+        return cls.for_path(DatabasePaths.get_personalization_db_path(user_id))
+
+    def __init__(self, db_path: str | Path) -> None:
+        resolved_path = Path(db_path)
+        if not resolved_path.parent.exists():
+            raise ValueError("PersonalizationDB parent directory must already exist")
+        self.db_path = str(resolved_path)
         self._lock = threading.RLock()
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:

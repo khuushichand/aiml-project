@@ -31,6 +31,7 @@ import { logger } from '@/lib/logger';
 type AuditFilters = {
   user: string;
   action: string;
+  actionPrefix: string;
   resource: string;
   start: string;
   end: string;
@@ -126,13 +127,24 @@ const parseUserFilter = (value: string) => {
 const normalizeAuditFilters = (filters: AuditFilters): AuditFilters => ({
   user: filters.user.trim(),
   action: filters.action.trim(),
+  actionPrefix: filters.actionPrefix.trim(),
   resource: filters.resource.trim(),
   start: filters.start.trim(),
   end: filters.end.trim(),
 });
 
 const hasAnyFilterValue = (filters: AuditFilters) =>
-  Boolean(filters.user || filters.action || filters.resource || filters.start || filters.end);
+  Boolean(filters.user || filters.action || filters.actionPrefix || filters.resource || filters.start || filters.end);
+
+const matchesActionPrefix = (action: string, actionPrefix: string) => {
+  const normalizedAction = action.trim().toLowerCase();
+  const normalizedPrefix = actionPrefix.trim().toLowerCase();
+  if (!normalizedAction || !normalizedPrefix) return true;
+  if (normalizedPrefix === 'destructive') {
+    return ['delete', 'revoke', 'disable', 'reset'].some((keyword) => normalizedAction.includes(keyword));
+  }
+  return normalizedAction.startsWith(normalizedPrefix) || normalizedAction.includes(`.${normalizedPrefix}`);
+};
 
 const escapeHtml = (value: string) =>
   value
@@ -304,7 +316,7 @@ const buildAuditParams = (
 
   const userIdParam = parseUserFilter(normalized.user);
   if (userIdParam) params.user_id = userIdParam;
-  if (normalized.action) params.action = normalized.action;
+  if (normalized.action && !normalized.actionPrefix) params.action = normalized.action;
   if (normalized.resource) params.resource = normalized.resource;
   if (normalized.start) params.start = normalized.start;
   if (normalized.end) params.end = normalized.end;
@@ -331,6 +343,7 @@ const parseSavedSearches = (value: string | null): SavedAuditSearch[] => {
       const filters: AuditFilters = {
         user: String(candidate.filters?.user ?? ''),
         action: String(candidate.filters?.action ?? ''),
+        actionPrefix: String(candidate.filters?.actionPrefix ?? ''),
         resource: String(candidate.filters?.resource ?? ''),
         start: String(candidate.filters?.start ?? ''),
         end: String(candidate.filters?.end ?? ''),
@@ -383,6 +396,7 @@ function AuditPageContent() {
   const [filters, setFilters, clearFilters] = useUrlMultiState<AuditFilters>({
     user: '',
     action: '',
+    actionPrefix: '',
     resource: '',
     start: '',
     end: '',
@@ -398,6 +412,7 @@ function AuditPageContent() {
         if (
           prev.user === filters.user
           && prev.action === filters.action
+          && prev.actionPrefix === filters.actionPrefix
           && prev.resource === filters.resource
           && prev.start === filters.start
           && prev.end === filters.end
@@ -435,11 +450,25 @@ function AuditPageContent() {
         return;
       }
 
-      const params = buildAuditParams(activeFilters, page, size, selectedOrg?.id);
+      const normalizedFilters = normalizeAuditFilters(activeFilters);
+      const prefixFiltering = Boolean(normalizedFilters.actionPrefix);
+      const params = buildAuditParams(
+        activeFilters,
+        prefixFiltering ? 1 : page,
+        prefixFiltering ? COMPLIANCE_REPORT_LIMIT : size,
+        selectedOrg?.id
+      );
       const data = await api.getAuditLogs(params);
-      const items = Array.isArray(data) ? data : data.entries ?? [];
-      setLogs(items);
-      setTotalItems(Number(data.total ?? items.length ?? 0));
+      const rawItems = Array.isArray(data) ? data : data.entries ?? [];
+      if (prefixFiltering) {
+        const matchingItems = rawItems.filter((item) => matchesActionPrefix(item.action ?? '', normalizedFilters.actionPrefix));
+        const startIndex = (page - 1) * size;
+        setLogs(matchingItems.slice(startIndex, startIndex + size));
+        setTotalItems(matchingItems.length);
+      } else {
+        setLogs(rawItems);
+        setTotalItems(Number(data.total ?? rawItems.length ?? 0));
+      }
     } catch (err: unknown) {
       logger.error('Failed to load audit logs', { component: 'AuditPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to load audit logs');
@@ -1020,7 +1049,7 @@ function AuditPageContent() {
                       id="actionFilter"
                       placeholder="e.g., user.create or admin*"
                       value={filters.action}
-                      onChange={(e) => handleFilterChange({ action: e.target.value })}
+                      onChange={(e) => handleFilterChange({ action: e.target.value, actionPrefix: '' })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -1083,6 +1112,27 @@ function AuditPageContent() {
                   >
                     <Filter className="mr-1.5 h-4 w-4" />
                     {adminUsersLoading ? 'Loading...' : 'Admin Users'}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleFilterChange({ action: '', actionPrefix: 'destructive' })}
+                  >
+                    Destructive Actions
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleFilterChange({ action: '', actionPrefix: 'login' })}
+                  >
+                    Login Events
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleFilterChange({ resource: 'api_key' })}
+                  >
+                    API Key Activity
                   </Button>
                 </div>
               </CardContent>
@@ -1240,21 +1290,23 @@ function AuditPageContent() {
                                   <span className="text-muted-foreground">-</span>
                                 )}
                               </TableCell>
-                              <TableCell className="text-right space-x-2">
-                                <Button variant="outline" size="sm" onClick={() => setSelectedLog(log)}>
-                                  <Eye className="mr-2 h-4 w-4" />
-                                  View
-                                </Button>
-                                {log.request_id && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => router.push(`/logs?request_id=${encodeURIComponent(log.request_id!)}`)}
-                                  >
-                                    <ExternalLink className="mr-2 h-4 w-4" />
-                                    View Logs
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-1">
+                                  <Button variant="outline" size="sm" onClick={() => setSelectedLog(log)}>
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    View
                                   </Button>
-                                )}
+                                  {log.request_id && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => router.push(`/logs?request_id=${encodeURIComponent(log.request_id!)}`)}
+                                    >
+                                      <ExternalLink className="mr-2 h-4 w-4" />
+                                      View Logs
+                                    </Button>
+                                  )}
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}

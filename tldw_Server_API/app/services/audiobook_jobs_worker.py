@@ -374,8 +374,10 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
     default_subtitles = payload.get("subtitles") or {}
     default_metadata = payload.get("metadata") or {}
     default_voice_profile_id = payload.get("voice_profile_id")
-    default_tts_provider = _normalize_tts_provider(payload.get("tts_provider"))
-    default_tts_model = payload.get("tts_model")
+    default_tts_provider = _normalize_tts_provider(
+        payload.get("tts_provider") or default_metadata.get("tts_provider")
+    )
+    default_tts_model = payload.get("tts_model") or default_metadata.get("tts_model")
 
     if items is None:
         source = payload.get("source") or {}
@@ -408,8 +410,11 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
         source = item.get("source") or {}
         if not source:
             raise AudiobookJobError("missing_item_source", retryable=False)
-        tts_provider = _normalize_tts_provider(item.get("tts_provider") or default_tts_provider)
-        tts_model = item.get("tts_model") or default_tts_model
+        item_override = item.get("metadata") or {}
+        tts_provider = _normalize_tts_provider(
+            item.get("tts_provider") or item_override.get("tts_provider") or default_tts_provider
+        )
+        tts_model = item.get("tts_model") or item_override.get("tts_model") or default_tts_model
         output_cfg = item.get("output") or default_output
         subtitle_cfg = item.get("subtitles") if "subtitles" in item else default_subtitles
         if not output_cfg:
@@ -419,7 +424,6 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
         item_metadata = {}
         if default_metadata:
             item_metadata.update(default_metadata)
-        item_override = item.get("metadata") or {}
         if item_override:
             item_metadata.update(item_override)
         resolved.append(
@@ -1137,19 +1141,20 @@ async def process_audiobook_job(
     try:
         project_source_ref = _build_project_source_ref(item_requests)
         queue_settings: dict[str, Any] = {}
-        try:
-            job_priority = job.get("priority")
-            if job_priority is not None:
-                queue_settings["priority"] = int(job_priority)
-        except (TypeError, ValueError):
-            pass
-        batch_group = job.get("batch_group")
-        if batch_group:
-            queue_settings["batch_group"] = str(batch_group)
-        if not queue_settings:
-            queue_payload = payload.get("queue")
-            if isinstance(queue_payload, dict):
-                queue_settings = {k: v for k, v in queue_payload.items() if v is not None}
+        queue_payload = payload.get("queue")
+        if isinstance(queue_payload, dict):
+            queue_settings = {k: v for k, v in queue_payload.items() if v is not None}
+        if "priority" not in queue_settings:
+            try:
+                job_priority = job.get("priority")
+                if job_priority is not None:
+                    queue_settings["priority"] = int(job_priority)
+            except (TypeError, ValueError):
+                pass
+        if "batch_group" not in queue_settings:
+            batch_group = job.get("batch_group")
+            if batch_group:
+                queue_settings["batch_group"] = str(batch_group)
 
         project_settings = {
             "project_id": project_id,
@@ -1161,8 +1166,8 @@ async def process_audiobook_job(
             "items_count": total_items,
             "metadata": payload.get("metadata") or {},
             "voice_profile_id": payload.get("voice_profile_id"),
-            "tts_provider": payload.get("tts_provider"),
-            "tts_model": payload.get("tts_model"),
+            "tts_provider": payload.get("tts_provider") or (payload.get("metadata") or {}).get("tts_provider"),
+            "tts_model": payload.get("tts_model") or (payload.get("metadata") or {}).get("tts_model"),
         }
         if queue_settings:
             project_settings["queue"] = queue_settings
@@ -1189,9 +1194,9 @@ async def process_audiobook_job(
             item_subtitle_cfg = item_subtitle_cfg_raw or {}
             item_chapter_specs = item.get("chapters")
             item_voice_profile_id = item.get("voice_profile_id")
-            item_tts_provider = item.get("tts_provider")
-            item_tts_model = item.get("tts_model")
             item_metadata = item.get("metadata") or {}
+            item_tts_provider = _normalize_tts_provider(item.get("tts_provider") or item_metadata.get("tts_provider"))
+            item_tts_model = item.get("tts_model") or item_metadata.get("tts_model")
 
             jm.update_job_progress(
                 job_id,

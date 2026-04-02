@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -12,7 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Pagination } from '@/components/ui/pagination';
 import { Select } from '@/components/ui/select';
-import { TableSkeleton } from '@/components/ui/skeleton';
+import { CardSkeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
@@ -51,6 +52,7 @@ function ApiKeysPageContent() {
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [bulkRotating, setBulkRotating] = useState(false);
   const [bulkRevoking, setBulkRevoking] = useState(false);
+  const [bulkMutating, setBulkMutating] = useState(false);
 
   // Create Key dialog state
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -272,7 +274,7 @@ function ApiKeysPageContent() {
   };
 
   const handleRotateSelected = async () => {
-    if (selectedRows.length === 0 || bulkRotating) return;
+    if (selectedRows.length === 0 || bulkMutating) return;
 
     const confirmed = await confirm({
       title: 'Rotate selected keys',
@@ -284,6 +286,7 @@ function ApiKeysPageContent() {
     if (!confirmed) return;
 
     try {
+      setBulkMutating(true);
       setBulkRotating(true);
       const results = await Promise.allSettled(
         selectedRows.map((row) => api.rotateApiKey(String(row.ownerUserId), row.keyId))
@@ -305,6 +308,7 @@ function ApiKeysPageContent() {
       toastError('Bulk rotation failed', message);
     } finally {
       setBulkRotating(false);
+      setBulkMutating(false);
     }
   };
 
@@ -322,6 +326,7 @@ function ApiKeysPageContent() {
     if (!confirmed) return;
 
     try {
+      setBulkMutating(true);
       setBulkRevoking(true);
       const results = await Promise.allSettled(
         revokeableRows.map((row) => api.revokeApiKey(String(row.ownerUserId), row.keyId))
@@ -343,6 +348,7 @@ function ApiKeysPageContent() {
       toastError('Bulk revocation failed', message);
     } finally {
       setBulkRevoking(false);
+      setBulkMutating(false);
     }
   };
 
@@ -578,7 +584,7 @@ function ApiKeysPageContent() {
                   </Button>
                   <Button
                     onClick={handleRotateSelected}
-                    disabled={selectedRowIds.size === 0 || bulkRotating || bulkRevoking}
+                    disabled={selectedRowIds.size === 0 || bulkRotating || bulkRevoking || bulkMutating}
                     loading={bulkRotating}
                     loadingText="Rotating..."
                   >
@@ -588,7 +594,7 @@ function ApiKeysPageContent() {
                   <Button
                     variant="destructive"
                     onClick={handleRevokeSelected}
-                    disabled={selectedRowIds.size === 0 || bulkRevoking || bulkRotating}
+                    disabled={selectedRowIds.size === 0 || bulkRevoking || bulkRotating || bulkMutating}
                     loading={bulkRevoking}
                     loadingText="Revoking..."
                   >
@@ -762,9 +768,69 @@ function ApiKeysPageContent() {
               )}
             </DialogContent>
           </Dialog>
+
+          {/* Recent Key Activity */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Recent Key Activity</CardTitle>
+              <CardDescription>Latest API key create, rotate, and revoke events from audit log</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <KeyActivitySection />
+            </CardContent>
+          </Card>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+function KeyActivitySection() {
+  const [logs, setLogs] = useState<Array<{ id: number; timestamp: string; user_id: number; action: string; resource: string; details?: string }>>([]);
+  const [loadingLogs, setLoadingLogs] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.getAuditLogs({ resource: 'api_key', limit: '10' })
+      .then((data) => {
+        if (cancelled) return;
+        const items = Array.isArray(data) ? data : (data as { items?: unknown[] })?.items ?? [];
+        setLogs(items as typeof logs);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLogs([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingLogs(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loadingLogs) return <CardSkeleton />;
+  if (logs.length === 0) return <p className="text-sm text-muted-foreground">No recent key activity.</p>;
+
+  return (
+    <div className="space-y-2 max-h-48 overflow-y-auto">
+      {logs.map((log) => (
+        <div key={log.id} className="flex items-center justify-between p-2 rounded bg-muted/30 text-sm">
+          <div>
+            <span className="font-medium">{log.action}</span>
+            <span className="text-muted-foreground ml-2">by User {log.user_id}</span>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {new Date(log.timestamp).toLocaleString()}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

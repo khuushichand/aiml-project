@@ -114,6 +114,12 @@ export function useKeyboardShortcuts() {
       category: 'Navigation',
     },
     {
+      key: 'g k',
+      action: () => router.push('/api-keys'),
+      description: 'Go to API Keys',
+      category: 'Navigation',
+    },
+    {
       key: 'g l',
       action: () => router.push('/logs'),
       description: 'Go to Logs',

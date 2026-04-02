@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import builtins
+
 import pytest
 from fastapi import APIRouter, FastAPI
+
+from tldw_Server_API.tests.helpers.app_main_state import (
+    clear_app_main,
+    import_app_main,
+    restore_app_main,
+    snapshot_app_main,
+)
 
 
 @pytest.mark.unit
@@ -59,3 +68,28 @@ def test_router_registry_idempotent_registration() -> None:
 @pytest.mark.integration
 def test_minimal_app_uses_router_registry(client_user_only) -> None:
     assert hasattr(client_user_only.app.state, "_tldw_router_registry")
+
+
+@pytest.mark.unit
+def test_minimal_app_import_survives_setup_router_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+
+    original_import = builtins.__import__
+    existing_main = snapshot_app_main()
+    clear_app_main()
+
+    def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "tldw_Server_API.app.api.v1.endpoints.setup":
+            raise ImportError("setup router unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _guarded_import)
+
+    try:
+        imported_main = import_app_main()
+        assert imported_main.app is not None
+        assert any(route.path == "/health" for route in imported_main.app.routes)
+    finally:
+        restore_app_main(existing_main)

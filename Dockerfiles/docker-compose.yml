@@ -13,7 +13,9 @@ services:
     environment:
       # Auth mode: set to multi_user for team deployments
       - AUTH_MODE=${AUTH_MODE:-single_user}
-      # Provide a secure API key in single_user mode
+      # Provide a secure API key in single_user mode.
+      # Placeholder values (change-me, CHANGE_ME*, etc.) are auto-replaced
+      # by the entrypoint with a secure random key on first run.
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY:-change-me}
       # In production set: tldw_production=true (masks API key in logs and docs-info responses)
       - tldw_production=${tldw_production:-false}
@@ -23,6 +25,7 @@ services:
       # Example: postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
       - JOBS_DB_URL=${JOBS_DB_URL:-}
       # Optional OpenTelemetry envs can be passed through here
+      # Worker count. Default 4. Set to 1-2 for machines with <4GB RAM.
       - UVICORN_WORKERS=${UVICORN_WORKERS:-4}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:

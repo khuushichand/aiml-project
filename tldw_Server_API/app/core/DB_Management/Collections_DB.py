@@ -308,6 +308,8 @@ class UserNotificationRow:
     created_at: str
     read_at: str | None
     dismissed_at: str | None
+    delivery_status: str = "pending"
+    delivered_at: str | None = None
 
 
 @dataclass
@@ -438,7 +440,7 @@ class CollectionsDatabase:
         if not self._owns_backend:
             return
         try:
-            self.backend.close_all()
+            self.backend.get_pool().close_all()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections_db: failed to close backend for user {}: {}", self.user_id, exc)
 
@@ -528,6 +530,15 @@ class CollectionsDatabase:
             if name:
                 columns.add(str(name))
         return columns
+
+    def _table_columns(self, table: str) -> set[str]:
+        if self.backend.backend_type == BackendType.SQLITE:
+            return self._sqlite_columns(table)
+        return {
+            str(row["name"])
+            for row in self.backend.get_table_info(table)
+            if row.get("name")
+        }
 
     def _backfill_audiobook_project_ids(self) -> None:
         try:
@@ -704,7 +715,9 @@ class CollectionsDatabase:
                 archived_at TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
-                dismissed_at TEXT
+                dismissed_at TEXT,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                delivered_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
@@ -953,7 +966,9 @@ class CollectionsDatabase:
                 archived_at TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
-                dismissed_at TEXT
+                dismissed_at TEXT,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                delivered_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
@@ -1551,6 +1566,34 @@ class CollectionsDatabase:
                     logger.debug("collections backfill: content_items.{} already exists or skipped", column)
                 else:
                     raise
+        # Backfill user_notifications columns
+        notif_columns: set[str] = set()
+        if self.backend.table_exists("user_notifications"):
+            with contextlib.suppress(*_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                notif_columns = self._table_columns("user_notifications")
+        if notif_columns and "delivery_status" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'pending'",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.delivery_status already exists or skipped")
+                else:
+                    raise
+        if notif_columns and "delivered_at" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN delivered_at TEXT",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.delivered_at already exists or skipped")
+                else:
+                    raise
+
         self._fts_available = fts_available
         self._refresh_fts_capabilities()
 
@@ -4365,6 +4408,8 @@ class CollectionsDatabase:
             created_at=str(row.get("created_at") or ""),
             read_at=row.get("read_at"),
             dismissed_at=row.get("dismissed_at"),
+            delivery_status=str(row.get("delivery_status") or "pending"),
+            delivered_at=row.get("delivered_at"),
         )
 
     def create_user_notification(
@@ -4390,8 +4435,8 @@ class CollectionsDatabase:
             "INSERT INTO user_notifications ("
             "user_id, kind, title, message, severity, source_task_id, source_task_run_id, source_job_id, "
             "source_domain, source_job_type, link_type, link_id, link_url, dedupe_key, retention_until, archived_at, "
-            "created_at, read_at, dismissed_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "created_at, read_at, dismissed_at, delivery_status, delivered_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             self.user_id,
@@ -4413,6 +4458,8 @@ class CollectionsDatabase:
             now,
             None,
             None,
+            "pending",
+            None,
         )
         res = self._execute_insert(q, params)
         new_id = self._extract_lastrowid(res)
@@ -4432,6 +4479,25 @@ class CollectionsDatabase:
         if not row:
             raise KeyError("user_notification_not_found")
         return self._notification_row_from_db(row)
+
+    def update_notification_delivery_status(
+        self,
+        notification_id: int,
+        status: str,
+        delivered_at: str | None = None,
+    ) -> bool:
+        """Update the delivery_status (and optionally delivered_at) of a notification."""
+        if delivered_at is not None:
+            cursor = self.backend.execute(
+                "UPDATE user_notifications SET delivery_status = ?, delivered_at = ? WHERE id = ? AND user_id = ?",
+                (status, delivered_at, notification_id, self.user_id),
+            )
+        else:
+            cursor = self.backend.execute(
+                "UPDATE user_notifications SET delivery_status = ?, delivered_at = NULL WHERE id = ? AND user_id = ?",
+                (status, notification_id, self.user_id),
+            )
+        return bool(cursor.rowcount and cursor.rowcount > 0)
 
     def list_user_notifications(
         self,

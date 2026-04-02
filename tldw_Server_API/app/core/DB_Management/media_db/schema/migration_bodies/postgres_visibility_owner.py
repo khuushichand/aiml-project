@@ -60,7 +60,7 @@ def run_postgres_migrate_to_v9(db: PostgresVisibilityOwnerBody, conn: Any) -> No
         )
     except MEDIA_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
-            "Could not add visibility check constraint: %s",
+            "Could not add visibility check constraint: {}",
             exc,
         )
 
@@ -89,7 +89,7 @@ def run_postgres_migrate_to_v9(db: PostgresVisibilityOwnerBody, conn: Any) -> No
         )
     except MEDIA_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
-            "Could not backfill owner_user_id: %s",
+            "Could not backfill owner_user_id: {}",
             exc,
         )
 

@@ -23,6 +23,17 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
     expect(params.get("quiz_id")).toBe("42")
     expect(params.get("attempt_id")).toBe("501")
     expect(params.get("deck_id")).toBe("7")
+    expect(params.get("include_workspace_items")).toBe("1")
+  })
+
+  it("keeps flashcards workspace force-show off when no direct deck is targeted", () => {
+    const route = buildFlashcardsStudyRouteFromQuiz({
+      quizId: 42,
+      attemptId: 501
+    })
+
+    const params = new URLSearchParams(route.slice(route.indexOf("?") + 1))
+    expect(params.get("include_workspace_items")).toBeNull()
   })
 
   it("parses flashcards study intent from search and ignores invalid IDs", () => {
@@ -32,7 +43,8 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
     expect(valid).toEqual({
       quizId: 42,
       attemptId: 501,
-      deckId: 9
+      deckId: 9,
+      forceShowWorkspaceItems: false
     })
 
     const invalid = parseFlashcardsStudyIntentFromSearch(
@@ -49,7 +61,8 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
     expect(intent).toEqual({
       quizId: 88,
       attemptId: 12,
-      deckId: undefined
+      deckId: undefined,
+      forceShowWorkspaceItems: false
     })
   })
 
@@ -68,6 +81,7 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
     expect(params.get("deck_id")).toBe("11")
     expect(params.get("deck_name")).toBe("Biology Recovery")
     expect(params.get("source_attempt_id")).toBe("600")
+    expect(params.get("include_workspace_items")).toBeNull()
   })
 
   it("parses quiz assessment intent and handles invalid params gracefully", () => {
@@ -83,7 +97,8 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
       assignmentMode: undefined,
       assignmentDueAt: undefined,
       assignmentNote: undefined,
-      assignedByRole: undefined
+      assignedByRole: undefined,
+      forceShowWorkspaceItems: false
     })
 
     const invalid = parseQuizAssessmentIntentFromSearch(
@@ -106,7 +121,8 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
       assignmentMode: undefined,
       assignmentDueAt: undefined,
       assignmentNote: undefined,
-      assignedByRole: undefined
+      assignedByRole: undefined,
+      forceShowWorkspaceItems: false
     })
   })
 
@@ -124,7 +140,8 @@ describe("quiz/flashcards cross-navigation handoff helpers", () => {
       assignmentMode: "shared",
       assignmentDueAt: "2026-03-01T14:30:00.000Z",
       assignmentNote: "Review chapters 2-3",
-      assignedByRole: "lead"
+      assignedByRole: "lead",
+      forceShowWorkspaceItems: false
     })
   })
 })

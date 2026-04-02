@@ -12,7 +12,7 @@ import asyncio
 import copy
 import fnmatch
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -225,6 +225,7 @@ class AgentConfig:
     updated_at: str | None = None
     default_token_budget: int | None = None
     default_auto_terminate_at_budget: bool = True
+    max_token_budget: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         import os
@@ -249,6 +250,7 @@ class AgentConfig:
             "is_configured": is_configured,
             "default_token_budget": self.default_token_budget,
             "default_auto_terminate_at_budget": self.default_auto_terminate_at_budget,
+            "max_token_budget": self.max_token_budget,
         }
 
 
@@ -604,6 +606,11 @@ class ACPSessionStore:
         records = [self._dict_to_record(d) for d in rows]
         return records, total
 
+    async def get_agent_usage_stats(self, *, range_days: int = 7) -> list[dict[str, Any]]:
+        """Return per-agent aggregated token usage for the last *range_days* days."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=range_days)).isoformat()
+        return await asyncio.to_thread(self._db.get_agent_usage_stats, since_iso=cutoff)
+
     async def fork_session(
         self,
         source_session_id: str,
@@ -682,6 +689,7 @@ class ACPSessionStore:
                 org_id=data.get("org_id"),
                 team_id=data.get("team_id"),
                 enabled=data.get("enabled", True),
+                max_token_budget=data.get("max_token_budget"),
                 created_at=now,
                 default_token_budget=data.get("default_token_budget"),
                 default_auto_terminate_at_budget=data.get("default_auto_terminate_at_budget", True),
@@ -697,7 +705,8 @@ class ACPSessionStore:
             for key in ("name", "description", "system_prompt", "allowed_tools",
                         "denied_tools", "parameters", "requires_api_key",
                         "org_id", "team_id", "enabled", "type",
-                        "default_token_budget", "default_auto_terminate_at_budget"):
+                        "default_token_budget", "default_auto_terminate_at_budget",
+                        "max_token_budget"):
                 if key in data:
                     setattr(config, key, data[key])
             config.updated_at = datetime.now(timezone.utc).isoformat()

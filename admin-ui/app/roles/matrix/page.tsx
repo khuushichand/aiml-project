@@ -14,6 +14,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw, Search, Shield, Save, 
 import { api } from '@/lib/api-client';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Role, Permission } from '@/types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 import { logger } from '@/lib/logger';
 
 type RolePermissionMap = Record<number, Set<number>>;
@@ -31,6 +32,8 @@ export default function PermissionMatrixPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showDifferencesOnly, setShowDifferencesOnly] = useState(false);
+  const [permSearch, setPermSearch] = useState('');
+  const [differencesOnly, setDifferencesOnly] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -429,6 +432,27 @@ export default function PermissionMatrixPage() {
                     {showDifferencesOnly ? ' and difference filter' : ''}.
                   </div>
                 ) : (
+                  <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="relative flex-1 max-w-xs">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Filter permissions..."
+                        value={permSearch}
+                        onChange={(e) => setPermSearch(e.target.value)}
+                        className="pl-9"
+                        aria-label="Filter permissions"
+                      />
+                    </div>
+                    <Button
+                      variant={differencesOnly ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setDifferencesOnly(!differencesOnly)}
+                      aria-pressed={differencesOnly}
+                    >
+                      Differences only
+                    </Button>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full border-collapse">
                       <thead>
@@ -517,6 +541,7 @@ export default function PermissionMatrixPage() {
                       </tbody>
                     </table>
                   </div>
+                  </>
                 )}
               </CardContent>
             </Card>

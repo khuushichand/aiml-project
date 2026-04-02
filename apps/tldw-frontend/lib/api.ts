@@ -34,6 +34,27 @@ const deploymentEnv = {
 };
 const apiVersion = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
 
+export function shouldIncludeBrowserCredentials(): boolean {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+
+  const hasJwtToken = !!localStorage.getItem('access_token');
+  if (hasJwtToken) {
+    return true;
+  }
+
+  if (getApiKey()) {
+    return false;
+  }
+
+  if (getApiBearer()) {
+    return false;
+  }
+
+  return true;
+}
+
 function resolveDefaultApiBaseUrl(): string {
   const pageOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined;
   return buildApiBaseUrl(resolvePublicApiOrigin(deploymentEnv, pageOrigin), apiVersion);
@@ -95,6 +116,8 @@ api.interceptors.request.use(
           config.headers.set('X-CSRF-Token', csrf);
         }
       }
+
+      config.withCredentials = shouldIncludeBrowserCredentials();
     }
     return config;
   },
@@ -246,4 +269,25 @@ export function buildAuthHeaders(method: string = 'GET', contentType?: string): 
   }
 
   return headers;
+}
+
+export function hasExplicitAuthHeaders(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const token = localStorage.getItem('access_token');
+  if (token) {
+    return true;
+  }
+
+  if (getApiBearer()) {
+    return true;
+  }
+
+  if (getApiKey()) {
+    return true;
+  }
+
+  return false;
 }

@@ -1,4 +1,5 @@
 import type { NotesTitleSuggestStrategy, NotesNotebookSetting } from '@/services/settings/ui-settings'
+import type { NotesStudioHandwritingMode, NotesStudioTemplateType } from './notes-studio-types'
 import type { NoteListItem } from './types'
 
 export type NoteWithKeywords = {
@@ -217,6 +218,23 @@ export const NOTES_OFFLINE_NEW_DRAFT_KEY = 'draft:new'
 export const NOTES_LIST_REGION_ID = 'notes-list-region'
 export const NOTES_EDITOR_REGION_ID = 'notes-editor-region'
 export const NOTES_SHORTCUTS_SUMMARY_ID = 'notes-shortcuts-summary'
+export const NOTES_STUDIO_TEMPLATE_OPTIONS: Array<{
+  value: NotesStudioTemplateType
+  labelKey: string
+  defaultLabel: string
+}> = [
+  { value: 'lined', labelKey: 'option:notesSearch.notesStudioTemplateLined', defaultLabel: 'Lined' },
+  { value: 'grid', labelKey: 'option:notesSearch.notesStudioTemplateGrid', defaultLabel: 'Grid' },
+  { value: 'cornell', labelKey: 'option:notesSearch.notesStudioTemplateCornell', defaultLabel: 'Cornell' },
+]
+export const NOTES_STUDIO_HANDWRITING_OPTIONS: Array<{
+  value: NotesStudioHandwritingMode
+  labelKey: string
+  defaultLabel: string
+}> = [
+  { value: 'accented', labelKey: 'option:notesSearch.notesStudioHandwritingAccented', defaultLabel: 'Accented' },
+  { value: 'off', labelKey: 'option:notesSearch.notesStudioHandwritingOff', defaultLabel: 'Off' },
+]
 
 export const shouldIgnoreGlobalShortcut = (target: EventTarget | null): boolean => {
   if (!(target instanceof Element)) return false

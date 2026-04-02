@@ -34,7 +34,7 @@ export function ExportMenu({ onExport, disabled = false, label = 'Export' }: Exp
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuItem
           onSelect={() => onExport('csv')}
-          className="flex items-center gap-2 px-3 py-2"
+          className="flex items-center gap-2 px-3 py-2 cursor-pointer"
         >
           <FileSpreadsheet className="h-4 w-4 text-green-600" />
           <div>
@@ -44,7 +44,7 @@ export function ExportMenu({ onExport, disabled = false, label = 'Export' }: Exp
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onExport('json')}
-          className="flex items-center gap-2 px-3 py-2"
+          className="flex items-center gap-2 px-3 py-2 cursor-pointer"
         >
           <FileJson className="h-4 w-4 text-blue-600" />
           <div>

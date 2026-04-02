@@ -16,8 +16,9 @@ import uuid
 from typing import Any, Optional
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
@@ -61,6 +62,9 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.TTS.tts_exceptions import TTSError
+from tldw_Server_API.app.core.TTS.tts_request_resolution import (
+    resolve_tts_request_defaults,
+)
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType,
@@ -220,6 +224,7 @@ async def _authenticate_websocket(
 async def _generate_tts_audio(
     text: str,
     provider: Optional[str] = None,
+    model: Optional[str] = None,
     voice: Optional[str] = None,
     response_format: str = "mp3",
 ) -> tuple[bytes, str]:
@@ -234,11 +239,16 @@ async def _generate_tts_audio(
         from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 
         tts_service = await get_tts_service_v2()
+        resolved = resolve_tts_request_defaults(
+            provider=provider,
+            model=model,
+            voice=voice,
+        )
 
         request = OpenAISpeechRequest(
-            model=provider or "kokoro",
+            model=resolved.model,
             input=text,
-            voice=voice or "af_heart",
+            voice=resolved.voice,
             response_format=response_format,
             stream=False,
         )
@@ -247,7 +257,7 @@ async def _generate_tts_audio(
         audio_chunks = []
         async for chunk in tts_service.generate_speech(
             request=request,
-            provider=provider or "kokoro",
+            provider=resolved.provider,
             fallback=True,
         ):
             if chunk:
@@ -325,6 +335,7 @@ async def process_voice_command(
         audio_bytes, mime_type = await _generate_tts_audio(
             text=result.response_text,
             provider=request.tts_provider,
+            model=request.tts_model,
             voice=request.tts_voice,
             response_format=request.tts_format,
         )
@@ -1088,11 +1099,20 @@ async def websocket_voice_assistant(
                     config = {
                         "stt_model": message.get("stt_model", "parakeet"),
                         "stt_language": message.get("stt_language"),
-                        "tts_provider": message.get("tts_provider", "kokoro"),
-                        "tts_voice": message.get("tts_voice", "af_heart"),
+                        "tts_provider": None,
+                        "tts_model": None,
+                        "tts_voice": None,
                         "tts_format": message.get("tts_format", "mp3"),
                         "sample_rate": message.get("sample_rate", 16000),
                     }
+                    resolved_tts = resolve_tts_request_defaults(
+                        provider=message.get("tts_provider"),
+                        model=message.get("tts_model"),
+                        voice=message.get("tts_voice"),
+                    )
+                    config["tts_provider"] = resolved_tts.provider
+                    config["tts_model"] = resolved_tts.model
+                    config["tts_voice"] = resolved_tts.voice
 
                     # Resume existing session if provided
                     if message.get("session_id"):
@@ -1106,6 +1126,7 @@ async def websocket_voice_assistant(
                             session_id=session_id,
                             stt_model=config["stt_model"],
                             tts_provider=config["tts_provider"],
+                            tts_model=config["tts_model"],
                         ).model_dump()
                     )
 
@@ -1419,11 +1440,16 @@ async def _stream_tts_response(
 
         tts_service = await get_tts_service_v2()
         tts_format = config.get("tts_format", "mp3")
+        resolved = resolve_tts_request_defaults(
+            provider=config.get("tts_provider"),
+            model=config.get("tts_model"),
+            voice=config.get("tts_voice"),
+        )
 
         request = OpenAISpeechRequest(
-            model=config.get("tts_provider", "kokoro"),
+            model=resolved.model,
             input=text,
-            voice=config.get("tts_voice", "af_heart"),
+            voice=resolved.voice,
             response_format=tts_format,
             stream=True,
         )
@@ -1433,7 +1459,7 @@ async def _stream_tts_response(
 
         async for chunk in tts_service.generate_speech(
             request=request,
-            provider=config.get("tts_provider", "kokoro"),
+            provider=resolved.provider,
             fallback=True,
         ):
             if chunk:
@@ -1512,6 +1538,104 @@ async def _stream_workflow_progress(
                 recoverable=True,
             ).model_dump()
         )
+
+
+#######################################################################################################################
+#
+# Voice Command Dry-Run
+#
+
+class VoiceCommandDryRunRequest(BaseModel):
+    """Request payload for voice command dry-run."""
+    phrase: str = Field(..., min_length=1, max_length=500)
+    command_id: str | None = None
+
+
+class VoiceCommandDryRunAlternative(BaseModel):
+    action_type: str
+    confidence: float | None = None
+    raw_text: str | None = None
+
+
+class VoiceCommandDryRunResponse(BaseModel):
+    dry_run: bool = True
+    phrase: str
+    matched: bool
+    match_method: str
+    matched_phrase: str | None = None
+    confidence: float | None = None
+    action_type: str
+    action_config: dict[str, Any] = {}
+    processing_time_ms: float
+    alternatives: list[VoiceCommandDryRunAlternative] = []
+
+
+@router.post(
+    "/voice/commands/dry-run",
+    response_model=VoiceCommandDryRunResponse,
+    summary="Dry-run a voice command phrase",
+)
+async def voice_command_dry_run(
+    payload: VoiceCommandDryRunRequest,
+    request: Request,
+    current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> VoiceCommandDryRunResponse:
+    """Parse a phrase through the voice pipeline without executing.
+
+    Returns the matched command, confidence score, extracted entities,
+    and what action would be taken — without actually running it.
+    """
+    try:
+        from tldw_Server_API.app.core.VoiceAssistant.intent_parser import IntentParser
+
+        registry = get_voice_command_registry()
+        registry.load_defaults()
+        registry.refresh_user_commands(
+            db,
+            user_id=current_user.id,
+            include_disabled=True,
+        )
+        parser = IntentParser(registry=registry)
+
+        result = await parser.parse(
+            text=payload.phrase,
+            user_id=current_user.id,
+            context=None,
+        )
+
+        intent = result.intent
+        alternatives = []
+        if hasattr(result, "alternatives") and result.alternatives:
+            for alt in result.alternatives[:3]:
+                alternatives.append(VoiceCommandDryRunAlternative(
+                    action_type=alt.action_type.value if hasattr(alt.action_type, "value") else str(alt.action_type),
+                    confidence=getattr(alt, "confidence", None),
+                    raw_text=getattr(alt, "raw_text", None),
+                ))
+
+        return VoiceCommandDryRunResponse(
+            phrase=payload.phrase,
+            matched=result.match_method != "default",
+            match_method=result.match_method,
+            matched_phrase=getattr(result, "matched_phrase", None),
+            confidence=getattr(intent, "confidence", None),
+            action_type=intent.action_type.value if hasattr(intent.action_type, "value") else str(intent.action_type),
+            action_config=intent.action_config,
+            processing_time_ms=getattr(result, "processing_time_ms", 0.0),
+            alternatives=alternatives,
+        )
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Voice assistant module not available: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Voice command dry-run failed: {}", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dry-run failed: {exc}",
+        ) from exc
 
 
 #

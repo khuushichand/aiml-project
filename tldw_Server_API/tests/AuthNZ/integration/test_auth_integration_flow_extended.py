@@ -6,6 +6,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.tests.helpers.app_main_state import reload_app_main
+
 pytestmark = pytest.mark.integration
 
 
@@ -35,9 +37,7 @@ async def test_reset_password_integration_success(monkeypatch):
     reset_jwt_service()
 
     # Reload a fresh app instance (router mounts use the stubbed module)
-    import tldw_Server_API.app.main as _main
-    reloaded = importlib.reload(_main)
-    app = reloaded.app
+    app = reload_app_main().app
 
     # Force Postgres branch inside endpoint
     import tldw_Server_API.app.api.v1.endpoints.auth as auth

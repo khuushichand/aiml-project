@@ -507,6 +507,24 @@ class ACPAgentMetricsListResponse(BaseModel):
     items: list[ACPAgentMetrics] = Field(default_factory=list)
 
 
+class ACPAgentUsageItem(BaseModel):
+    """Aggregated usage statistics for a single agent type."""
+    agent_type: str
+    invocation_count: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    error_count: int = 0
+    estimated_cost_usd: float = 0.0
+    avg_tokens_per_session: float = 0.0
+
+
+class ACPAgentUsageResponse(BaseModel):
+    """Response for aggregated per-agent token usage."""
+    agents: list[ACPAgentUsageItem]
+    range_days: int
+
+
 # -----------------------------------------------------------------------------
 # Agent Configuration (Admin-managed)
 # -----------------------------------------------------------------------------
@@ -536,6 +554,7 @@ class ACPAgentConfigCreate(BaseModel):
         default=True,
         description="Whether new sessions using this agent auto-terminate when budget is exceeded",
     )
+    max_token_budget: int | None = Field(default=None, description="Maximum total tokens per session (null = unlimited)")
 
 
 class ACPAgentConfigResponse(ACPAgentConfigCreate):

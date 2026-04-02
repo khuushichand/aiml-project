@@ -167,4 +167,37 @@ describe("useFlashcardDocumentQuery", () => {
       })
     )
   })
+
+  it("keeps document queries workspace-hidden by default", async () => {
+    let options: any
+    useInfiniteQueryMock.mockImplementation((input: any) => {
+      options = input
+      return {
+        data: { pages: [] },
+        fetchNextPage: vi.fn(),
+        hasNextPage: false,
+        isFetchingNextPage: false
+      }
+    })
+
+    listFlashcardsMock.mockResolvedValue({
+      items: [makeFlashcard({ uuid: "workspace-card", deck_id: 9 })],
+      count: 1,
+      total: 1
+    })
+
+    useFlashcardDocumentQuery({
+      deckId: null,
+      dueStatus: "all",
+      sortBy: "due"
+    })
+
+    await options.queryFn({ pageParam: 0 })
+
+    expect(listFlashcardsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include_workspace_items: false
+      })
+    )
+  })
 })

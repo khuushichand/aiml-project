@@ -292,8 +292,20 @@ export const buildDashboardSystemHealth = ({
     const rows = Array.isArray(jobsStatsResult.value)
       ? jobsStatsResult.value
       : (toRecord(jobsStatsResult.value)?.items as unknown[] ?? []);
+    const payload = toRecord(jobsStatsResult.value);
+    const failed = typeof payload?.failed === 'number' ? payload.failed : 0;
+    const queueDepth = typeof payload?.queue_depth === 'number' ? payload.queue_depth : 0;
     if (!Array.isArray(rows) || rows.length === 0) {
-      return { status: 'healthy' as DashboardHealthStatus, checkedAt: referenceTime };
+      // No row-level stats; fall back to top-level failed / queue_depth counters
+      const status: DashboardHealthStatus =
+        failed > 0 ? 'degraded' :
+        queueDepth > 100 ? 'degraded' :
+        'healthy';
+      return {
+        status,
+        checkedAt: referenceTime,
+        errorMessage: failed > 0 ? `${failed} failed jobs` : queueDepth > 100 ? `Queue depth: ${queueDepth}` : null,
+      };
     }
     let quarantined = 0;
     for (const row of rows) {
@@ -304,11 +316,15 @@ export const buildDashboardSystemHealth = ({
       }
     }
     const status: DashboardHealthStatus =
-      quarantined > 10 ? 'down' : quarantined > 0 ? 'degraded' : 'healthy';
+      quarantined > 10 ? 'down' : quarantined > 0 ? 'degraded' : failed > 0 ? 'degraded' : queueDepth > 100 ? 'degraded' : 'healthy';
+    const messages: string[] = [];
+    if (quarantined > 0) messages.push(`${quarantined} quarantined job(s)`);
+    if (failed > 0) messages.push(`${failed} failed jobs`);
+    if (queueDepth > 100) messages.push(`Queue depth: ${queueDepth}`);
     return {
       status,
       checkedAt: referenceTime,
-      errorMessage: quarantined > 0 ? `${quarantined} quarantined job(s)` : null,
+      errorMessage: messages.length > 0 ? messages.join('; ') : null,
     };
   })();
 

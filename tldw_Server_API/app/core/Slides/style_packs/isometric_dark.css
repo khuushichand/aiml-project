@@ -1,0 +1,12 @@
+.reveal[data-style-pack="isometric_dark"] {
+  background-color: var(--surface, #111827);
+  color: var(--text, #e5e7eb);
+  font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+}
+
+.reveal[data-style-pack="isometric_dark"] .slides section {
+  background-color: rgba(17, 24, 39, 0.92);
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 20px;
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.4);
+}

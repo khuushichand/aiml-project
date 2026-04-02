@@ -56,7 +56,7 @@ function logResult(testName: string, passed: boolean, details?: string) {
 test.describe('Onboarding Flow', () => {
   test('new onboarding form renders correctly', async () => {
     const { context, page } = await launchWithExtensionOrSkip(test, '', {
-      seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
+      seedConfig: withFeatures([])
       // No serverUrl triggers onboarding
     })
 
@@ -87,7 +87,7 @@ test.describe('Onboarding Flow', () => {
 
   test('onboarding URL validation feedback', async () => {
     const { context, page } = await launchWithExtensionOrSkip(test, '', {
-      seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
+      seedConfig: withFeatures([])
     })
 
     await page.waitForTimeout(1000)
@@ -110,7 +110,7 @@ test.describe('Onboarding Flow', () => {
 
   test('onboarding auth mode toggle', async () => {
     const { context, page } = await launchWithExtensionOrSkip(test, '', {
-      seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
+      seedConfig: withFeatures([])
     })
 
     await page.waitForTimeout(1000)
@@ -135,7 +135,7 @@ test.describe('Onboarding Flow', () => {
 
   test('onboarding connect test with live server', async () => {
     const { context, page } = await launchWithExtensionOrSkip(test, '', {
-      seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
+      seedConfig: withFeatures([])
     })
 
     await page.waitForTimeout(1000)
@@ -165,7 +165,7 @@ test.describe('Onboarding Flow', () => {
 
   test('onboarding demo mode activation', async () => {
     const { context, page } = await launchWithExtensionOrSkip(test, '', {
-      seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
+      seedConfig: withFeatures([])
     })
 
     await page.waitForTimeout(1000)

@@ -48,6 +48,48 @@ export interface WorkspaceSourceFolderMembership {
   sourceId: string
 }
 
+export type WorkspaceSourceTransferMode = "copy" | "move"
+
+export type WorkspaceSourceTransferConflictResolution =
+  | "skip"
+  | "merge-folders"
+  | "replace-transferred-folders"
+
+export type WorkspaceSourceTransferEmptyFolderPolicy =
+  | "keep"
+  | "delete-empty-folders"
+
+export type WorkspaceSourceTransferIdKind = "source" | "folder"
+
+export interface WorkspaceSourceTransferSnapshot {
+  workspaceId: string
+  sources: WorkspaceSource[]
+  sourceFolders: WorkspaceSourceFolder[]
+  sourceFolderMemberships: WorkspaceSourceFolderMembership[]
+}
+
+export interface WorkspaceSourceTransferInput {
+  mode: WorkspaceSourceTransferMode
+  originSnapshot: WorkspaceSourceTransferSnapshot
+  destinationSnapshot: WorkspaceSourceTransferSnapshot
+  selectedSourceIds: string[]
+  conflictResolutions: Record<number, WorkspaceSourceTransferConflictResolution>
+  emptyFolderPolicy: WorkspaceSourceTransferEmptyFolderPolicy
+  sourceFolderFallbackName: string
+  generateId: (kind: WorkspaceSourceTransferIdKind) => string
+}
+
+export interface WorkspaceSourceTransferResult {
+  originSnapshot: WorkspaceSourceTransferSnapshot
+  destinationSnapshot: WorkspaceSourceTransferSnapshot
+  transferredMediaIds: number[]
+  transferredDestinationSourceIds: string[]
+  removedOriginSourceIds: string[]
+  newlyEmptiedOriginFolderIds: string[]
+  conflictsResolved: number[]
+  conflictsSkipped: number[]
+}
+
 export interface WorkspaceCollection {
   id: string
   name: string
@@ -74,6 +116,32 @@ export type ArtifactType =
 
 export type ArtifactStatus = "pending" | "generating" | "completed" | "failed"
 
+export type StudyMaterialsPolicy = "general" | "workspace"
+
+export type WorkspaceStudyArtifactSource = {
+  source_type: string
+  source_id: string
+}
+
+export interface WorkspaceStudyArtifactData {
+  quizId?: number
+  deckId?: number
+  workspaceId?: string | null
+  sourceMediaIds?: number[]
+  sourceBundle?: WorkspaceStudyArtifactSource[]
+  questions?: Array<{
+    question: string
+    options: string[]
+    answer: string
+    explanation?: string
+    sourceMediaId?: number
+  }>
+  flashcards?: Array<{
+    front: string
+    back: string
+  }>
+}
+
 export interface GeneratedArtifact {
   id: string
   type: ArtifactType
@@ -91,7 +159,7 @@ export interface GeneratedArtifact {
   presentationId?: string // For slides - ID of the generated presentation
   presentationVersion?: number // For slides - version for export
   errorMessage?: string // If status is failed
-  data?: Record<string, unknown> // Optional structured artifact payload (quiz, flashcards, tables, etc.)
+  data?: WorkspaceStudyArtifactData & Record<string, unknown> // Optional structured artifact payload (quiz, flashcards, tables, etc.)
   createdAt: Date
   completedAt?: Date
 }

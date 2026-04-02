@@ -1,7 +1,41 @@
 # -----------------------------------------------------------------------------
+# Default target: show help
+# -----------------------------------------------------------------------------
+.PHONY: help
+help:
+	@echo ""
+	@echo "tldw_server — available targets"
+	@echo "================================"
+	@echo ""
+	@echo "Getting Started:"
+	@echo "  make quickstart              Docker single-user + WebUI (recommended)"
+	@echo "  make quickstart-install      Local Python install + start server"
+	@echo "  make quickstart-docker       Docker API-only (no WebUI)"
+	@echo "  make quickstart-prereqs      Check Python, ffmpeg, and dependencies"
+	@echo ""
+	@echo "Server:"
+	@echo "  make quickstart-local        Start local server (after install)"
+	@echo "  make server-up-dev           Start server in mock/dev mode"
+	@echo "  make verify                  Health-check a running server"
+	@echo "  make show-api-key            Print your SINGLE_USER_API_KEY"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make tooling-install         Install test/smoke extras"
+	@echo "  make tooling-smoke           Run unified smoke checks"
+	@echo "  make lint-changed            Lint only changed files"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make quickstart-docker-webui Docker API + WebUI"
+	@echo "  make monitoring-up           Start Prometheus + Grafana"
+	@echo "  make monitoring-down         Stop monitoring stack"
+	@echo ""
+	@echo "See Docs/Getting_Started/README.md for full setup guides."
+	@echo ""
+
+# -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-local quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-local quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke show-api-key
 
 PYTHON ?= python3
 VENV_DIR ?= .venv
@@ -128,6 +162,17 @@ model-cycle:
 verify:
 	@echo "[verify] Checking server health..."
 	@curl -sf http://localhost:8000/health > /dev/null && echo "[verify] Health check PASSED" || (echo "[verify] Health check FAILED - is the server running?" && exit 1)
+
+show-api-key:
+	@echo "[show-api-key] WARNING: This prints a secret to stdout. Do not use in CI or shared terminals." >&2
+	@if [ -f "$(TLDW_ENV_FILE)" ]; then \
+		grep '^SINGLE_USER_API_KEY=' "$(TLDW_ENV_FILE)" | cut -d= -f2-; \
+	elif command -v docker >/dev/null 2>&1; then \
+		echo "[show-api-key] .env not found on host; reading from Docker container..." >&2; \
+		docker compose -f $(DOCKER_BASE_COMPOSE) exec -T app cat /app/tldw_Server_API/Config_Files/.env 2>/dev/null | grep '^SINGLE_USER_API_KEY=' | cut -d= -f2- || echo "[show-api-key] Could not read key. Is the container running?" >&2; \
+	else \
+		echo "[show-api-key] .env file not found at $(TLDW_ENV_FILE) and docker not available." >&2; \
+	fi
 
 # -----------------------------------------------------------------------------
 # PyPI packaging helpers

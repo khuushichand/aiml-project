@@ -1,9 +1,27 @@
 import pytest
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.endpoints import (
     embeddings_v5_production_enhanced,
     media_embeddings,
 )
+
+
+def test_user_embedding_config_prefers_resolved_test_db_base(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        media_embeddings,
+        "settings",
+        {"EMBEDDING_CONFIG": {}, "USER_DB_BASE_DIR": "Databases/user_databases"},
+    )
+    monkeypatch.setattr(
+        DatabasePaths,
+        "get_user_db_base_dir",
+        staticmethod(lambda: tmp_path / "isolated-user-dbs"),
+    )
+
+    config = media_embeddings._user_embedding_config()
+
+    assert config["USER_DB_BASE_DIR"] == str(tmp_path / "isolated-user-dbs")
 
 
 @pytest.mark.asyncio
@@ -75,4 +93,5 @@ async def test_generate_embeddings_for_media_uses_user_scoped_chroma_manager(mon
     assert created["user_id"] == "tenant-7"
     assert stored["collection_name"] == "user_tenant-7_media_embeddings"
     assert stored["ids"] == ["media_42_chunk_0"]
+    assert stored["metadatas"][0]["chunk_type"] == "text"
     assert stored["embedding_model_id_for_dim_check"] == "test-model"

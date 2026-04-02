@@ -11,6 +11,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ActivitySummaryResponse,
+    AdminPermissionDebugRequest,
+    AdminPermissionDebugResponse,
+    AdminTokenDecodeRequest,
+    AdminTokenDecodeResponse,
     AuditLogResponse,
     ErrorBreakdownResponse,
     RateLimitSummaryResponse,
@@ -24,9 +28,95 @@ from tldw_Server_API.app.services import admin_system_service
 router = APIRouter()
 
 
+async def _enforce_admin_user_scope(
+    principal: AuthPrincipal,
+    target_user_id: int,
+    *,
+    require_hierarchy: bool,
+) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+    await admin_mod._enforce_admin_user_scope(
+        principal,
+        target_user_id,
+        require_hierarchy=require_hierarchy,
+    )
+
+
 @router.get("/security/alert-status", response_model=SecurityAlertStatusResponse)
 async def get_security_alert_status() -> SecurityAlertStatusResponse:
     return await admin_system_service.get_security_alert_status()
+
+
+@router.post("/debug/resolve-permissions", response_model=AdminPermissionDebugResponse)
+async def debug_resolve_permissions(
+    payload: AdminPermissionDebugRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> AdminPermissionDebugResponse:
+    """Resolve effective permissions for a given user (debug tool)."""
+    await _enforce_admin_user_scope(principal, payload.user_id, require_hierarchy=False)
+    result = await admin_system_service.debug_resolve_permissions(payload.user_id, db)
+    return AdminPermissionDebugResponse(**result)
+
+
+@router.post("/debug/validate-token", response_model=AdminTokenDecodeResponse)
+async def debug_decode_token(
+    payload: AdminTokenDecodeRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AdminTokenDecodeResponse:
+    """Decode a JWT or API token without verifying its signature."""
+    result = await admin_system_service.debug_decode_token(payload.token.get_secret_value())
+    return AdminTokenDecodeResponse(**result)
+
+
+@router.get("/billing/analytics")
+async def get_billing_analytics(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
+    """Get billing analytics: MRR, subscriber counts, churn rate."""
+    return await admin_system_service.get_billing_analytics(db)
+
+
+@router.get("/dependencies/health")
+async def get_all_dependencies_health(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict:
+    """Probe all external service dependencies and return health status."""
+    return await admin_system_service.get_all_dependencies_health()
+
+
+@router.get("/dependencies/uptime-history")
+async def get_dependencies_uptime_history(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    service: str | None = None,
+    range_days: int = 30,
+) -> dict:
+    """Return uptime history for dependency health probes.
+
+    If *service* is given, returns history for that service only.
+    Otherwise returns history for all tracked services.
+    """
+    from tldw_Server_API.app.services.admin_uptime_history_service import (
+        get_admin_uptime_history_service,
+    )
+
+    svc = get_admin_uptime_history_service()
+    if service:
+        history = await svc.get_uptime_history(service, range_days=range_days)
+        return {"service": service, "range_days": range_days, "history": history}
+    all_history = await svc.get_all_services_uptime(range_days=range_days)
+    return {"range_days": range_days, "services": all_history}
+
+
+@router.get("/security/key-age-stats")
+async def get_key_age_stats(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
+    """Get API key age distribution without per-user fan-out."""
+    return await admin_system_service.get_key_age_stats(db)
 
 
 @router.get("/stats", response_model=SystemStatsResponse)

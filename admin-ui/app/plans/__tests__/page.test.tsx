@@ -7,6 +7,7 @@ import PlansPage from '../page';
 import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
@@ -29,6 +30,10 @@ vi.mock('@/components/ui/privileged-action-dialog', () => ({
   usePrivilegedActionDialog: () => confirmMock,
 }));
 
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
+}));
+
 vi.mock('@/components/ui/toast', () => ({
   useToast: () => ({
     success: toastSuccessMock,
@@ -39,6 +44,7 @@ vi.mock('@/components/ui/toast', () => ({
 vi.mock('@/lib/api-client', () => ({
   api: {
     getPlans: vi.fn(),
+    getSubscriptions: vi.fn(),
     createPlan: vi.fn(),
     updatePlan: vi.fn(),
     deletePlan: vi.fn(),
@@ -54,6 +60,7 @@ vi.mock('@/lib/billing', () => ({
 
 type ApiMock = {
   getPlans: ReturnType<typeof vi.fn>;
+  getSubscriptions: ReturnType<typeof vi.fn>;
   createPlan: ReturnType<typeof vi.fn>;
   updatePlan: ReturnType<typeof vi.fn>;
   deletePlan: ReturnType<typeof vi.fn>;
@@ -110,9 +117,11 @@ const samplePlans = [
 beforeEach(() => {
   billingEnabled = true;
   confirmMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
+  privilegedActionMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   apiMock.getPlans.mockResolvedValue(samplePlans);
+  apiMock.getSubscriptions.mockResolvedValue([]);
   apiMock.createPlan.mockResolvedValue(samplePlans[0]);
   apiMock.updatePlan.mockResolvedValue(samplePlans[0]);
   apiMock.deletePlan.mockResolvedValue({});
@@ -191,7 +200,7 @@ describe('PlansPage', () => {
     await user.click(deleteButtons[0]);
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           title: 'Delete Plan',
           message: expect.stringContaining('Free'),

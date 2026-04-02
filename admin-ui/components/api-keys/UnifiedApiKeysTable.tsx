@@ -80,8 +80,6 @@ export const UnifiedApiKeysTable = ({
   const rowIds = rows.map((row) => `${row.ownerUserId}:${row.keyId}`);
   const selectedCount = rowIds.filter((rowId) => selectedRowIds?.has(rowId)).length;
   const allSelected = selectedCount > 0 && selectedCount === rowIds.length;
-
-  // Only show telemetry columns when any row has real data from the backend
   const hasTelemetry = rows.some(
     (row) => row.requestCount24h !== null || row.errorRate24h !== null
   );
@@ -119,6 +117,9 @@ export const UnifiedApiKeysTable = ({
                 <span className="block"><span className="inline-block h-2 w-2 rounded-full bg-red-600 mr-1" />Red: &gt;180 days</span>
               </span>
             </button>
+            <span className="sr-only">
+              Green under 90 days, yellow 90 to 180 days, red over 180 days.
+            </span>
           </TableHead>
           <TableHead>Expiry</TableHead>
           <TableHead>Activity</TableHead>

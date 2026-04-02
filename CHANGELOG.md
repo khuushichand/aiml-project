@@ -10,9 +10,60 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
-- Single-image reference-guided generation for `POST /api/v1/files/create` image artifacts via `payload.reference_file_id`, including managed reference-image discovery through `GET /api/v1/files/reference-images`.
-- Image backend capability metadata for `image_reference_input`, plus Model Studio support for documented reference-image model families.
-- Playground image-generation modal support for selecting one eligible managed image as a reference source, with synced request metadata for image-generation events.
+### Changed
+
+### Fixed
+
+### Removed
+
+
+## [0.1.30] - 2026-03-31
+
+### Added
+
+- **Evaluations Recipe Framework** — A recipe-driven evaluation system with manifests, run persistence, job worker integration, and reporting APIs. Includes guided retrieval tuning and RAG answer quality recipes, recipe-first UI flows with a guided launcher, and legacy evaluations tab fixes. Synthetic eval draft generation and shared review workflow added alongside browser and unit test coverage. (PR #942)
+- **MCP Virtual CLI** — Phase-1 virtual CLI command runtime with workspace-bounded filesystem tools, governed `run` MCP tool, parser/registry/execution/presentation layers, approval-gated execution for governed chains, policy-aware discovery, nested idempotency propagation, spill-safe presentation, and integration test coverage across authz and path scoping. (PRs #939, #941)
+- **Reference Manager Import/Sync** — Provider-neutral reference-manager connector contracts, storage, and Zotero integration. Zotero collection sources are exposed through the connectors API with import-mode scheduler and worker sync including dedupe, metadata-only tracking. (PR #940)
+- **NotebookLM Presentation Style Catalog** — Built-in visual style catalog with resolver-backed metadata, prompt profiles, and reusable style packs. Reveal export rendering extended with namespaced style CSS and richer visual-block HTML. Presentation Studio gained a visual style picker, client metadata support, and built-in theme synchronization. (PR #935)
+- **FTUE Audit** — Comprehensive first-time user experience audit addressing 41 issues across documentation, tooling, configuration, and frontend UX. Includes unified README entry points, `make help`/`make show-api-key` targets, restructured `.env.example`, improved onboarding error messages, Docker entrypoint auth-init failure handling, DATABASE_URL preflight checks, demo mode exit banners, and multi-user JWT setup guidance. (PRs #938, #944)
+
+### Changed
+
+- Chat mood badge hidden by default across shared WebUI and extension chat surfaces, with one-time legacy preference migration and preserved user opt-in. (PR #943)
+- Workspace scope now forwarded when saving chat knowledge; voice-unavailable reason propagated through PlaygroundForm. (PR #943)
+
+### Fixed
+
+- Evaluations recipe framework hardened with 50 review-feedback fixes: Pydantic-typed recipe endpoints, worker readiness gating before enqueue, custom `RecipeEnqueueError` exception, sanitized error metadata, `managed_media_database` context manager for worker sessions, `owner_user_id` enforcement on `get_run()`, pre-validated `build_reuse_hash`, DB-level reuse-hash lookup, `ConfidenceSummary.model_validate` fallback, field-specific weight validation errors, CLI JSON shape validation, non-retryable `fts` mode error, `RecipeNotFoundError` custom exception, dict-backed document normalization in RAG pipeline, parameterized Loguru logging, and comprehensive recipe logic fixes across retrieval tuning, answer quality, embeddings, and summarization recipes. (PR #942 review follow-ups)
+- FTUE v2 residual issues: Docker entrypoint now exits on auth init failure, DATABASE_URL TCP connectivity preflight added, demo mode crash guard for missing `DemoModeProvider`, and clearer configuration guidance across Docker and local installs. (PR #944)
+- MCP virtual CLI review feedback addressed: preflight validation, filesystem module registration, command runtime path scope tests, and idempotency propagation fixes. (PR #941 review follow-ups)
+
+
+## [0.1.29] 2026-03-29
+### Added
+
+- Shared workspace cloning and "Shared With Me" flows, backed by new sharing APIs, privilege-aware workspace sharing rules, and clone-service support. (PR #903)
+- ACP workspaces gained workspace discovery and health services for workspace-entity orchestration surfaces. (PR #912)
+- Deep Research now includes jobs-backed run persistence, provider-backed collection/synthesis, replayable SSE progress, checkpoint review, chat handoff and follow-up flows, and workflow launch/wait/bundle steps. (PR #831)
+- MCP Hub governance pack management expanded with source distribution, trust policy and signer provenance/diagnostics, hosted staging/production overlays, and route parity across shared UI, the web app, and extension settings. (PRs #917, #922, #933)
+- Companion/Home and integrations management grew with a customizable Companion Home dashboard, notifications surfaces, shared integrations and scheduled-task management, and workspace installation registry syncing. (PRs #920, #925, #926)
+- The audio stack gained KittenTTS provider support, curated `kitten_tts` bundle profiles, shared admin audio installer routes/panel, and `pocket_tts_cpp` adapter/runtime/installer support. Audio setup docs and scripts were also migrated from `huggingface-cli` to `hf`. (PRs #918, #919, #921, #923, #931)
+- Telegram bot AuthNZ/governance support now includes permission foundations, admin configuration APIs, webhook intake/deduplication, linked-actor mapping, scoped execution identities, and exact-scope approval callbacks. (PR #924)
+- Reference-guided image generation for `POST /api/v1/files/create` image artifacts via `payload.reference_file_id`, including managed reference-image discovery through `GET /api/v1/files/reference-images`, backend `image_reference_input` capability metadata, documented Model Studio support for eligible reference-image model families, and Playground modal support for selecting one managed reference image as the request source.
+
+### Changed
+
+- Media DB v2 advanced through the phase-1 and stage-1 caller-first migrations, splitting the monolith into repository/runtime/schema modules, rebinding callers to the new API surface, tightening request-scope isolation, and expanding read-contract coverage. (PRs #911, #930, #925)
+- Quick Ingest audio configuration now uses structured language selection and backend-driven transcription model dropdowns, and the web UI also gained audio input source switching. (direct dev merges)
+- Knowledge QA and related workspace/chat flows were hardened with a wider desktop workspace, media retrieval fallback coverage, workspace study material ownership, flashcard visibility enforcement, and stricter voice-conversation capability contracts. (direct dev merges and PR #933 follow-ups)
+- Admin and operator surfaces were overhauled with production-readiness and incident-management follow-through across dashboard, AI overview, budgets, compliance, monitoring, invitations, registration codes, webhooks, usage, and voice-command tooling. (PR #932)
+
+### Fixed
+
+- Embeddings jobs workers now normalize legacy chunk types instead of failing queued work. (PR #914)
+- Sharing, research, governance-pack trust, Telegram approvals/webhooks, companion routing, MCP Hub navigation, and admin audio installer follow-ups received post-review stability fixes. (PRs #903, #831, #922, #924, #926, #933)
+- `pocket_tts_cpp`, KittenTTS bundle verification, quick ingest language-state handling, quickstart same-origin hydration/browser config, and Media DB v2 delete/review regressions were addressed in post-merge hardening. (PRs #919, #921, #923, #930, #931 and direct follow-ups)
+- CI and repo hygiene were tightened with frontend/browser gate fixes, isolated workspace installation repo tests, OSS/private boundary enforcement, and GitHub Actions dependency bumps for `docker/login-action`, `docker/setup-buildx-action`, and `dependency-review-action`. (PRs #843, #900, #901, #925 and related follow-ups)
 
 ## Backfill: merged on `main` before `dev` sync
 

@@ -25,6 +25,11 @@ export class FlashcardsPage extends BasePage {
     await waitForConnection(this.page)
   }
 
+  async gotoPath(path: string): Promise<void> {
+    await this.page.goto(path, { waitUntil: "domcontentloaded" })
+    await waitForConnection(this.page)
+  }
+
   async assertPageReady(): Promise<void> {
     await waitForAppShell(this.page, 30_000)
     // Either the tabs container is visible (online) or a connection banner
@@ -137,6 +142,18 @@ export class FlashcardsPage extends BasePage {
     return this.page.locator('[data-testid="flashcards-manage-sort-select"]')
   }
 
+  get manageShowWorkspaceDecksToggle(): Locator {
+    return this.page.locator('[data-testid="flashcards-manage-show-workspace-decks"]')
+  }
+
+  get manageWorkspaceFilter(): Locator {
+    return this.page.locator('[data-testid="flashcards-manage-workspace-filter"]')
+  }
+
+  get manageMoveScopeButton(): Locator {
+    return this.page.locator('[data-testid="flashcards-manage-move-scope"]')
+  }
+
   get fabCreateButton(): Locator {
     return this.page.locator('[data-testid="flashcards-fab-create"]')
   }
@@ -173,6 +190,38 @@ export class FlashcardsPage extends BasePage {
 
   get generateButton(): Locator {
     return this.page.locator('[data-testid="flashcards-generate-button"]')
+  }
+
+  getManageFlashcardRow(cardUuid: string): Locator {
+    return this.page.locator(`[data-testid="flashcard-item-${cardUuid}"]`)
+  }
+
+  getReviewDeckOption(deckName: string): Locator {
+    return this.page.getByRole("option", { name: deckName })
+  }
+
+  async openReviewDeckSelect(): Promise<void> {
+    await this.reviewDeckSelect.click({ force: true })
+  }
+
+  async selectManageDeckByName(deckName: string): Promise<void> {
+    await this.manageDeckSelect.click({ force: true })
+    const deckOption = this.getReviewDeckOption(deckName)
+    await expect(deckOption).toBeVisible({ timeout: 10_000 })
+    await deckOption.click()
+  }
+
+  async selectManageWorkspaceById(workspaceId: string): Promise<void> {
+    await this.manageWorkspaceFilter.click({ force: true })
+    const option = this.page.getByRole("option", { name: workspaceId, exact: true })
+    await expect(option).toBeVisible({ timeout: 10_000 })
+    await option.click()
+  }
+
+  async selectFirstManageDeckOption(): Promise<void> {
+    await this.manageDeckSelect.click({ force: true })
+    await this.page.keyboard.press("ArrowDown")
+    await this.page.keyboard.press("Enter")
   }
 
   // -- Tab Navigation --------------------------------------------------------

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -222,6 +222,8 @@ export default function FlagsPage() {
   const [flagSaving, setFlagSaving] = useState(false);
   const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
   const [togglingFlagId, setTogglingFlagId] = useState<string | null>(null);
+  const [togglingFlags, setTogglingFlags] = useState<Record<string, boolean>>({});
+  const togglingFlagsRef = useRef<Set<string>>(new Set());
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -404,11 +406,13 @@ export default function FlagsPage() {
 
   const handleToggleFlag = async (flag: FeatureFlagItem) => {
     const flagId = getFlagId(flag);
-    if (togglingFlagId === flagId) return;
+    if (togglingFlagId === flagId || togglingFlagsRef.current.has(flagId)) return;
     const previousEnabled = flag.enabled;
     const nextEnabled = !previousEnabled;
 
     // Optimistic update: toggle immediately in UI
+    togglingFlagsRef.current.add(flagId);
+    setTogglingFlags((prev) => ({ ...prev, [flagId]: true }));
     setFlags((prev) =>
       prev.map((f) => (getFlagId(f) === flagId ? { ...f, enabled: nextEnabled } : f))
     );
@@ -436,6 +440,11 @@ export default function FlagsPage() {
       showError(message);
     } finally {
       setTogglingFlagId((prev) => (prev === flagId ? null : prev));
+      togglingFlagsRef.current.delete(flagId);
+      setTogglingFlags((prev) => {
+        const { [flagId]: _removed, ...rest } = prev;
+        return rest;
+      });
     }
   };
 
@@ -549,7 +558,9 @@ export default function FlagsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Feature Flags</CardTitle>
-              <CardDescription>Manage feature overrides by scope.</CardDescription>
+              <CardDescription>
+                Manage feature overrides by scope. This is a feature flag system, not an A/B testing platform — for experiments, use a dedicated experimentation tool.
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-3">
@@ -751,11 +762,12 @@ export default function FlagsPage() {
                           <TableCell>
                             <button
                               type="button"
-                              onClick={() => handleToggleFlag(flag)}
-                              disabled={togglingFlagId === flagId}
-                              className="cursor-pointer border-0 bg-transparent p-0"
+                              onClick={() => void handleToggleFlag(flag)}
+                              disabled={togglingFlagId === flagId || Boolean(togglingFlags[flagId])}
+                              className="cursor-pointer border-0 bg-transparent p-0 hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                               title={`Click to ${flag.enabled ? 'disable' : 'enable'} flag`}
                               aria-label={`Toggle flag ${flag.key} ${flag.enabled ? 'off' : 'on'}`}
+                              aria-pressed={flag.enabled}
                             >
                               <Badge variant={flag.enabled ? 'default' : 'outline'}>
                                 {togglingFlagId === flagId ? 'Toggling...' : (flag.enabled ? 'Enabled' : 'Disabled')}

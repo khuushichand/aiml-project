@@ -59,6 +59,12 @@ def _transform_sqlite_statement_to_postgres(
 
     stmt = re.sub(r"INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", stmt, flags=re.IGNORECASE)
     stmt = re.sub(r"INTEGER PRIMARY KEY", "BIGINT PRIMARY KEY", stmt, flags=re.IGNORECASE)
+    stmt = re.sub(
+        r"TEXT\s+DEFAULT\s+\(datetime\('now'\)\)",
+        "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
+        stmt,
+        flags=re.IGNORECASE,
+    )
     stmt = re.sub(r"BOOLEAN NOT NULL DEFAULT 0", "BOOLEAN NOT NULL DEFAULT FALSE", stmt, flags=re.IGNORECASE)
     stmt = re.sub(r"BOOLEAN NOT NULL DEFAULT 1", "BOOLEAN NOT NULL DEFAULT TRUE", stmt, flags=re.IGNORECASE)
     stmt = re.sub(r"BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE", stmt, flags=re.IGNORECASE)

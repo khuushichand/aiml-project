@@ -444,7 +444,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const workspaceName = useWorkspaceStore((s) => s.workspaceName)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
+  const studyMaterialsPolicy = useWorkspaceStore((s) => s.studyMaterialsPolicy)
   const audioSettings = useWorkspaceStore((s) => s.audioSettings)
   const noteFocusTarget = useWorkspaceStore((s) => s.noteFocusTarget)
 
@@ -600,6 +603,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     resolvedSummaryInstruction,
     slidesVisualStyleValue,
     selectedFlashcardDeck,
+    workspaceId,
+    workspaceName,
+    studyMaterialsPolicy,
     ragAdvancedOptions: normalizedRagAdvancedOptions,
     t,
   })
@@ -1643,7 +1649,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                       value: "auto",
                       label: t(
                         "playground:studio.flashcardDeckAuto",
-                        "Auto (first deck or create new)"
+                        "Auto (create new deck)"
                       )
                     },
                     ...availableDecks.map((deck) => ({

@@ -119,6 +119,7 @@ describe("useUpdateDeckMutation", () => {
       }
     })
     vi.mocked(updateDeck).mockResolvedValue(updatedDeck)
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries")
 
     queryClient.setQueryData(["flashcards:decks"], [makeDeck()])
 
@@ -154,6 +155,7 @@ describe("useUpdateDeckMutation", () => {
       }
     )
     expect(queryClient.getQueryData<Deck[]>(["flashcards:decks"])).toEqual([updatedDeck])
+    expect(invalidateSpy).toHaveBeenCalled()
   })
 
   it("propagates deck update conflicts without corrupting deck cache", async () => {

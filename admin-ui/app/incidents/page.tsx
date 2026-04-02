@@ -33,7 +33,7 @@ import {
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
-import { AlertTriangle, ExternalLink, Mail, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Bell, ExternalLink, Mail, RefreshCw, Trash2, X } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportIncidents, ExportFormat } from '@/lib/export';
 import type { IncidentNotifyResponse } from '@/types/incidents';
@@ -57,6 +57,14 @@ const formatMinutes = (minutes: number | null | undefined): string => {
   const d = Math.floor(rounded / 1440);
   const h = Math.floor((rounded % 1440) / 60);
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
+};
+
+const formatDuration = (ms: number): string => {
+  const hours = Math.floor(ms / 3_600_000);
+  const minutes = Math.floor((ms % 3_600_000) / 60_000);
+  if (hours > 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 };
 
 type IncidentAssignableUser = {
@@ -338,6 +346,7 @@ function IncidentsPageContent() {
       const updated = await api.updateIncident(incident.id, {
         root_cause: state.rootCause.trim() || null,
         impact: state.impact.trim() || null,
+        runbook_url: state.runbookUrl?.trim() || null,
         action_items: state.actionItems,
         update_message: buildPostmortemTimelineMessage(state),
       });
@@ -413,6 +422,21 @@ function IncidentsPageContent() {
     setNotifyRecipients('');
     setNotifyMessage('');
     setNotifyResults(null);
+  };
+
+  const [notifyingId, setNotifyingId] = useState<string | null>(null);
+
+  const handleNotifyIncident = async (incidentId: string) => {
+    setNotifyingId(incidentId);
+    try {
+      const result = await api.notifyIncident(incidentId);
+      success(`Notification sent to ${result.webhooks_delivered} webhook${result.webhooks_delivered !== 1 ? 's' : ''}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to notify';
+      showError(message);
+    } finally {
+      setNotifyingId(null);
+    }
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -667,6 +691,12 @@ function IncidentsPageContent() {
                     <div>
                       <CardTitle className="flex items-center gap-2">
                         {incident.title}
+                        {workflowState.runbookUrl && (
+                          <a href={workflowState.runbookUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-primary hover:underline text-sm font-normal" title="Open runbook">
+                            <ExternalLink className="h-3.5 w-3.5 inline" />
+                          </a>
+                        )}
                         <Badge variant={displayStatus === 'resolved' ? 'secondary' : 'outline'}>
                           {displayStatus}
                         </Badge>
@@ -686,9 +716,15 @@ function IncidentsPageContent() {
                             MTTR: {formatMinutes(incident.mttr_minutes)}
                           </span>
                         )}
+                        {incident.time_to_acknowledge_seconds != null && (
+                          <span className="ml-2">· TTA: {formatDuration(incident.time_to_acknowledge_seconds * 1000)}</span>
+                        )}
+                        {incident.time_to_resolve_seconds != null && (
+                          <span className="ml-2">· TTR: {formatDuration(incident.time_to_resolve_seconds * 1000)}</span>
+                        )}
                       </CardDescription>
                     </div>
-                    <div className="flex gap-1">
+                    <div className="flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="icon"
@@ -835,6 +871,16 @@ function IncidentsPageContent() {
                               data-testid={`incident-impact-${incident.id}`}
                             />
                           </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor={`runbook-${incident.id}`}>Runbook URL</Label>
+                          <Input
+                            id={`runbook-${incident.id}`}
+                            type="url"
+                            placeholder="https://wiki.example.com/runbooks/..."
+                            value={workflowState.runbookUrl || ''}
+                            onChange={(e) => updateIncidentWorkflow(incident.id, { runbookUrl: e.target.value })}
+                          />
                         </div>
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">

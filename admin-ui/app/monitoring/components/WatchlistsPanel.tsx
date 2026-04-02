@@ -16,6 +16,7 @@ import {
 import { AlertTriangle, CheckCircle, Clock, Eye, Plus, Trash2 } from 'lucide-react';
 import { CardSkeleton } from '@/components/ui/skeleton';
 import type { Watchlist, WatchlistDraft } from '../types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type WatchlistsPanelProps = {
   watchlists: Watchlist[];

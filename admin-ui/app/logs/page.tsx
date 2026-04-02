@@ -18,6 +18,8 @@ import { api } from '@/lib/api-client';
 import { useSearchParams } from 'next/navigation';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { formatDateTime } from '@/lib/format';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportLogs, ExportFormat } from '@/lib/export';
@@ -295,9 +297,15 @@ function LogsPageContent() {
               <h1 className="text-2xl font-bold">System Logs</h1>
               <p className="text-muted-foreground">Query recent logs aggregated across workers.</p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <ExportMenu
-                onExport={(format: ExportFormat) => exportLogs(logs, format)}
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: logs as Record<string, unknown>[],
+                    filename: 'system-logs',
+                    format,
+                  });
+                }}
                 disabled={logs.length === 0}
               />
               <Button

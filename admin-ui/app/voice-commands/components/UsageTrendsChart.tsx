@@ -44,7 +44,7 @@ export function UsageTrendsChart({ data, isLoading }: UsageTrendsChartProps) {
           </div>
         ) : (
           <>
-          <div role="img" aria-label="Voice command usage trends chart showing commands, unique users, and success rate over time">
+          <div role="img" aria-label={`Voice command usage trends chart showing ${chartData.length} data points for commands, users, and success rate`}>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
                 <AreaChart data={chartData}>

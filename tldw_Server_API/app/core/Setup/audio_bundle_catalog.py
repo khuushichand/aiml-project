@@ -171,7 +171,7 @@ class AudioBundle(BaseModel):
     verification_targets: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def populate_profile_compatibility_fields(self) -> "AudioBundle":
+    def populate_profile_compatibility_fields(self) -> AudioBundle:
         """Keep the legacy bundle shape populated from the default profile."""
 
         if not self.resource_profiles:

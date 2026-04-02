@@ -275,4 +275,35 @@ describe('JobsPage', () => {
     await screen.findByText('export');
     expect(screen.getByRole('button', { name: /delete policy/i })).toBeInTheDocument();
   });
+
+  it('prefers job-specific SLA policies over the generic fallback', async () => {
+    apiMock.getJobs.mockResolvedValue([
+      {
+        id: 201,
+        uuid: 'job-201',
+        domain: 'exports',
+        queue: 'default',
+        job_type: 'root-task',
+        status: 'completed',
+        retry_count: 0,
+        max_retries: 3,
+        created_at: '2026-02-17T12:00:00Z',
+        started_at: '2026-02-17T12:01:00Z',
+        completed_at: '2026-02-17T12:04:00Z',
+      },
+    ]);
+    apiMock.getJobSlaPolicies.mockResolvedValue([
+      { id: 1, enabled: true, job_type: null, max_processing_time_seconds: 60 },
+      { id: 2, enabled: true, job_type: 'root-task', max_processing_time_seconds: 600 },
+    ]);
+
+    render(<JobsPage />);
+
+    expect(await screen.findByText('Jobs')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMock.getJobs).toHaveBeenCalled();
+      expect(apiMock.getJobSlaPolicies).toHaveBeenCalled();
+      expect(screen.queryByText('SLA')).not.toBeInTheDocument();
+    });
+  });
 });

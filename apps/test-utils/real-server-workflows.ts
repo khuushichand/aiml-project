@@ -34,7 +34,6 @@ export type CreateWorkflowDriver = (options: {
 }) => Promise<WorkflowDriver>
 
 export const ALL_FEATURE_FLAGS_ENABLED = {
-  ff_newOnboarding: true,
   ff_newChat: true,
   ff_newSettings: true,
   ff_commandPalette: true,
@@ -44,7 +43,6 @@ export const ALL_FEATURE_FLAGS_ENABLED = {
 }
 
 export const ALL_FEATURE_FLAGS_DISABLED = {
-  ff_newOnboarding: false,
   ff_newChat: false,
   ff_newSettings: false,
   ff_commandPalette: false,
@@ -54,7 +52,6 @@ export const ALL_FEATURE_FLAGS_DISABLED = {
 }
 
 export const FEATURE_FLAG_KEYS = {
-  NEW_ONBOARDING: "ff_newOnboarding",
   NEW_CHAT: "ff_newChat",
   NEW_SETTINGS: "ff_newSettings",
   COMMAND_PALETTE: "ff_commandPalette",

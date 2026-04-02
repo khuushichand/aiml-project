@@ -269,6 +269,7 @@ export default function UserDetailPage() {
   // Permission Overrides
   const [permissionOverrides, setPermissionOverrides] = useState<PermissionOverride[]>([]);
   const [effectivePermissions, setEffectivePermissions] = useState<EffectivePermission[]>([]);
+  const [permFilter, setPermFilter] = useState('');
   const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
   const [permissionsLoading, setPermissionsLoading] = useState(false);
   const [showAddOverride, setShowAddOverride] = useState(false);

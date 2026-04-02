@@ -1139,11 +1139,13 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     }
   ]
 
+  const runStatus = data ? String(data.status || "").toLowerCase() : ""
+
   return (
     <Drawer
       title={t("watchlists:runs.detail.title", "Run Details")}
       extra={
-        data && ["running", "pending", "queued"].includes(String(data.status || "").toLowerCase()) ? (
+        data && ["running", "pending", "queued"].includes(runStatus) ? (
           <Button
             danger
             size="small"
@@ -1162,6 +1164,16 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               : cancelState === "failed-to-cancel"
                 ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
                 : t("watchlists:runs.cancelRun", "Cancel run")}
+          </Button>
+        ) : data && runStatus === "failed" ? (
+          <Button
+            size="small"
+            type="primary"
+            loading={retryingRun}
+            aria-label={t("watchlists:runs.detail.retryRun", "Retry run")}
+            onClick={handleRetryRun}
+          >
+            {t("watchlists:runs.detail.retryRun", "Retry run")}
           </Button>
         ) : undefined
       }

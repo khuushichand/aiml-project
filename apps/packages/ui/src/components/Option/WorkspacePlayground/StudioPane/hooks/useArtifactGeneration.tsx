@@ -3,17 +3,25 @@ import type { MessageInstance } from "antd/es/message/interface"
 import { tldwClient, type VisualStyleRecord } from "@/services/tldw/TldwApiClient"
 import { tldwModels, type ModelInfo } from "@/services/tldw"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
-import { generateQuiz } from "@/services/quizzes"
+import {
+  createQuestion,
+  createQuiz,
+  type QuestionType,
+  type QuizGenerateSource
+} from "@/services/quizzes"
 import {
   createFlashcard,
   createDeck,
+  createFlashcardsBulk,
   generateFlashcards as generateFlashcardDrafts,
-  listDecks
+  listDecks,
+  type FlashcardCreate
 } from "@/services/flashcards"
 import type {
   ArtifactType,
   GeneratedArtifact,
   AudioGenerationSettings,
+  StudyMaterialsPolicy,
   WorkspaceSource
 } from "@/types/workspace"
 import {
@@ -75,6 +83,14 @@ type GeneratedFlashcardDraft = {
   modelType: "basic" | "basic_reverse" | "cloze"
 }
 
+type GeneratedQuizQuestionDraft = {
+  questionText: string
+  questionType: QuestionType
+  options: string[]
+  correctAnswer: string
+  explanation?: string
+}
+
 type UsageMetrics = {
   totalTokens?: number
   totalCostUsd?: number
@@ -95,6 +111,218 @@ type GenerationResult = {
 type StudioSourceContext = {
   title: string
   text: string
+}
+
+type WorkspaceStudyMaterialsMode = StudyMaterialsPolicy | null | undefined
+
+const shouldAttachWorkspaceOwnership = (
+  workspaceId: string | undefined,
+  studyMaterialsPolicy: WorkspaceStudyMaterialsMode
+): boolean => {
+  if (!workspaceId || !workspaceId.trim()) {
+    return false
+  }
+  return studyMaterialsPolicy === "workspace"
+}
+
+const normalizeStudyMaterialsPolicyForServer = (
+  studyMaterialsPolicy: WorkspaceStudyMaterialsMode
+): "general" | "workspace" =>
+  studyMaterialsPolicy === "workspace" ? "workspace" : "general"
+
+const ensureWorkspaceRecordForOwnership = async (options: {
+  workspaceId?: string
+  workspaceName?: string
+  studyMaterialsPolicy?: WorkspaceStudyMaterialsMode
+}): Promise<string | null> => {
+  const workspaceId = typeof options.workspaceId === "string" ? options.workspaceId.trim() : ""
+  if (!workspaceId) {
+    return null
+  }
+
+  await tldwClient.upsertWorkspace(workspaceId, {
+    name:
+      typeof options.workspaceName === "string" && options.workspaceName.trim()
+        ? options.workspaceName.trim()
+        : "Workspace",
+    study_materials_policy: normalizeStudyMaterialsPolicyForServer(
+      options.studyMaterialsPolicy
+    )
+  })
+
+  return workspaceId
+}
+
+const buildQuizSourceBundle = (
+  mediaIds: number[]
+): QuizGenerateSource[] =>
+  Array.from(new Set(mediaIds))
+    .filter((mediaId) => Number.isFinite(mediaId))
+    .map((mediaId) => ({
+      source_type: "media",
+      source_id: String(mediaId)
+    }))
+
+const buildBundledQuizQuestionCount = (mediaCount: number): number => {
+  const normalizedMediaCount = Math.max(1, mediaCount)
+  return Math.min(8, Math.max(6, normalizedMediaCount * 3))
+}
+
+const extractJsonPayloadText = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return ""
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim()
+  }
+
+  const objectStart = trimmed.indexOf("{")
+  const objectEnd = trimmed.lastIndexOf("}")
+  if (objectStart !== -1 && objectEnd > objectStart) {
+    return trimmed.slice(objectStart, objectEnd + 1).trim()
+  }
+
+  return trimmed
+}
+
+const normalizeQuizQuestionType = (value: unknown): QuestionType | null => {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : ""
+  if (normalized === "true_false" || normalized === "true/false" || normalized === "boolean") {
+    return "true_false"
+  }
+  if (normalized === "multiple_choice" || normalized === "multiple-choice" || normalized === "mcq") {
+    return "multiple_choice"
+  }
+  return null
+}
+
+const normalizeQuizOptionList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value
+        .map((option) => (typeof option === "string" ? option.trim() : ""))
+        .filter(Boolean)
+    : []
+
+const resolveQuizCorrectAnswer = (
+  rawAnswer: unknown,
+  options: string[]
+): string => {
+  if (typeof rawAnswer === "boolean") {
+    return rawAnswer ? "True" : "False"
+  }
+
+  if (typeof rawAnswer === "number" && Number.isInteger(rawAnswer)) {
+    const option = options[rawAnswer]
+    return typeof option === "string" ? option : ""
+  }
+
+  const answer = typeof rawAnswer === "string" ? rawAnswer.trim() : ""
+  if (!answer) {
+    return ""
+  }
+
+  if (options.includes(answer)) {
+    return answer
+  }
+
+  const optionIndex = "abcdefghijklmnopqrstuvwxyz".indexOf(answer.toLowerCase())
+  if (optionIndex >= 0 && optionIndex < options.length) {
+    return options[optionIndex]
+  }
+
+  return answer
+}
+
+const normalizeGeneratedQuizQuestions = (
+  rawQuestions: unknown
+): GeneratedQuizQuestionDraft[] => {
+  if (!Array.isArray(rawQuestions)) {
+    return []
+  }
+
+  return rawQuestions
+    .map((candidate) => {
+      if (!isRecord(candidate)) {
+        return null
+      }
+
+      const questionText =
+        typeof candidate.question_text === "string"
+          ? candidate.question_text.trim()
+          : typeof candidate.question === "string"
+            ? candidate.question.trim()
+            : ""
+      const requestedType =
+        normalizeQuizQuestionType(candidate.question_type) ||
+        normalizeQuizQuestionType(candidate.type)
+      const rawOptions = normalizeQuizOptionList(candidate.options)
+      const explanation =
+        typeof candidate.explanation === "string" && candidate.explanation.trim()
+          ? candidate.explanation.trim()
+          : undefined
+
+      if (!questionText) {
+        return null
+      }
+
+      if (requestedType === "true_false") {
+        const correctAnswer = resolveQuizCorrectAnswer(
+          candidate.correct_answer,
+          ["True", "False"]
+        )
+        if (correctAnswer !== "True" && correctAnswer !== "False") {
+          return null
+        }
+        return {
+          questionText,
+          questionType: "true_false" as const,
+          options: ["True", "False"],
+          correctAnswer,
+          explanation
+        }
+      }
+
+      const options = rawOptions
+      if (options.length < 2) {
+        return null
+      }
+
+      const correctAnswer = resolveQuizCorrectAnswer(candidate.correct_answer, options)
+      if (!options.includes(correctAnswer)) {
+        return null
+      }
+
+      return {
+        questionText,
+        questionType: "multiple_choice" as const,
+        options,
+        correctAnswer,
+        explanation
+      }
+    })
+    .filter((question): question is GeneratedQuizQuestionDraft => question !== null)
+}
+
+const buildFlashcardDeckName = (
+  workspaceName: string | undefined,
+  selectedSources: WorkspaceSource[]
+): string => {
+  const workspaceLabel =
+    typeof workspaceName === "string" && workspaceName.trim().length > 0
+      ? workspaceName.trim()
+      : "Workspace"
+  const sourceLabel = selectedSources
+    .map((source) => source.title.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(", ")
+  if (!sourceLabel) {
+    return `${workspaceLabel} Flashcards`
+  }
+  return `${workspaceLabel} Flashcards - ${sourceLabel}`
 }
 
 type SourceContentGenerationOptions = {
@@ -121,6 +349,10 @@ type StructuredArtifactGenerationOptions = SourceContentGenerationOptions & {
 
 type FlashcardsGenerationOptions = SourceContentGenerationOptions & {
   preferredDeckId?: number
+  workspaceId?: string
+  workspaceName?: string
+  workspaceTag?: string
+  studyMaterialsPolicy?: WorkspaceStudyMaterialsMode
 }
 
 type StudioRagGenerationRequest = {
@@ -805,55 +1037,155 @@ Requirements:
 }
 
 async function generateQuizFromMedia(
-  mediaIds: number[],
-  workspaceTag?: string,
-  abortSignal?: AbortSignal
+  options: SourceContentGenerationOptions & {
+    model?: string
+    apiProvider?: string
+    workspaceId?: string
+    workspaceName?: string
+    workspaceTag?: string
+    studyMaterialsPolicy?: WorkspaceStudyMaterialsMode
+  }
 ): Promise<GenerationResult> {
-  const uniqueMediaIds = Array.from(new Set(mediaIds))
+  const uniqueMediaIds = Array.from(new Set(options.mediaIds))
   if (uniqueMediaIds.length === 0) {
     throw new Error("No media selected for quiz generation")
   }
+  const model = typeof options.model === "string" ? options.model.trim() : ""
+  if (!model) {
+    throw new Error("No model available for quiz generation")
+  }
 
-  const generationResponses: Array<{
-    mediaId: number
-    response: any
-    usage: UsageMetrics
-  }> = await Promise.all(
-    uniqueMediaIds.map(async (mediaId) => {
-      const response = await generateQuiz(
+  const sourceBundle = buildQuizSourceBundle(uniqueMediaIds)
+  const workspaceOwnershipId =
+    shouldAttachWorkspaceOwnership(options.workspaceId, options.studyMaterialsPolicy)
+      ? await ensureWorkspaceRecordForOwnership({
+          workspaceId: options.workspaceId,
+          workspaceName: options.workspaceName,
+          studyMaterialsPolicy: options.studyMaterialsPolicy
+        })
+      : null
+  const useWorkspaceOwnership = shouldAttachWorkspaceOwnership(
+    workspaceOwnershipId ?? undefined,
+    options.studyMaterialsPolicy
+  )
+  const sourceContexts = await loadStudioSourceContexts(options)
+  const sourceText = formatStudioSourceContexts(sourceContexts)
+  if (!sourceText) {
+    throw new Error("No usable quiz source content was found.")
+  }
+
+  const requestedQuestionCount = buildBundledQuizQuestionCount(uniqueMediaIds.length)
+  const quizMaxTokens = Math.max(
+    estimateGenerationTokens("quiz", uniqueMediaIds.length),
+    typeof options.maxTokens === "number" ? options.maxTokens : 0,
+    1400
+  )
+  const response = await tldwClient.createChatCompletion(
+    {
+      model,
+      api_provider: options.apiProvider,
+      response_format: { type: "json_object" },
+      messages: [
         {
-          media_id: mediaId,
-          num_questions: Math.max(3, Math.ceil(10 / uniqueMediaIds.length)),
-          question_types: ["multiple_choice", "true_false"],
-          difficulty: "mixed",
-          workspace_tag: workspaceTag || undefined
+          role: "system",
+          content:
+            "You are a source-grounded quiz writer. Use only the provided source content. Return strict JSON only. Do not invent facts. Every question must be answerable from the sources."
         },
-        { signal: abortSignal }
-      )
+        {
+          role: "user",
+          content: `Create ${requestedQuestionCount} quiz questions using only these question types: multiple_choice and true_false.
 
-      return {
-        mediaId,
-        response,
-        usage: extractUsageMetrics(response)
-      }
-    })
+Return a JSON object with this shape:
+{
+  "title": "Short quiz title",
+  "description": "One sentence description",
+  "questions": [
+    {
+      "question_type": "multiple_choice" | "true_false",
+      "question_text": "Question text",
+      "options": ["Option A", "Option B"],
+      "correct_answer": "Exact matching option text",
+      "explanation": "Short explanation"
+    }
+  ]
+}
+
+Rules:
+- Keep questions grounded in the sources below.
+- For true_false questions, options must be ["True", "False"] and correct_answer must be either "True" or "False".
+- For multiple_choice questions, provide 3-4 options and make correct_answer exactly match one option.
+- Keep explanations brief and factual.
+- Do not include markdown fences or commentary outside the JSON object.
+
+Selected sources:
+${sourceText}`
+        }
+      ],
+      temperature: options.temperature,
+      top_p: options.topP,
+      max_tokens: quizMaxTokens
+    },
+    { signal: options.abortSignal }
   )
 
-  const mergedQuestions = generationResponses.flatMap(({ mediaId, response }) =>
-    (response.questions || []).map((question: any) => ({
-      question: String(question.question_text || "").trim(),
-      options: Array.isArray(question.options)
-        ? question.options.map((option: unknown) => String(option))
-        : [],
-      answer: String(question.correct_answer || "").trim(),
-      explanation: question.explanation
-        ? String(question.explanation)
-        : undefined,
-      sourceMediaId: mediaId
-    }))
+  const { content: rawContent, usage } = await readChatCompletionResponsePayload(response)
+  let parsedPayload: Record<string, unknown>
+  try {
+    parsedPayload = JSON.parse(extractJsonPayloadText(rawContent || ""))
+  } catch (error) {
+    throw new Error(
+      `Failed to parse quiz JSON from chat response: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    )
+  }
+  const quizTitle =
+    typeof parsedPayload?.title === "string" && parsedPayload.title.trim()
+      ? parsedPayload.title.trim()
+      : "Workspace Quiz"
+  const quizDescription =
+    typeof parsedPayload?.description === "string" && parsedPayload.description.trim()
+      ? parsedPayload.description.trim()
+      : undefined
+  const questions = normalizeGeneratedQuizQuestions(parsedPayload?.questions).slice(0, 20)
+  if (!questions.length) {
+    throw new Error("Quiz generation returned no usable questions")
+  }
+
+  const createdQuiz = await createQuiz({
+    name: quizTitle,
+    description: quizDescription,
+    ...(useWorkspaceOwnership && workspaceOwnershipId
+      ? { workspace_id: workspaceOwnershipId }
+      : {}),
+    ...(useWorkspaceOwnership && options.workspaceTag
+      ? { workspace_tag: options.workspaceTag }
+      : {}),
+    media_id: uniqueMediaIds[0],
+    source_bundle_json: sourceBundle
+  })
+
+  await Promise.all(
+    questions.map((question, index) =>
+      createQuestion(createdQuiz.id, {
+        question_type: question.questionType,
+        question_text: question.questionText,
+        options: question.options,
+        correct_answer: question.correctAnswer,
+        explanation: question.explanation,
+        order_index: index
+      })
+    )
   )
 
-  const limitedQuestions = mergedQuestions.slice(0, 20)
+  const limitedQuestions = questions.map((question) => ({
+    question: question.questionText,
+    options: question.options,
+    answer: question.correctAnswer,
+    explanation: question.explanation,
+    sourceMediaId:
+      uniqueMediaIds.length === 1 ? uniqueMediaIds[0] : undefined
+  }))
   const content = formatQuizQuestionsContent(
     limitedQuestions.map((question) => ({
       question: question.question,
@@ -861,28 +1193,67 @@ async function generateQuizFromMedia(
       answer: question.answer,
       explanation: question.explanation
     })),
-    generationResponses[0]?.response?.quiz?.name || "Workspace Quiz"
-  )
-
-  const totalTokens = generationResponses.reduce(
-    (acc, item) => acc + (item.usage.totalTokens || 0),
-    0
-  )
-  const totalCostUsd = generationResponses.reduce(
-    (acc, item) => acc + (item.usage.totalCostUsd || 0),
-    0
+    createdQuiz.name || "Workspace Quiz"
   )
 
   return {
-    serverId: generationResponses[0]?.response?.quiz?.id,
+    serverId: createdQuiz.id,
     content,
-    totalTokens: totalTokens > 0 ? totalTokens : undefined,
+    totalTokens: usage.totalTokens,
     totalCostUsd:
-      totalCostUsd > 0 ? Number(totalCostUsd.toFixed(4)) : undefined,
+      typeof usage.totalCostUsd === "number"
+        ? Number(usage.totalCostUsd.toFixed(4))
+        : undefined,
     data: {
+      quizId: createdQuiz.id,
       questions: limitedQuestions,
-      sourceMediaIds: uniqueMediaIds
+      sourceBundle,
+      sourceMediaIds: uniqueMediaIds,
+      workspaceId: useWorkspaceOwnership ? workspaceOwnershipId : null
     }
+  }
+}
+
+const saveFlashcardsWithFallback = async (
+  flashcardInputs: FlashcardCreate[],
+  abortSignal?: AbortSignal
+): Promise<{ createdCount: number; failedCount: number }> => {
+  try {
+    const bulkResponse = await createFlashcardsBulk(flashcardInputs, {
+      signal: abortSignal
+    })
+    const createdCount = Array.isArray(bulkResponse.items)
+      ? bulkResponse.items.length
+      : 0
+    if (createdCount > 0) {
+      return {
+        createdCount,
+        failedCount: Math.max(0, flashcardInputs.length - createdCount)
+      }
+    }
+  } catch (bulkError) {
+    if (isAbortLikeError(bulkError)) {
+      throw bulkError
+    }
+    console.warn("Bulk flashcard save failed, falling back to per-card saves:", bulkError)
+  }
+
+  const settledResults = await Promise.allSettled(
+    flashcardInputs.map((input) =>
+      createFlashcard(input, { signal: abortSignal })
+    )
+  )
+  const createdCount = settledResults.filter(
+    (result) => result.status === "fulfilled"
+  ).length
+
+  if (createdCount === 0) {
+    throw new Error("Failed to save generated flashcards")
+  }
+
+  return {
+    createdCount,
+    failedCount: Math.max(0, flashcardInputs.length - createdCount)
   }
 }
 
@@ -898,7 +1269,7 @@ async function generateFlashcards(
     throw buildMissingContentError("flashcard")
   }
 
-  const generated = await generateFlashcardDrafts({
+  const generationRequest = {
     text: sourceText,
     num_cards: 12,
     difficulty: "mixed",
@@ -907,12 +1278,13 @@ async function generateFlashcards(
       typeof options.model === "string" && options.model.trim().length > 0
         ? options.model.trim()
         : undefined
-  })
-
-  const flashcards: GeneratedFlashcardDraft[] = (
-    Array.isArray(generated.flashcards) ? generated.flashcards : []
+  }
+  const normalizeGeneratedFlashcards = (
+    drafts: unknown
+  ): GeneratedFlashcardDraft[] => (
+    Array.isArray(drafts) ? drafts : []
   )
-    .map((card): GeneratedFlashcardDraft => {
+    .map((card: any): GeneratedFlashcardDraft => {
       const modelType: GeneratedFlashcardDraft["modelType"] =
         card.model_type === "basic_reverse" || card.model_type === "cloze"
           ? card.model_type
@@ -930,77 +1302,82 @@ async function generateFlashcards(
       }
     })
     .filter((card) => card.front && card.back)
+
+  let generated = await generateFlashcardDrafts(generationRequest)
+  let flashcards = normalizeGeneratedFlashcards(generated.flashcards)
+  if (flashcards.length === 0) {
+    generated = await generateFlashcardDrafts({
+      ...generationRequest,
+      num_cards: 8,
+      difficulty: "easy"
+    })
+    flashcards = normalizeGeneratedFlashcards(generated.flashcards)
+  }
   if (!flashcards.length) {
     throw new Error("Flashcard generation returned no usable cards")
   }
 
-  // Ensure we have a deck
   const decks = await listDecks({ signal: options.abortSignal })
   let deckId: number | undefined
+  const workspaceOwnershipId =
+    shouldAttachWorkspaceOwnership(options.workspaceId, options.studyMaterialsPolicy)
+      ? await ensureWorkspaceRecordForOwnership({
+          workspaceId: options.workspaceId,
+          workspaceName: options.workspaceName,
+          studyMaterialsPolicy: options.studyMaterialsPolicy
+        })
+      : null
+  const useWorkspaceOwnership = shouldAttachWorkspaceOwnership(
+    workspaceOwnershipId ?? undefined,
+    options.studyMaterialsPolicy
+  )
 
   if (
     options.preferredDeckId &&
     decks.some((deck) => deck.id === options.preferredDeckId)
   ) {
     deckId = options.preferredDeckId
-  } else if (decks.length === 0) {
+  } else {
     const newDeck = await createDeck(
-      { name: "Workspace Flashcards" },
+      {
+        name: buildFlashcardDeckName(options.workspaceName, options.selectedSources),
+        ...(useWorkspaceOwnership && workspaceOwnershipId
+          ? { workspace_id: workspaceOwnershipId }
+          : {})
+      },
       { signal: options.abortSignal }
     )
     deckId = newDeck.id
-  } else {
-    deckId = decks[0].id
   }
 
-  // Create flashcards
-  const creationResults = await Promise.allSettled(
-    flashcards.map((card) =>
-      createFlashcard({
-        deck_id: deckId,
-        front: card.front,
-        back: card.back,
-        tags: card.tags.length > 0 ? card.tags : undefined,
-        notes: card.notes || undefined,
-        extra: card.extra || undefined,
-        model_type: card.modelType,
-        reverse: card.modelType === "basic_reverse",
-        is_cloze: card.modelType === "cloze",
-        source_ref_type: "media",
-        source_ref_id: options.mediaIds.join(",")
-      }, { signal: options.abortSignal })
-    )
+  const flashcardInputs = flashcards.map((card) => ({
+    deck_id: deckId,
+    front: card.front,
+    back: card.back,
+    tags: card.tags.length > 0 ? card.tags : undefined,
+    notes: card.notes || undefined,
+    extra: card.extra || undefined,
+    model_type: card.modelType,
+    reverse: card.modelType === "basic_reverse",
+    is_cloze: card.modelType === "cloze",
+    source_ref_type: "media" as const,
+    source_ref_id: options.mediaIds.join(",")
+  }))
+
+  const { createdCount, failedCount } = await saveFlashcardsWithFallback(
+    flashcardInputs,
+    options.abortSignal
   )
-
-  let createdCount = 0
-  let firstCreateError: unknown = null
-  for (const result of creationResults) {
-    if (result.status === "fulfilled") {
-      createdCount += 1
-      continue
-    }
-    if (firstCreateError == null) {
-      firstCreateError = result.reason
-    }
-  }
-
-  if (createdCount === 0) {
-    if (firstCreateError instanceof Error && firstCreateError.message) {
-      throw new Error(`Failed to save generated flashcards: ${firstCreateError.message}`)
-    }
-    throw new Error("Failed to save generated flashcards")
-  }
-
-  const failedCount = flashcards.length - createdCount
   const summaryLine =
     failedCount > 0
-      ? `Created ${createdCount} of ${flashcards.length} flashcards (${failedCount} failed)`
+      ? `Created ${createdCount} of ${flashcardInputs.length} flashcards (${failedCount} failed)`
       : `Created ${createdCount} flashcards`
   const content = flashcards
     .map((card) => `Front: ${card.front}\nBack: ${card.back}`)
     .join("\n\n")
 
   return {
+    serverId: deckId,
     content: `${summaryLine}\n\n${content}`,
     data: {
       flashcards: flashcards.map((card) => ({
@@ -1008,7 +1385,8 @@ async function generateFlashcards(
         back: card.back
       })),
       deckId,
-      sourceMediaIds: options.mediaIds
+      sourceMediaIds: options.mediaIds,
+      workspaceId: useWorkspaceOwnership ? workspaceOwnershipId : null
     }
   }
 }
@@ -1067,32 +1445,59 @@ ${sourceContexts
 }
 
 async function generateAudioOverview(
-  mediaIds: number[],
-  audioSettings: AudioGenerationSettings,
-  abortSignal?: AbortSignal
+  options: SourceContentGenerationOptions & {
+    audioSettings: AudioGenerationSettings
+  }
 ): Promise<GenerationResult> {
-  const generationPrompt = `Create a spoken overview script (2-3 minutes when read aloud) that:
+  const model = typeof options.model === "string" ? options.model.trim() : ""
+  if (!model) {
+    throw new Error("No model available for audio summary generation")
+  }
+
+  const sourceContexts = await loadStudioSourceContexts(options)
+  const sourceText = formatStudioSourceContexts(sourceContexts)
+  if (!sourceText) {
+    throw new Error("No usable audio source content was found.")
+  }
+
+  const response = await tldwClient.createChatCompletion(
+    {
+      model,
+      api_provider: options.apiProvider,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a source-grounded audio script writer. Use only the provided source content. Do not invent facts. Write plain spoken prose without speaker labels, bullets, or stage directions."
+        },
+        {
+          role: "user",
+          content: `Create a spoken overview script (2-3 minutes when read aloud) that:
 1. Introduces the topic
 2. Covers the main points
 3. Concludes with key takeaways
 
-Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`
-  const ragResponse = await requestStudioRagGeneration({
-    query: "topic main points key takeaways overview",
-    generationPrompt,
-    mediaIds,
-    topK: 15,
-    abortSignal
-  })
-  const usage = extractUsageMetrics(ragResponse)
-  const script = extractRequiredRagText(ragResponse, "audio")
+Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.
+
+Selected sources:
+${sourceText}`
+        }
+      ],
+      temperature: options.temperature,
+      top_p: options.topP,
+      max_tokens: options.maxTokens
+    },
+    { signal: options.abortSignal }
+  )
+  const { content: rawScript, usage } = await readChatCompletionResponsePayload(response)
+  const script = rawScript.trim()
 
   if (!script.trim()) {
     throw new Error("Failed to generate audio script")
   }
 
   // Use browser TTS if selected
-  if (audioSettings.provider === "browser") {
+  if (options.audioSettings.provider === "browser") {
     return {
       content: script,
       audioFormat: "browser",
@@ -1103,11 +1508,11 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
   // Generate audio using TTS API with user settings
   try {
     const audioBuffer = await tldwClient.synthesizeSpeech(script, {
-      model: audioSettings.model,
-      voice: audioSettings.voice,
-      responseFormat: audioSettings.format,
-      speed: audioSettings.speed,
-      signal: abortSignal
+      model: options.audioSettings.model,
+      voice: options.audioSettings.voice,
+      responseFormat: options.audioSettings.format,
+      speed: options.audioSettings.speed,
+      signal: options.abortSignal
     })
 
     // Determine MIME type based on format
@@ -1121,14 +1526,14 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
 
     // Create a blob URL for playback
     const audioBlob = new Blob([audioBuffer], {
-      type: mimeTypes[audioSettings.format] || "audio/mpeg"
+      type: mimeTypes[options.audioSettings.format] || "audio/mpeg"
     })
     const audioUrl = URL.createObjectURL(audioBlob)
 
     return {
       content: script,
       audioUrl,
-      audioFormat: audioSettings.format,
+      audioFormat: options.audioSettings.format,
       ...usage
     }
   } catch (ttsError) {
@@ -1390,7 +1795,10 @@ export interface UseArtifactGenerationDeps {
   selectedMediaCount: number
   hasSelectedSources: boolean
   audioSettings: AudioGenerationSettings
+  workspaceId?: string
+  workspaceName?: string
   workspaceTag?: string
+  studyMaterialsPolicy?: WorkspaceStudyMaterialsMode
   /** output button configs - labels used for toast messages */
   outputButtons: Array<{ type: ArtifactType; label: string }>
   // Store actions
@@ -1429,7 +1837,10 @@ export function useArtifactGeneration(deps: UseArtifactGenerationDeps) {
     selectedMediaCount,
     hasSelectedSources,
     audioSettings,
+    workspaceId,
+    workspaceName,
     workspaceTag,
+    studyMaterialsPolicy,
     outputButtons,
     generatedArtifacts,
     isGeneratingOutput,
@@ -1889,17 +2300,35 @@ export function useArtifactGeneration(deps: UseArtifactGenerationDeps) {
             break
             }
           case "quiz":
+            {
+              const quizRuntime = await resolveStudioChatRuntime()
             result = await generateQuizFromMedia(
-              mediaIds,
-              workspaceTag,
-              activeAbort.signal
+              {
+                mediaIds,
+                selectedSources,
+                model: quizRuntime.model,
+                apiProvider: quizRuntime.provider,
+                workspaceId,
+                workspaceName,
+                workspaceTag,
+                studyMaterialsPolicy,
+                temperature: resolvedTemperature,
+                topP: resolvedTopP,
+                maxTokens: resolvedNumPredict,
+                abortSignal: activeAbort.signal
+              }
             )
             break
+            }
           case "flashcards": {
             const flashcardRuntime = await resolveStudioChatRuntime()
             result = await generateFlashcards({
               mediaIds,
               selectedSources,
+              workspaceId,
+              workspaceName,
+              workspaceTag,
+              studyMaterialsPolicy,
               model: flashcardRuntime.model,
               apiProvider: flashcardRuntime.provider,
               temperature: resolvedTemperature,
@@ -1925,11 +2354,18 @@ export function useArtifactGeneration(deps: UseArtifactGenerationDeps) {
             })
             break
           case "audio_overview":
-            result = await generateAudioOverview(
+            result = await generateAudioOverview({
               mediaIds,
+              selectedSources,
+              model: await resolveStudioChatModel(),
+              apiProvider:
+                normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined,
+              temperature: resolvedTemperature,
+              topP: resolvedTopP,
+              maxTokens: resolvedNumPredict,
               audioSettings,
-              activeAbort.signal
-            )
+              abortSignal: activeAbort.signal
+            })
             break
           case "slides": {
             const slidesRuntime = await resolveStudioChatRuntime()
@@ -2068,7 +2504,10 @@ export function useArtifactGeneration(deps: UseArtifactGenerationDeps) {
       setIsGeneratingOutput,
       t,
       updateArtifactStatus,
+      workspaceId,
+      workspaceName,
       workspaceTag,
+      studyMaterialsPolicy,
     ]
   )
 

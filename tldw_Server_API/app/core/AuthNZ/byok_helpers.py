@@ -77,7 +77,11 @@ def resolve_byok_base_url_allowlist() -> set[str]:
 
 def is_byok_enabled() -> bool:
     settings = get_settings()
-    return settings.AUTH_MODE == "multi_user" and bool(settings.BYOK_ENABLED)
+    if not bool(settings.BYOK_ENABLED):
+        return False
+    # Self-disable when encryption key is not configured — returns 403
+    # instead of 500 when endpoints are called without a key.
+    return bool(settings.BYOK_ENCRYPTION_KEY)
 
 
 def resolve_byok_allowlist() -> set[str]:

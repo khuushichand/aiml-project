@@ -1246,10 +1246,24 @@ class UnifiedEvaluationService:
             logger.error(f"Failed to list datasets: {e}")
             raise
 
-    async def get_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> Optional[dict[str, Any]]:
+    async def get_dataset(
+        self,
+        dataset_id: str,
+        *,
+        created_by: Optional[str] = None,
+        include_samples: bool = True,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Optional[dict[str, Any]]:
         """Get dataset by ID"""
         try:
-            return self.db.get_dataset(dataset_id, created_by=created_by)
+            return self.db.get_dataset(
+                dataset_id,
+                created_by=created_by,
+                include_samples=include_samples,
+                sample_limit=limit,
+                sample_offset=offset,
+            )
         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get dataset {dataset_id}: {e}")
             raise

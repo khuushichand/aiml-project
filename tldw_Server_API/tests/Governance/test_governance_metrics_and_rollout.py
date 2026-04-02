@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import configparser
+
 import pytest
 
 from tldw_Server_API.app.core import config as app_config
@@ -18,6 +20,54 @@ def test_rollout_modes_resolve_off_shadow_enforce(monkeypatch):
 
     monkeypatch.setenv("GOVERNANCE_ROLLOUT_MODE", "shadow")
     assert app_config.resolve_governance_rollout_mode() == "shadow"
+
+
+def test_run_first_rollout_resolvers_default_off(monkeypatch):
+    monkeypatch.delenv("ACP_RUN_FIRST_ROLLOUT_MODE", raising=False)
+    monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
+    monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
+
+    monkeypatch.setattr(app_config, "load_comprehensive_config", lambda: configparser.ConfigParser())
+
+    assert app_config.resolve_acp_run_first_rollout_mode() == "off"
+    assert app_config.resolve_acp_run_first_provider_allowlist() == []
+    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2a_v1"
+
+
+def test_run_first_rollout_provider_allowlist_parses_csv(monkeypatch):
+    monkeypatch.setenv(
+        "ACP_RUN_FIRST_PROVIDER_ALLOWLIST",
+        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet",
+    )
+
+    assert app_config.resolve_acp_run_first_provider_allowlist() == [
+        "openai:gpt-4o-mini",
+        "anthropic:claude-3-7-sonnet",
+    ]
+
+
+def test_run_first_rollout_acp_mode_uses_acp_config_section(monkeypatch):
+    monkeypatch.delenv("ACP_RUN_FIRST_ROLLOUT_MODE", raising=False)
+    monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
+    monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
+
+    parser = configparser.ConfigParser()
+    parser.add_section("ACP")
+    parser.set("ACP", "run_first_rollout_mode", "gated")
+    parser.set(
+        "ACP",
+        "run_first_provider_allowlist",
+        "openai:gpt-4o-mini,anthropic:claude-3-7-sonnet",
+    )
+    parser.set("ACP", "run_first_presentation_variant", "acp_phase2a_v2")
+    monkeypatch.setattr(app_config, "load_comprehensive_config", lambda: parser)
+
+    assert app_config.resolve_acp_run_first_rollout_mode() == "gated"
+    assert app_config.resolve_acp_run_first_provider_allowlist() == [
+        "openai:gpt-4o-mini",
+        "anthropic:claude-3-7-sonnet",
+    ]
+    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2a_v2"
 
 
 def test_metrics_use_low_cardinality_labels_only():

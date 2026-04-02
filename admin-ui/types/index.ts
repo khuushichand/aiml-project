@@ -613,6 +613,50 @@ export interface FeatureRegistryEntry {
   description: string;
   plans: string[];
   category: string;
+  availability_type?: 'core' | 'plan_gated' | 'add_on';
+}
+
+// Admin Webhooks
+export interface AdminWebhook {
+  id: number;
+  url: string;
+  event_types: string[];
+  description: string;
+  active: boolean;
+  retry_count: number;
+  timeout_seconds: number;
+  created_by: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AdminWebhooksResponse {
+  items: AdminWebhook[];
+  total: number;
+}
+
+export interface AdminWebhookDeliveryLogEntry {
+  id: number;
+  webhook_id: number;
+  event_type: string;
+  status_code: number | null;
+  latency_ms: number | null;
+  retry_attempt: number;
+  error_message: string | null;
+  delivered_at: string | null;
+  created_at: string | null;
+}
+
+export interface AdminWebhookDeliveryLogResponse {
+  items: AdminWebhookDeliveryLogEntry[];
+  total: number;
+}
+
+export interface AdminWebhookTestResult {
+  success: boolean;
+  status_code: number | null;
+  latency_ms: number | null;
+  error: string | null;
 }
 
 export interface ComplianceReportSchedule {

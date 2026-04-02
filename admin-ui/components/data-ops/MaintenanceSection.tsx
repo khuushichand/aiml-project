@@ -17,6 +17,7 @@ import type {
 } from '@/types';
 import { Settings, Trash2, FileText, Database, Key, RefreshCw } from 'lucide-react';
 import { logger } from '@/lib/logger';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type CleanupSettings = {
   auto_cleanup_enabled: boolean;
@@ -336,7 +337,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
           </CardHeader>
           <CardContent className="space-y-4">
             {cleanupLoading ? (
-              <div className="py-4 text-center text-muted-foreground">Loading...</div>
+              <CardSkeleton />
             ) : (
               <>
                 <div className="flex items-center justify-between">
@@ -385,7 +386,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
           </CardHeader>
           <CardContent className="space-y-4">
             {notesLoading ? (
-              <div className="py-4 text-center text-muted-foreground">Loading...</div>
+              <CardSkeleton />
             ) : (
               <>
                 <div className="flex items-center justify-between">

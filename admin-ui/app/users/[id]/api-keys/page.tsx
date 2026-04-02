@@ -20,7 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
-import { PageHeaderSkeleton, TableSkeleton } from '@/components/ui/skeleton';
+import { PageHeaderSkeleton, TableSkeleton, CardSkeleton } from '@/components/ui/skeleton';
 import { logger } from '@/lib/logger';
 
 type VirtualApiKey = {
@@ -337,14 +337,7 @@ export default function UserApiKeysPage() {
                         onClick={() => copyToClipboard(newKeyValue)}
                       />
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setNewKeyValue(null)}
-                      className="text-yellow-700"
-                    >
-                      Dismiss
-                    </Button>
+                    <DismissKeyButton key={newKeyValue} onDismiss={() => setNewKeyValue(null)} />
                   </div>
                 </AlertDescription>
               </Alert>
@@ -419,14 +412,7 @@ export default function UserApiKeysPage() {
                             onClick={() => copyToClipboard(newVirtualKeyValue)}
                           />
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setNewVirtualKeyValue(null)}
-                          className="text-yellow-700"
-                        >
-                          Dismiss
-                        </Button>
+                        <DismissKeyButton key={newVirtualKeyValue} onDismiss={() => setNewVirtualKeyValue(null)} />
                       </div>
                     </AlertDescription>
                   </Alert>
@@ -547,7 +533,7 @@ export default function UserApiKeysPage() {
                               loading={deletingVirtualKeyId === key.id}
                               aria-label={`Delete virtual key ${key.name}`}
                               title="Delete virtual key"
-                              className="text-red-500 hover:text-red-500"
+                              className="text-destructive hover:text-destructive"
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -562,5 +548,29 @@ export default function UserApiKeysPage() {
           </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+function DismissKeyButton({ onDismiss }: { onDismiss: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-yellow-800">Have you saved this key?</span>
+        <Button variant="destructive" size="sm" onClick={onDismiss}>
+          Yes, dismiss
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setConfirming(false)} className="text-yellow-700">
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button variant="ghost" size="sm" onClick={() => setConfirming(true)} className="text-yellow-700">
+      Dismiss
+    </Button>
   );
 }

@@ -17,6 +17,7 @@ import type { SecurityHealthData } from '@/types';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, Key, Users, Lock } from 'lucide-react';
 import Link from 'next/link';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type SecurityAlertStatus = {
   total_alerts?: number;

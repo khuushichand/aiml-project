@@ -167,6 +167,7 @@ describe('OrganizationDetailPage billing state', () => {
 
     expect(await screen.findByText('active')).toBeInTheDocument();
     expect(screen.getByTestId('invoice-table').textContent).toBe('1');
+    expect(screen.getByTestId('usage-meter').textContent).toBe('42');
 
     currentOrgId = '2';
     rerender(<OrganizationDetailPage />);
@@ -183,6 +184,32 @@ describe('OrganizationDetailPage billing state', () => {
     expect(screen.queryByText('active')).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoice-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('usage-meter')).not.toBeInTheDocument();
+  });
+
+  it('shows a no-results message when member search filters out every row', async () => {
+    const user = userEvent.setup();
+    apiMock.getOrgMembers.mockResolvedValue([
+      {
+        user_id: 42,
+        role: 'member',
+        joined_at: '2026-01-01T00:00:00Z',
+        user: {
+          username: 'alice',
+          email: 'alice@example.com',
+        },
+      },
+    ]);
+
+    render(<OrganizationDetailPage />);
+
+    await screen.findByText('alice');
+
+    await user.type(screen.getByPlaceholderText('Search members...'), 'missing-user');
+
+    await waitFor(() => {
+      expect(screen.getByText('No members match your search.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('alice')).not.toBeInTheDocument();
   });
 });
 

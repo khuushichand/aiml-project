@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { CardSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput, FormSelect } from '@/components/ui/form';
@@ -47,8 +48,10 @@ function formatCents(cents: number): string {
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [compareMode, setCompareMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const { success, error: showError } = useToast();
+  const confirm = useConfirm();
   const promptPrivilegedAction = usePrivilegedActionDialog();
 
   const [showDialog, setShowDialog] = useState(false);
@@ -175,7 +178,7 @@ export default function PlansPage() {
       title: 'Delete Plan',
       message,
       confirmText: 'Delete',
-      requirePassword: false,
+      requirePassword: true,
     });
     if (!approval) return;
 
@@ -203,12 +206,19 @@ export default function PlansPage() {
                 Manage subscription plans and pricing
               </p>
             </div>
-            {billingEnabled && (
-              <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Plan
-              </Button>
-            )}
+            <div className="flex gap-2">
+              {billingEnabled && plans.length > 1 && (
+                <Button variant={compareMode ? 'default' : 'outline'} onClick={() => setCompareMode(!compareMode)}>
+                  {compareMode ? 'Card View' : 'Compare'}
+                </Button>
+              )}
+              {billingEnabled && (
+                <Button onClick={openCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Plan
+                </Button>
+              )}
+            </div>
           </div>
 
           {!billingEnabled ? (
@@ -229,6 +239,41 @@ export default function PlansPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 <p className="text-muted-foreground">No plans found. Create your first plan to get started.</p>
+              </CardContent>
+            </Card>
+          ) : compareMode ? (
+            <Card>
+              <CardContent className="pt-6 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-2 font-semibold">Feature</th>
+                      {plans.map(p => (
+                        <th key={p.id} className="text-center p-2 font-semibold">
+                          {p.name} <PlanBadge tier={p.tier} />
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b">
+                      <td className="p-2 text-muted-foreground">Price</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2 font-medium">{formatCents(p.monthly_price_cents)}/mo</td>)}
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2 text-muted-foreground">Token Credits</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2">{p.included_token_credits.toLocaleString()}</td>)}
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2 text-muted-foreground">Overage Rate</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2">{formatCents(p.overage_rate_per_1k_tokens_cents)}/1k</td>)}
+                    </tr>
+                    <tr>
+                      <td className="p-2 text-muted-foreground">Features</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2">{p.features?.length ?? 0}</td>)}
+                    </tr>
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
           ) : (
@@ -254,6 +299,11 @@ export default function PlansPage() {
                         <dt className="text-muted-foreground">Overage rate</dt>
                         <dd>{formatCents(plan.overage_rate_per_1k_tokens_cents)}/1k tokens</dd>
                       </div>
+                      {plan.overage_rate_per_1k_tokens_cents > 0 && (
+                        <p className="text-xs italic text-muted-foreground">
+                          e.g., 100k excess tokens = {formatCents(plan.overage_rate_per_1k_tokens_cents * 100)}
+                        </p>
+                      )}
                       <div className="flex justify-between">
                         <dt className="text-muted-foreground">Features</dt>
                         <dd>{plan.features?.length ?? 0}</dd>

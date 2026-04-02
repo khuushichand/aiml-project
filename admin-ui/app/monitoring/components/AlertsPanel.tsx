@@ -122,6 +122,7 @@ export default function AlertsPanel({
             size="sm"
             onClick={onToggleShowSnoozed}
             data-testid="alerts-show-snoozed-toggle"
+            aria-label={showSnoozed ? 'Hide snoozed alerts' : `Show snoozed alerts (${snoozedCount})`}
           >
             <ChevronDown className="mr-2 h-4 w-4" />
             Show snoozed ({snoozedCount})
@@ -138,6 +139,9 @@ export default function AlertsPanel({
           </div>
         ) : (
           <div className="space-y-3">
+            <div className="text-xs text-muted-foreground mb-2">
+              Showing {paginatedAlerts.length} of {visibleAlerts.length} alerts
+            </div>
             {paginatedAlerts.map((alert) => (
               <div
                 key={alert.id}
@@ -221,6 +225,7 @@ export default function AlertsPanel({
                       disabled={!localActionsEnabled}
                       onClick={() => onEscalate(alert)}
                       title="Escalate"
+                      aria-label="Escalate"
                     >
                       Escalate
                     </Button>
@@ -292,6 +297,18 @@ export default function AlertsPanel({
             )}
           </div>
         </details>
+        <div className="mt-4 text-center">
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="text-xs text-muted-foreground"
+            disabled
+            title="Preset alert rules are not available yet"
+          >
+            Create Alert Rule for common patterns
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

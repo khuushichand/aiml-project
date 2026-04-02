@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.External_Sources.google_drive import GoogleDriveCo
 from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
 from tldw_Server_API.app.core.External_Sources.onedrive import OneDriveConnector
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncAdapter
+from tldw_Server_API.app.core.External_Sources.zotero import ZoteroConnector
 
 _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -34,6 +35,7 @@ _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
 )
 
 FILE_SYNC_PROVIDERS = frozenset({"drive", "onedrive"})
+REFERENCE_MANAGER_PROVIDERS = frozenset({"zotero"})
 _SYNC_STATE_FIELDS = (
     "sync_mode",
     "cursor",
@@ -51,6 +53,16 @@ _SYNC_STATE_FIELDS = (
     "needs_full_rescan",
     "active_job_id",
     "active_job_started_at",
+)
+_REFERENCE_ITEM_BINDING_FIELDS = (
+    "provider_library_id",
+    "collection_key",
+    "collection_name",
+    "provider_version",
+    "provider_updated_at",
+    "media_id",
+    "dedupe_match_reason",
+    "raw_reference_metadata",
 )
 _EXTERNAL_ITEM_BINDING_FIELDS = (
     "name",
@@ -71,7 +83,6 @@ _EXTERNAL_ITEM_BINDING_FIELDS = (
     "access_revoked_at",
     "provider_metadata",
 )
-
 
 def _utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -116,6 +127,27 @@ def _json_loads(value: Any, default: Any) -> Any:
         return default
 
 
+def _provider_metadata_from_tokens(tokens: dict[str, Any] | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key, value in dict(tokens or {}).items():
+        if value in (None, ""):
+            continue
+        if key in {"access_token", "refresh_token", "token_type", "expires_in", "expires_at", "scope", "email"}:
+            continue
+        metadata[str(key)] = value
+    return metadata
+
+
+def _merge_provider_metadata(target: dict[str, Any], provider_metadata: Any) -> dict[str, Any]:
+    metadata = _json_loads(provider_metadata, {})
+    if not isinstance(metadata, dict):
+        return target
+    target["provider_metadata"] = metadata
+    for key, value in metadata.items():
+        target.setdefault(str(key), value)
+    return target
+
+
 def _normalize_sync_state_row(row: Any) -> dict[str, Any] | None:
     if not row:
         return None
@@ -133,6 +165,55 @@ def _normalize_external_item_row(row: Any) -> dict[str, Any] | None:
         data["provider_metadata"] = _json_loads(data.get("provider_metadata"), {})
     if "sync_status" not in data or data.get("sync_status") is None:
         data["sync_status"] = "active"
+    return data
+
+
+def _normalize_reference_item_row(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    data = _row_to_dict(row)
+    if "raw_reference_metadata" in data:
+        data["raw_reference_metadata"] = _json_loads(data.get("raw_reference_metadata"), {})
+    return data
+
+
+def _protect_oauth_state_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not metadata:
+        return None
+    try:
+        from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+        envelope = encrypt_json_blob(dict(metadata))
+        if envelope:
+            return envelope
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
+        pass
+    return dict(metadata)
+
+
+def _unprotect_oauth_state_metadata(metadata: Any) -> dict[str, Any]:
+    parsed_metadata = _json_loads(metadata, {})
+    if not isinstance(parsed_metadata, dict):
+        return {}
+    if parsed_metadata.get("_enc") != "aesgcm:v1":
+        return parsed_metadata
+    try:
+        from tldw_Server_API.app.core.Security.crypto import decrypt_json_blob
+
+        decrypted = decrypt_json_blob(parsed_metadata)
+        if isinstance(decrypted, dict):
+            return decrypted
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to decrypt oauth state metadata: {}", exc)
+    return {}
+
+
+def _normalize_oauth_state_row(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    data = _row_to_dict(row)
+    data["metadata"] = _unprotect_oauth_state_metadata(data.get("metadata"))
+    _merge_provider_metadata(data, data.get("metadata"))
     return data
 
 
@@ -258,6 +339,8 @@ def get_connector_by_name(name: str):
         return NotionConnector()
     if n == "gmail":
         return GmailConnector()
+    if n == "zotero":
+        return ZoteroConnector()
     raise ValueError(f"Unknown connector provider: {name}")
 
 
@@ -288,6 +371,7 @@ async def _ensure_tables(db) -> None:
                     refresh_token TEXT,
                     token_expires_at TIMESTAMP NULL,
                     scopes TEXT,
+                    provider_metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -328,6 +412,27 @@ async def _ensure_tables(db) -> None:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS external_reference_items (
+                    id SERIAL PRIMARY KEY,
+                    source_id INTEGER NOT NULL REFERENCES external_sources(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL,
+                    provider_item_key TEXT NOT NULL,
+                    provider_library_id TEXT,
+                    collection_key TEXT,
+                    collection_name TEXT,
+                    provider_version TEXT,
+                    provider_updated_at TIMESTAMP NULL,
+                    media_id INTEGER,
+                    dedupe_match_reason TEXT,
+                    raw_reference_metadata JSONB,
+                    first_imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_id, provider, provider_item_key)
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS org_connector_policy (
                     org_id INTEGER PRIMARY KEY,
                     enabled_providers TEXT,
@@ -351,11 +456,14 @@ async def _ensure_tables(db) -> None:
                     state TEXT NOT NULL,
                     user_id INTEGER NOT NULL,
                     provider TEXT NOT NULL,
+                    metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (state, user_id)
                 )
                 """
             )
+            await db.execute("ALTER TABLE external_accounts ADD COLUMN IF NOT EXISTS provider_metadata JSONB")
+            await db.execute("ALTER TABLE external_oauth_state ADD COLUMN IF NOT EXISTS metadata JSONB")
             await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS media_id INTEGER")
             await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS sync_status TEXT")
             await db.execute("ALTER TABLE external_items ADD COLUMN IF NOT EXISTS current_version_number INTEGER")
@@ -434,6 +542,7 @@ async def _ensure_tables(db) -> None:
                     refresh_token TEXT,
                     token_expires_at TEXT,
                     scopes TEXT,
+                    provider_metadata TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -474,6 +583,27 @@ async def _ensure_tables(db) -> None:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS external_reference_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_item_key TEXT NOT NULL,
+                    provider_library_id TEXT,
+                    collection_key TEXT,
+                    collection_name TEXT,
+                    provider_version TEXT,
+                    provider_updated_at TEXT,
+                    media_id INTEGER,
+                    dedupe_match_reason TEXT,
+                    raw_reference_metadata TEXT,
+                    first_imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    last_imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_id, provider, provider_item_key)
+                )
+                """,
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS org_connector_policy (
                     org_id INTEGER PRIMARY KEY,
                     enabled_providers TEXT,
@@ -497,11 +627,14 @@ async def _ensure_tables(db) -> None:
                     state TEXT NOT NULL,
                     user_id INTEGER NOT NULL,
                     provider TEXT NOT NULL,
+                    metadata TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (state, user_id)
                 )
                 """,
             )
+            await _ensure_sqlite_column(db, "external_accounts", "provider_metadata", "provider_metadata TEXT")
+            await _ensure_sqlite_column(db, "external_oauth_state", "metadata", "metadata TEXT")
             await _ensure_sqlite_column(db, "external_items", "media_id", "media_id INTEGER")
             await _ensure_sqlite_column(db, "external_items", "sync_status", "sync_status TEXT")
             await _ensure_sqlite_column(db, "external_items", "current_version_number", "current_version_number INTEGER")
@@ -703,27 +836,35 @@ def _oauth_state_cutoff(max_age_minutes: int) -> tuple[datetime, str]:
     return cutoff_dt, cutoff_str
 
 
-async def create_oauth_state(db, user_id: int, provider: str, state: str) -> None:
+async def create_oauth_state(
+    db,
+    user_id: int,
+    provider: str,
+    state: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
+    metadata_value = _protect_oauth_state_metadata(metadata)
     if is_pg:
         await db.execute(
             """
-            INSERT INTO external_oauth_state (state, user_id, provider, created_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            INSERT INTO external_oauth_state (state, user_id, provider, metadata, created_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
             ON CONFLICT (state, user_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
+                metadata = EXCLUDED.metadata,
                 created_at = CURRENT_TIMESTAMP
             """,
-            state, user_id, provider,
+            state, user_id, provider, metadata_value,
         )
         return
     await db.execute(
         """
-        INSERT OR REPLACE INTO external_oauth_state (state, user_id, provider, created_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT OR REPLACE INTO external_oauth_state (state, user_id, provider, metadata, created_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         """,
-        (state, user_id, provider),
+        (state, user_id, provider, json.dumps(metadata_value) if metadata_value is not None else None),
     )
     await getattr(db, "commit", lambda: None)()
 
@@ -735,58 +876,87 @@ async def consume_oauth_state(
     provider: str,
     state: str,
     max_age_minutes: int = 10,
-) -> bool:
+) -> dict[str, Any] | bool:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
     cutoff_dt, cutoff_str = _oauth_state_cutoff(max_age_minutes)
+    row = await _fetch_oauth_state_row(
+        db,
+        is_pg=is_pg,
+        state=state,
+        user_id=user_id,
+        provider=provider,
+        cutoff_dt=cutoff_dt,
+        cutoff_str=cutoff_str,
+    )
+    if not row:
+        return False
+    await _delete_oauth_state_row(
+        db,
+        is_pg=is_pg,
+        state=state,
+        user_id=user_id,
+    )
+    return _normalize_oauth_state_row(row) or True
+
+
+async def _fetch_oauth_state_row(
+    db,
+    *,
+    is_pg: bool,
+    state: str,
+    user_id: int,
+    provider: str,
+    cutoff_dt: datetime,
+    cutoff_str: str,
+):
     if is_pg:
-        row = await db.fetchrow(
+        return await db.fetchrow(
             """
-            SELECT state FROM external_oauth_state
+            SELECT state, provider, metadata, created_at FROM external_oauth_state
             WHERE state = $1 AND user_id = $2 AND provider = $3 AND created_at >= $4
             """,
             state, user_id, provider, cutoff_dt,
         )
-        if not row:
-            return False
-        await db.execute(
-            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
-            state, user_id,
-        )
-        return True
     cur = await db.execute(
         """
-        SELECT state FROM external_oauth_state
+        SELECT state, provider, metadata, created_at FROM external_oauth_state
         WHERE state = ? AND user_id = ? AND provider = ? AND created_at >= ?
         """,
         (state, user_id, provider, cutoff_str),
     )
-    row = await cur.fetchone()
-    if not row:
-        return False
+    return await cur.fetchone()
+
+
+async def _delete_oauth_state_row(
+    db,
+    *,
+    is_pg: bool,
+    state: str,
+    user_id: int,
+) -> None:
+    if is_pg:
+        await db.execute(
+            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
+            state, user_id,
+        )
+        return
     await db.execute(
         "DELETE FROM external_oauth_state WHERE state = ? AND user_id = ?",
         (state, user_id),
     )
     await getattr(db, "commit", lambda: None)()
-    return True
 
 
 async def create_account(db, user_id: int, provider: str, display_name: str, email: str | None, tokens: dict[str, Any]) -> dict[str, Any]:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
+    provider_metadata = _provider_metadata_from_tokens(tokens)
     # Securely envelope tokens if crypto is configured; fallback to storing access token raw
     import json as _json
     try:
         from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
-        env = encrypt_json_blob({
-            "access_token": tokens.get("access_token"),
-            "refresh_token": tokens.get("refresh_token"),
-            "token_type": tokens.get("token_type"),
-            "expires_in": tokens.get("expires_in"),
-            "expires_at": tokens.get("expires_at"),
-            "scope": tokens.get("scope"),
-        })
+        env = encrypt_json_blob(dict(tokens or {}))
         access_token_store = _json.dumps(env) if env else str(tokens.get("access_token") or "")
         refresh_token_store = None  # envelope contains refresh
         tokens.get("scope") or None
@@ -798,19 +968,20 @@ async def create_account(db, user_id: int, provider: str, display_name: str, ema
     if is_pg:
         row = await db.fetchrow(
             """
-            INSERT INTO external_accounts (user_id, provider, display_name, email, access_token, refresh_token, token_expires_at, scopes)
-            VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)
+            INSERT INTO external_accounts (user_id, provider, display_name, email, access_token, refresh_token, token_expires_at, scopes, provider_metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, $7)
             RETURNING id, user_id, provider, display_name, email, created_at
             """,
-            user_id, provider, display_name, email, access_token_store, refresh_token_store
+            user_id, provider, display_name, email, access_token_store, refresh_token_store, provider_metadata or None
         )
         return dict(row)
+    sqlite_provider_metadata = _json.dumps(provider_metadata) if provider_metadata else None
     cur = await db.execute(
         """
-        INSERT INTO external_accounts (user_id, provider, display_name, email, access_token, refresh_token, token_expires_at, scopes)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+        INSERT INTO external_accounts (user_id, provider, display_name, email, access_token, refresh_token, token_expires_at, scopes, provider_metadata)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
         """,
-        (user_id, provider, display_name, email, access_token_store, refresh_token_store),
+        (user_id, provider, display_name, email, access_token_store, refresh_token_store, sqlite_provider_metadata),
     )
     await getattr(db, "commit", lambda: None)()
     rid = cur.lastrowid
@@ -826,17 +997,17 @@ async def _get_account_with_tokens(db, user_id: int, account_id: int) -> dict[st
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
     if is_pg:
-        row = await db.fetchrow("SELECT id, user_id, provider, display_name, email, access_token, refresh_token FROM external_accounts WHERE id = $1 AND user_id = $2", account_id, user_id)
+        row = await db.fetchrow("SELECT id, user_id, provider, display_name, email, access_token, refresh_token, provider_metadata FROM external_accounts WHERE id = $1 AND user_id = $2", account_id, user_id)
         if not row:
             return None
         d = dict(row)
     else:
-        cur = await db.execute("SELECT id, user_id, provider, display_name, email, access_token, refresh_token FROM external_accounts WHERE id = ? AND user_id = ?", (account_id, user_id))
+        cur = await db.execute("SELECT id, user_id, provider, display_name, email, access_token, refresh_token, provider_metadata FROM external_accounts WHERE id = ? AND user_id = ?", (account_id, user_id))
         r = await cur.fetchone()
         if not r:
             return None
         try:
-            d = {"id": r[0], "user_id": r[1], "provider": r[2], "display_name": r[3], "email": r[4], "access_token": r[5], "refresh_token": r[6]}
+            d = {"id": r[0], "user_id": r[1], "provider": r[2], "display_name": r[3], "email": r[4], "access_token": r[5], "refresh_token": r[6], "provider_metadata": r[7]}
         except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             d = dict(r)
     # Decrypt envelope if present
@@ -855,6 +1026,10 @@ async def _get_account_with_tokens(db, user_id: int, account_id: int) -> dict[st
         tokens["access_token"] = at_raw
     if not tokens.get("refresh_token") and d.get("refresh_token"):
         tokens["refresh_token"] = d.get("refresh_token")
+    _merge_provider_metadata(d, d.get("provider_metadata"))
+    if isinstance(d.get("provider_metadata"), dict):
+        for key, value in d["provider_metadata"].items():
+            tokens.setdefault(str(key), value)
     d["tokens"] = tokens
     return d
 
@@ -877,16 +1052,19 @@ async def get_account_for_user(db, user_id: int, account_id: int) -> dict[str, A
     if is_pg:
         row = await db.fetchrow(
             """
-            SELECT id, user_id, provider, display_name, email, created_at
+            SELECT id, user_id, provider, display_name, email, created_at, provider_metadata
             FROM external_accounts
             WHERE id = $1 AND user_id = $2
             """,
             account_id, user_id,
         )
-        return dict(row) if row else None
+        if not row:
+            return None
+        data = dict(row)
+        return _merge_provider_metadata(data, data.get("provider_metadata"))
     cur = await db.execute(
         """
-        SELECT id, user_id, provider, display_name, email, created_at
+        SELECT id, user_id, provider, display_name, email, created_at, provider_metadata
         FROM external_accounts
         WHERE id = ? AND user_id = ?
         """,
@@ -896,16 +1074,18 @@ async def get_account_for_user(db, user_id: int, account_id: int) -> dict[str, A
     if not r:
         return None
     try:
-        return {
+        data = {
             "id": r[0],
             "user_id": r[1],
             "provider": r[2],
             "display_name": r[3],
             "email": r[4],
             "created_at": r[5],
+            "provider_metadata": r[6],
         }
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
-        return dict(r)
+        data = dict(r)
+    return _merge_provider_metadata(data, data.get("provider_metadata"))
 
 
 async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: dict[str, Any]) -> bool:
@@ -917,23 +1097,21 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: d
     is_pg = _is_postgres_connection(db)
     import json as _json
     existing_refresh: str | None = None
+    existing = await _get_account_with_tokens(db, user_id, account_id)
+    if not existing:
+        return False
+    existing_provider_metadata = dict(existing.get("provider_metadata") or {})
     if not new_tokens.get("refresh_token"):
-        existing = await _get_account_with_tokens(db, user_id, account_id)
-        if not existing:
-            return False
         existing_refresh = (existing.get("tokens") or {}).get("refresh_token")
+    provider_metadata_value = existing_provider_metadata | _provider_metadata_from_tokens(new_tokens)
     refresh_token_value = new_tokens.get("refresh_token") or existing_refresh
     # Build storage values similar to create_account
     try:
         from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
-        env = encrypt_json_blob({
-            "access_token": new_tokens.get("access_token"),
-            "refresh_token": refresh_token_value,
-            "token_type": new_tokens.get("token_type"),
-            "expires_in": new_tokens.get("expires_in"),
-            "expires_at": new_tokens.get("expires_at"),
-            "scope": new_tokens.get("scope"),
-        })
+        envelope_payload = dict(existing.get("tokens") or {})
+        envelope_payload.update(dict(new_tokens or {}))
+        envelope_payload["refresh_token"] = refresh_token_value
+        env = encrypt_json_blob(envelope_payload)
         access_token_store = _json.dumps(env) if env else str(new_tokens.get("access_token") or "")
         refresh_token_store = None
         scopes_store = new_tokens.get("scope") or None
@@ -953,19 +1131,21 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: d
             SET access_token = $1,
                 refresh_token = COALESCE($2, refresh_token),
                 updated_at = CURRENT_TIMESTAMP,
-                scopes = COALESCE($3, scopes)
-            WHERE id = $4
+                scopes = COALESCE($3, scopes),
+                provider_metadata = COALESCE($4, provider_metadata)
+            WHERE id = $5
             """,
-            access_token_store, refresh_token_store, scopes_store, account_id,
+            access_token_store, refresh_token_store, scopes_store, provider_metadata_value or None, account_id,
         )
         return True
     # SQLite path
+    sqlite_provider_metadata = _json.dumps(provider_metadata_value) if provider_metadata_value else None
     cur = await db.execute("SELECT id FROM external_accounts WHERE id = ? AND user_id = ?", (account_id, user_id))
     if not await cur.fetchone():
         return False
     await db.execute(
-        "UPDATE external_accounts SET access_token = ?, refresh_token = COALESCE(?, refresh_token), scopes = COALESCE(?, scopes), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (access_token_store, refresh_token_store, scopes_store, account_id),
+        "UPDATE external_accounts SET access_token = ?, refresh_token = COALESCE(?, refresh_token), scopes = COALESCE(?, scopes), provider_metadata = COALESCE(?, provider_metadata), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (access_token_store, refresh_token_store, scopes_store, sqlite_provider_metadata, account_id),
     )
     await getattr(db, "commit", lambda: None)()
     return True
@@ -1027,7 +1207,7 @@ async def upsert_source_sync_state(db, *, source_id: int, **updates: Any) -> dic
     existing = await get_source_sync_state(db, source_id=source_id) or {}
     data = {"source_id": source_id, "sync_mode": "manual", **existing}
     for field in _SYNC_STATE_FIELDS:
-        if field in updates and updates[field] is not None:
+        if field in updates:
             data[field] = updates[field]
 
     is_pg = _is_postgres_connection(db)
@@ -1418,8 +1598,10 @@ async def finish_source_sync_job(
                 SET active_job_id = NULL,
                     active_job_started_at = NULL,
                     last_sync_succeeded_at = $1,
+                    last_sync_failed_at = NULL,
                     last_error = NULL,
-                    retry_backoff_count = 0
+                    retry_backoff_count = 0,
+                    needs_full_rescan = FALSE
                 WHERE source_id = $2
                   AND (active_job_id IS NULL OR active_job_id = $3)
                 RETURNING *
@@ -1435,8 +1617,10 @@ async def finish_source_sync_job(
             SET active_job_id = NULL,
                 active_job_started_at = NULL,
                 last_sync_succeeded_at = ?,
+                last_sync_failed_at = NULL,
                 last_error = NULL,
-                retry_backoff_count = 0
+                retry_backoff_count = 0,
+                needs_full_rescan = 0
             WHERE source_id = ?
               AND (active_job_id IS NULL OR active_job_id = ?)
             """,
@@ -1550,6 +1734,56 @@ async def get_external_item_binding(
     return _normalize_external_item_row(row)
 
 
+async def get_reference_item_binding(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    provider_item_key: str,
+) -> dict[str, Any] | None:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            SELECT *
+            FROM external_reference_items
+            WHERE source_id = $1 AND provider = $2 AND provider_item_key = $3
+            """,
+            source_id,
+            provider,
+            provider_item_key,
+        )
+        return _normalize_reference_item_row(row)
+    cur = await db.execute(
+        """
+        SELECT *
+        FROM external_reference_items
+        WHERE source_id = ? AND provider = ? AND provider_item_key = ?
+        """,
+        (source_id, provider, provider_item_key),
+    )
+    row = await cur.fetchone()
+    return _normalize_reference_item_row(row)
+
+
+async def list_reference_items_for_source(db, *, source_id: int) -> list[dict[str, Any]]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        rows = await db.fetch(
+            "SELECT * FROM external_reference_items WHERE source_id = $1 ORDER BY id ASC",
+            source_id,
+        )
+        return [_normalize_reference_item_row(row) or {} for row in rows]
+    cur = await db.execute(
+        "SELECT * FROM external_reference_items WHERE source_id = ? ORDER BY id ASC",
+        (source_id,),
+    )
+    rows = await cur.fetchall()
+    return [_normalize_reference_item_row(row) or {} for row in rows]
+
+
 async def list_external_items_for_source(db, *, source_id: int) -> list[dict[str, Any]]:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
@@ -1571,7 +1805,7 @@ async def get_source_binding_health(db, *, source_id: int) -> dict[str, int]:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
     if is_pg:
-        row = await db.fetchrow(
+        external_items_row = await db.fetchrow(
             """
             SELECT
                 COUNT(*) AS tracked_item_count,
@@ -1582,10 +1816,26 @@ async def get_source_binding_health(db, *, source_id: int) -> dict[str, int]:
             """,
             source_id,
         )
-        data = _row_to_dict(row)
+        reference_items_row = await db.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS tracked_item_count,
+                COALESCE(SUM(CASE WHEN media_id IS NOT NULL AND dedupe_match_reason IS NOT NULL THEN 1 ELSE 0 END), 0)
+                    AS duplicate_count,
+                COALESCE(SUM(CASE WHEN media_id IS NULL AND dedupe_match_reason IS NOT NULL THEN 1 ELSE 0 END), 0)
+                    AS metadata_only_count
+            FROM external_reference_items
+            WHERE source_id = $1
+            """,
+            source_id,
+        )
+        data = _row_to_dict(external_items_row)
+        reference_data = _row_to_dict(reference_items_row)
         return {
-            "tracked_item_count": int(data.get("tracked_item_count") or 0),
+            "tracked_item_count": int(data.get("tracked_item_count") or 0) + int(reference_data.get("tracked_item_count") or 0),
             "degraded_item_count": int(data.get("degraded_item_count") or 0),
+            "duplicate_count": int(reference_data.get("duplicate_count") or 0),
+            "metadata_only_count": int(reference_data.get("metadata_only_count") or 0),
         }
 
     cur = await db.execute(
@@ -1601,9 +1851,26 @@ async def get_source_binding_health(db, *, source_id: int) -> dict[str, int]:
     )
     row = await cur.fetchone()
     data = _row_to_dict(row)
+    cur = await db.execute(
+        """
+        SELECT
+            COUNT(*) AS tracked_item_count,
+            COALESCE(SUM(CASE WHEN media_id IS NOT NULL AND dedupe_match_reason IS NOT NULL THEN 1 ELSE 0 END), 0)
+                AS duplicate_count,
+            COALESCE(SUM(CASE WHEN media_id IS NULL AND dedupe_match_reason IS NOT NULL THEN 1 ELSE 0 END), 0)
+                AS metadata_only_count
+        FROM external_reference_items
+        WHERE source_id = ?
+        """,
+        (source_id,),
+    )
+    row = await cur.fetchone()
+    reference_data = _row_to_dict(row)
     return {
-        "tracked_item_count": int(data.get("tracked_item_count") or 0),
+        "tracked_item_count": int(data.get("tracked_item_count") or 0) + int(reference_data.get("tracked_item_count") or 0),
         "degraded_item_count": int(data.get("degraded_item_count") or 0),
+        "duplicate_count": int(reference_data.get("duplicate_count") or 0),
+        "metadata_only_count": int(reference_data.get("metadata_only_count") or 0),
     }
 
 
@@ -1788,6 +2055,178 @@ async def upsert_external_item_binding(
         provider=provider,
         external_id=external_id,
     ) or {}
+
+
+async def upsert_reference_item_binding(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    provider_item_key: str,
+    provider_library_id: str | None,
+    collection_key: str | None,
+    collection_name: str | None,
+    provider_version: str | None,
+    provider_updated_at: str | None,
+    media_id: int | None,
+    dedupe_match_reason: str | None,
+    raw_reference_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    raw_reference_metadata_value = raw_reference_metadata or None
+    collection_name_value = str(collection_name) if collection_name is not None else None
+    if collection_name_value is None and isinstance(raw_reference_metadata_value, dict):
+        collection_name_raw = raw_reference_metadata_value.get("collection_name")
+        if collection_name_raw is not None:
+            collection_name_value = str(collection_name_raw)
+    sqlite_raw_reference_metadata = (
+        json.dumps(raw_reference_metadata_value) if raw_reference_metadata_value is not None else None
+    )
+
+    if is_pg:
+        await db.execute(
+            """
+            INSERT INTO external_reference_items (
+                source_id,
+                provider,
+                provider_item_key,
+                provider_library_id,
+                collection_key,
+                collection_name,
+                provider_version,
+                provider_updated_at,
+                media_id,
+                dedupe_match_reason,
+                raw_reference_metadata,
+                first_imported_at,
+                last_imported_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (source_id, provider, provider_item_key) DO UPDATE SET
+                provider_library_id = COALESCE(EXCLUDED.provider_library_id, external_reference_items.provider_library_id),
+                collection_key = COALESCE(EXCLUDED.collection_key, external_reference_items.collection_key),
+                collection_name = COALESCE(EXCLUDED.collection_name, external_reference_items.collection_name),
+                provider_version = COALESCE(EXCLUDED.provider_version, external_reference_items.provider_version),
+                provider_updated_at = COALESCE(EXCLUDED.provider_updated_at, external_reference_items.provider_updated_at),
+                media_id = COALESCE(EXCLUDED.media_id, external_reference_items.media_id),
+                dedupe_match_reason = CASE
+                    WHEN EXCLUDED.media_id IS NOT NULL AND EXCLUDED.dedupe_match_reason IS NULL THEN NULL
+                    ELSE COALESCE(EXCLUDED.dedupe_match_reason, external_reference_items.dedupe_match_reason)
+                END,
+                raw_reference_metadata = COALESCE(EXCLUDED.raw_reference_metadata, external_reference_items.raw_reference_metadata),
+                last_imported_at = CURRENT_TIMESTAMP
+            """,
+            source_id,
+            provider,
+            provider_item_key,
+            provider_library_id,
+            collection_key,
+            collection_name_value,
+            provider_version,
+            provider_updated_at,
+            media_id,
+            dedupe_match_reason,
+            raw_reference_metadata_value,
+        )
+        row = await db.fetchrow(
+            """
+            SELECT *
+            FROM external_reference_items
+            WHERE source_id = $1 AND provider = $2 AND provider_item_key = $3
+            """,
+            source_id,
+            provider,
+            provider_item_key,
+        )
+        return _normalize_reference_item_row(row) or {}
+
+    await db.execute(
+        """
+        INSERT INTO external_reference_items (
+            source_id,
+            provider,
+            provider_item_key,
+            provider_library_id,
+            collection_key,
+            collection_name,
+            provider_version,
+            provider_updated_at,
+            media_id,
+            dedupe_match_reason,
+            raw_reference_metadata,
+            first_imported_at,
+            last_imported_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(source_id, provider, provider_item_key) DO UPDATE SET
+            provider_library_id = COALESCE(excluded.provider_library_id, external_reference_items.provider_library_id),
+            collection_key = COALESCE(excluded.collection_key, external_reference_items.collection_key),
+            collection_name = COALESCE(excluded.collection_name, external_reference_items.collection_name),
+            provider_version = COALESCE(excluded.provider_version, external_reference_items.provider_version),
+            provider_updated_at = COALESCE(excluded.provider_updated_at, external_reference_items.provider_updated_at),
+            media_id = COALESCE(excluded.media_id, external_reference_items.media_id),
+            dedupe_match_reason = CASE
+                WHEN excluded.media_id IS NOT NULL AND excluded.dedupe_match_reason IS NULL THEN NULL
+                ELSE COALESCE(excluded.dedupe_match_reason, external_reference_items.dedupe_match_reason)
+            END,
+            raw_reference_metadata = COALESCE(excluded.raw_reference_metadata, external_reference_items.raw_reference_metadata),
+            last_imported_at = CURRENT_TIMESTAMP
+        """,
+        (
+            source_id,
+            provider,
+            provider_item_key,
+            provider_library_id,
+            collection_key,
+            collection_name_value,
+            provider_version,
+            provider_updated_at,
+            media_id,
+            dedupe_match_reason,
+            sqlite_raw_reference_metadata,
+        ),
+    )
+    await getattr(db, "commit", lambda: None)()
+    return await get_reference_item_binding(
+        db,
+        source_id=source_id,
+        provider=provider,
+        provider_item_key=provider_item_key,
+    ) or {}
+
+
+async def delete_reference_item_binding(
+    db,
+    *,
+    source_id: int,
+    provider: str,
+    provider_item_key: str,
+) -> bool:
+    await _ensure_tables(db)
+    is_pg = _is_postgres_connection(db)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            DELETE FROM external_reference_items
+            WHERE source_id = $1 AND provider = $2 AND provider_item_key = $3
+            RETURNING id
+            """,
+            source_id,
+            provider,
+            provider_item_key,
+        )
+        return bool(row)
+
+    cur = await db.execute(
+        """
+        DELETE FROM external_reference_items
+        WHERE source_id = ? AND provider = ? AND provider_item_key = ?
+        """,
+        (source_id, provider, provider_item_key),
+    )
+    await getattr(db, "commit", lambda: None)()
+    return int(getattr(cur, "rowcount", 0) or 0) > 0
 
 
 async def record_item_event(
@@ -2104,6 +2543,15 @@ async def create_source(
 ) -> dict[str, Any]:
     await _ensure_tables(db)
     is_pg = _is_postgres_connection(db)
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_type = str(type_ or "").strip().lower()
+    normalized_options = dict(options or {})
+    if normalized_provider in REFERENCE_MANAGER_PROVIDERS:
+        if normalized_type != "collection":
+            raise ValueError("Reference-manager sources must use type 'collection'.")
+        normalized_options["recursive"] = False
+    elif normalized_type == "collection":
+        raise ValueError("Source type 'collection' is only supported for reference-manager providers.")
     if is_pg:
         row = await db.fetchrow(
             """
@@ -2111,7 +2559,7 @@ async def create_source(
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, account_id, provider, remote_id, type, path, options, enabled, last_synced_at
             """,
-            account_id, provider, remote_id, type_, path, options, enabled,
+            account_id, provider, remote_id, type_, path, normalized_options, enabled,
         )
         d = dict(row)
         return d
@@ -2120,7 +2568,7 @@ async def create_source(
         INSERT INTO external_sources (account_id, provider, remote_id, type, path, options, enabled)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (account_id, provider, remote_id, type_, path, __import__("json").dumps(options or {}), 1 if enabled else 0),
+        (account_id, provider, remote_id, type_, path, __import__("json").dumps(normalized_options), 1 if enabled else 0),
     )
     await getattr(db, "commit", lambda: None)()
     rid = cur.lastrowid
@@ -2327,7 +2775,7 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
     # Ensure source belongs to user via join
     if is_pg:
         row = await db.fetchrow(
-            "SELECT s.id, s.account_id FROM external_sources s JOIN external_accounts a ON s.account_id = a.id WHERE s.id = $1 AND a.user_id = $2",
+            "SELECT s.id, s.account_id, s.provider FROM external_sources s JOIN external_accounts a ON s.account_id = a.id WHERE s.id = $1 AND a.user_id = $2",
             source_id, user_id,
         )
         if not row:
@@ -2338,8 +2786,11 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
             sets.append(f"enabled = ${len(params) + 1}")
             params.append(enabled)
         if options is not None:
+            normalized_options = dict(options or {})
+            if str(row.get("provider") or "").strip().lower() in REFERENCE_MANAGER_PROVIDERS:
+                normalized_options["recursive"] = False
             sets.append(f"options = ${len(params) + 1}")
-            params.append(options)
+            params.append(normalized_options)
         if not sets:
             pass
         else:
@@ -2353,7 +2804,7 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
         return dict(row2)
     cur = await db.execute(
         """
-        SELECT s.id, s.account_id
+        SELECT s.id, s.account_id, s.provider
         FROM external_sources s
         JOIN external_accounts a ON s.account_id = a.id
         WHERE s.id = ? AND a.user_id = ?
@@ -2369,8 +2820,12 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
         sets.append("enabled = ?")
         params.append(1 if enabled else 0)
     if options is not None:
+        normalized_options = dict(options or {})
+        source_provider = str(r[2] or "").strip().lower()
+        if source_provider in REFERENCE_MANAGER_PROVIDERS:
+            normalized_options["recursive"] = False
         sets.append("options = ?")
-        params.append(__import__("json").dumps(options or {}))
+        params.append(__import__("json").dumps(normalized_options))
     if sets:
         params.extend([source_id])
         set_clause = ", ".join(sets)

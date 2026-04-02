@@ -10,6 +10,7 @@ import { getRoleRank, hasRoleAccess, isAdminRole, isMemberRole, isSuperAdminRole
 import { logger } from '@/lib/logger';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 // UI gating only; backend must enforce authorization and never trust client permissions.
 interface PermissionContextType {
@@ -286,8 +287,9 @@ const usePermissionGuardDecision = ({
 };
 
 const renderRouteLoading = () => (
-  <div className="flex h-screen items-center justify-center">
-    <div className="text-muted-foreground">Loading...</div>
+  <div className="flex h-screen items-center justify-center" role="status" aria-live="polite" aria-atomic="true">
+    <span className="sr-only">Loading protected page</span>
+    <CardSkeleton />
   </div>
 );
 

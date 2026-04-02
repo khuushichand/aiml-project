@@ -22,7 +22,7 @@ const getJobBlock = (workflow: string, jobId: string) => {
   for (let index = startIndex + 1; index < lines.length; index += 1) {
     const line = lines[index]
 
-    if (/^  [a-z0-9-]+:$/.test(line)) {
+    if (/^ {2}[a-z0-9-]+:$/.test(line)) {
       break
     }
 

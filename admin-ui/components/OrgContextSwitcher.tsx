@@ -158,7 +158,7 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
   if (!isSuperAdmin()) {
     if (loading) {
       return (
-        <div className={`flex items-center gap-2 px-3 py-2 ${className}`}>
+        <div className={`flex min-w-0 items-center gap-2 px-3 py-2 ${className}`}>
           <Building2 className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">Loading...</span>
         </div>
@@ -168,9 +168,9 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
       return null;
     }
     return (
-      <div className={`flex items-center gap-2 px-3 py-2 ${className}`} data-testid="org-badge">
+      <div className={`flex min-w-0 items-center gap-2 px-3 py-2 ${className}`} data-testid="org-badge">
         <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        <Badge variant="secondary" className="cursor-default hover:bg-secondary truncate max-w-[140px]">
+        <Badge variant="secondary" className="cursor-default hover:bg-secondary truncate max-w-[140px]" title={selectedOrg.name}>
           {selectedOrg.name}
         </Badge>
       </div>

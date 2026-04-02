@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,6 +26,7 @@ import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import type { WebhookItem, WebhookDeliveryItem } from '@/types/webhooks';
 import { Activity, ChevronDown, ChevronRight, Copy, Play, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react';
+
 
 const AVAILABLE_EVENTS = [
   'user.created',

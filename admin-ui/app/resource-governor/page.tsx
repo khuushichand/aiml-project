@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
@@ -215,6 +216,7 @@ const getPolicyRowKey = (policy: ResourcePolicy, fallbackIndex: number) => {
 };
 
 export default function ResourceGovernorPage() {
+  const confirm = useConfirm();
   const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
 
@@ -240,6 +242,7 @@ export default function ResourceGovernorPage() {
   const [simulationResult, setSimulationResult] = useState<PolicySimulationResult | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [resolutionUserId, setResolutionUserId] = useState('');
+  const [userSuggestions, setUserSuggestions] = useState<Array<{ id: number; username: string }>>([]);
   const [resolutionResourceType, setResolutionResourceType] = useState<PolicyFormData['resource_type']>('llm');
   const [resolutionResult, setResolutionResult] = useState<PolicyResolutionResult | null>(null);
   const [resolutionError, setResolutionError] = useState('');
@@ -646,7 +649,18 @@ export default function ResourceGovernorPage() {
         return;
       }
 
-      const user = scopeUsers.find((entry) => String(entry.id) === userIdValue);
+      const normalizedUserValue = userIdValue.toLowerCase();
+      const matchingSuggestion = userSuggestions.find(
+        (entry) =>
+          String(entry.id) === userIdValue ||
+          entry.username?.toLowerCase() === normalizedUserValue
+      );
+      const resolvedUserId = matchingSuggestion ? String(matchingSuggestion.id) : userIdValue;
+      const user = scopeUsers.find(
+        (entry) =>
+          String(entry.id) === resolvedUserId ||
+          entry.username?.toLowerCase() === normalizedUserValue
+      );
       if (!user) {
         setResolutionError(`User ${userIdValue} was not found in the current admin scope.`);
         return;
@@ -757,7 +771,7 @@ export default function ResourceGovernorPage() {
       title: `Delete policy "${policy.name}"?`,
       message: 'This will remove the resource governance policy. This action cannot be undone.',
       confirmText: 'Delete',
-      requirePassword: false,
+      requirePassword: true,
     });
 
     if (!approval) return;

@@ -25,6 +25,7 @@ from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyRotateRequest,
     APIKeyUpdateRequest,
 )
+from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import VirtualKeyCreateRequest
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.services import admin_api_keys_service
@@ -189,6 +190,20 @@ async def admin_get_api_key_usage(
     """Return usage summary for a specific API key (admin)."""
     data = svc_get_api_key_usage(key_id)
     return ApiKeyUsageSummary(**data)
+
+
+@router.delete("/users/{user_id}/virtual-keys/{key_id}", response_model=MessageResponse)
+async def admin_delete_virtual_key(
+    user_id: int,
+    key_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
+) -> MessageResponse:
+    """Delete (revoke) a virtual API key for the given user (admin)."""
+    await admin_api_keys_service.revoke_api_key(
+        principal, user_id, key_id, db=db, is_pg_fn=_get_is_pg_fn()
+    )
+    return MessageResponse(message=f"Virtual key {key_id} revoked")
 
 
 @router.get("/api-keys/{key_id}/audit-log", response_model=APIKeyAuditListResponse)

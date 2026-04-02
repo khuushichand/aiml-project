@@ -167,6 +167,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     success,
     setSuccess,
   } = useMonitoringMessages();
+  const loadInFlightRef = useRef<Promise<void> | null>(null);
 
   const { loadData } = useMonitoringDataLoader({
     alertsRef,
@@ -191,6 +192,19 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
   });
 
+  const guardedLoadData = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      return loadInFlightRef.current;
+    }
+    const pendingLoad = Promise.resolve(loadData()).finally(() => {
+      if (loadInFlightRef.current === pendingLoad) {
+        loadInFlightRef.current = null;
+      }
+    });
+    loadInFlightRef.current = pendingLoad;
+    return pendingLoad;
+  }, [loadData]);
+
   // --- Auto-refresh (60 s) --------------------------------------------------
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -213,12 +227,12 @@ export const useMonitoringPageController = (): MonitoringPageController => {
 
     const intervalId = setInterval(() => {
       if (document.visibilityState === 'visible' && !loadingRef.current) {
-        void loadData();
+        void guardedLoadData();
       }
     }, 60_000);
 
     return () => clearInterval(intervalId);
-  }, [autoRefreshEnabled, loadData]);
+  }, [autoRefreshEnabled, guardedLoadData]);
 
   const onAutoRefreshToggle = useCallback(() => {
     setAutoRefreshEnabled((prev) => !prev);
@@ -238,7 +252,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     confirm,
     setError,
     setSuccess,
-    onReloadRequested: loadData,
+    onReloadRequested: guardedLoadData,
   });
 
   const {
@@ -253,7 +267,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     setAlerts,
     setError,
     setSuccess,
-    onReloadRequested: loadData,
+    onReloadRequested: guardedLoadData,
   });
 
   const {
@@ -284,8 +298,8 @@ export const useMonitoringPageController = (): MonitoringPageController => {
   });
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    void guardedLoadData();
+  }, [guardedLoadData]);
 
   const activeAlertsCount = useMemo(
     () =>
@@ -297,12 +311,12 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     () => ({
       lastUpdated,
       loading,
-      onRefresh: loadData,
+      onRefresh: guardedLoadData,
       lastRefreshed,
       autoRefreshEnabled,
       onAutoRefreshToggle,
     }),
-    [lastUpdated, loading, loadData, lastRefreshed, autoRefreshEnabled, onAutoRefreshToggle]
+    [lastUpdated, loading, guardedLoadData, lastRefreshed, autoRefreshEnabled, onAutoRefreshToggle]
   );
 
   const feedbackBannersProps = useMemo<ComponentProps<typeof MonitoringFeedbackBanners>>(

@@ -40,6 +40,12 @@ type StatsGridProps = {
 
 const CARD_COUNT = 12;
 
+function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 const formatTrendValue = (trend: MetricTrend): string => {
   if (trend.percentChange !== null) {
     return `${Math.abs(trend.percentChange).toFixed(1)}%`;
@@ -235,7 +241,7 @@ export const StatsGrid = ({
                 aria-valuenow={Math.round(storagePercentage)}
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-label="Storage usage"
+                aria-label={`Storage usage: ${storagePercentage.toFixed(0)}%`}
               >
                 <div
                   className={`h-2 rounded-full ${
@@ -386,21 +392,34 @@ export const StatsGrid = ({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">MCP Tool Invocations</CardTitle>
-            <Plug className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent className="space-y-1">
-            <div
-              className="text-2xl font-bold"
-              title="Requires MCP telemetry"
-            >
-              N/A
-            </div>
-            <p className="text-xs text-muted-foreground">Requires MCP telemetry</p>
-          </CardContent>
-        </Card>
+        {stats.mcpInvocationsToday != null ? (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">MCP Calls</CardTitle>
+              <Plug className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCompact(stats.mcpInvocationsToday)}</div>
+              <p className="text-xs text-muted-foreground">Tool invocations today</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">MCP Tool Invocations</CardTitle>
+              <Plug className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <div
+                className="text-2xl font-bold"
+                title="Requires MCP telemetry"
+              >
+                N/A
+              </div>
+              <p className="text-xs text-muted-foreground">Requires MCP telemetry</p>
+            </CardContent>
+          </Card>
+        )}
       </>
     )}
   </div>

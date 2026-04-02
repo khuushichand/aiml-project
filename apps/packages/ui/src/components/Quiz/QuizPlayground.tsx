@@ -60,6 +60,7 @@ export const QuizPlayground: React.FC = () => {
             initialAssessmentIntent.highlightQuizId ??
             initialAssessmentIntent.startQuizId ??
             null,
+        forceShowWorkspaceItems: initialAssessmentIntent.forceShowWorkspaceItems ?? false,
         sourceTab: initialAssessmentIntent.assignmentMode === "shared"
           ? "assignment"
           : (initialAssessmentIntent.deckId != null ||
@@ -153,6 +154,7 @@ export const QuizPlayground: React.FC = () => {
     setTakeTabIntent({
       startQuizId: intent?.startQuizId ?? null,
       highlightQuizId: intent?.highlightQuizId ?? intent?.startQuizId ?? null,
+      forceShowWorkspaceItems: intent?.forceShowWorkspaceItems ?? false,
       sourceTab: intent?.sourceTab ?? null,
       attemptId: intent?.attemptId ?? null,
       assignmentMode: intent?.assignmentMode ?? null,

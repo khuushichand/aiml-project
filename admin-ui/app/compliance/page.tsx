@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,11 +12,12 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { CardSkeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import type { CompliancePosture, ComplianceReportSchedule } from '@/types';
-import { Shield, ShieldCheck, Key, Users, FileText, RefreshCw, ExternalLink, Plus, Trash2, Send, Calendar } from 'lucide-react';
-import Link from 'next/link';
+import { Shield, ShieldCheck, Key, Users, FileText, Database, RefreshCw, ExternalLink, Plus, Trash2, Send, Calendar } from 'lucide-react';
 
 type ComplianceGrade = 'A' | 'B' | 'C' | 'D' | 'F';
 
@@ -541,7 +543,7 @@ function CompliancePageContent() {
 
 export default function CompliancePage() {
   return (
-    <PermissionGuard role={['admin', 'super_admin', 'owner']}>
+    <PermissionGuard variant="route" requireAuth role={['admin', 'super_admin', 'owner']}>
       <ResponsiveLayout>
         <CompliancePageContent />
       </ResponsiveLayout>

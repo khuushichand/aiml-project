@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-import importlib
-import sys
-
 import pytest
 from fastapi.testclient import TestClient
+
+from tldw_Server_API.tests.helpers.app_main_state import (
+    clear_app_main,
+    import_app_main,
+    restore_app_main,
+    snapshot_app_main,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -44,10 +48,10 @@ def test_notifications_services_start_when_enabled(monkeypatch):
     import tldw_Server_API.app.services.reminder_jobs_worker as reminder_jobs_worker
     import tldw_Server_API.app.services.reminders_scheduler as reminders_scheduler
 
-    previous_main = sys.modules.get("tldw_Server_API.app.main")
-    sys.modules.pop("tldw_Server_API.app.main", None)
+    previous_main = snapshot_app_main()
+    clear_app_main()
     try:
-        main_mod = importlib.import_module("tldw_Server_API.app.main")
+        main_mod = import_app_main()
         app = main_mod.app
 
         monkeypatch.setattr(reminders_scheduler, "start_reminders_scheduler", _fake_start_reminders_scheduler)
@@ -62,9 +66,7 @@ def test_notifications_services_start_when_enabled(monkeypatch):
         with TestClient(app):
             pass
     finally:
-        sys.modules.pop("tldw_Server_API.app.main", None)
-        if previous_main is not None:
-            sys.modules["tldw_Server_API.app.main"] = previous_main
+        restore_app_main(previous_main)
 
     assert called["reminders_scheduler_start"] == 1
     assert called["reminders_scheduler_stop"] == 1

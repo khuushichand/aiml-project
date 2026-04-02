@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_agent ON sessions(created_at, agent_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_forked ON sessions(forked_from);
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -678,6 +679,29 @@ class ACPSessionsDB:
         rows = conn.execute(
             "SELECT agent_type, model, prompt_tokens, completion_tokens FROM sessions"
         ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_agent_usage_stats(self, *, since_iso: str) -> list[dict[str, Any]]:
+        """Aggregate per-agent token usage for sessions created on or after *since_iso*."""
+        conn = self._get_conn()
+        query = (
+            "SELECT "
+            "  agent_type, "
+            "  COUNT(*) AS invocation_count, "
+            "  COALESCE(SUM(total_tokens), 0) AS total_tokens, "
+            "  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+            "  COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+            "  SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count, "
+            "  CASE WHEN COUNT(*) > 0 "
+            "    THEN CAST(COALESCE(SUM(total_tokens), 0) AS REAL) / COUNT(*) "
+            "    ELSE 0 "
+            "  END AS avg_tokens_per_session "
+            "FROM sessions "
+            "WHERE created_at >= ? "
+            "GROUP BY agent_type "
+            "ORDER BY total_tokens DESC"
+        )
+        rows = conn.execute(query, [since_iso]).fetchall()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------

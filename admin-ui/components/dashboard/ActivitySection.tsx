@@ -40,6 +40,9 @@ type ActivityChartPoint = {
   users: number;
   errorRate?: number | null;
   latencyP95?: number | null;
+  errors?: number;
+  latencyAvgMs?: number;
+  costUsd?: number;
 };
 
 type ActivitySectionProps = {
@@ -109,12 +112,16 @@ export const ActivitySection = ({
 }: ActivitySectionProps) => {
   const [showErrorRate, setShowErrorRate] = useState(false);
   const [showLatency, setShowLatency] = useState(false);
+  const [showCost, setShowCost] = useState(false);
 
   const hasErrorData = activityChartData.some(
     (p) => p.errorRate !== undefined && p.errorRate !== null
   );
   const hasLatencyData = activityChartData.some(
     (p) => p.latencyP95 !== undefined && p.latencyP95 !== null
+  );
+  const hasCostData = activityChartData.some(
+    (p) => p.costUsd !== undefined && p.costUsd !== null
   );
 
   return (
@@ -175,11 +182,12 @@ export const ActivitySection = ({
           <Button
             type="button"
             size="sm"
-            variant="outline"
-            aria-pressed={false}
-            disabled
+            variant={showCost ? 'default' : 'outline'}
+            onClick={() => setShowCost((v) => !v)}
+            aria-pressed={showCost}
+            disabled={!hasCostData}
             className="text-xs"
-            title="Cost time-series not available"
+            title={hasCostData ? 'Toggle cost overlay' : 'Cost time-series not available'}
           >
             <DollarSign className="h-3 w-3 mr-1.5 text-emerald-600" />
             Cost
@@ -194,17 +202,19 @@ export const ActivitySection = ({
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis dataKey="name" className="text-xs" />
                 <YAxis className="text-xs" yAxisId="left" />
-                {(showErrorRate || showLatency) && (
+                {(showErrorRate || showLatency || showCost) && (
                   <YAxis
                     className="text-xs"
                     yAxisId="right"
                     orientation="right"
                     tickFormatter={(v: number) =>
-                      showLatency && !showErrorRate
+                      showLatency
                         ? `${v}ms`
-                        : !showLatency && showErrorRate
-                          ? `${v}%`
-                          : `${v}`
+                        : showCost
+                          ? `$${v}`
+                          : showErrorRate
+                            ? `${v}%`
+                            : `${v}`
                     }
                   />
                 )}
@@ -255,6 +265,19 @@ export const ActivitySection = ({
                     strokeWidth={2}
                     dot={false}
                     name="Latency p95 (ms)"
+                    yAxisId="right"
+                    connectNulls
+                  />
+                )}
+                {showCost && hasCostData && (
+                  <Line
+                    type="monotone"
+                    dataKey="costUsd"
+                    stroke="#8b5cf6"
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    dot={false}
+                    name="Cost ($)"
                     yAxisId="right"
                     connectNulls
                   />
@@ -335,7 +358,7 @@ export const ActivitySection = ({
                   <p className="pl-7 text-xs text-muted-foreground">{cacheHitRateLabel}</p>
                 )}
                 {showError && (
-                  <p className="pl-7 text-xs text-red-600 truncate" title={subsystemHealth.errorMessage!}>
+                  <p className="pl-7 text-xs text-destructive truncate max-w-[250px]" title={subsystemHealth.errorMessage!}>
                     {subsystemHealth.errorMessage}
                   </p>
                 )}

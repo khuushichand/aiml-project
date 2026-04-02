@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Bell, Mail, Webhook, Send, X, AlertCircle, MessageSquare, ToggleLeft, ToggleRight } from 'lucide-react';
 import { FormSkeleton } from '@/components/ui/skeleton';
 import type { NotificationSettings, NotificationChannel, RecentNotification } from '../types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type NotificationsPanelProps = {
   settings: NotificationSettings | null;

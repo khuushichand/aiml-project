@@ -31,8 +31,8 @@ describe('UnifiedApiKeysTable', () => {
             lastUsedAt: '2026-02-17T01:00:00Z',
             expiresAt: null,
             status: 'active',
-            requestCount24h: null,
-            errorRate24h: null,
+            requestCount24h: 10,
+            errorRate24h: 0.1,
           },
           {
             keyId: '102',
@@ -133,5 +133,31 @@ describe('UnifiedApiKeysTable', () => {
 
     fireEvent.click(screen.getByLabelText('Select all keys'));
     expect(onToggleAllSelection).toHaveBeenCalledWith(['1:101'], true);
+  });
+
+  it('exposes the age legend to assistive technology', () => {
+    render(
+      <UnifiedApiKeysTable
+        rows={[
+          {
+            keyId: '101',
+            keyPrefix: 'sk-active',
+            ownerUserId: 1,
+            ownerUsername: 'alice',
+            ownerEmail: 'alice@example.com',
+            createdAt: '2026-02-17T00:00:00Z',
+            lastUsedAt: '2026-02-17T01:00:00Z',
+            expiresAt: null,
+            status: 'active',
+            requestCount24h: 10,
+            errorRate24h: 0.1,
+          },
+        ]}
+      />
+    );
+
+    expect(
+      screen.getAllByText(/Green under 90 days, yellow 90 to 180 days, red over 180 days/i).length
+    ).toBeGreaterThan(0);
   });
 });

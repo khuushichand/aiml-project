@@ -27,6 +27,8 @@ export interface FlashcardDocumentQueryParams {
   dueStatus?: DueStatus
   sortBy?: DocumentManageSortBy
   pageSize?: number
+  includeWorkspaceItems?: boolean
+  workspaceId?: string | null
 }
 
 export interface FlashcardDocumentPage {
@@ -47,6 +49,8 @@ export const getFlashcardDocumentQueryKey = (
     dueStatus?: DueStatus
     sortBy?: DocumentManageSortBy
     pageSize?: number
+    includeWorkspaceItems?: boolean
+    workspaceId?: string | null
   }
 ) => [
   "flashcards:document",
@@ -55,7 +59,9 @@ export const getFlashcardDocumentQueryKey = (
   (resolved?.normalizedTags ?? normalizeManageTags(params.tags, params.tag)).join("|"),
   resolved?.dueStatus ?? params.dueStatus ?? "all",
   resolved?.sortBy ?? params.sortBy ?? "due",
-  resolved?.pageSize ?? params.pageSize ?? DOCUMENT_PAGE_SIZE
+  resolved?.pageSize ?? params.pageSize ?? DOCUMENT_PAGE_SIZE,
+  resolved?.includeWorkspaceItems ?? params.includeWorkspaceItems ?? false,
+  resolved?.workspaceId ?? params.workspaceId ?? null
 ] as const
 
 const getListTotal = (response: FlashcardListResponse) =>
@@ -65,6 +71,8 @@ async function fetchSingleTagDocumentPage(
   params: Required<Pick<FlashcardDocumentQueryParams, "dueStatus" | "sortBy" | "pageSize">> &
     Pick<FlashcardDocumentQueryParams, "deckId" | "query"> & {
       primaryTag?: string
+      includeWorkspaceItems?: boolean
+      workspaceId?: string | null
     },
   pageIndex: number
 ): Promise<FlashcardDocumentPage> {
@@ -75,7 +83,9 @@ async function fetchSingleTagDocumentPage(
     due_status: params.dueStatus,
     limit: params.pageSize,
     offset: pageIndex * params.pageSize,
-    order_by: getManageServerOrderBy(params.sortBy)
+    order_by: getManageServerOrderBy(params.sortBy),
+    include_workspace_items: params.includeWorkspaceItems ?? false,
+    workspace_id: params.workspaceId ?? undefined
   })
   const items = applyManageClientSort(response.items || [], params.sortBy)
 
@@ -92,6 +102,8 @@ async function fetchMultiTagDocumentPage(
     Pick<FlashcardDocumentQueryParams, "deckId" | "query"> & {
       normalizedTags: string[]
       primaryTag: string
+      includeWorkspaceItems?: boolean
+      workspaceId?: string | null
     },
   pageIndex: number
 ): Promise<FlashcardDocumentPage> {
@@ -109,7 +121,9 @@ async function fetchMultiTagDocumentPage(
       due_status: params.dueStatus,
       limit: DOCUMENT_SCAN_PAGE_SIZE,
       offset,
-      order_by: getManageServerOrderBy(params.sortBy)
+      order_by: getManageServerOrderBy(params.sortBy),
+      include_workspace_items: params.includeWorkspaceItems ?? false,
+      workspace_id: params.workspaceId ?? undefined
     })
     total = getListTotal(response)
     const items = response.items || []
@@ -158,13 +172,17 @@ export function useFlashcardDocumentQuery(
   const dueStatus = params.dueStatus ?? "all"
   const sortBy = params.sortBy ?? "due"
   const pageSize = params.pageSize ?? DOCUMENT_PAGE_SIZE
+  const includeWorkspaceItems = params.includeWorkspaceItems ?? false
+  const workspaceId = params.workspaceId ?? null
 
   const query = useInfiniteQuery({
     queryKey: getFlashcardDocumentQueryKey(params, {
       normalizedTags,
       dueStatus,
       sortBy,
-      pageSize
+      pageSize,
+      includeWorkspaceItems,
+      workspaceId
     }),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
@@ -179,7 +197,9 @@ export function useFlashcardDocumentQuery(
             sortBy,
             pageSize,
             normalizedTags,
-            primaryTag
+            primaryTag,
+            includeWorkspaceItems,
+            workspaceId
           },
           pageIndex
         )
@@ -191,7 +211,9 @@ export function useFlashcardDocumentQuery(
           dueStatus,
           sortBy,
           pageSize,
-          primaryTag
+          primaryTag,
+          includeWorkspaceItems,
+          workspaceId
         },
         pageIndex
       )

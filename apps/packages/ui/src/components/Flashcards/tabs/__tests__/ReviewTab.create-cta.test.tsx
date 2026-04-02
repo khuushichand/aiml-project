@@ -378,6 +378,39 @@ describe("ReviewTab create CTA visibility", () => {
     expect(screen.getByText("Biology (7 due)")).toBeInTheDocument()
   })
 
+  it("force-shows the addressed workspace deck without widening the visible deck list", () => {
+    vi.mocked(useDecksQuery).mockImplementation((params: any) => ({
+      data: params?.includeWorkspaceItems
+        ? [
+            {
+              id: 9,
+              name: "Workspace Biology",
+              workspace_id: "workspace-77"
+            }
+          ]
+        : [],
+      isLoading: false
+    } as any))
+
+    render(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={9}
+        onReviewDeckChange={() => {}}
+        isActive
+        forceShowWorkspaceItems
+      />
+    )
+
+    expect(screen.getByText("Workspace Biology")).toBeInTheDocument()
+    expect(vi.mocked(useHasCardsQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        includeWorkspaceItems: true
+      })
+    )
+  })
+
   it("matches baseline snapshot for active review state", () => {
     vi.mocked(useReviewQuery).mockReturnValue({
       data: {

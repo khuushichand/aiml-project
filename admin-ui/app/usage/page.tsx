@@ -110,6 +110,12 @@ const formatDateTime = (value?: string | null): string => {
   return parsed.toLocaleString();
 };
 
+const renderTokenHeader = (shortLabel: string, fullLabel: string) => (
+  <TableHead className="text-right" aria-label={fullLabel}>
+    <abbr title={fullLabel}>{shortLabel}</abbr>
+  </TableHead>
+);
+
 function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterAnalyticsBreakdownRow[]; keyLabel: string }) {
   return (
     <Card>

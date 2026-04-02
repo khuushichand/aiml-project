@@ -13,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -21,12 +22,12 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
-import { Checkbox } from '@/components/ui/checkbox';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportOrganizations, ExportFormat } from '@/lib/export';
+import { exportData } from '@/lib/export';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
 import type { Organization, PlanTier, Subscription } from '@/types';
 import { api } from '@/lib/api-client';
-import { ExportMenu } from '@/components/ui/export-menu';
-import { exportOrganizations, ExportFormat } from '@/lib/export';
 import {
   EMPTY_BILLING_CELL_PLACEHOLDER,
   isBillingEnabled,
@@ -179,6 +180,14 @@ function OrganizationsPageContent() {
   useEffect(() => {
     loadOrganizations();
   }, [loadOrganizations]);
+
+  useEffect(() => {
+    const visibleIds = new Set(organizations.map((org) => org.id));
+    setSelectedOrgIds((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [organizations]);
 
   useEffect(() => {
     if (!showCreateForm) {
@@ -341,7 +350,7 @@ function OrganizationsPageContent() {
         title: 'Delete organization',
         message: `Delete "${organization.name}"? This organization has ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
         confirmText: 'Delete',
-        requirePassword: false,
+        requirePassword: true,
       });
       if (!approval) return;
 
@@ -689,6 +698,37 @@ function OrganizationsPageContent() {
                   />
                 ) : (
                   <>
+                    {selectedOrgIds.size > 0 && (
+                      <div className="mb-3 flex items-center gap-2 rounded-md border p-2">
+                        <Badge variant="secondary">{selectedOrgIds.size} selected</Badge>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={async () => {
+                            const result = await privilegedAction({
+                              title: 'Bulk Delete Organizations',
+                              message: `Delete ${selectedOrgIds.size} organization(s)? This cannot be undone.`,
+                              confirmText: 'Delete All',
+                              requirePassword: true,
+                            });
+                            if (!result) return;
+                            const ids = [...selectedOrgIds];
+                            const results = await Promise.allSettled(ids.map(id => api.deleteOrganization(String(id))));
+                            const okCount = results.filter(r => r.status === 'fulfilled').length;
+                            const failCount = results.length - okCount;
+                            setSelectedOrgIds(new Set());
+                            await loadOrganizations();
+                            if (okCount > 0) success('Bulk Delete', `${okCount} organization(s) deleted.`);
+                            if (failCount > 0) showError('Partial Failure', `${failCount} organization(s) failed to delete.`);
+                          }}
+                        >
+                          Delete Selected
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedOrgIds(new Set())}>
+                          Clear
+                        </Button>
+                      </div>
+                    )}
                     <Table>
                       <TableHeader>
                         <TableRow>

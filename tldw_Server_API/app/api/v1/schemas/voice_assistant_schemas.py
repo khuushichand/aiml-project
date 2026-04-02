@@ -79,6 +79,10 @@ class WSConfigMessage(BaseModel):
         default=None,
         description="TTS provider (e.g., 'kokoro', 'openai')"
     )
+    tts_model: Optional[str] = Field(
+        default=None,
+        description="TTS model identifier (e.g., 'kokoro', 'tts-1')"
+    )
     tts_voice: Optional[str] = Field(
         default=None,
         description="TTS voice identifier"
@@ -141,6 +145,7 @@ class WSConfigAckMessage(BaseModel):
     session_id: str = Field(..., description="Session ID")
     stt_model: str = Field(..., description="Active STT model")
     tts_provider: str = Field(..., description="Active TTS provider")
+    tts_model: str = Field(..., description="Active TTS model")
 
 
 class WSTranscriptionMessage(BaseModel):
@@ -253,6 +258,7 @@ class VoiceCommandRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, description="Session ID for context")
     include_tts: bool = Field(default=True, description="Whether to generate TTS audio")
     tts_provider: Optional[str] = Field(default=None, description="TTS provider override")
+    tts_model: Optional[str] = Field(default=None, description="TTS model override")
     tts_voice: Optional[str] = Field(default=None, description="TTS voice override")
     tts_format: Literal["mp3", "opus", "wav", "pcm"] = Field(default="mp3")
 

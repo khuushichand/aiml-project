@@ -17,6 +17,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from functools import lru_cache
+from types import SimpleNamespace
 from typing import Any, Literal, Mapping, Optional
 
 from fastapi import (
@@ -201,6 +202,11 @@ DEFAULT_AUTO_SUMMARY_WINDOW_MESSAGES = 12
 MAX_AUTO_SUMMARY_LINES = 24
 MAX_AUTO_SUMMARY_LINE_CHARS = 220
 MAX_AUTO_SUMMARY_CONTENT_CHARS = 8_000
+
+# Preserve the legacy patch point used by greeting tests without routing selection
+# through the insecure stdlib PRNG.
+_greeting_random = SimpleNamespace(choice=secrets.choice)
+random = _greeting_random
 
 
 @lru_cache(maxsize=1)
@@ -3203,7 +3209,7 @@ async def create_chat_session(
                     ag = character.get('alternate_greetings')
                     if isinstance(ag, list) and ag:
                         if greeting_strategy == "alternate_random":
-                            choice_text = secrets.choice(ag)
+                            choice_text = _greeting_random.choice(ag)
                         elif greeting_strategy == "alternate_index" and isinstance(alternate_index, int) and 0 <= alternate_index < len(ag):
                             choice_text = ag[alternate_index]
                 if not choice_text:

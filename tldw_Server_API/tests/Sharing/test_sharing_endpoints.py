@@ -1,6 +1,7 @@
 """Integration tests for the sharing API endpoints."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -150,6 +151,54 @@ class TestSharedWithMe:
         share_id = create.json()["id"]
         resp = client.get(f"/api/v1/sharing/shared-with-me/{share_id}/workspace")
         assert resp.status_code == 200
+
+    def test_get_shared_workspace_media_releases_owner_session(self, client, mock_repo):
+        create = client.post("/api/v1/sharing/workspaces/ws-media/share", json={
+            "share_scope_type": "team",
+            "share_scope_id": 10,
+        })
+        share_id = create.json()["id"]
+        events: list[str] = []
+
+        class _FakeChaCha:
+            def list_workspace_sources(self, workspace_id: str):
+                assert workspace_id == "ws-media"
+                return [{"media_id": 123}]
+
+        class _FakeMediaDb:
+            def get_media_by_id(self, media_id: int):
+                assert media_id == 123
+                return {
+                    "id": 123,
+                    "title": "Shared Item",
+                    "url": "https://example.com/shared",
+                    "type": "article",
+                    "content": "shared content",
+                    "author": "author",
+                    "ingestion_date": "2025-01-01T00:00:00",
+                }
+
+        @contextmanager
+        def _managed_media_db_for_owner(owner_user_id: int):
+            assert owner_user_id == 1
+            events.append("enter")
+            try:
+                yield _FakeMediaDb()
+            finally:
+                events.append("exit")
+
+        with patch(
+            "tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps.get_chacha_db_for_owner",
+            return_value=_FakeChaCha(),
+        ), patch(
+            "tldw_Server_API.app.api.v1.API_Deps.DB_Deps.managed_media_db_for_owner",
+            _managed_media_db_for_owner,
+        ):
+            resp = client.get(f"/api/v1/sharing/shared-with-me/{share_id}/media/123")
+
+        assert resp.status_code == 200
+        assert resp.json()["id"] == 123
+        assert events == ["enter", "exit"]
 
 
 class TestClone:

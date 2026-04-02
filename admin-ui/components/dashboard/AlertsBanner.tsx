@@ -16,9 +16,15 @@ export type DashboardAlertSummaryItem = {
   created_at?: string;
 };
 
+type DashboardAlertFull = DashboardAlertSummaryItem & {
+  id?: string | number;
+  message?: string;
+  acknowledged?: boolean;
+};
+
 type AlertsBannerProps = {
-  alerts: DashboardAlertSummaryItem[];
-  onAcknowledge?: () => void;
+  alerts: DashboardAlertFull[];
+  onAcknowledgeAll?: () => void;
 };
 
 export const summarizeAlertSeverities = (alerts: DashboardAlertSummaryItem[]) => {
@@ -92,7 +98,7 @@ const getAlertToneClasses = (critical: number, warning: number) => {
   };
 };
 
-export const AlertsBanner = ({ alerts, onAcknowledge }: AlertsBannerProps) => {
+export const AlertsBanner = ({ alerts, onAcknowledgeAll }: AlertsBannerProps) => {
   if (alerts.length <= 0) return null;
 
   const summary = summarizeAlertSeverities(alerts);
@@ -114,24 +120,24 @@ export const AlertsBanner = ({ alerts, onAcknowledge }: AlertsBannerProps) => {
           <Badge className="bg-blue-500 text-white">
             {summary.info} info
           </Badge>
+          {topAlert?.message && (
+            <span className="text-sm truncate max-w-md">
+              — {topAlert.message}
+            </span>
+          )}
         </div>
-        {topAlert?.message && (
-          <p className="text-sm truncate" title={topAlert.message} data-testid="top-alert-message">
-            {topAlert.message}
-          </p>
-        )}
         <div className="flex flex-wrap items-center gap-3">
           <span>
             {total} active alert{total !== 1 ? 's' : ''} require attention.{' '}
             <Link href="/monitoring" className="underline font-medium">View all</Link>
           </span>
-          {onAcknowledge && (
+          {onAcknowledgeAll && (
             <Button
               type="button"
               size="sm"
               variant="ghost"
               className="h-7 px-2 text-xs"
-              onClick={onAcknowledge}
+              onClick={onAcknowledgeAll}
               title="Acknowledge all alerts"
               data-testid="acknowledge-alerts-btn"
             >

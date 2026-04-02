@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   buildAuthHeaders: vi.fn(),
+  hasExplicitAuthHeaders: vi.fn(),
   getApiBaseUrl: vi.fn(),
   streamStructuredSSE: vi.fn(),
   bgRequest: vi.fn(),
@@ -18,6 +19,8 @@ vi.mock("@web/lib/api", () => ({
     post: (...args: unknown[]) => mocks.apiPost(...args)
   },
   buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
+  hasExplicitAuthHeaders: (...args: unknown[]) =>
+    mocks.hasExplicitAuthHeaders(...args),
   getApiBaseUrl: (...args: unknown[]) => mocks.getApiBaseUrl(...args)
 }))
 
@@ -46,6 +49,7 @@ describe("web notifications adapter", () => {
       Authorization: "Bearer web-token",
       "X-CSRF-Token": "csrf-token"
     })
+    mocks.hasExplicitAuthHeaders.mockReturnValue(true)
     mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
     mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
     mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
@@ -80,19 +84,24 @@ describe("web notifications adapter", () => {
     await snoozeNotification(1, 15)
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
-      "/notifications?limit=20&offset=0&include_archived=false"
+      "/notifications?limit=20&offset=0&include_archived=false",
+      { withCredentials: false }
     )
-    expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/unread-count")
+    expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/unread-count", {
+      withCredentials: false
+    })
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/mark-read", {
       ids: [1]
+    }, { withCredentials: false })
+    expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/dismiss", undefined, {
+      withCredentials: false
     })
-    expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/dismiss")
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/snooze", {
       minutes: 15
-    })
+    }, { withCredentials: false })
   })
 
-  it("uses web auth headers and SSE helpers for the notification stream", async () => {
+  it("omits cookie credentials for the notification stream when header auth is present", async () => {
     const unsubscribe = subscribeNotificationsStream({
       after: 42,
       onEvent: vi.fn()
@@ -106,7 +115,7 @@ describe("web notifications adapter", () => {
       "http://example.test/api/v1/notifications/stream?after=42",
       expect.objectContaining({
         method: "GET",
-        credentials: "include",
+        credentials: "omit",
         signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           Authorization: "Bearer web-token",
@@ -115,6 +124,27 @@ describe("web notifications adapter", () => {
       }),
       expect.any(Function)
     )
+
+    unsubscribe()
+  })
+
+  it("keeps cookie credentials enabled when there is no header-based auth", async () => {
+    mocks.buildAuthHeaders.mockReturnValue({})
+    mocks.hasExplicitAuthHeaders.mockReturnValue(false)
+    mocks.streamStructuredSSE.mockImplementationOnce(async (_url, options, _onEvent) => {
+      expect(options).toEqual(
+        expect.objectContaining({
+          credentials: "include"
+        })
+      )
+    })
+
+    const unsubscribe = subscribeNotificationsStream({
+      after: 1,
+      onEvent: vi.fn()
+    })
+
+    await Promise.resolve()
 
     unsubscribe()
   })

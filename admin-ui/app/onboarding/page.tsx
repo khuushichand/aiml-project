@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -40,10 +40,10 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
       className="flex items-center justify-center gap-2 mb-8"
       data-testid="step-indicator"
       role="group"
-      aria-label={`Step ${currentStep} of ${STEPS.length}`}
+      aria-label={`Onboarding progress, step ${currentStep} of ${STEPS.length}`}
     >
       {STEPS.map((step, idx) => (
-        <div key={step.number} className="flex items-center gap-2">
+        <div key={step.number} className="flex items-center gap-2" aria-current={currentStep === step.number ? 'step' : undefined}>
           <div className="flex items-center gap-2">
             <div
               className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
@@ -94,6 +94,62 @@ function OnboardingPageContent() {
     defaultValues: { name: '', slug: '', owner_email: '' },
   });
 
+  const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
+  const [slugChecking, setSlugChecking] = useState(false);
+  const slugCheckSequence = useRef(0);
+  const slugCheckPromise = useRef<Promise<boolean | null> | null>(null);
+  const latestRequestedSlug = useRef<string | null>(null);
+  const latestResolvedSlug = useRef<string | null>(null);
+  const latestResolvedAvailability = useRef<boolean | null>(null);
+
+  const checkSlugAvailability = useCallback(async (slug: string): Promise<boolean | null> => {
+    const normalizedSlug = slug.trim();
+    const sequence = ++slugCheckSequence.current;
+    latestRequestedSlug.current = normalizedSlug;
+    if (!normalizedSlug || normalizedSlug.length < 2) {
+      if (sequence === slugCheckSequence.current) {
+        setSlugAvailable(null);
+        setSlugChecking(false);
+        latestResolvedSlug.current = normalizedSlug;
+        latestResolvedAvailability.current = null;
+        slugCheckPromise.current = null;
+      }
+      return null;
+    }
+    setSlugChecking(true);
+    const requestPromise = (async () => {
+      try {
+        const orgs = await api.getOrganizations({ q: normalizedSlug });
+        const taken = (Array.isArray(orgs) ? orgs : []).some(
+          (o: { slug?: string }) => o.slug === normalizedSlug
+        );
+        const available = !taken;
+        if (sequence === slugCheckSequence.current) {
+          setSlugAvailable(available);
+          latestResolvedSlug.current = normalizedSlug;
+          latestResolvedAvailability.current = available;
+        }
+        return available;
+      } catch {
+        if (sequence === slugCheckSequence.current) {
+          setSlugAvailable(null);
+          latestResolvedSlug.current = normalizedSlug;
+          latestResolvedAvailability.current = null;
+        }
+        return null;
+      } finally {
+        if (sequence === slugCheckSequence.current) {
+          setSlugChecking(false);
+          if (slugCheckPromise.current === requestPromise) {
+            slugCheckPromise.current = null;
+          }
+        }
+      }
+    })();
+    slugCheckPromise.current = requestPromise;
+    return requestPromise;
+  }, []);
+
   const fetchPlans = useCallback(async () => {
     setLoading(true);
     try {
@@ -126,6 +182,17 @@ function OnboardingPageContent() {
     if (currentStep === 1) {
       const valid = await trigger(['name', 'slug', 'owner_email']);
       if (!valid) return;
+      const slug = getValues('slug').trim();
+      const availability =
+        latestResolvedSlug.current === slug
+          ? latestResolvedAvailability.current
+          : latestRequestedSlug.current === slug && slugCheckPromise.current
+            ? await slugCheckPromise.current
+            : await checkSlugAvailability(slug);
+      if (availability !== true) {
+        showError(availability === false ? 'Slug is already taken' : 'Unable to verify slug availability');
+        return;
+      }
       setCurrentStep(2);
     } else if (currentStep === 2) {
       if (!selectedPlanId) {
@@ -200,9 +267,14 @@ function OnboardingPageContent() {
                 id="org-slug"
                 data-testid="org-slug-input"
                 placeholder="my-organization"
-                {...register('slug')}
+                {...register('slug', {
+                  onBlur: (e) => { void checkSlugAvailability(e.target.value); },
+                })}
               />
               {errors.slug && <p className="mt-1 text-sm text-red-600">{errors.slug.message}</p>}
+              {slugChecking && <p className="mt-1 text-xs text-muted-foreground">Checking availability...</p>}
+              {slugAvailable === true && !errors.slug && <p className="mt-1 text-xs text-green-600">Slug is available</p>}
+              {slugAvailable === false && !errors.slug && <p className="mt-1 text-xs text-red-600">Slug is already taken</p>}
             </div>
             <div>
               <Label htmlFor="owner-email">Owner Email (optional)</Label>

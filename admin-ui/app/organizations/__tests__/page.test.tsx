@@ -58,6 +58,7 @@ vi.mock('@/lib/use-url-state', () => ({
 vi.mock('@/lib/api-client', () => ({
   api: {
     getOrganizations: vi.fn(),
+    getSubscriptions: vi.fn(),
     createOrganization: vi.fn(),
     updateOrganization: vi.fn(),
     getOrgMembers: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock('@/lib/api-client', () => ({
 
 type ApiMock = {
   getOrganizations: ReturnType<typeof vi.fn>;
+  getSubscriptions: ReturnType<typeof vi.fn>;
   createOrganization: ReturnType<typeof vi.fn>;
   updateOrganization: ReturnType<typeof vi.fn>;
   getOrgMembers: ReturnType<typeof vi.fn>;
@@ -92,6 +94,7 @@ beforeEach(() => {
     ],
     total: 1,
   });
+  apiMock.getSubscriptions.mockResolvedValue([]);
   apiMock.getOrgMembers.mockResolvedValue([
     { user_id: 11 },
     { user_id: 12 },

@@ -422,6 +422,11 @@ export default function ConfigPage() {
                     : process.env.NODE_ENV === 'development' ? 'secondary'
                     : 'outline'
                   }
+                  className={
+                    process.env.NODE_ENV === 'production' ? 'border-red-500 text-red-600' :
+                    process.env.NODE_ENV === 'development' ? 'border-green-500 text-green-600' :
+                    'border-yellow-500 text-yellow-600'
+                  }
                   data-testid="environment-badge"
                 >
                   {process.env.NODE_ENV ?? 'unknown'}

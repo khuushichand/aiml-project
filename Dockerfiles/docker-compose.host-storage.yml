@@ -5,8 +5,9 @@
 # It intentionally preserves the same service names and mount targets so the
 # runtime behavior stays aligned with the default quickstart.
 # WARNING: Default credentials in this file are for local development only.
-# Override SINGLE_USER_API_KEY and POSTGRES_PASSWORD in your .env or secret
-# manager before using this compose stack anywhere beyond local testing.
+# Override SINGLE_USER_API_KEY, POSTGRES_PASSWORD, and configure Redis
+# authentication (requirepass or ACLs) before using this compose stack anywhere
+# beyond local testing.
 
 services:
   app:
@@ -22,6 +23,7 @@ services:
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY:-change-me}
       - tldw_production=${tldw_production:-false}
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./Databases/users.db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - JOBS_DB_URL=${JOBS_DB_URL:-}
       - UVICORN_WORKERS=${UVICORN_WORKERS:-4}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -29,8 +31,8 @@ services:
       - ../docker-data/app:/app/Databases
       - ../docker-data/user_data:/app/Databases/user_databases
     depends_on:
-      - postgres
-      - redis
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/ready', timeout=3).status == 200 else 1)"]
       interval: 30s
@@ -59,6 +61,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: tldw-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru

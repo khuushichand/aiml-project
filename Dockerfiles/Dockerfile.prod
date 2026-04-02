@@ -59,11 +59,16 @@ RUN mkdir -p /app/Databases && \
     chmod +x /usr/local/bin/tldw-app-first-run
 USER appuser
 
+ARG HOST=0.0.0.0
+ARG PORT=8000
+ARG UVICORN_WORKERS=4
+ARG LOG_LEVEL=info
+
 ENV PYTHONPATH=/app/tldw_Server_API \
-    HOST=0.0.0.0 \
-    PORT=8000 \
-    UVICORN_WORKERS=4 \
-    LOG_LEVEL=info
+    HOST=${HOST} \
+    PORT=${PORT} \
+    UVICORN_WORKERS=${UVICORN_WORKERS} \
+    LOG_LEVEL=${LOG_LEVEL}
 
 EXPOSE 8000
 
@@ -72,5 +77,5 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD python -c "import sys, u
 
 ENTRYPOINT ["/usr/local/bin/tldw-app-first-run"]
 
-# Start the server
-CMD ["python", "-m", "uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info", "--proxy-headers"]
+# Start the server using runtime-expanded env vars so compose overrides take effect.
+CMD ["/bin/sh", "-c", "exec python -m uvicorn tldw_Server_API.app.main:app --host \"$HOST\" --port \"$PORT\" --workers \"$UVICORN_WORKERS\" --log-level \"$LOG_LEVEL\" --proxy-headers"]

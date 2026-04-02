@@ -56,7 +56,7 @@ export function TopCommandsChart({ data, isLoading }: TopCommandsChartProps) {
           </div>
         ) : (
           <>
-          <div role="img" aria-label="Bar chart showing the top 10 most frequently used voice commands by invocation count">
+          <div role="img" aria-label={`Top voice commands chart showing ${chartData.length} most used commands by invocation count`}>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
                 <BarChart data={chartData} layout="vertical">

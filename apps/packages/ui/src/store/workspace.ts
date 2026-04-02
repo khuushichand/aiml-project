@@ -38,6 +38,7 @@ import type {
   AudioGenerationSettings,
   AudioTtsProvider,
   GeneratedArtifact,
+  StudyMaterialsPolicy,
   SavedWorkspace,
   WorkspaceBanner,
   WorkspaceBannerImage,
@@ -46,6 +47,10 @@ import type {
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
+  WorkspaceSourceTransferConflictResolution,
+  WorkspaceSourceTransferEmptyFolderPolicy,
+  WorkspaceSourceTransferMode,
+  WorkspaceSourceTransferResult,
   WorkspaceSourceFolder,
   WorkspaceSourceFolderMembership,
   WorkspaceSourceStatus,
@@ -1832,6 +1837,7 @@ interface WorkspaceIdentityState {
   workspaceId: string
   workspaceName: string
   workspaceTag: string // Format: "workspace:<slug>"
+  studyMaterialsPolicy: StudyMaterialsPolicy | null
   workspaceCreatedAt: Date | null
   workspaceChatReferenceId: string
 }
@@ -1884,6 +1890,7 @@ interface WorkspaceSnapshot {
   workspaceId: string
   workspaceName: string
   workspaceTag: string
+  studyMaterialsPolicy: StudyMaterialsPolicy | null
   workspaceCreatedAt: Date | null
   workspaceChatReferenceId: string
   sources: WorkspaceSource[]
@@ -1928,6 +1935,7 @@ export interface WorkspaceUndoSnapshot {
   workspaceId: string
   workspaceName: string
   workspaceTag: string
+  studyMaterialsPolicy: StudyMaterialsPolicy | null
   workspaceCreatedAt: Date | null
   workspaceChatReferenceId: string
   sources: WorkspaceSource[]
@@ -1956,6 +1964,36 @@ interface CaptureToNoteInput {
   title?: string
   content: string
   mode?: CaptureNoteMode
+}
+
+export type WorkspaceSourceTransferDestination =
+  | {
+      kind: "existing"
+      workspaceId: string
+    }
+  | {
+      kind: "new"
+      name: string
+    }
+
+export interface WorkspaceSourceTransferRequest {
+  mode: WorkspaceSourceTransferMode
+  destination: WorkspaceSourceTransferDestination
+  selectedSourceIds: string[]
+  conflictResolutions?: Record<
+    number,
+    WorkspaceSourceTransferConflictResolution
+  >
+  emptyFolderPolicy?: WorkspaceSourceTransferEmptyFolderPolicy
+  sourceFolderFallbackName?: string
+  switchToDestinationOnComplete?: boolean
+}
+
+export interface WorkspaceSourceTransferExecutionResult
+  extends WorkspaceSourceTransferResult {
+  originWorkspaceId: string
+  destinationWorkspaceId: string
+  destinationWasCreated: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2100,6 +2138,10 @@ interface WorkspaceListActions {
   createNewWorkspace: (name?: string) => void
   /** Duplicate a workspace (defaults to current) and switch to the duplicate */
   duplicateWorkspace: (id?: string) => string | null
+  /** Transfer selected sources from the current workspace into another workspace */
+  transferSourcesBetweenWorkspaces: (
+    request: WorkspaceSourceTransferRequest
+  ) => WorkspaceSourceTransferExecutionResult | null
   /** Archive a workspace from active saved list */
   archiveWorkspace: (id: string) => void
   /** Restore a workspace from archive back into saved list */
@@ -2171,6 +2213,7 @@ const initialIdentityState: WorkspaceIdentityState = {
   workspaceId: "",
   workspaceName: "",
   workspaceTag: "",
+  studyMaterialsPolicy: null,
   workspaceCreatedAt: null,
   workspaceChatReferenceId: ""
 }
@@ -2696,6 +2739,12 @@ export const reviveWorkspaceSnapshot = (
   workspaceId: string,
   snapshot: WorkspaceSnapshot
 ): WorkspaceSnapshot => {
+  const resolvedStudyMaterialsPolicy =
+    snapshot.studyMaterialsPolicy === "workspace"
+      ? "workspace"
+      : snapshot.studyMaterialsPolicy === "general"
+        ? "general"
+        : null
   const createdAt = reviveDateOrNull(snapshot.workspaceCreatedAt)
   const sources = reviveSources(snapshot.sources || [])
   const sourceIdSet = new Set(sources.map((source) => source.id))
@@ -2712,6 +2761,7 @@ export const reviveWorkspaceSnapshot = (
   return {
     ...snapshot,
     workspaceId: snapshot.workspaceId || workspaceId,
+    studyMaterialsPolicy: resolvedStudyMaterialsPolicy,
     workspaceCreatedAt: createdAt,
     workspaceChatReferenceId:
       snapshot.workspaceChatReferenceId ||
@@ -3046,11 +3096,18 @@ const buildLegacyTopLevelSnapshotForMigration = (
     typeof persisted.workspaceName === "string" && persisted.workspaceName.trim()
       ? persisted.workspaceName
       : "Untitled Workspace"
+  const resolvedStudyMaterialsPolicy =
+    persisted.studyMaterialsPolicy === "workspace"
+      ? "workspace"
+      : persisted.studyMaterialsPolicy === "general"
+        ? "general"
+        : null
 
   return {
     workspaceId,
     workspaceName: resolvedWorkspaceName,
     workspaceTag: resolvedWorkspaceTag,
+    studyMaterialsPolicy: resolvedStudyMaterialsPolicy,
     workspaceCreatedAt: reviveDateOrNull(
       persisted.workspaceCreatedAt as Date | string | null | undefined
     ),
@@ -3133,16 +3190,19 @@ export const createEmptyWorkspaceSnapshot = ({
   id,
   name,
   tag,
-  createdAt
+  createdAt,
+  studyMaterialsPolicy = null
 }: {
   id: string
   name: string
   tag: string
   createdAt: Date
+  studyMaterialsPolicy?: StudyMaterialsPolicy | null
 }): WorkspaceSnapshot => ({
   workspaceId: id,
   workspaceName: name,
   workspaceTag: tag,
+  studyMaterialsPolicy: studyMaterialsPolicy ?? null,
   workspaceCreatedAt: createdAt,
   workspaceChatReferenceId: id,
   sources: [],
@@ -3167,6 +3227,7 @@ export const applyWorkspaceSnapshot = (
   | "workspaceId"
   | "workspaceName"
   | "workspaceTag"
+  | "studyMaterialsPolicy"
   | "workspaceCreatedAt"
   | "workspaceChatReferenceId"
   | "sources"
@@ -3186,6 +3247,7 @@ export const applyWorkspaceSnapshot = (
   workspaceId: snapshot.workspaceId,
   workspaceName: snapshot.workspaceName,
   workspaceTag: snapshot.workspaceTag,
+  studyMaterialsPolicy: snapshot.studyMaterialsPolicy ?? null,
   workspaceCreatedAt: snapshot.workspaceCreatedAt,
   workspaceChatReferenceId: snapshot.workspaceChatReferenceId,
   sources: snapshot.sources.map((source) => ({ ...source })),
@@ -3211,6 +3273,7 @@ export const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot
   workspaceId: state.workspaceId,
   workspaceName: state.workspaceName || "Untitled Workspace",
   workspaceTag: state.workspaceTag,
+  studyMaterialsPolicy: state.studyMaterialsPolicy ?? null,
   workspaceCreatedAt: state.workspaceCreatedAt,
   workspaceChatReferenceId: state.workspaceChatReferenceId || state.workspaceId,
   sources: state.sources.map((source) => ({ ...source })),
@@ -3237,6 +3300,7 @@ export const buildWorkspaceBundleSnapshot = (
 ): WorkspaceBundleSnapshot => ({
   workspaceName: snapshot.workspaceName,
   workspaceTag: snapshot.workspaceTag,
+  studyMaterialsPolicy: snapshot.studyMaterialsPolicy ?? null,
   workspaceCreatedAt: snapshot.workspaceCreatedAt,
   sources: snapshot.sources.map((source) => ({ ...source })),
   selectedSourceIds: [...snapshot.selectedSourceIds],
@@ -3300,6 +3364,7 @@ export const hydrateWorkspaceBundleSnapshot = (
     workspaceId,
     workspaceName,
     workspaceTag,
+    studyMaterialsPolicy: snapshot.studyMaterialsPolicy ?? null,
     workspaceCreatedAt: new Date(),
     workspaceChatReferenceId: workspaceId,
     sources: revivedSources,
@@ -3337,6 +3402,7 @@ export const buildWorkspaceUndoSnapshot = (
     workspaceId: state.workspaceId,
     workspaceName: state.workspaceName,
     workspaceTag: state.workspaceTag,
+    studyMaterialsPolicy: state.studyMaterialsPolicy ?? null,
     workspaceCreatedAt: state.workspaceCreatedAt,
     workspaceChatReferenceId:
       state.workspaceChatReferenceId || state.workspaceId,
@@ -3531,6 +3597,7 @@ export const duplicateWorkspaceSnapshot = (
     workspaceId: duplicateId,
     workspaceName: duplicateName,
     workspaceTag: duplicateTag,
+    studyMaterialsPolicy: snapshot.studyMaterialsPolicy ?? null,
     workspaceCreatedAt: new Date(),
     workspaceChatReferenceId: duplicateId,
     sources: duplicatedSources,

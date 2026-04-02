@@ -16,6 +16,12 @@ export interface CreateNoteOptions {
   content: string
 }
 
+export interface CompleteNotesStudioSetupOptions {
+  template: "Cornell"
+  handwriting: "Accented"
+  excerptText: string
+}
+
 export class NotesPage extends BasePage {
   /* ------------------------------------------------------------------ */
   /* Locators                                                            */
@@ -48,6 +54,11 @@ export class NotesPage extends BasePage {
     return this.page.getByTestId("notes-save-button")
   }
 
+  /** Markdown input mode toggle (data-testid "notes-input-mode-markdown") */
+  get markdownModeButton(): Locator {
+    return this.page.getByTestId("notes-input-mode-markdown")
+  }
+
   /** Overflow / "More actions" button (data-testid "notes-overflow-menu-button") */
   get overflowMenuButton(): Locator {
     return this.page.getByTestId("notes-overflow-menu-button")
@@ -56,6 +67,21 @@ export class NotesPage extends BasePage {
   /** Editor region (data-testid "notes-editor-region") */
   get editorRegion(): Locator {
     return this.page.getByTestId("notes-editor-region")
+  }
+
+  /** Notes Studio create modal (data-testid "notes-studio-create-modal") */
+  get notesStudioCreateModal(): Locator {
+    return this.page.getByTestId("notes-studio-create-modal")
+  }
+
+  /** Notes Studio view shell (data-testid "notes-studio-view") */
+  get notesStudioView(): Locator {
+    return this.page.getByTestId("notes-studio-view")
+  }
+
+  /** Print / Save as PDF menu item in the export submenu. */
+  get printExportMenuItem(): Locator {
+    return this.page.getByRole("menuitem", { name: /print \/ save as pdf/i })
   }
 
   /* ------------------------------------------------------------------ */
@@ -149,6 +175,97 @@ export class NotesPage extends BasePage {
 
     const { response } = await createApiCall
     expect(response.status()).toBeLessThan(400)
+  }
+
+  /**
+   * Ensure the editor is in Markdown mode before selecting text.
+   */
+  async ensureMarkdownMode(): Promise<void> {
+    const wysiwygEditorVisible = await this.page
+      .getByTestId("notes-wysiwyg-editor")
+      .isVisible()
+      .catch(() => false)
+    if (wysiwygEditorVisible) {
+      await this.markdownModeButton.click()
+      await expect(this.contentTextarea).toBeVisible({ timeout: 10_000 })
+    }
+  }
+
+  /**
+   * Select a substring inside the Markdown textarea and fail fast if it is missing.
+   */
+  async selectMarkdownExcerpt(excerpt: string): Promise<void> {
+    await this.ensureMarkdownMode()
+    await expect(this.contentTextarea).toBeVisible({ timeout: 10_000 })
+    await this.contentTextarea.focus()
+
+    await this.contentTextarea.evaluate((element, targetExcerpt) => {
+      const textarea = element as HTMLTextAreaElement
+      const start = textarea.value.indexOf(targetExcerpt)
+      if (start < 0) {
+        throw new Error(`Could not find excerpt "${targetExcerpt}" in the Markdown editor.`)
+      }
+
+      textarea.focus()
+      textarea.setSelectionRange(start, start + targetExcerpt.length)
+      textarea.dispatchEvent(new Event("select", { bubbles: true }))
+    }, excerpt)
+  }
+
+  /**
+   * Open the Notes Studio entry from the overflow menu.
+   */
+  async openNotesStudio(): Promise<void> {
+    await this.overflowMenuButton.click()
+    const menuItem = this.page.getByRole("menuitem", { name: /^notes studio$/i })
+    await expect(menuItem).toBeVisible({ timeout: 10_000 })
+    await menuItem.click()
+    await expect(this.notesStudioCreateModal).toBeVisible({ timeout: 10_000 })
+  }
+
+  /**
+   * Complete the Notes Studio modal and wait for the derived studio view.
+   */
+  async completeNotesStudioSetup(opts: CompleteNotesStudioSetupOptions): Promise<void> {
+    const modal = this.notesStudioCreateModal
+    await expect(modal).toBeVisible({ timeout: 10_000 })
+
+    await modal.getByRole("radio", { name: opts.template }).click()
+    await modal.getByRole("radio", { name: opts.handwriting }).click()
+    const deriveApiCall = expectApiCall(this.page, {
+      method: "POST",
+      url: /\/api\/v1\/notes\/studio\/derive$/,
+      bodyContains: {
+        template_type: "cornell",
+        handwriting_mode: "accented",
+        excerpt_text: opts.excerptText,
+      },
+    }, 30_000)
+
+    await modal.getByRole("button", { name: /create notes studio note/i }).click()
+
+    const { response } = await deriveApiCall
+    expect(response.status()).toBeLessThan(400)
+
+    await expect(this.notesStudioView).toBeVisible({ timeout: 20_000 })
+    await expect(this.page.getByTestId("notes-studio-template-cornell")).toBeVisible({
+      timeout: 10_000
+    })
+    await expect(modal).toBeHidden({ timeout: 10_000 }).catch(() => {})
+  }
+
+  /**
+   * Trigger the print export flow from the Notes overflow menu.
+   */
+  async triggerPrintExport(): Promise<void> {
+    await this.overflowMenuButton.click()
+
+    const exportMenuItem = this.page.getByRole("menuitem", { name: /^export$/i })
+    await expect(exportMenuItem).toBeVisible({ timeout: 10_000 })
+    await exportMenuItem.hover()
+
+    await expect(this.printExportMenuItem).toBeVisible({ timeout: 10_000 })
+    await this.printExportMenuItem.click()
   }
 
   /**

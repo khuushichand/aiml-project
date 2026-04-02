@@ -21,6 +21,8 @@ import sys
 import types
 import pytest
 
+from tldw_Server_API.tests.helpers.app_main_state import restore_app_main, set_app_main, snapshot_app_main
+
 
 def _merge_csv_env(name: str, values: list[str]) -> None:
     existing_raw = str(os.getenv(name, "") or "")
@@ -71,7 +73,7 @@ def _install_app_main_stub() -> None:
             self.state = types.SimpleNamespace()
 
     m.app = _StubApp()
-    sys.modules["tldw_Server_API.app.main"] = m
+    set_app_main(m)
 
 
 def _resolve_app_for_fallback_client():
@@ -96,6 +98,13 @@ def _resolve_app_for_fallback_client():
     _install_app_main_stub()
     from tldw_Server_API.app.main import app as fastapi_app
     return fastapi_app
+
+
+@pytest.fixture(autouse=True)
+def _preserve_app_main_state():
+    previous_main = snapshot_app_main()
+    yield
+    restore_app_main(previous_main)
 
 # Shared chat fixtures are registered at the repository root conftest.py
 # However, when running this subtree in isolation or with plugin autoloading

@@ -1369,6 +1369,33 @@ export default function JobsPage() {
                         const isBreaching = breachedJobIds.has(job.id);
                         const breach = breachByJobId.get(job.id);
 
+                        // SLA breach detection
+                        const matchingSla =
+                          slaPolicies.find((policy) => policy.enabled && policy.job_type === job.job_type)
+                          ?? slaPolicies.find((policy) => policy.enabled && !policy.job_type);
+                        const nowMs = Date.now();
+                        const queuedAtMs = parseTimestampMs(job.available_at ?? job.created_at);
+                        const startedAtMs = parseTimestampMs(job.started_at);
+                        const completedAtMs = parseTimestampMs(job.completed_at);
+                        const processingDurationSec = startedAtMs !== null
+                          ? ((completedAtMs ?? nowMs) - startedAtMs) / 1000
+                          : null;
+                        const waitDurationSec = queuedAtMs !== null
+                          ? (((startedAtMs ?? completedAtMs) ?? nowMs) - queuedAtMs) / 1000
+                          : null;
+                        const isSlaBreach = Boolean(
+                          matchingSla && (
+                            (
+                              processingDurationSec !== null
+                              && processingDurationSec > matchingSla.max_processing_time_seconds
+                            )
+                            || (
+                              waitDurationSec !== null
+                              && waitDurationSec > matchingSla.max_wait_time_seconds
+                            )
+                          )
+                        );
+
                         return (
                           <TableRow key={job.id} className={isBreaching ? 'bg-red-50 dark:bg-red-950/30' : ''}>
                             <TableCell className="font-medium">

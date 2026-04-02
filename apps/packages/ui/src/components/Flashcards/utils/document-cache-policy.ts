@@ -9,6 +9,8 @@ export interface DocumentQueryFilterContext {
   tags?: string[]
   sortBy?: DocumentQuerySortBy
   dueStatus?: "new" | "learning" | "due" | "all"
+  workspaceId?: string | null
+  includeWorkspaceItems?: boolean
 }
 
 const normalizeTags = (tags?: string[] | null, singleTag?: string | null): string[] => {
@@ -67,6 +69,10 @@ export function shouldRefetchDocumentQueryAfterRowSave(
   next: Flashcard,
   context: DocumentQueryFilterContext
 ): boolean {
+  if ((context.workspaceId != null || context.includeWorkspaceItems) && previous.deck_id !== next.deck_id) {
+    return true
+  }
+
   const previousMatches = cardMatchesDocumentFilters(previous, context)
   const nextMatches = cardMatchesDocumentFilters(next, context)
 

@@ -14,7 +14,7 @@ generate_key() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr -d '\n'
   else
-    python -c "import secrets; print(secrets.token_urlsafe(32))"
+    python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
   fi
 }
 
@@ -103,6 +103,19 @@ if [ "$AUTH_MODE" = "single_user" ]; then
   upsert_env "SINGLE_USER_API_KEY" "$current_key"
 fi
 
+# Auto-generate MCP secrets if missing or placeholder (min 32 chars each)
+for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT BYOK_ENCRYPTION_KEY; do
+  eval current_val="\${$mcp_var:-}"
+  case "$current_val" in
+    ""|CHANGE_ME*)
+      new_val="$(generate_key)"
+      eval export "$mcp_var=$new_val"
+      upsert_env "$mcp_var" "$new_val"
+      echo "[entrypoint] Generated $mcp_var."
+      ;;
+  esac
+done
+
 should_run_auth_init=0
 case "$*" in
   *uvicorn*|*tldw_Server_API.app.main:app*)
@@ -114,7 +127,12 @@ if [ "$AUTH_MODE" = "single_user" ] && [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [
   mkdir -p "$AUTH_MARKER_DIR"
   if [ ! -f "$AUTH_MARKER_FILE" ]; then
     echo "[entrypoint] Running first-use auth initialization..."
-    python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+    # Note: `if !` suppresses set -e for this command; the explicit exit 1
+    # below is load-bearing — do not remove it.
+    if ! python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive; then
+      echo "[entrypoint] ERROR: Auth initialization failed. Fix configuration and restart." >&2
+      exit 1
+    fi
     touch "$AUTH_MARKER_FILE"
     echo "[entrypoint] Auth initialization complete."
   fi

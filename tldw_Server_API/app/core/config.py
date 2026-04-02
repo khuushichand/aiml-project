@@ -2553,6 +2553,196 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
 
 
 _GOVERNANCE_ROLLOUT_MODES = {"off", "shadow", "enforce"}
+_RUN_FIRST_ROLLOUT_MODES = {"off", "gated"}
+
+
+def _split_run_first_provider_allowlist(raw: Optional[object]) -> list[str]:
+    if raw is None:
+        return []
+    items: list[str] = []
+    for chunk in str(raw).split(","):
+        value = chunk.strip()
+        if value:
+            items.append(value)
+    return items
+
+
+def _resolve_run_first_rollout_mode(
+    *,
+    raw_mode: Optional[str],
+    env_name: str,
+    config_section: str,
+    config_key: str,
+    default: str,
+) -> str:
+    safe_default = str(default or "off").strip().lower()
+    if safe_default not in _RUN_FIRST_ROLLOUT_MODES:
+        safe_default = "off"
+
+    if raw_mode is not None:
+        candidate = str(raw_mode).strip().lower()
+        return candidate if candidate in _RUN_FIRST_ROLLOUT_MODES else safe_default
+
+    env_mode = os.getenv(env_name)
+    if env_mode is not None:
+        candidate = str(env_mode).strip().lower()
+        return candidate if candidate in _RUN_FIRST_ROLLOUT_MODES else safe_default
+
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section(config_section):
+            candidate = cp.get(config_section, config_key, fallback="").strip().lower()
+            if candidate in _RUN_FIRST_ROLLOUT_MODES:
+                return candidate
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_warning(
+            f"_resolve_run_first_rollout_mode: unable to read "
+            f"[{config_section}] {config_key}; falling back to '{safe_default}': {exc}"
+        )
+
+    return safe_default
+
+
+def _resolve_run_first_provider_allowlist(
+    *,
+    raw_allowlist: Optional[str],
+    env_name: str,
+    config_section: str,
+    config_key: str,
+) -> list[str]:
+    if raw_allowlist is not None:
+        return _split_run_first_provider_allowlist(raw_allowlist)
+
+    env_allowlist = os.getenv(env_name)
+    if env_allowlist is not None:
+        return _split_run_first_provider_allowlist(env_allowlist)
+
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section(config_section):
+            return _split_run_first_provider_allowlist(
+                cp.get(config_section, config_key, fallback="")
+            )
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_warning(
+            f"_resolve_run_first_provider_allowlist: unable to read "
+            f"[{config_section}] {config_key}; falling back to empty allowlist: {exc}"
+        )
+
+    return []
+
+
+def _resolve_run_first_presentation_variant(
+    *,
+    raw_variant: Optional[str],
+    env_name: str,
+    config_section: str,
+    config_key: str,
+    default: str,
+) -> str:
+    safe_default = str(default or "").strip()
+
+    if raw_variant is not None:
+        candidate = str(raw_variant).strip()
+        return candidate or safe_default
+
+    env_variant = os.getenv(env_name)
+    if env_variant is not None:
+        candidate = str(env_variant).strip()
+        if candidate:
+            return candidate
+
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section(config_section):
+            candidate = cp.get(config_section, config_key, fallback="").strip()
+            if candidate:
+                return candidate
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_warning(
+            f"_resolve_run_first_presentation_variant: unable to read "
+            f"[{config_section}] {config_key}; falling back to '{safe_default}': {exc}"
+        )
+
+    return safe_default
+
+
+def resolve_chat_run_first_rollout_mode(
+    raw_mode: Optional[str] = None,
+    *,
+    default: str = "off",
+) -> str:
+    return _resolve_run_first_rollout_mode(
+        raw_mode=raw_mode,
+        env_name="CHAT_RUN_FIRST_ROLLOUT_MODE",
+        config_section="Chat-Module",
+        config_key="run_first_rollout_mode",
+        default=default,
+    )
+
+
+def resolve_chat_run_first_provider_allowlist(
+    raw_allowlist: Optional[str] = None,
+) -> list[str]:
+    return _resolve_run_first_provider_allowlist(
+        raw_allowlist=raw_allowlist,
+        env_name="CHAT_RUN_FIRST_PROVIDER_ALLOWLIST",
+        config_section="Chat-Module",
+        config_key="run_first_provider_allowlist",
+    )
+
+
+def resolve_chat_run_first_presentation_variant(
+    raw_variant: Optional[str] = None,
+    *,
+    default: str = "chat_phase2a_v1",
+) -> str:
+    return _resolve_run_first_presentation_variant(
+        raw_variant=raw_variant,
+        env_name="CHAT_RUN_FIRST_PRESENTATION_VARIANT",
+        config_section="Chat-Module",
+        config_key="run_first_presentation_variant",
+        default=default,
+    )
+
+
+def resolve_acp_run_first_rollout_mode(
+    raw_mode: Optional[str] = None,
+    *,
+    default: str = "off",
+) -> str:
+    return _resolve_run_first_rollout_mode(
+        raw_mode=raw_mode,
+        env_name="ACP_RUN_FIRST_ROLLOUT_MODE",
+        config_section="ACP",
+        config_key="run_first_rollout_mode",
+        default=default,
+    )
+
+
+def resolve_acp_run_first_provider_allowlist(
+    raw_allowlist: Optional[str] = None,
+) -> list[str]:
+    return _resolve_run_first_provider_allowlist(
+        raw_allowlist=raw_allowlist,
+        env_name="ACP_RUN_FIRST_PROVIDER_ALLOWLIST",
+        config_section="ACP",
+        config_key="run_first_provider_allowlist",
+    )
+
+
+def resolve_acp_run_first_presentation_variant(
+    raw_variant: Optional[str] = None,
+    *,
+    default: str = "acp_phase2a_v1",
+) -> str:
+    return _resolve_run_first_presentation_variant(
+        raw_variant=raw_variant,
+        env_name="ACP_RUN_FIRST_PRESENTATION_VARIANT",
+        config_section="ACP",
+        config_key="run_first_presentation_variant",
+        default=default,
+    )
 
 
 def resolve_governance_rollout_mode(
@@ -3042,6 +3232,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "mcp-catalogs",
             "tools",
             "jobs",
+            "scheduled-tasks",
             "personalization",
             "orgs",
             "org-invites",

@@ -21,7 +21,7 @@ _MAX_COMPANION_ACTIVITY_COUNT = 3
 
 
 def _redacted_user_id(user_id: Any) -> str:
-    digest = hashlib.sha1(str(user_id or "").encode("utf-8"), usedforsecurity=False).hexdigest()
+    digest = hashlib.sha256(str(user_id or "").encode("utf-8")).hexdigest()
     return digest[:12]
 
 
@@ -140,8 +140,7 @@ def _load_ranked_companion_candidates(
 ) -> dict[str, Any]:
     personalization_db = db
     if personalization_db is None:
-        db_path = DatabasePaths.get_personalization_db_path(user_id)
-        personalization_db = PersonalizationDB(str(db_path))
+        personalization_db = PersonalizationDB.for_user(user_id)
     profile = personalization_db.get_or_create_profile(user_id)
     if not bool(profile.get("enabled", 0)):
         return {

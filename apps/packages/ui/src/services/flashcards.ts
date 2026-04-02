@@ -13,6 +13,8 @@ const flashcardsClient = createResourceClient({
   basePath: "/api/v1/flashcards" as AllowedPath
 })
 
+export const FLASHCARD_GENERATION_TIMEOUT_MS = 120000
+
 export type DeckSchedulerSettings = {
   new_steps_minutes: number[]
   relearn_steps_minutes: number[]
@@ -125,6 +127,7 @@ export type Deck = {
   id: number
   name: string
   description?: string | null
+  workspace_id?: string | null
   deleted: boolean
   client_id: string
   version: number
@@ -171,6 +174,7 @@ export type Flashcard = {
 export type DeckUpdate = {
   name?: string | null
   description?: string | null
+  workspace_id?: string | null
   scheduler_type?: DeckSchedulerType | null
   scheduler_settings?: DeckSchedulerSettingsEnvelopeUpdate | null
   expected_version?: number | null
@@ -179,6 +183,7 @@ export type DeckUpdate = {
 export type DeckCreateInput = {
   name: string
   description?: string | null
+  workspace_id?: string | null
   scheduler_type?: DeckSchedulerType | null
   scheduler_settings?: DeckSchedulerSettingsEnvelope | null
 }
@@ -310,6 +315,12 @@ export type FlashcardsImportApkgRequest = {
   filename?: string | null
 }
 
+export type DeckListParams = {
+  workspace_id?: string | null
+  include_workspace_items?: boolean | null
+  signal?: AbortSignal
+}
+
 export type StructuredQaImportPreviewRequest = {
   content: string
 }
@@ -378,8 +389,11 @@ export type FlashcardAnalyticsSummary = {
 }
 
 // Decks
-export async function listDecks(options?: { signal?: AbortSignal }): Promise<Deck[]> {
-  return await decksClient.list<Deck[]>(undefined, {
+export async function listDecks(options?: DeckListParams): Promise<Deck[]> {
+  return await decksClient.list<Deck[]>({
+    workspace_id: options?.workspace_id,
+    include_workspace_items: options?.include_workspace_items ?? false
+  }, {
     abortSignal: options?.signal
   })
 }
@@ -409,6 +423,8 @@ export async function listFlashcards(params: {
   tag?: string | null
   due_status?: "new" | "learning" | "due" | "all" | null
   q?: string | null
+  workspace_id?: string | null
+  include_workspace_items?: boolean | null
   limit?: number
   offset?: number
   order_by?: "due_at" | "created_at" | null
@@ -418,6 +434,8 @@ export async function listFlashcards(params: {
     tag: params.tag,
     due_status: params.due_status,
     q: params.q,
+    workspace_id: params.workspace_id,
+    include_workspace_items: params.include_workspace_items ?? false,
     limit: params.limit,
     offset: params.offset,
     order_by: params.order_by
@@ -434,13 +452,15 @@ export async function createFlashcard(
 }
 
 export async function createFlashcardsBulk(
-  input: FlashcardCreate[]
+  input: FlashcardCreate[],
+  options?: { signal?: AbortSignal }
 ): Promise<FlashcardListResponse> {
   return await bgRequest<FlashcardListResponse, AllowedPath, "POST">({
     path: "/api/v1/flashcards/bulk",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: input
+    body: input,
+    abortSignal: options?.signal
   })
 }
 
@@ -517,10 +537,16 @@ export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<Fl
 }
 
 export async function getNextReviewCard(
-  deck_id?: number | null
+  deck_id?: number | null,
+  params?: {
+    workspace_id?: string | null
+    include_workspace_items?: boolean | null
+  }
 ): Promise<FlashcardNextReviewResponse> {
   const query = buildQuery({
-    deck_id
+    deck_id,
+    workspace_id: params?.workspace_id,
+    include_workspace_items: params?.include_workspace_items ?? false
   })
   return await bgRequest<FlashcardNextReviewResponse, AllowedPath, "GET">({
     path: `/api/v1/flashcards/review/next${query}` as AllowedPath,
@@ -535,7 +561,8 @@ export async function generateFlashcards(
     path: "/api/v1/flashcards/generate",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: input
+    body: input,
+    timeoutMs: FLASHCARD_GENERATION_TIMEOUT_MS
   })
 }
 
@@ -648,10 +675,14 @@ export async function importFlashcardsApkg(
 
 export async function getFlashcardsAnalyticsSummary(params?: {
   deck_id?: number | null
+  workspace_id?: string | null
+  include_workspace_items?: boolean | null
   signal?: AbortSignal
 }): Promise<FlashcardAnalyticsSummary> {
   const query = buildQuery({
-    deck_id: params?.deck_id
+    deck_id: params?.deck_id,
+    workspace_id: params?.workspace_id,
+    include_workspace_items: params?.include_workspace_items ?? false
   })
   const path = `/api/v1/flashcards/analytics/summary${query}` as AllowedPath
   return await bgRequest<FlashcardAnalyticsSummary, AllowedPath, "GET">({

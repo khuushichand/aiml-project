@@ -1,5 +1,6 @@
 """Unit tests for Audio_Transcription_Qwen3ASR module."""
 
+import sys
 import types
 
 import pytest
@@ -375,14 +376,15 @@ def test_validate_model_path_missing_with_download(tmp_path):
 
 
 @pytest.mark.unit
-def test_get_torch_dtype():
+def test_get_torch_dtype(monkeypatch):
     """Test torch dtype mapping."""
     qwen3 = _import_module()
 
-    try:
-        import torch
-    except ImportError:
-        pytest.skip("torch not installed")
+    torch = types.ModuleType("torch")
+    torch.float32 = object()
+    torch.float16 = object()
+    torch.bfloat16 = object()
+    monkeypatch.setitem(sys.modules, "torch", torch)
 
     assert qwen3._get_torch_dtype("float32") == torch.float32
     assert qwen3._get_torch_dtype("fp32") == torch.float32

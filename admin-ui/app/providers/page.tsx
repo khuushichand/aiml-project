@@ -21,6 +21,7 @@ import { getDeprecatedModelNotice } from '@/lib/deprecated-models';
 import { buildProviderTokenTrendMap, buildSparklinePoints } from '@/lib/provider-token-trends';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { LLMProvider, LLMProviderOverride, User as UserType, Organization } from '@/types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 import { logger } from '@/lib/logger';
 
 interface ByokKey {

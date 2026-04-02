@@ -257,7 +257,7 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                 );
                 return (
                   <Fragment key={policy.key}>
-                    <TableRow key={policy.key}>
+                    <TableRow>
                       <TableCell className="font-mono text-xs">{policy.key}</TableCell>
                       <TableCell>{policy.description || '—'}</TableCell>
                       <TableCell className="w-40">
@@ -334,7 +334,7 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                                 id={`retention-preview-ack-${policy.key}`}
                                 checked={Boolean(policyPreviewAcknowledged[policy.key])}
                                 onCheckedChange={(checked) =>
-                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked }))
+                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked === true }))
                                 }
                               />
                               <span>I understand this change can permanently delete historical data.</span>

@@ -15,6 +15,8 @@ import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 import Link from 'next/link';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { formatDate } from '@/lib/formatters';
 import type { Subscription, SubscriptionStatus } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -132,6 +134,7 @@ function OrgDisplayName({ sub }: { sub: Subscription }) {
 function SubscriptionsPageContent() {
   const { error: showError } = useToast();
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [orgNames, setOrgNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -146,6 +149,17 @@ function SubscriptionsPageContent() {
       }
       const data = await api.getSubscriptions(params);
       setSubscriptions(data);
+      // Batch-fetch org names for display
+      try {
+        const orgs = await api.getOrganizations();
+        const names: Record<string, string> = {};
+        (Array.isArray(orgs) ? orgs : []).forEach((o: { id: number | string; name: string }) => {
+          names[String(o.id)] = o.name;
+        });
+        setOrgNames(names);
+      } catch (err) {
+        console.error('Failed to fetch organization names for subscriptions:', err);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load subscriptions';
       setLoadError(message);
@@ -208,6 +222,18 @@ function SubscriptionsPageContent() {
               <AlertDescription>{loadError}</AlertDescription>
             </Alert>
           )}
+
+          {!loading && (() => {
+            const atRisk = subscriptions.filter(s => s.status === 'past_due' || s.status === 'incomplete');
+            if (atRisk.length === 0) return null;
+            return (
+              <Alert className="mb-4 border-red-200 bg-red-50">
+                <AlertDescription className="text-red-900">
+                  <strong>{atRisk.length} subscription{atRisk.length !== 1 ? 's' : ''} need attention</strong> — {atRisk.filter(s => s.status === 'past_due').length} past due, {atRisk.filter(s => s.status === 'incomplete').length} incomplete.
+                </AlertDescription>
+              </Alert>
+            );
+          })()}
 
           {loading ? (
             <TableSkeleton rows={5} columns={6} />

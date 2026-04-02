@@ -22,6 +22,7 @@ vi.mock('@/lib/api-client', () => ({
     getLLMProviders: vi.fn(),
     getLlmUsageSummary: vi.fn(),
     getMetricsText: vi.fn(),
+    getDependenciesUptimeHistory: vi.fn(),
     testLLMProvider: vi.fn(),
     getSystemDependencies: vi.fn(),
     getDependencyUptime: vi.fn(),
@@ -32,6 +33,7 @@ type ApiMock = {
   getLLMProviders: ReturnType<typeof vi.fn>;
   getLlmUsageSummary: ReturnType<typeof vi.fn>;
   getMetricsText: ReturnType<typeof vi.fn>;
+  getDependenciesUptimeHistory: ReturnType<typeof vi.fn>;
   testLLMProvider: ReturnType<typeof vi.fn>;
   getSystemDependencies: ReturnType<typeof vi.fn>;
   getDependencyUptime: ReturnType<typeof vi.fn>;
@@ -86,6 +88,7 @@ beforeEach(() => {
   apiMock.getMetricsText.mockResolvedValue(
     'llm_provider_requests_total{provider="openai",status="ok"} 80'
   );
+  apiMock.getDependenciesUptimeHistory.mockResolvedValue({ services: {} });
 
   apiMock.testLLMProvider.mockImplementation(async ({ provider }: { provider: string }) => {
     if (provider === 'anthropic') {
@@ -421,5 +424,14 @@ describe('DependenciesPage', () => {
     await waitFor(() => {
       expect(apiMock.getDependencyUptime).toHaveBeenCalled();
     });
+  });
+
+  it('surfaces uptime history failures instead of silently falling back to no data', async () => {
+    apiMock.getDependenciesUptimeHistory.mockRejectedValue(new Error('uptime endpoint down'));
+
+    render(<DependenciesPage />);
+
+    expect(await screen.findByText(/Some dependency telemetry is unavailable:/i)).toBeInTheDocument();
+    expect(screen.getByText('Uptime history unavailable: uptime endpoint down')).toBeInTheDocument();
   });
 });

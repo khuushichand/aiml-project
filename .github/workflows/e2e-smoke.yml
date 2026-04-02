@@ -27,6 +27,8 @@ jobs:
       E2E_INPROCESS: "1"
       AUTH_MODE: single_user
       TEST_MODE: "1"
+      # Critical smoke should not require a live Redis service, especially on macOS runners.
+      EMBEDDINGS_REDIS_ALLOW_STUB: "1"
       SINGLE_USER_API_KEY: test-api-key-for-e2e-testing-12345
       SINGLE_USER_TEST_API_KEY: test-api-key-for-e2e-testing-12345
       # Avoid matplotlib cache permission issues during imports

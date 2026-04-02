@@ -33,6 +33,7 @@ vi.mock("@/services/quizzes", () => ({
     id: 1,
     name: "Generated",
     description: null,
+    workspace_id: null,
     workspace_tag: null,
     media_id: null,
     total_questions: 0,
@@ -107,5 +108,44 @@ describe("useQuizQueries performance configuration", () => {
     await create.onMutate({ name: "Quick Quiz" })
     expect(queryClientMock.cancelQueries).toHaveBeenCalledWith({ queryKey: ["quizzes:list"] })
     expect(queryClientMock.getQueriesData).toHaveBeenCalledWith({ queryKey: ["quizzes:list"] })
+  })
+
+  it("preserves list totals during optimistic quiz scope moves", async () => {
+    const existingQuiz = {
+      id: 7,
+      name: "Neuron Quiz",
+      description: null,
+      workspace_id: null,
+      workspace_tag: null,
+      media_id: null,
+      total_questions: 5,
+      time_limit_seconds: null,
+      passing_score: null,
+      deleted: false,
+      client_id: "test",
+      version: 2
+    }
+    queryClientMock.getQueriesData.mockReturnValueOnce([
+      [["quizzes:list", { limit: 10, offset: 0 }], { items: [existingQuiz], count: 37 }]
+    ])
+    queryClientMock.getQueryData.mockReturnValueOnce(existingQuiz)
+
+    const update = renderHook(() => useUpdateQuizMutation()).result.current as any
+
+    await update.onMutate({
+      quizId: 7,
+      update: {
+        workspace_id: "workspace-1",
+        workspace_tag: "workspace:workspace-1"
+      }
+    })
+
+    expect(queryClientMock.setQueryData).toHaveBeenCalledWith(
+      ["quizzes:list", { limit: 10, offset: 0 }],
+      expect.objectContaining({
+        items: [],
+        count: 36
+      })
+    )
   })
 })

@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { ManageTab } from "../ManageTab"
+import { ManageTab, buildQuizManageQueryParams } from "../ManageTab"
 import {
   useCreateQuizMutation,
   useCreateQuestionMutation,
@@ -81,6 +82,7 @@ describe("ManageTab bulk and duplicate actions", () => {
   const createQuizMutateAsync = vi.fn(async () => ({ id: 77 }))
   const createQuestionMutateAsync = vi.fn(async () => undefined)
   const deleteQuizMutateAsync = vi.fn(async () => undefined)
+  const updateQuizMutateAsync = vi.fn(async () => undefined)
   const importQuizzesJsonMock = vi.fn(async () => ({
     imported_quizzes: 1,
     failed_quizzes: 0,
@@ -174,7 +176,10 @@ describe("ManageTab bulk and duplicate actions", () => {
     vi.mocked(useDeleteQuizMutation).mockReturnValue({
       mutateAsync: deleteQuizMutateAsync
     } as any)
-    vi.mocked(useUpdateQuizMutation).mockReturnValue({ mutateAsync: vi.fn(async () => undefined), isPending: false } as any)
+    vi.mocked(useUpdateQuizMutation).mockReturnValue({
+      mutateAsync: updateQuizMutateAsync,
+      isPending: false
+    } as any)
     vi.mocked(useUpdateQuestionMutation).mockReturnValue({ mutateAsync: vi.fn(async () => undefined), isPending: false } as any)
     vi.mocked(useDeleteQuestionMutation).mockReturnValue({ mutateAsync: vi.fn(async () => undefined) } as any)
     vi.mocked(importQuizzesJson).mockImplementation(importQuizzesJsonMock)
@@ -713,4 +718,210 @@ describe("ManageTab bulk and duplicate actions", () => {
     const sourceLink = await screen.findByRole("link", { name: "Cell Biology Source" })
     expect(sourceLink).toHaveAttribute("href", "/media?id=42")
   }, 20000)
+
+  it("hides workspace quizzes by default and reveals them when the toggle is enabled", async () => {
+    vi.mocked(useQuizzesQuery).mockImplementation((params: any) => ({
+      data: {
+        items: params?.workspace_id === "workspace-1"
+          ? [
+              {
+                id: 3,
+                name: "Workspace Quiz",
+                description: "Scoped",
+                workspace_tag: "workspace:workspace-1",
+                workspace_id: "workspace-1",
+                total_questions: 4,
+                passing_score: 85,
+                media_id: null,
+                time_limit_seconds: 450,
+                deleted: false,
+                client_id: "test",
+                version: 1
+              }
+            ]
+          : params?.include_workspace_items
+          ? [
+              {
+                id: 1,
+                name: "Quiz A",
+                description: "Alpha",
+                workspace_tag: null,
+                workspace_id: null,
+                total_questions: 2,
+                passing_score: 70,
+                media_id: null,
+                time_limit_seconds: 600,
+                deleted: false,
+                client_id: "test",
+                version: 1
+              },
+              {
+                id: 3,
+                name: "Workspace Quiz",
+                description: "Scoped",
+                workspace_tag: "workspace:ws-1",
+                workspace_id: "ws-1",
+                total_questions: 4,
+                passing_score: 85,
+                media_id: null,
+                time_limit_seconds: 450,
+                deleted: false,
+                client_id: "test",
+                version: 1
+              }
+            ]
+          : [
+              {
+                id: 1,
+                name: "Quiz A",
+                description: "Alpha",
+                workspace_tag: null,
+                workspace_id: null,
+                total_questions: 2,
+                passing_score: 70,
+                media_id: null,
+                time_limit_seconds: 600,
+                deleted: false,
+                client_id: "test",
+                version: 1
+              }
+            ],
+        count: 2
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+      _params: params
+    } as any))
+
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    expect(screen.getByText("Quiz A")).toBeInTheDocument()
+    expect(screen.queryByText("Workspace Quiz")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Show workspace quizzes/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Workspace Quiz")).toBeInTheDocument()
+    })
+    expect(vi.mocked(useQuizzesQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        include_workspace_items: true
+      })
+    )
+  })
+
+  it("filters quizzes to a selected workspace without widening the general list", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    await user.click(screen.getByRole("checkbox", { name: /Show workspace quizzes/i }))
+    expect(screen.getByTestId("quiz-manage-workspace-filter")).toBeInTheDocument()
+    expect(
+      buildQuizManageQueryParams({
+        searchQuery: "",
+        page: 1,
+        pageSize: 10,
+        showWorkspaceQuizzes: true,
+        selectedWorkspaceId: "workspace-1"
+      })
+    ).toEqual(
+      expect.objectContaining({
+        workspace_id: "workspace-1",
+        include_workspace_items: false
+      })
+    )
+  })
+
+  it("patches quiz workspace scope in place when moving scope", async () => {
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("quiz-edit-1"))
+
+    const workspaceInput = await screen.findByLabelText(/Workspace ID/i)
+    fireEvent.change(workspaceInput, { target: { value: "workspace-1" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(updateQuizMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          quizId: 1,
+          update: expect.objectContaining({
+            workspace_id: "workspace-1",
+            workspace_tag: "workspace:workspace-1"
+          })
+        })
+      )
+    })
+  })
+
+  it("clears quiz workspace scope in place when moving back to general", async () => {
+    vi.mocked(useQuizzesQuery).mockReturnValueOnce({
+      data: {
+        items: [
+          {
+            id: 1,
+            name: "Quiz A",
+            description: "Alpha",
+            workspace_id: "workspace-1",
+            workspace_tag: "workspace:workspace-1",
+            total_questions: 2,
+            passing_score: 70,
+            media_id: null,
+            time_limit_seconds: 600,
+            deleted: false,
+            client_id: "test",
+            version: 3
+          }
+        ],
+        count: 1
+      },
+      isLoading: false,
+      refetch: vi.fn()
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("quiz-edit-1"))
+
+    const workspaceInput = await screen.findByLabelText(/Workspace ID/i)
+    fireEvent.change(workspaceInput, { target: { value: "" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(updateQuizMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          quizId: 1,
+          update: expect.objectContaining({
+            workspace_id: null,
+            workspace_tag: null,
+            expected_version: 3
+          })
+        })
+      )
+    })
+  })
 })

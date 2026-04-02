@@ -73,6 +73,7 @@ interface ReviewTabProps {
   reviewOverrideCard?: Flashcard | null
   onClearOverride?: () => void
   isActive: boolean
+  forceShowWorkspaceItems?: boolean
 }
 
 interface ReviewFailureState {
@@ -96,7 +97,8 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   onReviewDeckChange,
   reviewOverrideCard,
   onClearOverride,
-  isActive
+  isActive,
+  forceShowWorkspaceItems = false
 }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
@@ -155,23 +157,34 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const answerStartTimeRef = React.useRef<number | null>(null)
 
   // Queries and mutations
+  const directPathVisibilityOptions = React.useMemo(
+    () => (forceShowWorkspaceItems && reviewDeckId != null ? { includeWorkspaceItems: true } : undefined),
+    [forceShowWorkspaceItems, reviewDeckId]
+  )
   const decksQuery = useDecksQuery()
+  const directPathDecksQuery = useDecksQuery(
+    forceShowWorkspaceItems && reviewDeckId != null
+      ? { includeWorkspaceItems: true }
+      : { enabled: false }
+  )
   const reviewQuery = useReviewQuery(reviewDeckId, {
-    enabled: reviewMode === "due"
+    enabled: reviewMode === "due",
+    ...(directPathVisibilityOptions ?? {})
   })
   const cramTagFilter = cramTag.trim() || undefined
   const cramQueueQuery = useCramQueueQuery(reviewDeckId, cramTagFilter, {
-    enabled: reviewMode === "cram"
+    enabled: reviewMode === "cram",
+    ...(directPathVisibilityOptions ?? {})
   })
   const reviewMutation = useReviewFlashcardMutation()
   const updateMutation = useUpdateFlashcardMutation()
   const resetSchedulingMutation = useResetFlashcardSchedulingMutation()
   const deleteMutation = useDeleteFlashcardMutation()
-  const dueCountsQuery = useDueCountsQuery(reviewDeckId)
+  const dueCountsQuery = useDueCountsQuery(reviewDeckId, directPathVisibilityOptions)
   const deckDueCountsQuery = useDeckDueCountsQuery()
-  const analyticsSummaryQuery = useReviewAnalyticsSummaryQuery(reviewDeckId)
-  const hasCardsQuery = useHasCardsQuery()
-  const nextDueQuery = useNextDueQuery(reviewDeckId)
+  const analyticsSummaryQuery = useReviewAnalyticsSummaryQuery(reviewDeckId, directPathVisibilityOptions)
+  const hasCardsQuery = useHasCardsQuery(directPathVisibilityOptions)
+  const nextDueQuery = useNextDueQuery(reviewDeckId, directPathVisibilityOptions)
   const nextDueInfo = nextDueQuery.data
   const cramQueue = cramQueueQuery.data || []
   const cramQueueCard =
@@ -254,11 +267,21 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             defaultValue: "Show hints"
           })
 
+  const availableDecks = React.useMemo(() => {
+    const items = [...(decksQuery.data || [])]
+    const directPreviewDeck =
+      directPathDecksQuery.data?.find((deck) => deck.id === reviewDeckId) ?? null
+    if (directPreviewDeck && !items.some((deck) => deck.id === directPreviewDeck.id)) {
+      items.unshift(directPreviewDeck)
+    }
+    return items
+  }, [decksQuery.data, directPathDecksQuery.data, reviewDeckId])
+
   // Get deck name for progress display
   const currentDeckName = React.useMemo(() => {
-    if (!reviewDeckId || !decksQuery.data) return undefined
-    return decksQuery.data.find((d) => d.id === reviewDeckId)?.name
-  }, [reviewDeckId, decksQuery.data])
+    if (!reviewDeckId) return undefined
+    return availableDecks.find((d) => d.id === reviewDeckId)?.name ?? `Deck ${reviewDeckId}`
+  }, [availableDecks, reviewDeckId])
 
   const activeSchedulerLabel = React.useMemo(() => {
     if (!activeCard?.scheduler_type) return null
@@ -794,7 +817,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             defaultValue: "Select deck (optional)"
           })}
           allowClear
-          loading={decksQuery.isLoading}
+          loading={decksQuery.isLoading || directPathDecksQuery.isLoading}
           value={reviewDeckId ?? undefined}
           className="min-w-64 max-w-full flex-1"
           onChange={(v) => {
@@ -804,7 +827,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             }
           }}
           data-testid="flashcards-review-deck-select"
-          options={(decksQuery.data || []).map((d) => ({
+          options={availableDecks.map((d) => ({
             label:
               ((deckDueCountsQuery.data?.[d.id]?.due ?? 0) > 0)
                 ? t("option:flashcards.deckWithDueCount", {

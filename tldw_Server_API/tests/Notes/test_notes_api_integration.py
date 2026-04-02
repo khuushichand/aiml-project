@@ -397,7 +397,10 @@ def test_get_note(client: TestClient):
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["id"] == note_id_val
-    mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
+    mock_chacha_db_instance.get_note_by_id.assert_called_once_with(
+        note_id=note_id_val,
+        include_studio_summary=True,
+    )
 
 
 def test_get_note_not_found(client: TestClient):

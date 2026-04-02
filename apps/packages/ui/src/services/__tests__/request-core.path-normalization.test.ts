@@ -50,6 +50,15 @@ describe("request-core media path normalization", () => {
     expect(deriveRequestTimeout(cfg, "/api/v1/media/?page=1")).toBe(25000)
     expect(deriveRequestTimeout(cfg, "/api/v1/media?page=1")).toBe(25000)
   })
+
+  it("applies a long-running timeout floor to slides routes", () => {
+    expect(
+      deriveRequestTimeout({ requestTimeoutMs: 10000 }, "/api/v1/slides/generate/from-media")
+    ).toBe(120000)
+    expect(
+      deriveRequestTimeout({ requestTimeoutMs: 180000 }, "/api/v1/slides/generate/from-media")
+    ).toBe(180000)
+  })
 })
 
 describe("request-core absolute URL policy", () => {
