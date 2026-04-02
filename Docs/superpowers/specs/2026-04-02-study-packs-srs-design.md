@@ -165,15 +165,19 @@ Prefilled entry points:
 
 - Notes: launch the study-pack flow from a note or selected excerpt
 - Media: launch the study-pack flow from a media detail or source context
-- Chat: launch the study-pack flow from a conversation or message action when stable source context exists
+- Chat: launch the study-pack flow from one or more selected messages, not from an entire conversation
 
 Default deck policy:
 
 - default to `create new deck`
-- offer `append to existing deck` as an explicit opt-in
 - default deck title should derive from the study-pack title with collision-safe suffixing
 
-This keeps V1 predictable, avoids accidental mixing of unrelated material, and still leaves room for advanced deck reuse.
+Implementation-plan scope rule:
+
+- the first implementation plan should support `create new deck` only
+- `append to existing deck` remains a later follow-up once pack membership and lifecycle behavior have shipped and stabilized
+
+This keeps V1 predictable, avoids accidental mixing of unrelated material, and narrows the first implementation plan to the most reliable path.
 
 ### Core Components
 
@@ -182,7 +186,6 @@ Recommended units:
 - `StudySourceResolver`
 - `StudyPackGenerationService`
 - `FlashcardProvenanceStore`
-- `StudyPackCalendarService`
 
 Responsibilities:
 
@@ -199,11 +202,6 @@ Responsibilities:
 - `FlashcardProvenanceStore`
   - owns flashcard citation read/write behavior
   - resolves deep-dive targets from locators and workspace routes
-
-- `StudyPackCalendarService`
-  - computes internal study-session suggestions from due workload
-  - emits `ICS` outputs in V1
-  - defines provider-neutral interfaces for later adapters without implementing free/busy scanning yet
 
 ## Data Model
 
@@ -242,6 +240,7 @@ Recommended new persistence units:
   - `source_bundle_json`
   - `generation_options_json`
   - `status`
+  - `superseded_by_pack_id`
   - `created_at`
   - `last_modified`
   - `deleted`
@@ -275,6 +274,17 @@ Recommended new persistence units:
   - `client_id`
   - `version`
 
+Recommended `study_packs.status` values:
+
+- `active`
+- `superseded`
+
+Important boundary:
+
+- Jobs owns in-flight generation state such as queued, running, failed, or cancelled
+- `study_packs.status` owns only the persisted pack lifecycle after a pack is successfully created
+- `superseded_by_pack_id` links an older pack to the newer replacement pack created during regeneration
+
 ### Why A Membership Table Is Required
 
 Explicit `study_pack_cards` membership is required because:
@@ -293,21 +303,22 @@ Delete behavior:
 
 - deleting a study pack should soft-delete the `study_pack` row and its `study_pack_cards` membership rows
 - deleting a study pack should not automatically delete underlying flashcards, review history, or citations
-- this avoids accidental data loss when cards were appended into an existing deck or already reviewed and edited
+- this avoids accidental data loss when cards were already reviewed and edited
 
 Regenerate behavior:
 
 - regenerating a study pack should create a new pack record and a new generated card set
 - the prior pack should be marked superseded, not mutated in place
+- the prior pack should set `status = superseded` and `superseded_by_pack_id = study_packs.id` of the replacement pack
 - prior flashcards should remain intact unless a later explicit cleanup action is introduced
 
-Append behavior:
+Future append behavior:
 
-- appending into an existing deck should still create a distinct `study_pack`
+- if append support is added later, appending into an existing deck should still create a distinct `study_pack`
 - `study_pack_cards` should contain only the cards created by that append run
 - pack membership must remain stable even if the destination deck contains cards from other packs or manual edits
 
-This keeps deletion, regeneration, and deck reuse deterministic without conflating pack lifecycle with card lifecycle.
+This keeps deletion and regeneration deterministic in V1 while leaving a clear rule set for later deck reuse.
 
 ### Backward Compatibility
 
@@ -341,13 +352,15 @@ Recommended initial V1 source classes:
 
 - notes from the Notes system, including selected excerpts when available
 - ingested media records with chunk, transcript, or timestamp locators
-- chat conversations or individual chat messages with stable `conversation_id` and `message_id`
+- selected chat messages with stable `conversation_id` and `message_id`
+
+The V1 source allow-list is exactly those three source classes.
 
 Selection surfaces for V1 should map directly to those entities:
 
 - Notes surface selects note or excerpt inputs
 - Media surface selects ingested media inputs
-- Chat surface selects conversation or message inputs
+- Chat surface selects one or more messages from a conversation
 
 No generic catch-all workspace artifact adapter should ship in V1.
 
@@ -380,6 +393,12 @@ Recommended API shape:
 - persist the final `study_pack` only after validation succeeds
 - expose failure state and repair diagnostics without partial visible data
 
+Failure cleanup rule:
+
+- do not create the destination deck until validated card output is ready to persist
+- if a failure occurs before persistence completes, no visible deck should be created
+- if persistence fails after deck creation but before cards are committed, the job should roll back or soft-delete the empty deck before surfacing failure
+
 Instead, add a new strict study-pack generation flow:
 
 1. resolve selected sources into a canonical `source_bundle`
@@ -407,17 +426,23 @@ Each generated card must satisfy:
 
 ### Deck Policy
 
-V1 should support both:
-
-- `create new deck`
-- `append to existing deck`
+The first implementation plan should support `create new deck` only.
 
 Because deck names are currently globally unique, the service must own a deterministic naming policy for auto-created decks. Suggested behavior:
 
 - use a requested title when unique
 - otherwise suffix with a collision-safe variant
 
+Default scheduler behavior for newly created decks should inherit the existing deck-creation defaults already used by the flashcards system.
+
+Unless the user explicitly overrides scheduler settings during study-pack generation:
+
+- use the repository's current default deck scheduler type
+- use the repository's current default scheduler settings envelope
+
 Do not rely on workspace-local uniqueness because the underlying schema does not provide it today.
+
+`Append to existing deck` remains an explicitly deferred follow-up after the pack membership model has been exercised with the new-deck path.
 
 ## Review And Remediation
 
@@ -470,18 +495,20 @@ Deep dive should degrade gracefully if the underlying source moved or was delete
 
 ## Calendar And Scheduling
 
-### V1 Scope
+### Phase 2 Scope
 
-Provider-neutral calendar support in V1 means:
+Calendar support is not part of the first implementation plan.
+
+When calendar work begins in Phase 2, provider-neutral calendar support should mean:
 
 - internal study-session suggestions inside `tldw`
 - `ICS` export or feed
 
 It does not mean provider-synced free/busy placement.
 
-### V1 Non-Goal
+### Phase 2 Non-Goal
 
-Do not promise automatic free-block scanning across external calendars in V1.
+Do not promise automatic free-block scanning across external calendars in Phase 2.
 
 That requires provider-specific read/write integrations and availability APIs. It cannot be satisfied by `ICS` alone.
 
@@ -495,7 +522,7 @@ Instead, record the later expansion point here so Phase 3 can add interfaces suc
 - `CalendarScheduleAdapter.delete_session(...)`
 - `CalendarAvailabilityAdapter.find_candidate_slots(...)`
 
-Only internal study-session suggestions and `ICS` export need implementation in V1. Availability scanning and provider adapters remain deferred until a real provider integration milestone exists.
+Only internal study-session suggestions and `ICS` export need implementation in Phase 2. Availability scanning and provider adapters remain deferred until a real provider integration milestone exists.
 
 ### Provider Strategy
 
@@ -543,9 +570,8 @@ Google can be the first full adapter because the repo already has OAuth and conn
 - source resolution for each supported source class
 - citation validation and repair behavior
 - deep-dive locator resolution order
-- pack membership semantics when appending to existing decks
 - deck auto-naming and collision handling
-- `ICS` session rendering
+- empty-deck cleanup on failed generation jobs
 
 ### Integration Tests
 
@@ -553,7 +579,6 @@ Google can be the first full adapter because the repo already has OAuth and conn
 - verify persisted flashcards, pack membership, and citation rows
 - review a card and request remediation actions
 - deep-dive fallback when an exact locator is unavailable
-- append a second pack into an existing deck without corrupting membership
 
 ### Regression Tests
 
@@ -570,7 +595,7 @@ Google can be the first full adapter because the repo already has OAuth and conn
 - citation-grade flashcard generation
 - flashcard remediation backed by stored citations
 
-The first implementation plan should cover Phase 1 only.
+The first implementation plan should cover Phase 1 only, with `create new deck` as the only supported deck path.
 
 ### Phase 2
 
