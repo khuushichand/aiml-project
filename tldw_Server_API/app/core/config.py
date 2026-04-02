@@ -2697,6 +2697,11 @@ def resolve_chat_run_first_rollout_mode(
     *,
     default: str = "off",
 ) -> str:
+    """Resolve the chat run-first rollout mode from args, env, or config.
+
+    Accepts the bounded rollout values supported by the shared resolver and
+    falls back to ``default`` when the configured value is missing or invalid.
+    """
     return _resolve_run_first_rollout_mode(
         raw_mode=raw_mode,
         env_name="CHAT_RUN_FIRST_ROLLOUT_MODE",
@@ -2709,6 +2714,11 @@ def resolve_chat_run_first_rollout_mode(
 def resolve_chat_run_first_provider_allowlist(
     raw_allowlist: Optional[str] = None,
 ) -> list[str]:
+    """Resolve the chat run-first provider allowlist as normalized CSV values.
+
+    Precedence is explicit arg, then environment variable, then config file.
+    Empty or unreadable values resolve to an empty allowlist.
+    """
     return _resolve_run_first_provider_allowlist(
         raw_allowlist=raw_allowlist,
         env_name="CHAT_RUN_FIRST_PROVIDER_ALLOWLIST",
@@ -2722,6 +2732,11 @@ def resolve_chat_run_first_presentation_variant(
     *,
     default: str = "chat_phase2b_v1",
 ) -> str:
+    """Resolve the chat run-first presentation variant.
+
+    Uses explicit arg, env, and config precedence and falls back to the
+    phase-2b default when the configured variant is blank or unreadable.
+    """
     return _resolve_run_first_presentation_variant(
         raw_variant=raw_variant,
         env_name="CHAT_RUN_FIRST_PRESENTATION_VARIANT",
@@ -2736,6 +2751,11 @@ def resolve_acp_run_first_rollout_mode(
     *,
     default: str = "off",
 ) -> str:
+    """Resolve the ACP run-first rollout mode from args, env, or config.
+
+    Accepts the bounded rollout values supported by the shared resolver and
+    falls back to ``default`` when the configured value is missing or invalid.
+    """
     return _resolve_run_first_rollout_mode(
         raw_mode=raw_mode,
         env_name="ACP_RUN_FIRST_ROLLOUT_MODE",
@@ -2748,6 +2768,11 @@ def resolve_acp_run_first_rollout_mode(
 def resolve_acp_run_first_provider_allowlist(
     raw_allowlist: Optional[str] = None,
 ) -> list[str]:
+    """Resolve the ACP run-first provider allowlist as normalized CSV values.
+
+    Precedence is explicit arg, then environment variable, then config file.
+    Empty or unreadable values resolve to an empty allowlist.
+    """
     return _resolve_run_first_provider_allowlist(
         raw_allowlist=raw_allowlist,
         env_name="ACP_RUN_FIRST_PROVIDER_ALLOWLIST",
@@ -2761,6 +2786,11 @@ def resolve_acp_run_first_presentation_variant(
     *,
     default: str = "acp_phase2b_v1",
 ) -> str:
+    """Resolve the ACP run-first presentation variant.
+
+    Uses explicit arg, env, and config precedence and falls back to the
+    phase-2b default when the configured variant is blank or unreadable.
+    """
     return _resolve_run_first_presentation_variant(
         raw_variant=raw_variant,
         env_name="ACP_RUN_FIRST_PRESENTATION_VARIANT",

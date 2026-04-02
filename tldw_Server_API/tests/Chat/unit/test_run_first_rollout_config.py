@@ -121,3 +121,14 @@ def test_resolve_run_first_cohort_label_maps_gated_allowlist_miss_to_out_of_coho
         eligible=False,
         ineligible_reason="provider_not_in_rollout_allowlist",
     ) == "out_of_cohort"
+
+
+def test_run_first_resolvers_have_docstrings() -> None:
+    from tldw_Server_API.app.core import config
+
+    assert config.resolve_chat_run_first_rollout_mode.__doc__
+    assert config.resolve_chat_run_first_provider_allowlist.__doc__
+    assert config.resolve_chat_run_first_presentation_variant.__doc__
+    assert config.resolve_acp_run_first_rollout_mode.__doc__
+    assert config.resolve_acp_run_first_provider_allowlist.__doc__
+    assert config.resolve_acp_run_first_presentation_variant.__doc__

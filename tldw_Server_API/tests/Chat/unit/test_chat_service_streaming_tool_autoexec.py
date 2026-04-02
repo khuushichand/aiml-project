@@ -630,3 +630,27 @@ def test_emit_chat_run_first_rollout_metrics_logs_failures(monkeypatch: pytest.M
     assert context is not None
     assert context["cohort"] == "default_on"
     warning.assert_called_once()
+
+
+@pytest.mark.unit
+def test_emit_chat_run_first_rollout_metrics_propagates_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = SimpleNamespace(track_run_first_rollout=Mock(side_effect=AssertionError("unexpected")))
+    warning = Mock()
+    monkeypatch.setattr(chat_service, "logger", SimpleNamespace(warning=warning))
+
+    with pytest.raises(AssertionError, match="unexpected"):
+        chat_service._emit_chat_run_first_rollout_metrics(
+            metrics,
+            cleaned_args={
+                "_chat_run_first_presentation_variant": "chat_phase2b_v1",
+                "_chat_run_first_cohort": "default_on",
+                "_chat_run_first_eligible": True,
+            },
+            provider="openai",
+            model="gpt-4o-mini",
+            streaming=False,
+        )
+
+    warning.assert_not_called()

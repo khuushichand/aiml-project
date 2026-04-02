@@ -131,6 +131,13 @@ _CHAT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     asyncio.CancelledError,
 )
 
+_CHAT_RUN_FIRST_METRIC_EXCEPTIONS: tuple[type[Exception], ...] = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 _config = load_comprehensive_config()
 _chat_config: dict[str, str] = {}
 if _config and _config.has_section("Chat-Module"):
@@ -818,7 +825,7 @@ def _emit_chat_run_first_rollout_metrics(
 
     try:
         metrics.track_run_first_rollout(**context)
-    except Exception as exc:  # noqa: BLE001
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
         logger.warning("Chat run-first rollout metric emission failed: {}", exc)
     return context
 
@@ -846,7 +853,7 @@ def _emit_chat_run_first_tool_path_metrics(
     first_tool = tool_names[0]
     try:
         metrics.track_run_first_first_tool(**metric_context, first_tool=first_tool)
-    except Exception as exc:  # noqa: BLE001
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
         logger.warning("Chat run-first first-tool metric emission failed: {}", exc)
 
     if first_tool != "run":
@@ -858,7 +865,7 @@ def _emit_chat_run_first_tool_path_metrics(
 
     try:
         metrics.track_run_first_fallback_after_run(**metric_context, fallback_tool=fallback_tool)
-    except Exception as exc:  # noqa: BLE001
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
         logger.warning("Chat run-first fallback metric emission failed: {}", exc)
 
 
@@ -874,7 +881,7 @@ def _emit_chat_run_first_completion_metric(
         return
     try:
         metrics.track_run_first_completion_proxy(**metric_context, outcome=outcome)
-    except Exception as exc:  # noqa: BLE001
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
         logger.warning("Chat run-first completion metric emission failed: {}", exc)
 
 
@@ -1667,7 +1674,7 @@ def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[st
         "slash_command_injection_mode",
     }
     for key, value in chat_args.items():
-        if key in skip_keys or value is None:
+        if key in skip_keys or key.startswith("_chat_") or value is None:
             continue
         if key not in request:
             request[key] = value

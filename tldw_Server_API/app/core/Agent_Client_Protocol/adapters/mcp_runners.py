@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from typing import Any
 
 from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
@@ -25,6 +24,13 @@ from loguru import logger
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport import MCPTransport
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.Agent_Client_Protocol.tool_gate import ToolGate
+
+_RUN_FIRST_METRIC_EXCEPTIONS: tuple[type[Exception], ...] = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _extract_text_content(result: dict[str, Any]) -> str:
@@ -286,35 +292,43 @@ class LLMDrivenRunner:
     def _record_run_first_rollout(self) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_rollout(**self._run_first_metrics_context)
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning("ACP run-first rollout metric emission failed: {}", exc)
 
     def _record_run_first_first_tool(self, first_tool: str) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_first_tool(
                 **self._run_first_metrics_context,
                 first_tool=first_tool,
             )
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning("ACP run-first first-tool metric emission failed: {}", exc)
 
     def _record_run_first_fallback_after_run(self, fallback_tool: str) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_fallback_after_run(
                 **self._run_first_metrics_context,
                 fallback_tool=fallback_tool,
             )
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning("ACP run-first fallback metric emission failed: {}", exc)
 
     def _record_run_first_completion_proxy(self, outcome: str) -> None:
         if self._run_first_metrics_context is None:
             return
-        with suppress(Exception):
+        try:
             acp_metrics.record_run_first_completion_proxy(
                 **self._run_first_metrics_context,
                 outcome=outcome,
             )
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning("ACP run-first completion metric emission failed: {}", exc)
 
     # -- public API --
 
