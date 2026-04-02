@@ -2761,7 +2761,6 @@ async def restore_persona_profile(
         )
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        await _run_persona_db_call(_ensure_persona_buddy_after_profile_mutation, db=db, profile=profile)
         return _persona_profile_to_response(profile)
     except HTTPException:
         raise
