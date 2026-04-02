@@ -130,6 +130,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ## Phase 2b Run-First Posture
 - Chat and ACP now share a phase-2b rollout posture for `run(command)`:
   - `default_on` is the normal presentation for the stable `provider:model` cohort shipped in config
+  - the current phase 2c stable cohort is `openai:gpt-4o-mini`, `anthropic:claude-3-7-sonnet`, `openai:gpt-4o`, and `google:gemini-2.5-flash`
   - `gated` remains available for controlled experiments on narrower cohorts
   - `off` is the rollback posture; typed tools stay visible and executable as fallback in all three modes
   - `tool_choice` stays unset or `auto`; the surface is biased, not forced
