@@ -1,8 +1,19 @@
+import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { FlashcardCreateDrawer } from "../FlashcardCreateDrawer"
-import { useCreateFlashcardMutation, useCreateDeckMutation, useDecksQuery } from "../../hooks"
-import { FLASHCARDS_DRAWER_WIDTH_PX } from "../../constants"
+import {
+  useCreateDeckMutation,
+  useCreateFlashcardMutation,
+  useDecksQuery
+} from "../../hooks"
+
+const mockFlashcardTagPicker = vi.hoisted(() => vi.fn())
+
+vi.mock("../FlashcardTagPicker", () => ({
+  FlashcardTagPicker: (props: Record<string, unknown>) => mockFlashcardTagPicker(props)
+}))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -50,12 +61,6 @@ vi.mock("../MarkdownWithBoundary", () => ({
   MarkdownWithBoundary: ({ content }: { content: string }) => <div>{content}</div>
 }))
 
-vi.mock("../FlashcardTagPicker", () => ({
-  FlashcardTagPicker: ({ dataTestId }: { dataTestId?: string }) => (
-    <div data-testid={dataTestId ?? "flashcard-tag-picker"} />
-  )
-}))
-
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
@@ -80,7 +85,44 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   })
 }
 
-describe("FlashcardCreateDrawer cloze helper and validation", () => {
+const renderMockTagPicker = ({
+  value = [],
+  onChange,
+  active,
+  placeholder,
+  dataTestId
+}: {
+  value?: string[]
+  onChange?: (next: string[]) => void
+  active?: boolean
+  placeholder?: string
+  dataTestId?: string
+}) => (
+  <div
+    data-testid={dataTestId}
+    data-active={String(active)}
+    data-placeholder={placeholder}
+  >
+    <div data-testid={`${dataTestId}-value`}>{JSON.stringify(value)}</div>
+    <button
+      type="button"
+      onClick={() => onChange?.([...(value ?? []), "Biology"])}
+    >
+      choose suggested tag
+    </button>
+    <input
+      aria-label={`${dataTestId}-input`}
+      data-testid={`${dataTestId}-input`}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onChange?.([...(value ?? []), event.currentTarget.value])
+        }
+      }}
+    />
+  </div>
+)
+
+describe("FlashcardCreateDrawer tags", () => {
   const mutateAsync = vi.fn()
 
   beforeEach(() => {
@@ -106,9 +148,12 @@ describe("FlashcardCreateDrawer cloze helper and validation", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    mockFlashcardTagPicker.mockImplementation(renderMockTagPicker)
   })
 
-  it("shows template guidance and blocks invalid cloze front syntax", async () => {
+  it("choosing a suggested tag in Advanced options submits that tag", async () => {
+    mutateAsync.mockResolvedValueOnce({ uuid: "card-1" })
+
     render(
       <FlashcardCreateDrawer
         open
@@ -117,85 +162,33 @@ describe("FlashcardCreateDrawer cloze helper and validation", () => {
       />
     )
 
-    const wrapper = document.querySelector(".ant-drawer-content-wrapper") as HTMLElement | null
-    expect(wrapper?.style.width).toBe(`${FLASHCARDS_DRAWER_WIDTH_PX}px`)
+    fireEvent.click(screen.getByText("Advanced options (tags, extra, notes)"))
 
-    expect(
-      screen.getByText(
-        "Choose Basic for direct question and answer cards (facts, definitions, short prompts)."
+    const picker = await screen.findByTestId("flashcards-create-tag-picker")
+    expect(picker).toHaveAttribute("data-active", "true")
+    expect(picker).toHaveAttribute("data-placeholder", "tag1, tag2")
+
+    fireEvent.click(screen.getByRole("button", { name: "choose suggested tag" }))
+
+    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
+      target: { value: "Front content" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
+      target: { value: "Back content" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tags: ["Biology"]
+        })
       )
-    ).toBeInTheDocument()
-
-    fireEvent.mouseDown(screen.getByLabelText("Card template"))
-    fireEvent.click(screen.getByText("Cloze (Fill in the blank)"))
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          "Choose Cloze when you want to hide key words inside a sentence or paragraph."
-        )
-      ).toBeInTheDocument()
     })
-    await waitFor(() => {
-      expect(
-        screen.getByText("Cloze syntax: add at least one deletion like {{c1::answer}} in Front text.")
-      ).toBeInTheDocument()
-    })
-
-    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
-      target: { value: "This front has no cloze pattern" }
-    })
-    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
-      target: { value: "Back content" }
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: "Create" }))
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          "For Cloze cards, include at least one deletion like {{c1::answer}}."
-        )
-      ).toBeInTheDocument()
-    })
-    expect(mutateAsync).not.toHaveBeenCalled()
   }, 15000)
 
-  it("shows byte-limit guidance and blocks over-limit front content", async () => {
-    render(
-      <FlashcardCreateDrawer
-        open
-        onClose={vi.fn()}
-        onSuccess={vi.fn()}
-      />
-    )
-
-    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
-      target: { value: "a".repeat(8192) }
-    })
-    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
-      target: { value: "Back content" }
-    })
-
-    await waitFor(() => {
-      expect(screen.getByText("Front: 8192 / 8192 bytes. Approaching the 8192-byte limit.")).toBeInTheDocument()
-    })
-
-    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
-      target: { value: "a".repeat(8193) }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Create" }))
-
-    await waitFor(() => {
-      expect(screen.getByText("Front must be 8192 bytes or fewer.")).toBeInTheDocument()
-    })
-    expect(mutateAsync).not.toHaveBeenCalled()
-  }, 15000)
-
-  it("does not require cloze syntax for basic cards", async () => {
-    mutateAsync.mockResolvedValueOnce({
-      uuid: "card-1"
-    })
+  it("typing a new tag still submits successfully", async () => {
+    mutateAsync.mockResolvedValueOnce({ uuid: "card-1" })
 
     render(
       <FlashcardCreateDrawer
@@ -205,17 +198,31 @@ describe("FlashcardCreateDrawer cloze helper and validation", () => {
       />
     )
 
-    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
-      target: { value: "Plain front content without cloze syntax" }
-    })
-    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
-      target: { value: "Plain back content" }
+    fireEvent.click(screen.getByText("Advanced options (tags, extra, notes)"))
+
+    const input = await screen.findByTestId("flashcards-create-tag-picker-input")
+    fireEvent.change(input, { target: { value: "Neuroscience" } })
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      code: "Enter",
+      charCode: 13,
+      keyCode: 13
     })
 
+    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
+      target: { value: "Front content" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
+      target: { value: "Back content" }
+    })
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
 
     await waitFor(() => {
-      expect(mutateAsync).toHaveBeenCalledTimes(1)
+      expect(mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tags: ["Neuroscience"]
+        })
+      )
     })
   }, 15000)
 })

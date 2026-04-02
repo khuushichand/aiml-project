@@ -34,12 +34,21 @@ import {
 } from "../utils/text-selection"
 import { formatDeckDisplayName } from "../utils/deck-display"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { FlashcardTagPicker } from "./FlashcardTagPicker"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 
 const { Text } = Typography
 dayjs.extend(relativeTime)
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
+
+const normalizeTagValues = (tags?: string[] | null) => {
+  const normalized = Array.isArray(tags)
+    ? tags.map((tag) => tag.trim()).filter(Boolean)
+    : undefined
+
+  return normalized && normalized.length > 0 ? normalized : undefined
+}
 
 type FlashcardModelType = Flashcard["model_type"]
 type EditableTextField = "front" | "back" | "extra" | "notes"
@@ -204,9 +213,11 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
 
   const handleSave = async () => {
     try {
-      const values = normalizeFlashcardTemplateFields(
-        (await form.validateFields()) as FlashcardUpdate
-      )
+      const rawValues = (await form.validateFields()) as FlashcardUpdate
+      const values = normalizeFlashcardTemplateFields({
+        ...rawValues,
+        tags: normalizeTagValues(rawValues.tags)
+      })
       await onSave(values)
     } catch (e: any) {
       // Validation errors handled by form
@@ -384,10 +395,9 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
             name="tags"
             label={t("option:flashcards.tags", { defaultValue: "Tags" })}
           >
-            <Select
-              mode="tags"
-              open={false}
-              allowClear
+            <FlashcardTagPicker
+              active={open}
+              dataTestId="flashcards-edit-tag-picker"
               placeholder={t("option:flashcards.tagsPlaceholder", {
                 defaultValue: "Add tags..."
               })}

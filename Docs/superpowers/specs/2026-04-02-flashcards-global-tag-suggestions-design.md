@@ -157,8 +157,13 @@ Visibility contract:
 
 - the initial endpoint is intentionally global for the current user
 - it returns tags across all non-deleted flashcards the current user can access
+- it must include both general-scope flashcards and workspace-scoped flashcards, not just decks where `workspace_id IS NULL`
 - it does not inherit current deck filters, workspace filters, or Manage-tab visibility toggles
 - create and edit drawers call it without deck or workspace scoping because the agreed behavior is “all accessible flashcard tags”
+
+Implementation note:
+
+- the endpoint should not blindly reuse the default `list_flashcards` visibility behavior because that path defaults to general-scope items when no workspace flags are provided
 
 Proposed response shape:
 
@@ -167,11 +172,12 @@ Proposed response shape:
   "items": [
     { "tag": "biology", "count": 42 },
     { "tag": "chapter-1", "count": 17 }
-  ]
+  ],
+  "count": 2
 }
 ```
 
-`count` means the number of distinct non-deleted flashcards currently using that tag.
+Per-item `count` means the number of distinct non-deleted flashcards currently using that tag. Top-level `count` means the number of suggestion items returned in the response.
 
 Rationale:
 
@@ -187,8 +193,9 @@ The endpoint should query active flashcard tags using the existing flashcard-key
 
 - include only non-deleted flashcards
 - include only non-deleted keywords
+- exclude flashcards whose joined deck row is deleted, while still allowing deckless flashcards
 - aggregate usage counts by keyword text
-- apply `q` as a case-insensitive substring or prefix filter
+- apply `q` as a trimmed, case-insensitive substring filter
 - sort by `count DESC`, then tag text case-insensitively
 
 This avoids the current client-side `MAX_SCAN` approach and aligns the API with the actual domain model already present in `ChaChaNotes_DB`.
@@ -197,10 +204,11 @@ Scope note:
 
 - this new endpoint is for create/edit tag suggestions only in the initial change
 - the existing Manage-tab filter suggestion flow remains unchanged for now
+- do not silently repurpose the current Manage-tab page-scan hook unless its existing behavior is preserved for that tab
 
 Routing note:
 
-- because the same router already exposes `GET /{card_uuid}/tags`, the new static `GET /tags` route must be registered before the dynamic `/{card_uuid}/tags` route so the literal path `tags` is not captured as a `card_uuid`
+- because the same router also exposes a later `GET /{card_uuid}` alias route, the new static `GET /tags` route must be registered before that dynamic route so the literal path `tags` is not captured as a `card_uuid`
 
 ### 3. Add one shared `FlashcardTagPicker` component
 
@@ -215,6 +223,7 @@ Expected behavior:
 - loads suggestions from the new endpoint
 - shows a normal dropdown instead of `open={false}`
 - updates suggestions as the user types with a short debounce
+- forwards the active request abort signal so stale typeahead requests can be cancelled cleanly
 - allows selecting existing tags from the dropdown
 - allows typing a new tag and confirming it with `Enter`
 - trims whitespace and dedupes case-insensitively within the current value
@@ -242,6 +251,11 @@ This ensures:
 - a newly added tag appears immediately in later create or edit sessions
 - the suggestion list stays in sync without full page reloads
 - both WebUI and extension see the same refreshed suggestion state because they share the same query client logic in shared UI
+
+Implementation note:
+
+- if the new suggestion query key stays under the existing `flashcards:` namespace, the current shared invalidation helper can keep handling this without special-case mutation logic
+- the suggestion query should only be enabled while the drawer and picker are active, and its request helper should accept React Query abort signals to avoid stale results during rapid typing
 
 ### 6. Preserve current create/edit behavior if suggestions fail
 
@@ -300,6 +314,7 @@ Add unit or integration coverage for the new flashcard tags endpoint verifying:
 - unique tags are returned only once
 - deleted flashcards do not contribute suggestions
 - deleted keywords do not contribute suggestions
+- flashcards attached to deleted decks do not contribute suggestions
 - `q` filters results correctly
 - results are ordered by usage count, then alphabetically
 - `limit` is respected
@@ -313,6 +328,7 @@ Add focused tests for the shared picker verifying:
 - duplicate tag entry is normalized case-insensitively
 - whitespace-only tags are ignored
 - fetch failure falls back to non-blocking free typing
+- the picker exposes stable test ids or labels that create, edit, and E2E coverage can target consistently
 
 ### Drawer tests
 

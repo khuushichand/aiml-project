@@ -404,6 +404,16 @@ class StudyAssistantRespondResponse(BaseModel):
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
+class FlashcardTagSuggestionItem(BaseModel):
+    tag: str
+    count: int
+
+
+class FlashcardTagSuggestionsResponse(BaseModel):
+    items: list[FlashcardTagSuggestionItem] = Field(default_factory=list)
+    count: int
+
+
 class FlashcardTagsUpdate(BaseModel):
     tags: list[str]
 

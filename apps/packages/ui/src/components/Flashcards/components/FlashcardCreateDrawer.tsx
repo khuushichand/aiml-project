@@ -24,6 +24,7 @@ import {
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { FlashcardTagPicker } from "./FlashcardTagPicker"
 import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
 import { formatDeckDisplayName } from "../utils/deck-display"
@@ -46,6 +47,14 @@ const { Text } = Typography
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
 type FlashcardModelType = NonNullable<FlashcardCreate["model_type"]>
 type EditableTextField = "front" | "back" | "extra" | "notes"
+
+const normalizeTagValues = (tags?: string[] | null) => {
+  const normalized = Array.isArray(tags)
+    ? tags.map((tag) => tag.trim()).filter(Boolean)
+    : undefined
+
+  return normalized && normalized.length > 0 ? normalized : undefined
+}
 
 interface PreviewProps {
   content?: string
@@ -235,7 +244,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const handleCreate = async () => {
     try {
       const values = await form.validateFields()
-      await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
+      await createMutation.mutateAsync(
+        normalizeFlashcardTemplateFields({
+          ...values,
+          tags: normalizeTagValues(values.tags)
+        })
+      )
       message.success(t("common:created", { defaultValue: "Created" }))
       form.resetFields()
       onSuccess?.()
@@ -251,7 +265,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const handleCreateAndAddAnother = async () => {
     try {
       const values = await form.validateFields()
-      await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
+      await createMutation.mutateAsync(
+        normalizeFlashcardTemplateFields({
+          ...values,
+          tags: normalizeTagValues(values.tags)
+        })
+      )
       message.success(t("common:created", { defaultValue: "Created" }))
       // Keep deck selection but clear content
       const deckId = form.getFieldValue("deck_id")
@@ -694,13 +713,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                     label={t("option:flashcards.tags", { defaultValue: "Tags" })}
                     className="!mb-0"
                   >
-                    <Select
-                      mode="tags"
+                    <FlashcardTagPicker
+                      active={open}
+                      dataTestId="flashcards-create-tag-picker"
                       placeholder={t("option:flashcards.tagsPlaceholder", {
                         defaultValue: "tag1, tag2"
                       })}
-                      open={false}
-                      allowClear
                     />
                   </Form.Item>
 

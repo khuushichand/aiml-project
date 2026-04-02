@@ -21668,6 +21668,60 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
+    def list_flashcard_tag_suggestions(self, q: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """List global flashcard tag suggestions with per-tag usage counts."""
+        keyword_table = self._map_table_for_backend("keywords")
+        normalized_q = (q or "").strip()
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            where_clauses.extend(
+                [
+                    "f.deleted = FALSE",
+                    "kw.deleted = FALSE",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = FALSE))",
+                ]
+            )
+        else:
+            where_clauses.extend(
+                [
+                    "f.deleted = 0",
+                    "kw.deleted = 0",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = 0))",
+                ]
+            )
+
+        if normalized_q:
+            where_clauses.append("LOWER(kw.keyword) LIKE ?")
+            params.append(f"%{normalized_q.lower()}%")
+
+        order_keyword = self._case_insensitive_order_expression("kw.keyword")
+        where_sql = " AND ".join(where_clauses)
+        query = """
+            SELECT
+                kw.keyword AS tag,
+                COUNT(DISTINCT f.id) AS usage_count
+            FROM flashcards f
+            JOIN flashcard_keywords fk ON fk.card_id = f.id
+            JOIN {keyword_table} kw ON kw.id = fk.keyword_id
+            LEFT JOIN decks d ON d.id = f.deck_id
+            WHERE {where_sql}
+            GROUP BY kw.keyword
+            ORDER BY usage_count DESC, {order_keyword}
+            LIMIT ?
+        """.format_map(locals())  # nosec B608
+        params.append(limit)
+
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [
+                {"tag": str(row["tag"]), "count": int(row["usage_count"] or 0)}
+                for row in cursor.fetchall()
+            ]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
     def get_flashcards_by_uuids(self, uuids: list[str]) -> list[dict[str, Any]]:
         """Fetch multiple flashcards by UUIDs in one query. Order is not guaranteed; caller can reorder."""
         if not uuids:
