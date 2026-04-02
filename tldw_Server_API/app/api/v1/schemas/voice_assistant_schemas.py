@@ -425,6 +425,30 @@ class VoiceWorkflowTemplateListResponse(BaseModel):
     total: int = Field(..., description="Total count")
 
 
+# Dry-Run Validation Schemas
+
+class VoiceCommandValidationStep(BaseModel):
+    """Result for a single validation step in a dry-run check."""
+    name: str = Field(..., description="Step name (e.g. 'config_schema', 'action_target')")
+    passed: bool = Field(..., description="Whether this validation step passed")
+    message: str = Field(..., description="Human-readable result description")
+    details: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Extra details (e.g. available tools, missing fields)",
+    )
+
+
+class VoiceCommandValidationResponse(BaseModel):
+    """Aggregate dry-run validation report for a voice command."""
+    command_id: str = Field(..., description="Validated command ID")
+    command_name: str = Field(..., description="Command name")
+    action_type: VoiceActionType = Field(..., description="Configured action type")
+    valid: bool = Field(..., description="True when every step passed")
+    steps: list[VoiceCommandValidationStep] = Field(
+        ..., description="Per-step validation results"
+    )
+
+
 #
 # End of voice_assistant_schemas.py
 #######################################################################################################################

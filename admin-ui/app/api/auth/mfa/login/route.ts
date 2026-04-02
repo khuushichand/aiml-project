@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setJwtSessionCookies } from '@/lib/server-auth';
+import { checkRateLimit, extractClientIp } from '@/lib/rate-limiter';
 
 type MfaLoginResponsePayload = {
   access_token?: string;
@@ -10,6 +11,17 @@ type MfaLoginResponsePayload = {
 };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const rateCheck = checkRateLimit(extractClientIp(request.headers));
+  if (!rateCheck.allowed) {
+    return NextResponse.json(
+      { detail: 'Too many login attempts. Please try again later.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rateCheck.retryAfterSeconds) },
+      }
+    );
+  }
+
   const body = await request.text();
   const response = await fetch(buildApiUrlForRequest(request, '/auth/mfa/login'), {
     method: 'POST',

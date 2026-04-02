@@ -6622,6 +6622,13 @@ else:
 
     if admin_router is not None:
         _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    # Billing / subscription management endpoints (admin-only)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+
+        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except _IMPORT_EXCEPTIONS as _billing_import_err:
+        logger.warning(f"Billing endpoints unavailable; skipping: {_billing_import_err}")
     _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
     _include_if_enabled("mcp-hub", mcp_hub_management_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-hub"])
     # Self-service organization management endpoints
