@@ -637,6 +637,18 @@ describe("SidepanelPersona", () => {
           ]
         })
       }
+      if (
+        path.includes("/persona/profiles/garden-helper/setup-analytics") ||
+        path.includes("/persona/profiles/builder-bot/setup-analytics")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: path.includes("builder-bot") ? "builder-bot" : "garden-helper",
+            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
+          })
+        })
+      }
       if (path.includes("/persona/profiles/garden-helper")) {
         return Promise.resolve({
           ok: true,
@@ -658,18 +670,6 @@ describe("SidepanelPersona", () => {
       }
       if (path.includes("/persona/profiles/builder-bot")) {
         return builderProfilePromise as Promise<any>
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper/setup-analytics") ||
-        path.includes("/persona/profiles/builder-bot/setup-analytics")
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: path.includes("builder-bot") ? "builder-bot" : "garden-helper",
-            summary: { total_runs: 0, completed_runs: 0, completion_rate: 0 }
-          })
-        })
       }
       if (
         path.includes("/persona/sessions?persona_id=garden-helper") ||

@@ -142,9 +142,7 @@ def build_persona_buddy_summary(
 ) -> dict[str, Any]:
     """Build a compact, render-oriented buddy summary from an existing Track A row."""
     safe_persona_name = str(persona_name or "").strip()
-    safe_role_summary = str(role_summary).strip() if isinstance(role_summary, str) else None
-    if safe_role_summary == "":
-        safe_role_summary = None
+    safe_role_summary = str(role_summary or "").strip() or None
 
     summary: dict[str, Any] = {
         "has_buddy": False,

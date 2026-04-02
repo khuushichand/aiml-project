@@ -371,30 +371,23 @@ export const CharacterSelect: React.FC<Props> = ({
   }, [userPersonaImage])
 
   useEffect(() => {
-    if (selectedAssistant?.kind !== "persona") {
-      setBuddyShellRenderContext(null)
-      return () => {
-        setBuddyShellRenderContext(null)
+    let context: Parameters<typeof setBuddyShellRenderContext>[0] = null
+
+    if (selectedAssistant?.kind === "persona") {
+      const personaId = String(selectedAssistant.id || "").trim()
+      if (personaId) {
+        context = {
+          surface_id: "sidepanel-chat",
+          surface_active: true,
+          active_persona_id: personaId,
+          position_bucket: "sidepanel-desktop",
+          buddy_summary: selectedPersona?.buddy_summary ?? null,
+          persona_source: selectedPersonaSource
+        }
       }
     }
 
-    const personaId = String(selectedAssistant.id || "").trim()
-    if (!personaId) {
-      setBuddyShellRenderContext(null)
-      return () => {
-        setBuddyShellRenderContext(null)
-      }
-    }
-
-    setBuddyShellRenderContext({
-      surface_id: "sidepanel-chat",
-      surface_active: true,
-      active_persona_id: personaId,
-      position_bucket: "sidepanel-desktop",
-      buddy_summary: selectedPersona?.buddy_summary ?? null,
-      persona_source: selectedPersonaSource
-    })
-
+    setBuddyShellRenderContext(context)
     return () => {
       setBuddyShellRenderContext(null)
     }

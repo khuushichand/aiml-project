@@ -211,35 +211,33 @@ const SidepanelPersona = ({
 
   React.useEffect(() => {
     const activePersonaId = String(selectedPersonaId || "").trim() || null
-    if (
-      isCompanionMode ||
-      capsLoading ||
-      !capabilities?.hasPersona ||
-      !isOnline ||
-      uxState !== "connected_ok" ||
-      !activePersonaId
-    ) {
-      setBuddyShellRenderContext(null)
-      return () => {
-        setBuddyShellRenderContext(null)
+    const personaSurfaceActive =
+      !isCompanionMode &&
+      !capsLoading &&
+      Boolean(capabilities?.hasPersona) &&
+      isOnline &&
+      uxState === "connected_ok"
+
+    let context: Parameters<typeof setBuddyShellRenderContext>[0] = null
+
+    if (personaSurfaceActive && activePersonaId) {
+      context = {
+        surface_id: "persona-garden",
+        surface_active: true,
+        active_persona_id: activePersonaId,
+        position_bucket:
+          shell === "sidepanel" ? "sidepanel-desktop" : "web-desktop",
+        buddy_summary:
+          (savedPersonaBuddySummaryPersonaId === activePersonaId
+            ? savedPersonaBuddySummary
+            : null) ??
+          selectedCatalogPersona?.buddy_summary ??
+          null,
+        persona_source: "route-local"
       }
     }
 
-    setBuddyShellRenderContext({
-      surface_id: "persona-garden",
-      surface_active: true,
-      active_persona_id: activePersonaId,
-      position_bucket:
-        shell === "sidepanel" ? "sidepanel-desktop" : "web-desktop",
-      buddy_summary:
-        (savedPersonaBuddySummaryPersonaId === activePersonaId
-          ? savedPersonaBuddySummary
-          : null) ??
-        selectedCatalogPersona?.buddy_summary ??
-        null,
-      persona_source: "route-local"
-    })
-
+    setBuddyShellRenderContext(context)
     return () => {
       setBuddyShellRenderContext(null)
     }
