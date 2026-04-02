@@ -200,7 +200,11 @@ export const ActivitySection = ({
                     yAxisId="right"
                     orientation="right"
                     tickFormatter={(v: number) =>
-                      showLatency ? `${v}ms` : `${v}%`
+                      showLatency && !showErrorRate
+                        ? `${v}ms`
+                        : !showLatency && showErrorRate
+                          ? `${v}%`
+                          : `${v}`
                     }
                   />
                 )}

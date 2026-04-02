@@ -154,7 +154,10 @@ export default function PlansPage() {
     if (billingEnabled) {
       try {
         const subs = await api.getSubscriptions({ plan_id: String(plan.id) });
-        subscriberCount = Array.isArray(subs) ? subs.length : 0;
+        const allSubs = Array.isArray(subs) ? subs : [];
+        subscriberCount = allSubs.filter(
+          (s: Record<string, unknown>) => s.status === 'active' || s.status === 'trialing'
+        ).length;
       } catch (err: unknown) {
         logger.error('Failed to check plan subscribers', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
         subscriberCheckFailed = true;

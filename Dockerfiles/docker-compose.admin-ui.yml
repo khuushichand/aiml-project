@@ -28,7 +28,7 @@ services:
       - PORT=3001
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
-      - JWT_SECONDARY_SECRET=${JWT_SECONDARY_SECRET:-}
+      - JWT_SECONDARY_SECRET=${JWT_SECONDARY_SECRET:-}  # optional — omit or leave empty to disable key rotation
       - AUTH_MODE=${AUTH_MODE:-multi_user}
       # Set to 'true' when running behind a reverse proxy that sets
       # X-Forwarded-For / X-Real-IP. Without this, per-IP rate limiting

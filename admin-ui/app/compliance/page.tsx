@@ -449,6 +449,7 @@ function CompliancePageContent() {
                             onClick={() => handleSendNow(sched.id)}
                             disabled={sendingIds.has(sched.id)}
                             title="Send report now"
+                            aria-label="Send report now"
                           >
                             <Send className="h-4 w-4" />
                           </Button>
@@ -459,6 +460,7 @@ function CompliancePageContent() {
                             disabled={deletingIds.has(sched.id)}
                             className="text-destructive hover:text-destructive"
                             title="Delete schedule"
+                            aria-label="Delete schedule"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
