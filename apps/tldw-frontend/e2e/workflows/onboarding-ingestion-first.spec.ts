@@ -8,6 +8,7 @@ import {
   skipIfServerUnavailable,
 } from "../utils/fixtures"
 import { TEST_CONFIG, dismissConnectionModals, waitForConnection } from "../utils/helpers"
+import { openQuickIngestDialog } from "../utils/journey-helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -328,16 +329,13 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         /\/media(?:[/?#].*)?$/
       )
       await waitForConnection(authedPage)
-      const quickIngestDialog = authedPage
-        .getByRole("dialog", { name: /quick ingest/i })
-        .first()
-      await expect(quickIngestDialog).toBeVisible({ timeout: 20_000 })
+      const quickIngestDialog = await openQuickIngestDialog(authedPage, 20_000)
       await captureStep(
         authedPage,
         evidenceRows,
         viewport.label,
         "05-quick-ingest-modal",
-        "Onboarding ingest CTA navigates to Media and opens Quick Ingest there."
+        "Onboarding ingest CTA routes to Media, where Quick Ingest remains reachable."
       )
 
       const quickIngestClose = quickIngestDialog
