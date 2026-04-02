@@ -248,6 +248,77 @@ class TestChatMetricsCollector:
             error_type="RateLimitError"
         )
 
+    def test_chat_metrics_records_run_first_variant_labels(self):
+        collector = ChatMetricsCollector()
+        collector.metrics.run_first_rollout = MagicMock()
+
+        collector.track_run_first_rollout(
+            presentation_variant="chat_phase2a_v1",
+            cohort="gated",
+            provider="openai",
+            model="gpt-4o-mini",
+            streaming=False,
+            eligible=True,
+            ineligible_reason=None,
+        )
+
+        collector.metrics.run_first_rollout.add.assert_called_once()
+        _, labels = collector.metrics.run_first_rollout.add.call_args.args
+        assert labels["presentation_variant"] == "chat_phase2a_v1"
+        assert labels["cohort"] == "gated"
+        assert labels["provider"] == "openai"
+        assert labels["model"] == "set"
+        assert labels["streaming"] == "false"
+        assert labels["eligible"] == "true"
+        assert labels["ineligible_reason"] == "none"
+
+    def test_chat_metrics_records_run_first_tool_path_and_completion_labels(self):
+        collector = ChatMetricsCollector()
+        collector.metrics.run_first_first_tool = MagicMock()
+        collector.metrics.run_first_fallback_after_run = MagicMock()
+        collector.metrics.run_first_completion_proxy = MagicMock()
+
+        collector.track_run_first_first_tool(
+            presentation_variant="chat_phase2a_v1",
+            cohort="gated",
+            provider="openai",
+            model="gpt-4o-mini",
+            streaming=True,
+            eligible=True,
+            first_tool="run",
+        )
+        collector.track_run_first_fallback_after_run(
+            presentation_variant="chat_phase2a_v1",
+            cohort="gated",
+            provider="openai",
+            model="gpt-4o-mini",
+            streaming=True,
+            eligible=True,
+            fallback_tool="notes.search",
+        )
+        collector.track_run_first_completion_proxy(
+            presentation_variant="chat_phase2a_v1",
+            cohort="gated",
+            provider="openai",
+            model="gpt-4o-mini",
+            streaming=True,
+            eligible=True,
+            outcome="success",
+        )
+
+        collector.metrics.run_first_first_tool.add.assert_called_once()
+        _, first_tool_labels = collector.metrics.run_first_first_tool.add.call_args.args
+        assert first_tool_labels["first_tool"] == "run"
+        assert first_tool_labels["streaming"] == "true"
+
+        collector.metrics.run_first_fallback_after_run.add.assert_called_once()
+        _, fallback_labels = collector.metrics.run_first_fallback_after_run.add.call_args.args
+        assert fallback_labels["fallback_tool"] == "other"
+
+        collector.metrics.run_first_completion_proxy.add.assert_called_once()
+        _, completion_labels = collector.metrics.run_first_completion_proxy.add.call_args.args
+        assert completion_labels["outcome"] == "success"
+
     def test_get_active_metrics(self):
 
         """Test getting active operation counts."""
