@@ -151,6 +151,30 @@ The system should create:
 
 Flashcards remain the canonical review unit. Study packs are orchestration and provenance containers, not a second scheduler.
 
+### V1 Entry Points And Default Deck Policy
+
+V1 should define one primary launcher and a small set of prefilled entry points.
+
+Primary launcher:
+
+- add a `Generate Study Pack` flow in the Flashcards workspace
+- the launcher presents a supported-source picker limited to the V1 source classes defined below
+- the launcher supports one or more selected supported sources so mixed-source bundles remain possible
+
+Prefilled entry points:
+
+- Notes: launch the study-pack flow from a note or selected excerpt
+- Media: launch the study-pack flow from a media detail or source context
+- Chat: launch the study-pack flow from a conversation or message action when stable source context exists
+
+Default deck policy:
+
+- default to `create new deck`
+- offer `append to existing deck` as an explicit opt-in
+- default deck title should derive from the study-pack title with collision-safe suffixing
+
+This keeps V1 predictable, avoids accidental mixing of unrelated material, and still leaves room for advanced deck reuse.
+
 ### Core Components
 
 Recommended units:
@@ -261,9 +285,44 @@ Explicit `study_pack_cards` membership is required because:
 
 Without explicit membership, `study_pack.deck_id` becomes unreliable as soon as a deck contains cards from more than one generation event.
 
+### Pack Lifecycle Rules
+
+V1 should prefer retention-safe behavior over destructive cleanup.
+
+Delete behavior:
+
+- deleting a study pack should soft-delete the `study_pack` row and its `study_pack_cards` membership rows
+- deleting a study pack should not automatically delete underlying flashcards, review history, or citations
+- this avoids accidental data loss when cards were appended into an existing deck or already reviewed and edited
+
+Regenerate behavior:
+
+- regenerating a study pack should create a new pack record and a new generated card set
+- the prior pack should be marked superseded, not mutated in place
+- prior flashcards should remain intact unless a later explicit cleanup action is introduced
+
+Append behavior:
+
+- appending into an existing deck should still create a distinct `study_pack`
+- `study_pack_cards` should contain only the cards created by that append run
+- pack membership must remain stable even if the destination deck contains cards from other packs or manual edits
+
+This keeps deletion, regeneration, and deck reuse deterministic without conflating pack lifecycle with card lifecycle.
+
 ### Backward Compatibility
 
-The existing `flashcards.source_ref_type/source_ref_id` fields should remain as a backward-compatible summary pointing at the primary citation when possible.
+The existing `flashcards.source_ref_type/source_ref_id` fields should remain as a backward-compatible summary only. They are not authoritative once multi-citation cards exist.
+
+Primary citation rule:
+
+- citations must be stored with an explicit `ordinal`
+- `ordinal = 0` is the primary citation
+- the generation and persistence layer should choose the primary citation deterministically using:
+  - exact locator available
+  - otherwise richest routeable source identifier
+  - otherwise first valid citation returned after normalization
+
+Legacy summary fields should mirror only the primary citation. Deep-dive routing and remediation should always read from `flashcard_citations`, not from legacy summary fields.
 
 The new citation rows become canonical for deep-dive remediation and exact evidence rendering.
 
@@ -278,12 +337,21 @@ A source is eligible only if it can be resolved into:
 - bounded evidence text
 - at least one durable locator or graceful route fallback
 
-Examples of likely V1-eligible source classes:
+Recommended initial V1 source classes:
 
-- notes with resolvable IDs and excerpts
-- media with chunk or timestamp locators
-- chat messages or conversations when message identity is stable
-- workspace artifacts whose content and provenance are already explicit
+- notes from the Notes system, including selected excerpts when available
+- ingested media records with chunk, transcript, or timestamp locators
+- chat conversations or individual chat messages with stable `conversation_id` and `message_id`
+
+Selection surfaces for V1 should map directly to those entities:
+
+- Notes surface selects note or excerpt inputs
+- Media surface selects ingested media inputs
+- Chat surface selects conversation or message inputs
+
+No generic catch-all workspace artifact adapter should ship in V1.
+
+Additional source classes should only be added later after their provenance and locator behavior are proven equivalent.
 
 Examples that should remain unsupported until better provenance exists:
 
@@ -295,6 +363,22 @@ Examples that should remain unsupported until better provenance exists:
 ### Strict Study-Pack Generation Path
 
 Do not reuse the current permissive `flashcard_generate` adapter directly.
+
+Study-pack generation should be Jobs-backed in V1.
+
+Reasoning:
+
+- the feature is user-visible and potentially long-running
+- mixed-source resolution plus LLM generation and validation can exceed comfortable synchronous request times
+- the repo already treats user-visible longer-running work as a good fit for Jobs-backed execution
+- Jobs-backed execution gives cleaner retry, progress, cancellation, and partial-failure handling than a blocking request
+
+Recommended API shape:
+
+- create study-pack generation job
+- stream or poll job status
+- persist the final `study_pack` only after validation succeeds
+- expose failure state and repair diagnostics without partial visible data
 
 Instead, add a new strict study-pack generation flow:
 
@@ -403,13 +487,15 @@ That requires provider-specific read/write integrations and availability APIs. I
 
 ### Provider-Neutral Interface
 
-Define adapter interfaces now for later expansion:
+Do not make provider adapter interfaces part of the V1 implementation plan if calendar sync is out of scope.
+
+Instead, record the later expansion point here so Phase 3 can add interfaces such as:
 
 - `CalendarScheduleAdapter.create_or_update_session(...)`
 - `CalendarScheduleAdapter.delete_session(...)`
 - `CalendarAvailabilityAdapter.find_candidate_slots(...)`
 
-Only the schedule-export side needs implementation in V1. Availability scanning remains deferred until a real provider adapter exists.
+Only internal study-session suggestions and `ICS` export need implementation in V1. Availability scanning and provider adapters remain deferred until a real provider integration milestone exists.
 
 ### Provider Strategy
 
@@ -484,6 +570,8 @@ Google can be the first full adapter because the repo already has OAuth and conn
 - citation-grade flashcard generation
 - flashcard remediation backed by stored citations
 
+The first implementation plan should cover Phase 1 only.
+
 ### Phase 2
 
 - internal study-session suggestion layer
@@ -496,8 +584,6 @@ Google can be the first full adapter because the repo already has OAuth and conn
 
 ## Open Product Decisions For Later Planning
 
-- exact UX entry points for `Generate Study Pack`
-- whether packs should default to new decks or remember last deck choice
 - how aggressively remediation actions should appear in the review UI
 - whether pack analytics should be per-pack only or also per-source
 
