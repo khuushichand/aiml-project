@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+import json
+
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError
 from tldw_Server_API.app.core.Persona.buddy import ensure_persona_buddy_for_profile
 
