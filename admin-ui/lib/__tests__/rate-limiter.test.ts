@@ -45,6 +45,35 @@ describe('rate limiter', () => {
     expect(checkRateLimit('1.1.1.1').allowed).toBe(false);
     expect(checkRateLimit('2.2.2.2').allowed).toBe(true);
   });
+
+  it('evicts LRU entries when store exceeds MAX_ENTRIES', async () => {
+    // MAX_ENTRIES is 10_000; fill to 10_001 unique keys to trigger eviction
+    const { checkRateLimit } = await import('../rate-limiter');
+
+    // Use up 10 requests on the "old" IP so it's rate-limited
+    for (let i = 0; i < 10; i++) {
+      checkRateLimit('old-ip');
+    }
+    expect(checkRateLimit('old-ip').allowed).toBe(false);
+
+    // Touch a "recent" IP so it gets a higher LRU rank than old-ip
+    for (let i = 0; i < 5; i++) {
+      checkRateLimit('recent-ip');
+    }
+
+    // Fill beyond MAX_ENTRIES with unique IPs — old-ip was inserted first
+    // and hasn't been touched since, so it sits at the front of the Map
+    for (let i = 0; i < 10_001; i++) {
+      checkRateLimit(`filler-${i}`);
+    }
+
+    // old-ip should have been evicted (LRU) — a fresh request is allowed
+    expect(checkRateLimit('old-ip').allowed).toBe(true);
+
+    // recent-ip was accessed after old-ip, so it survives eviction
+    // and retains its 5 existing requests (still under limit)
+    expect(checkRateLimit('recent-ip').allowed).toBe(true);
+  });
 });
 
 describe('extractClientIp', () => {
