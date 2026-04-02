@@ -91,12 +91,18 @@ function TeamsPageContent() {
           organizations.map((org) => api.getTeams(String(org.id)))
         );
         const allTeams: Team[] = [];
-        results.forEach((result) => {
+        const failedOrgs: string[] = [];
+        results.forEach((result, idx) => {
           if (result.status === 'fulfilled' && Array.isArray(result.value)) {
             allTeams.push(...result.value);
+          } else if (result.status === 'rejected') {
+            failedOrgs.push(String(organizations[idx]?.name ?? organizations[idx]?.id ?? idx));
           }
         });
         setTeams(allTeams);
+        if (failedOrgs.length > 0) {
+          warning(`Failed to load teams for: ${failedOrgs.join(', ')}`);
+        }
       } else {
         const data = await api.getTeams(orgId);
         setTeams(Array.isArray(data) ? data : []);

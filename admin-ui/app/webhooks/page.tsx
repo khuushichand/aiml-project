@@ -46,9 +46,11 @@ function DeliveryStatusBadge({ success }: { success: boolean }) {
 function DeliveryHistory({
   webhookId,
   visible,
+  refreshKey,
 }: {
   webhookId: string;
   visible: boolean;
+  refreshKey?: number;
 }) {
   const [deliveries, setDeliveries] = useState<WebhookDeliveryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,7 +74,7 @@ function DeliveryHistory({
     if (visible) {
       fetchDeliveries();
     }
-  }, [visible, fetchDeliveries]);
+  }, [visible, fetchDeliveries, refreshKey]);
 
   if (!visible) return null;
 
@@ -150,6 +152,8 @@ function WebhooksPageContent() {
 
   // Track which webhooks have a test in-flight
   const [testingWebhookIds, setTestingWebhookIds] = useState<Set<string>>(new Set());
+  // Bump to refresh delivery history after a test webhook
+  const [deliveryRefreshKey, setDeliveryRefreshKey] = useState(0);
 
   // Create dialog state
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -247,8 +251,9 @@ function WebhooksPageContent() {
       } else {
         showError(`Test delivery failed: ${delivery.error || `HTTP ${delivery.status_code}`}`);
       }
-      // Expand deliveries to show the result
+      // Expand deliveries and refresh to show the new test result
       setExpandedWebhookId(webhook.id);
+      setDeliveryRefreshKey((k) => k + 1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send test';
       showError(message);
@@ -406,6 +411,7 @@ function WebhooksPageContent() {
                             <DeliveryHistory
                               webhookId={webhook.id}
                               visible={expandedWebhookId === webhook.id}
+                              refreshKey={deliveryRefreshKey}
                             />
                           </TableCell>
                         </TableRow>

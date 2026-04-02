@@ -544,13 +544,9 @@ export default function UserDetailPage() {
         setError('You are not authorized to update this user.');
         return;
       }
-      if (err instanceof Error) {
-        logger.error('Failed to update user', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
-        setError(err.message);
-      } else {
-        logger.error('Failed to update user', { component: 'UserDetailPage', error: err instanceof Error ? err.message : String(err) });
-        setError(String(err));
-      }
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Failed to update user', { component: 'UserDetailPage', error: message });
+      setError(message);
     } finally {
       setSaving(false);
     }

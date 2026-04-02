@@ -46,15 +46,16 @@ const formatIncidentDate = (value?: string | null) =>
 
 const formatMinutes = (minutes: number | null | undefined): string => {
   if (minutes == null) return '—';
-  if (minutes < 1) return '< 1m';
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-  if (minutes < 1440) {
-    const h = Math.floor(minutes / 60);
-    const m = Math.round(minutes % 60);
+  const rounded = Math.round(minutes);
+  if (rounded < 1) return '< 1m';
+  if (rounded < 60) return `${rounded}m`;
+  if (rounded < 1440) {
+    const h = Math.floor(rounded / 60);
+    const m = rounded % 60;
     return m > 0 ? `${h}h ${m}m` : `${h}h`;
   }
-  const d = Math.floor(minutes / 1440);
-  const h = Math.round((minutes % 1440) / 60);
+  const d = Math.floor(rounded / 1440);
+  const h = Math.floor((rounded % 1440) / 60);
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
 };
 

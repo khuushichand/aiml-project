@@ -65,6 +65,7 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 ## 6a. Feature-Specific Validation
 
 ### Resource Governor
+
 - [ ] Policy CRUD (create, edit, delete) completes without errors.
 - [ ] Policy resolution shows correct winner for user/org/global scopes.
 - [ ] Rate limit analytics card renders throttle event counts when data is present.
@@ -72,6 +73,7 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 - [ ] Simulation impact shows affected users and requests.
 
 ### Incidents
+
 - [ ] Create, update status, and resolve an incident end-to-end.
 - [ ] SLA metric cards (MTTA, MTTR, P95, resolved count) render with backend data.
 - [ ] Notify stakeholders dialog opens, sends notification, and shows delivery results.
@@ -80,6 +82,7 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 - [ ] Assignment changes persist and drafts are preserved.
 
 ### Organizations
+
 - [ ] Tab navigation (Members, Teams, Keys, Billing) works and preserves URL state.
 - [ ] Member search filters the member table correctly.
 - [ ] Member role changes via Select component persist to the backend.
@@ -87,16 +90,19 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 - [ ] Billing data clears when navigating to an org without billing.
 
 ### Webhooks
+
 - [ ] Create webhook with URL and event subscriptions.
 - [ ] Delivery history displays status, latency, and timestamps.
 - [ ] Test event sends successfully and appears in delivery log.
 
 ### Compliance
+
 - [ ] Posture score and letter grade render correctly.
 - [ ] MFA adoption and key rotation metrics reflect backend data.
 - [ ] Report scheduling (create, edit, delete schedule) works.
 
 ### AI Operations
+
 - [ ] AI spend dashboard shows costs by provider, model, and user.
 - [ ] Agent session list renders with correct status and token counts.
 - [ ] Token budget creation and enforcement work as configured.
