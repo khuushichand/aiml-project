@@ -22,6 +22,7 @@ def test_resolve_chat_run_first_rollout_mode_defaults_off_without_config(
     monkeypatch.setattr(config, "load_comprehensive_config", lambda: None)
 
     assert config.resolve_chat_run_first_rollout_mode() == "off"
+    assert config.resolve_chat_run_first_presentation_variant() == "chat_phase2b_v1"
 
 
 def test_resolve_chat_run_first_provider_allowlist_parses_csv(
@@ -107,6 +108,16 @@ def test_resolve_run_first_cohort_label_maps_default_on_out_of_cohort() -> None:
 
     assert config.resolve_run_first_cohort_label(
         "default_on",
+        eligible=False,
+        ineligible_reason="provider_not_in_rollout_allowlist",
+    ) == "out_of_cohort"
+
+
+def test_resolve_run_first_cohort_label_maps_gated_allowlist_miss_to_out_of_cohort() -> None:
+    from tldw_Server_API.app.core import config
+
+    assert config.resolve_run_first_cohort_label(
+        "gated",
         eligible=False,
         ineligible_reason="provider_not_in_rollout_allowlist",
     ) == "out_of_cohort"

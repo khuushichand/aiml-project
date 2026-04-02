@@ -30,7 +30,7 @@ def test_run_first_rollout_resolvers_default_off_without_config(monkeypatch):
 
     assert app_config.resolve_acp_run_first_rollout_mode() == "off"
     assert app_config.resolve_acp_run_first_provider_allowlist() == []
-    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2a_v1"
+    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2b_v1"
 
 
 def test_run_first_rollout_resolvers_accept_default_on(monkeypatch):

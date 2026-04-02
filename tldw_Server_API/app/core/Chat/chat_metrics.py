@@ -12,6 +12,17 @@ from loguru import logger
 
 from ..Metrics.telemetry import get_telemetry_manager
 
+RUN_FIRST_INELIGIBLE_REASONS = frozenset(
+    {
+        "no_effective_tools",
+        "no_tools",
+        "provider_not_in_rollout_allowlist",
+        "rollout_off",
+        "run_missing",
+        "run_missing_after_filtering",
+    }
+)
+
 
 class ChatMetricLabels(Enum):
     """Standard labels for chat metrics."""
@@ -801,6 +812,12 @@ class ChatMetricsCollector:
         eligible: bool,
         ineligible_reason: str | None,
     ) -> dict[str, str]:
+        normalized_ineligible_reason = str(ineligible_reason or "").strip()
+        if not normalized_ineligible_reason:
+            normalized_ineligible_reason = "none"
+        elif normalized_ineligible_reason not in RUN_FIRST_INELIGIBLE_REASONS:
+            normalized_ineligible_reason = "other"
+
         return {
             ChatMetricLabels.PRESENTATION_VARIANT.value: str(presentation_variant or "").strip() or "unknown",
             ChatMetricLabels.COHORT.value: str(cohort or "").strip() or "unknown",
@@ -808,9 +825,7 @@ class ChatMetricsCollector:
             ChatMetricLabels.MODEL.value: str(model or "").strip() or "unknown",
             ChatMetricLabels.STREAMING.value: str(bool(streaming)).lower(),
             ChatMetricLabels.ELIGIBLE.value: str(bool(eligible)).lower(),
-            ChatMetricLabels.INELIGIBLE_REASON.value: (
-                str(ineligible_reason or "").strip() or "none"
-            ),
+            ChatMetricLabels.INELIGIBLE_REASON.value: normalized_ineligible_reason,
         }
 
     def track_run_first_rollout(

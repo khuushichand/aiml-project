@@ -2677,6 +2677,11 @@ def resolve_run_first_cohort_label(
 
     rollout_mode_name = str(rollout_mode or "").strip().lower()
     if rollout_mode_name == "gated":
+        if (
+            not eligible
+            and str(ineligible_reason or "").strip() == "provider_not_in_rollout_allowlist"
+        ):
+            return "out_of_cohort"
         return "gated"
     if rollout_mode_name == "default_on":
         if eligible:
@@ -2715,7 +2720,7 @@ def resolve_chat_run_first_provider_allowlist(
 def resolve_chat_run_first_presentation_variant(
     raw_variant: Optional[str] = None,
     *,
-    default: str = "chat_phase2a_v1",
+    default: str = "chat_phase2b_v1",
 ) -> str:
     return _resolve_run_first_presentation_variant(
         raw_variant=raw_variant,
@@ -2754,7 +2759,7 @@ def resolve_acp_run_first_provider_allowlist(
 def resolve_acp_run_first_presentation_variant(
     raw_variant: Optional[str] = None,
     *,
-    default: str = "acp_phase2a_v1",
+    default: str = "acp_phase2b_v1",
 ) -> str:
     return _resolve_run_first_presentation_variant(
         raw_variant=raw_variant,

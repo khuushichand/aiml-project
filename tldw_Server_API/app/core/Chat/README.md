@@ -128,6 +128,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ---
 
 ## Phase 2b Run-First Posture
+
 - Chat and ACP now share a phase-2b rollout posture for `run(command)`:
   - `default_on` is the normal presentation for the stable `provider:model` cohort shipped in config
   - `gated` remains available for controlled experiments on narrower cohorts

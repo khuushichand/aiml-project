@@ -738,6 +738,45 @@ def _resolve_chat_run_first_metric_context(
     }
 
 
+def _tool_choice_name(tool_choice: Any) -> str | None:
+    """Extract a pinned tool name from an OpenAI-style tool_choice payload."""
+    if not isinstance(tool_choice, dict):
+        return None
+
+    function_block = tool_choice.get("function")
+    if isinstance(function_block, dict):
+        raw_name = function_block.get("name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            return raw_name.strip()
+
+    raw_name = tool_choice.get("name")
+    if isinstance(raw_name, str) and raw_name.strip():
+        return raw_name.strip()
+
+    return None
+
+
+def _tool_path_metric_context(context: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Drop rollout-only labels that tool-path/completion collectors do not accept."""
+    if context is None:
+        return None
+
+    trimmed = dict(context)
+    trimmed.pop("ineligible_reason", None)
+    return trimmed
+
+
+def _resolve_run_first_completion_outcome(exc: Exception) -> str:
+    """Map post-provider exceptions into the completion-proxy outcome label."""
+    if isinstance(exc, HTTPException):
+        detail = str(getattr(exc, "detail", "") or "").strip().lower()
+        if exc.status_code == status.HTTP_400_BAD_REQUEST and (
+            "block" in detail or "moderation" in detail
+        ):
+            return "blocked"
+    return "error"
+
+
 def _tool_names_from_tool_calls(tool_calls: Any) -> list[str]:
     """Extract normalized tool names from OpenAI-style tool call payloads."""
     if not isinstance(tool_calls, list):
@@ -792,7 +831,8 @@ def _emit_chat_run_first_tool_path_metrics(
     function_call: Any = None,
 ) -> None:
     """Emit first-tool and fallback-after-run metrics for one assistant turn."""
-    if context is None:
+    metric_context = _tool_path_metric_context(context)
+    if metric_context is None:
         return
 
     tool_names = _tool_names_from_tool_calls(tool_calls)
@@ -805,7 +845,7 @@ def _emit_chat_run_first_tool_path_metrics(
 
     first_tool = tool_names[0]
     try:
-        metrics.track_run_first_first_tool(**context, first_tool=first_tool)
+        metrics.track_run_first_first_tool(**metric_context, first_tool=first_tool)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chat run-first first-tool metric emission failed: {}", exc)
 
@@ -817,7 +857,7 @@ def _emit_chat_run_first_tool_path_metrics(
         return
 
     try:
-        metrics.track_run_first_fallback_after_run(**context, fallback_tool=fallback_tool)
+        metrics.track_run_first_fallback_after_run(**metric_context, fallback_tool=fallback_tool)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chat run-first fallback metric emission failed: {}", exc)
 
@@ -829,10 +869,11 @@ def _emit_chat_run_first_completion_metric(
     outcome: str,
 ) -> None:
     """Emit the completion-proxy metric for one chat execution."""
-    if context is None:
+    metric_context = _tool_path_metric_context(context)
+    if metric_context is None:
         return
     try:
-        metrics.track_run_first_completion_proxy(**context, outcome=outcome)
+        metrics.track_run_first_completion_proxy(**metric_context, outcome=outcome)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chat run-first completion metric emission failed: {}", exc)
 
@@ -1812,6 +1853,16 @@ def build_call_params_from_request(
         call_params["tools"] = run_first_presentation.llm_tools
     else:
         call_params.pop("tools", None)
+    if run_first_presentation.tool_choice is not None:
+        call_params["tool_choice"] = run_first_presentation.tool_choice
+    else:
+        pinned_tool_choice = call_params.get("tool_choice")
+        pinned_tool_name = _tool_choice_name(pinned_tool_choice)
+        effective_tool_names = set(run_first_presentation.effective_tool_names)
+        if pinned_tool_name and pinned_tool_name not in effective_tool_names:
+            call_params.pop("tool_choice", None)
+        elif not effective_tool_names and pinned_tool_name:
+            call_params.pop("tool_choice", None)
     call_params["_chat_effective_tool_names"] = run_first_presentation.effective_tool_names
     call_params["_chat_run_first_eligible"] = run_first_presentation.eligible
     if run_first_presentation.ineligible_reason is not None:
@@ -3485,11 +3536,6 @@ async def execute_streaming_call(
             },
         )
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
-        _emit_chat_run_first_completion_metric(
-            metrics,
-            context=run_first_metric_context,
-            outcome="error",
-        )
         metrics.track_llm_call(
             selected_provider,
             model,
@@ -3547,6 +3593,13 @@ async def execute_streaming_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        run_first_metric_context = _emit_chat_run_first_rollout_metrics(
+                            metrics,
+                            cleaned_args=cleaned_args,
+                            provider=selected_provider,
+                            model=model,
+                            streaming=True,
+                        )
                         llm_call_func = llm_call_func_fb
                         # Explicit telemetry for direct (non-queued) streaming fallback success
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
@@ -3569,43 +3622,52 @@ async def execute_streaming_call(
             # Queue path: stream SSE error as well
             pass
 
-        # Safely capture exception details for streaming outside the closure
-        _err_message = str(e)
-        _err_type = type(e).__name__
+        if raw_stream_iter is not None:
+            pass
+        else:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
 
-        # New safe variant that does not reference the except-scope variable directly
-        async def _safe_err_stream():
-            try:
-                import json as _json
-                payload = {"error": {"message": _err_message, "type": _err_type}}
-                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
-                    payload["conversation_id"] = final_conversation_id
-                    payload["tldw_conversation_id"] = final_conversation_id
-                    if system_message_id:
-                        payload["tldw_system_message_id"] = system_message_id
-                    if normalized_continuation_metadata:
-                        payload["tldw_continuation"] = normalized_continuation_metadata
-                yield f"data: {_json.dumps(payload)}\n\n"
-            except _CHAT_NONCRITICAL_EXCEPTIONS:
-                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
-                    yield (
-                        f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
-                        f"\"conversation_id\":\"{final_conversation_id}\","
-                        f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
-                    )
-                else:
-                    yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
-            yield "data: [DONE]\n\n"
+            # Safely capture exception details for streaming outside the closure
+            _err_message = str(e)
+            _err_type = type(e).__name__
 
-        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
-        return StreamingResponse(
-            _safe_err_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
+            # New safe variant that does not reference the except-scope variable directly
+            async def _safe_err_stream():
+                try:
+                    import json as _json
+                    payload = {"error": {"message": _err_message, "type": _err_type}}
+                    if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                        payload["conversation_id"] = final_conversation_id
+                        payload["tldw_conversation_id"] = final_conversation_id
+                        if system_message_id:
+                            payload["tldw_system_message_id"] = system_message_id
+                        if normalized_continuation_metadata:
+                            payload["tldw_continuation"] = normalized_continuation_metadata
+                    yield f"data: {_json.dumps(payload)}\n\n"
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                        yield (
+                            f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
+                            f"\"conversation_id\":\"{final_conversation_id}\","
+                            f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
+                        )
+                    else:
+                        yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
+                yield "data: [DONE]\n\n"
+
+            await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
+            return StreamingResponse(
+                _safe_err_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
@@ -4515,11 +4577,6 @@ async def execute_non_stream_call(
             raise
         raise
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
-        _emit_chat_run_first_completion_metric(
-            metrics,
-            context=run_first_metric_context,
-            outcome="error",
-        )
         llm_latency = time.time() - llm_start_time
         if not queue_failure_recorded:
             metrics.track_llm_call(
@@ -4570,6 +4627,11 @@ async def execute_non_stream_call(
                         )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
+                        _emit_chat_run_first_completion_metric(
+                            metrics,
+                            context=run_first_metric_context,
+                            outcome="error",
+                        )
                         raise
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
@@ -4580,6 +4642,13 @@ async def execute_non_stream_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        run_first_metric_context = _emit_chat_run_first_rollout_metrics(
+                            metrics,
+                            cleaned_args=cleaned_args,
+                            provider=selected_provider,
+                            model=model,
+                            streaming=False,
+                        )
                         metrics_recorded = True
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
@@ -4590,12 +4659,32 @@ async def execute_non_stream_call(
                             )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
+                        _emit_chat_run_first_completion_metric(
+                            metrics,
+                            context=run_first_metric_context,
+                            outcome="error",
+                        )
                         raise
                 else:
+                    _emit_chat_run_first_completion_metric(
+                        metrics,
+                        context=run_first_metric_context,
+                        outcome="error",
+                    )
                     raise
             else:
+                _emit_chat_run_first_completion_metric(
+                    metrics,
+                    context=run_first_metric_context,
+                    outcome="error",
+                )
                 raise
         else:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
             raise
 
     if isinstance(llm_response, str) and should_force_normalize_string_responses():
@@ -4604,6 +4693,8 @@ async def execute_non_stream_call(
     content_to_save: str | None = None
     tool_calls_to_save: Any | None = None
     function_call_to_save: Any | None = None
+    first_turn_tool_calls: Any | None = None
+    first_turn_function_call: Any | None = None
     if llm_response and isinstance(llm_response, dict):
         choices = llm_response.get("choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
@@ -4612,6 +4703,8 @@ async def execute_non_stream_call(
                 content_to_save = message_block.get("content")
                 tool_calls_to_save = message_block.get("tool_calls")
                 function_call_to_save = message_block.get("function_call")
+                first_turn_tool_calls = tool_calls_to_save
+                first_turn_function_call = function_call_to_save
         usage = llm_response.get("usage")
         if usage:
             try:
@@ -4689,6 +4782,11 @@ async def execute_non_stream_call(
     elif isinstance(llm_response, str):
         content_to_save = llm_response
     elif llm_response is None:
+        _emit_chat_run_first_completion_metric(
+            metrics,
+            context=run_first_metric_context,
+            outcome="error",
+        )
         raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
 
     # Cache content text for moderation/usage when content is non-string
@@ -4715,6 +4813,11 @@ async def execute_non_stream_call(
                 ),
             )
             if sm_result.action == "block":
+                _emit_chat_run_first_completion_metric(
+                    metrics,
+                    context=run_first_metric_context,
+                    outcome="blocked",
+                )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=sm_result.block_message or "Output blocked by self-monitoring rule",
@@ -4822,6 +4925,11 @@ async def execute_non_stream_call(
                     logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")
 
                 if resolved_action == "block":
+                    _emit_chat_run_first_completion_metric(
+                        metrics,
+                        context=run_first_metric_context,
+                        outcome="blocked",
+                    )
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Output violates moderation policy")
                 if resolved_action == "redact":
                     try:
@@ -4888,6 +4996,11 @@ async def execute_non_stream_call(
             StructuredGenerationParseError,
             StructuredGenerationSchemaError,
         ) as structured_exc:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
             raise build_structured_http_exception(structured_exc) from structured_exc
 
     should_save_response = (
@@ -5012,6 +5125,11 @@ async def execute_non_stream_call(
                             StructuredGenerationParseError,
                             StructuredGenerationSchemaError,
                         ) as structured_exc:
+                            _emit_chat_run_first_completion_metric(
+                                metrics,
+                                context=run_first_metric_context,
+                                outcome="error",
+                            )
                             raise build_structured_http_exception(structured_exc) from structured_exc
                         llm_response = continuation_response
                         content_to_save = continuation_content
@@ -5076,6 +5194,11 @@ async def execute_non_stream_call(
             StructuredGenerationParseError,
             StructuredGenerationSchemaError,
         ) as structured_exc:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
             raise build_structured_http_exception(structured_exc) from structured_exc
 
     if pending_assistant_payload is not None and should_persist and final_conversation_id:
@@ -5099,8 +5222,8 @@ async def execute_non_stream_call(
     _emit_chat_run_first_tool_path_metrics(
         metrics,
         context=run_first_metric_context,
-        tool_calls=tool_calls_to_save,
-        function_call=function_call_to_save,
+        tool_calls=first_turn_tool_calls,
+        function_call=first_turn_function_call,
     )
     _emit_chat_run_first_completion_metric(
         metrics,

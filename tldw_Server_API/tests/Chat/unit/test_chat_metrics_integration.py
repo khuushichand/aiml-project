@@ -293,6 +293,36 @@ class TestChatMetricsCollector:
         assert labels["eligible"] == "false"
         assert labels["ineligible_reason"] == "provider_not_in_rollout_allowlist"
 
+    @pytest.mark.parametrize(
+        ("raw_reason", "expected"),
+        [
+            ("no_tools", "no_tools"),
+            ("no_effective_tools", "no_effective_tools"),
+            ("provider_not_in_rollout_allowlist", "provider_not_in_rollout_allowlist"),
+            ("rollout_off", "rollout_off"),
+            ("run_missing", "run_missing"),
+            ("run_missing_after_filtering", "run_missing_after_filtering"),
+            (None, "none"),
+            ("unexpected_reason", "other"),
+        ],
+    )
+    def test_chat_metrics_normalizes_ineligible_reason_to_bounded_values(self, raw_reason, expected):
+        collector = ChatMetricsCollector()
+        collector.metrics.run_first_rollout = MagicMock()
+
+        collector.track_run_first_rollout(
+            presentation_variant="chat_phase2b_v1",
+            cohort="default_on",
+            provider="openai",
+            model="gpt-4o-mini",
+            streaming=False,
+            eligible=False,
+            ineligible_reason=raw_reason,
+        )
+
+        _, labels = collector.metrics.run_first_rollout.add.call_args.args
+        assert labels[ChatMetricLabels.INELIGIBLE_REASON.value] == expected
+
     def test_chat_metrics_records_run_first_tool_path_and_completion_labels(self):
         collector = ChatMetricsCollector()
         collector.metrics.run_first_first_tool = MagicMock()
