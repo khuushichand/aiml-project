@@ -88,6 +88,21 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
       "common:error.imageBackendUnavailableHint",
       "Enable an image backend (e.g., Flux-Klein or ZTurbo) in your tldw server config, then try again."
     )
+  } else if (
+    lower.includes("no llm providers are configured") ||
+    lower.includes("no providers configured") ||
+    lower.includes("provider_not_configured") ||
+    (lower.includes("provider") &&
+      (lower.includes("not configured") || lower.includes("no api key")))
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyNoProviderSummary",
+      "No LLM provider is configured on your server."
+    )
+    hint = i18n.t(
+      "common:error.friendlyNoProviderHint",
+      "Add an API key for OpenAI, Anthropic, or another provider in your server's .env file, then restart the server and try again."
+    )
   } else if (lower.includes("stream timeout: no updates received")) {
     summary = i18n.t(
       "common:error.friendlyTimeoutSummary",

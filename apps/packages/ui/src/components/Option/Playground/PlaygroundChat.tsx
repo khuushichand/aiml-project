@@ -13,6 +13,7 @@ import { generateID, updateMessageMedia } from "@/db/dexie/helpers"
 import { fetchChatModels, clearChatModelsCache } from "@/services/tldw-server"
 import { useIsConnected } from "@/hooks/useConnectionState"
 import { tldwClient, type ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
+import { NoProviderBanner } from "@/components/Common/NoProviderBanner"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import {
   getChatLinkedResearchActionPolicy,
@@ -192,6 +193,21 @@ export const PlaygroundChat = ({
     enabled: isConnected,
     staleTime: 30_000,
   })
+  const {
+    data: providersStatus,
+    refetch: refetchProvidersStatus,
+  } = useQuery({
+    queryKey: ["playground:providersStatus"],
+    queryFn: async () => {
+      await tldwClient.initialize().catch(() => null)
+      return await tldwClient.getProvidersStatus()
+    },
+    enabled: isConnected,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const noProvidersConfigured =
+    providersStatus != null && providersStatus.any_configured === false
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
     temporaryChat || historyId === "temp" ? null : historyId
@@ -995,7 +1011,17 @@ export const PlaygroundChat = ({
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-4 w-full">
-            {isConnected && chatModelsFetched && chatModels.length === 0 && (
+            {isConnected && noProvidersConfigured && (
+              <NoProviderBanner
+                className="mb-4"
+                onRefresh={() => {
+                  clearChatModelsCache()
+                  void refetchChatModels()
+                  void refetchProvidersStatus()
+                }}
+              />
+            )}
+            {isConnected && !noProvidersConfigured && chatModelsFetched && chatModels.length === 0 && (
               <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
                 <p className="font-medium">{t("playground:noModelsAvailable", "No AI models available")}</p>
                 <p className="mt-1 text-xs text-text-muted">
