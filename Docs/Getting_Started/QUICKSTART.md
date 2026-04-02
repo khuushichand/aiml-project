@@ -140,7 +140,14 @@ docker compose --env-file tldw_Server_API/Config_Files/.env \
 
 ### Next: create the first admin user
 
-Follow the multi-user setup guide at `Docs/User_Guides/Server/Multi-User_Postgres_Setup.md` to create users and configure roles.
+Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in your `.env` before running quickstart to create the admin user automatically, or run the CLI after startup:
+
+```bash
+docker compose exec app python -m tldw_Server_API.app.core.AuthNZ.create_admin \
+  --username admin --password <your-password>
+```
+
+For full details see `Docs/User_Guides/Server/Multi-User_Postgres_Setup.md`.
 
 ### External Postgres
 

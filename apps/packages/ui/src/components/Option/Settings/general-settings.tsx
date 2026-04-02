@@ -13,6 +13,7 @@ import { useConnectionState, useConnectionActions } from "@/hooks/useConnectionS
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { useTutorialCompletion } from "@/store/tutorials"
+import { isExtensionRuntime } from "@/utils/browser-runtime"
 
 export const GeneralSettings = () => {
   // Persisted preference: auto-finish onboarding when connection & RAG are healthy
@@ -131,10 +132,15 @@ export const GeneralSettings = () => {
           </div>
         </div>
         <p className="mt-1 text-[11px] text-text-subtle">
-          {t(
-            "generalSettings.connection.changeHint",
-            "To change, go to Settings > tldw Server, or update NEXT_PUBLIC_API_URL and rebuild."
-          )}
+          {isExtensionRuntime()
+            ? t(
+                "generalSettings.connection.changeHintExtension",
+                "To change, update the server URL in extension settings."
+              )
+            : t(
+                "generalSettings.connection.changeHint",
+                "To change, go to Settings > tldw Server, or update NEXT_PUBLIC_API_URL and rebuild."
+              )}
         </p>
       </div>
 

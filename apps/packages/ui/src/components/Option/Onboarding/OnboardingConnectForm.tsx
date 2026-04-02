@@ -352,23 +352,32 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             setServerUrl(fallback)
           } else if (isExtensionRuntime()) {
             // B1: Auto-probe localhost when no URL is configured (extension only)
+            // Use a normal CORS-mode fetch so we can distinguish a running server
+            // (which may reject CORS with a TypeError) from a truly unreachable
+            // host (which also throws TypeError but after an abort timeout).
+            const probeController = new AbortController()
+            const probeTimer = setTimeout(
+              () => probeController.abort(),
+              LOCALHOST_PROBE_TIMEOUT_MS
+            )
             try {
-              const controller = new AbortController()
-              const timer = setTimeout(
-                () => controller.abort(),
-                LOCALHOST_PROBE_TIMEOUT_MS
-              )
               const resp = await fetch(LOCALHOST_PROBE_URL, {
-                signal: controller.signal,
-                mode: "no-cors",
+                signal: probeController.signal,
               })
-              clearTimeout(timer)
-              // mode: "no-cors" yields opaque response (status 0) on success
-              if (resp.ok || resp.type === "opaque") {
+              clearTimeout(probeTimer)
+              if (resp.ok) {
                 setServerUrl("http://localhost:8000")
               }
-            } catch {
-              // Server not reachable - leave URL empty for manual entry
+            } catch (err) {
+              clearTimeout(probeTimer)
+              // A CORS rejection throws TypeError but the abort signal is NOT
+              // triggered. An unreachable host times out and the signal IS aborted.
+              if (err instanceof TypeError && !probeController.signal.aborted) {
+                // Likely a CORS rejection — server is present but CORS not
+                // configured for this origin. Still pre-fill the URL.
+                setServerUrl("http://localhost:8000")
+              }
+              // AbortError or truly unreachable — leave URL empty for manual entry
             }
           }
         }
@@ -1373,13 +1382,16 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             <button
               type="button"
               onClick={() => setAuthMode("multi-user")}
-              disabled={isConnecting}
+              disabled={isConnecting || isExtensionRuntime()}
               className={cn(
                 "flex-1 flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
-                authMode === "multi-user"
+                authMode === "multi-user" && !isExtensionRuntime()
                   ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border/70 text-text-muted hover:bg-surface2"
+                  : isExtensionRuntime()
+                    ? "border-border/40 text-text-subtle cursor-not-allowed opacity-60"
+                    : "border-border/70 text-text-muted hover:bg-surface2"
               )}
+              title={isExtensionRuntime() ? t("settings:onboarding.authMode.extensionApiKeyOnly", "The extension only supports API key authentication") : undefined}
             >
               <User className="size-4" />
               {t("settings:onboarding.authMode.multi", "Login")}
@@ -1415,8 +1427,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           )}
         </div>
 
-        {/* Auth Fields */}
-        {authMode === "single-user" ? (
+        {/* Auth Fields — extension always uses API key, even if server is multi-user */}
+        {authMode === "single-user" || (authMode === "multi-user" && isExtensionRuntime()) ? (
           <div>
             <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
               <Key className="size-4" />
