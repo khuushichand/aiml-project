@@ -2126,6 +2126,23 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
   }
 
+  /**
+   * Check which LLM providers are configured on the server.
+   * Returns `{ providers: [...], any_configured: boolean }`.
+   */
+  async getProvidersStatus(): Promise<{
+    providers: Array<{
+      name: string
+      configured: boolean
+      requires_api_key: boolean
+      key_hint?: string | null
+      key_source?: string | null
+    }>
+    any_configured: boolean
+  }> {
+    return await bgRequest<any>({ path: '/api/v1/config/providers', method: 'GET' })
+  }
+
   async getModelsMetadata(options?: {
     refreshOpenRouter?: boolean
   }): Promise<any> {

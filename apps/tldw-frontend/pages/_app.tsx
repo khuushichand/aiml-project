@@ -13,6 +13,7 @@ import { BackendRecoveryUiProvider } from "@/components/Common/BackendRecoveryUi
 import { AppProviders } from "@web/components/AppProviders"
 import ErrorBoundary from "@web/components/ErrorBoundary"
 import { ConfigurationGuard } from "@web/components/networking/ConfigurationGuard"
+import { ServerReadinessGate } from "@web/components/networking/ServerReadinessGate"
 import { loadTldwAuth, loadTldwClient } from "@web/lib/configured-auth-state"
 
 const OptionLayout = dynamic(
@@ -257,6 +258,7 @@ export default function App({ Component, pageProps }: AppProps) {
 
   return (
     <AppProviders>
+      <ServerReadinessGate>
       <ConfigurationGuard>
         <BackendRecoveryUiProvider routeRecoveryEnabled>
           <ErrorBoundary>
@@ -274,6 +276,7 @@ export default function App({ Component, pageProps }: AppProps) {
           </ErrorBoundary>
         </BackendRecoveryUiProvider>
       </ConfigurationGuard>
+      </ServerReadinessGate>
     </AppProviders>
   )
 }
