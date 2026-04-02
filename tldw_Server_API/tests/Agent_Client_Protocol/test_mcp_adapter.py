@@ -489,7 +489,24 @@ async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation
     messages_arg, tools_arg = mock_llm_caller.call.await_args.args
     assert messages_arg[0]["role"] == "system"
     assert "ACP run-first guidance" in messages_arg[0]["content"]
-    assert [tool["function"]["name"] for tool in tools_arg] == ["run", "search"]
+    assert tools_arg == [
+        {
+            "type": "function",
+            "function": {
+                "name": "run",
+                "description": "Execute governed commands Preferred first tool for multi-step work.",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Fallback tool: Search documents",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
     assert rollout_calls == [
         {
             "agent_type": "mcp",
