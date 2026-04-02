@@ -3133,8 +3133,8 @@ async def create_chat_completion(
                         detail={
                             "error": "no_provider_configured",
                             "message": (
-                                "No LLM provider is configured. Add an API key "
-                                "(e.g., OPENAI_API_KEY) to your server's .env file and restart."
+                                "No LLM provider is configured. "
+                                "Contact your administrator or check the provider configuration."
                             ),
                             "docs_url": "/docs#section/LLM-Providers",
                             "admin_url": "/admin/providers",

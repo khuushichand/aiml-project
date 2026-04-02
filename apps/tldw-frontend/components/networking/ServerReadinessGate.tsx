@@ -1,6 +1,18 @@
 import React from "react"
 
-const HEALTH_URL = `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/health`
+import { resolvePublicApiOrigin, type DeploymentEnv } from "@web/lib/api-base"
+
+const _env: DeploymentEnv = {
+  NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL
+}
+
+const _origin =
+  typeof window !== "undefined"
+    ? resolvePublicApiOrigin(_env, window.location.origin)
+    : resolvePublicApiOrigin(_env)
+
+const HEALTH_URL = `${_origin}/health`
 const MAX_WAIT_MS = 15_000
 const RETRY_INTERVAL_MS = 2_000
 
@@ -12,7 +24,9 @@ async function checkHealth(): Promise<boolean> {
       method: "GET",
       signal: AbortSignal.timeout(3000)
     })
-    return res.ok
+    if (!res.ok) return false
+    const body = await res.json()
+    return body.status === "ok"
   } catch {
     return false
   }

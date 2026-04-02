@@ -171,7 +171,7 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "║  3. Add an LLM provider key (OpenAI, Anthropic, etc.)       ║"
 	@echo "║     → Edit tldw_Server_API/Config_Files/.env                 ║"
 	@echo "║     → Add OPENAI_API_KEY=sk-... (or other provider)         ║"
-	@echo "║     → Restart: docker compose restart                        ║"
+	@echo "║     → Restart: docker compose up -d                           ║"
 	@echo "║  4. Try chatting or ingesting a YouTube URL!                 ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
@@ -505,12 +505,18 @@ stt-golden:
 .PHONY: check
 
 check:
-	@echo "Running tldw sanity checks..."
-	@echo -n "  Server health:    " && curl -sf http://localhost:8000/health > /dev/null && echo "✓" || echo "✗ (not running)"
-	@echo -n "  API key set:      " && (grep -q '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null && echo "✓") || echo "✗ (check .env)"
-	@echo -n "  FFmpeg available:  " && command -v ffmpeg > /dev/null && echo "✓" || echo "✗ (install ffmpeg)"
-	@echo -n "  Provider keys:    " && curl -sf -H "X-API-KEY: $$(grep '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null | cut -d= -f2-)" http://localhost:8000/api/v1/config/providers 2>/dev/null | grep -q '"any_configured":true' && echo "✓" || echo "✗ (add a provider key to .env)"
-	@echo "Done."
+	@FAIL=0; \
+	echo "Running tldw sanity checks..."; \
+	echo -n "  Server health:    "; \
+	if curl -sf http://localhost:8000/health > /dev/null 2>&1; then echo "✓"; else echo "✗ (not running)"; FAIL=1; fi; \
+	echo -n "  API key set:      "; \
+	if grep -q '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null; then echo "✓"; else echo "✗ (check .env)"; FAIL=1; fi; \
+	echo -n "  FFmpeg available:  "; \
+	if command -v ffmpeg > /dev/null 2>&1; then echo "✓"; else echo "✗ (install ffmpeg)"; FAIL=1; fi; \
+	echo -n "  Provider keys:    "; \
+	if curl -sf -H "X-API-KEY: $$(grep '^SINGLE_USER_API_KEY=' $(TLDW_ENV_FILE) 2>/dev/null | cut -d= -f2-)" http://localhost:8000/api/v1/config/providers 2>/dev/null | grep -q '"any_configured":true'; then echo "✓"; else echo "✗ (add a provider key to .env)"; FAIL=1; fi; \
+	if [ "$$FAIL" -ne 0 ]; then echo "Some checks failed."; exit 1; fi; \
+	echo "All checks passed."
 
 # -----------------------------------------------------------------------------
 # Secret generation helper (C3)

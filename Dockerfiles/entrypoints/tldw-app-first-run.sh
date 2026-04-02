@@ -3,7 +3,9 @@ set -eu
 
 ENV_FILE="${TLDW_ENV_FILE:-/app/tldw_Server_API/Config_Files/.env}"
 AUTH_MARKER_DIR="${TLDW_AUTH_MARKER_DIR:-/app/Databases}"
-AUTH_MARKER_FILE="${AUTH_MARKER_DIR}/.authnz_initialized_single_user"
+# NOTE: AUTH_MARKER_FILE is derived below *after* AUTH_MODE is resolved,
+# so that the marker is mode-specific (e.g. .authnz_initialized_single_user
+# vs .authnz_initialized_multi_user). Changing AUTH_MODE will re-trigger init.
 RUN_AUTH_INIT_ON_START="${TLDW_RUN_AUTH_INIT_ON_START:-1}"
 
 incoming_auth_mode="${AUTH_MODE:-}"
@@ -89,6 +91,9 @@ fi
 
 AUTH_MODE="${AUTH_MODE:-single_user}"
 DATABASE_URL="${DATABASE_URL:-sqlite:///./Databases/users.db}"
+
+# Derive mode-specific marker so switching AUTH_MODE re-triggers init.
+AUTH_MARKER_FILE="${AUTH_MARKER_DIR}/.authnz_initialized_${AUTH_MODE}"
 
 upsert_env "AUTH_MODE" "$AUTH_MODE"
 upsert_env "DATABASE_URL" "$DATABASE_URL"
@@ -185,7 +190,7 @@ sys.stdout.write('1' if asyncio.run(check()) else '0')
         echo "  the first admin user automatically, or run:"
         echo ""
         echo "  docker compose exec app python -m \\"
-        echo "    tldw_Server_API.app.core.AuthNZ.initialize"
+        echo "    tldw_Server_API.app.core.AuthNZ.create_admin"
         echo "======================================================================"
         echo ""
       fi

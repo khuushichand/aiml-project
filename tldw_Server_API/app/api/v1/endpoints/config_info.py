@@ -9,10 +9,12 @@ import asyncio
 import configparser
 import os
 import shutil
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -467,8 +469,8 @@ _PROVIDER_VALIDATION_INFO: dict[str, dict[str, Any]] = {
     "google": {
         "url": "https://generativelanguage.googleapis.com/v1beta/models",
         "method": "GET",
-        "auth_style": "query_param",
-        "query_param_name": "key",
+        "auth_header": "x-goog-api-key",
+        "auth_prefix": "",
     },
     "cohere": {
         "url": "https://api.cohere.ai/v1/models",
@@ -504,6 +506,31 @@ _PROVIDER_VALIDATION_INFO: dict[str, dict[str, Any]] = {
 
 _VALIDATION_TIMEOUT_SECONDS = 5.0
 
+# ---------------------------------------------------------------------------
+# Simple in-memory rate limiter for provider validation (5 calls/min per IP)
+# ---------------------------------------------------------------------------
+_VALIDATE_RATE_LIMIT = 5  # max calls
+_VALIDATE_RATE_WINDOW = 60  # seconds
+_validate_call_log: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_validate_rate_limit(client_ip: str) -> None:
+    """Raise 429 if the caller exceeds the provider-validation rate limit."""
+    now = time.monotonic()
+    window_start = now - _VALIDATE_RATE_WINDOW
+
+    # Prune expired entries
+    timestamps = _validate_call_log[client_ip]
+    _validate_call_log[client_ip] = [t for t in timestamps if t > window_start]
+
+    if len(_validate_call_log[client_ip]) >= _VALIDATE_RATE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {_VALIDATE_RATE_LIMIT} validation requests per {_VALIDATE_RATE_WINDOW}s",
+        )
+
+    _validate_call_log[client_ip].append(now)
+
 
 def _key_hint(api_key: str) -> str:
     """Return a safe hint for a key: first 3 and last 4 chars, or just last 4 if short."""
@@ -531,8 +558,8 @@ def _resolve_provider_key(provider: str) -> Optional[str]:
         val = (keys.get(provider) or "").strip()
         if val:
             return val
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to load API keys for provider %s: %s", provider, e)
 
     return None
 
@@ -554,7 +581,7 @@ class ProviderValidateRequest(BaseModel):
     provider: str = Field(..., description="Provider name to validate (e.g. 'openai')")
     api_key: Optional[str] = Field(
         None,
-        description="API key to validate. If omitted, uses the currently configured key.",
+        description="API key to validate. Must be provided; server will not fall back to configured keys.",
     )
 
 
@@ -565,7 +592,7 @@ class ProviderValidateResponse(BaseModel):
 
 
 @router.get("/config/providers", response_model=ProvidersStatusResponse)
-async def list_configured_providers():
+async def list_configured_providers() -> ProvidersStatusResponse:
     """List all supported LLM providers and their configuration status.
 
     Returns which providers have API keys set (from environment variables or
@@ -625,25 +652,32 @@ async def list_configured_providers():
 
 
 @router.post("/config/validate-provider", response_model=ProviderValidateResponse)
-async def validate_provider_key(body: ProviderValidateRequest):
+async def validate_provider_key(body: ProviderValidateRequest, request: Request) -> ProviderValidateResponse:
     """Validate a provider API key by making a lightweight test call.
 
-    If ``api_key`` is omitted in the request body the currently configured key
-    is used. The test call is provider-specific and designed to check
-    authentication without running inference. Times out after 5 seconds.
+    The caller **must** supply ``api_key`` in the request body. The endpoint
+    never falls back to server-configured keys to prevent unauthenticated
+    callers from probing which providers are configured.
+
+    Rate-limited to 5 requests per minute per client IP.
 
     Returns ``{valid: true}`` on success or ``{valid: false, error: "..."}``
     on failure.
     """
+    # Rate-limit: 5 calls/min per IP
+    client_ip = request.client.host if request.client else "unknown"
+    _check_validate_rate_limit(client_ip)
+
     provider = body.provider.strip().lower()
 
-    # Resolve key
-    api_key = (body.api_key or "").strip() or _resolve_provider_key(provider)
+    # Always require the caller to provide the key -- never fall back to
+    # server-configured keys (prevents unauthenticated provider probing).
+    api_key = (body.api_key or "").strip()
     if not api_key:
         return ProviderValidateResponse(
             provider=provider,
             valid=False,
-            error=f"No API key provided or configured for '{provider}'",
+            error="api_key is required. Provide the key you want to validate.",
         )
 
     info = _PROVIDER_VALIDATION_INFO.get(provider)
@@ -694,20 +728,14 @@ async def _validate_provider_http(
     url = info["url"]
     method = info.get("method", "GET").upper()
 
-    # Build headers
+    # Build headers -- always use headers for auth, never query strings
     headers: dict[str, str] = {}
     extra_headers = info.get("extra_headers", {})
     headers.update(extra_headers)
 
-    auth_style = info.get("auth_style", "header")
-    if auth_style == "query_param":
-        # e.g. Google: ?key=<api_key>
-        separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}{info['query_param_name']}={api_key}"
-    else:
-        auth_header = info.get("auth_header", "Authorization")
-        auth_prefix = info.get("auth_prefix", "Bearer ")
-        headers[auth_header] = f"{auth_prefix}{api_key}"
+    auth_header = info.get("auth_header", "Authorization")
+    auth_prefix = info.get("auth_prefix", "Bearer ")
+    headers[auth_header] = f"{auth_prefix}{api_key}"
 
     body_data = info.get("body")
 

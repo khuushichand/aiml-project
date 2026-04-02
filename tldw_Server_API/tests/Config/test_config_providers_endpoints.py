@@ -9,11 +9,21 @@ import pytest
 
 from tldw_Server_API.app.api.v1.endpoints.config_info import (
     ProviderValidateRequest,
+    _check_validate_rate_limit,
     _key_hint,
     _resolve_provider_key,
+    _validate_call_log,
     list_configured_providers,
     validate_provider_key,
 )
+
+
+def _make_mock_request(client_host: str = "127.0.0.1") -> MagicMock:
+    """Create a mock FastAPI Request with a client IP."""
+    req = MagicMock()
+    req.client = MagicMock()
+    req.client.host = client_host
+    return req
 
 
 # ---------------------------------------------------------------------------
@@ -181,19 +191,22 @@ class TestListConfiguredProviders:
 
 
 class TestValidateProviderKey:
-    @pytest.mark.asyncio
-    async def test_no_key_returns_invalid(self, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    @pytest.fixture(autouse=True)
+    def _clear_rate_limit_state(self):
+        """Reset the in-memory rate limiter between tests."""
+        _validate_call_log.clear()
+        yield
+        _validate_call_log.clear()
 
-        with patch(
-            "tldw_Server_API.app.api.v1.schemas.chat_request_schemas.get_api_keys",
-            return_value={},
-        ):
-            body = ProviderValidateRequest(provider="openai")
-            response = await validate_provider_key(body)
+    @pytest.mark.asyncio
+    async def test_no_key_returns_invalid(self):
+        """Omitting api_key should return an error requiring the caller to supply one."""
+        body = ProviderValidateRequest(provider="openai")
+        request = _make_mock_request()
+        response = await validate_provider_key(body, request)
 
         assert response.valid is False
-        assert "No API key" in response.error
+        assert "api_key is required" in response.error
 
     @pytest.mark.asyncio
     async def test_unknown_provider_with_key_returns_valid(self):
@@ -202,7 +215,8 @@ class TestValidateProviderKey:
             provider="some-unknown-provider",
             api_key="test-key-123",
         )
-        response = await validate_provider_key(body)
+        request = _make_mock_request()
+        response = await validate_provider_key(body, request)
         assert response.valid is True
         assert response.error is None
 
@@ -222,7 +236,8 @@ class TestValidateProviderKey:
                 provider="openai",
                 api_key="sk-valid-key-123",
             )
-            response = await validate_provider_key(body)
+            request = _make_mock_request()
+            response = await validate_provider_key(body, request)
 
         assert response.valid is True
         assert response.provider == "openai"
@@ -243,7 +258,8 @@ class TestValidateProviderKey:
                 provider="openai",
                 api_key="sk-invalid-key",
             )
-            response = await validate_provider_key(body)
+            request = _make_mock_request()
+            response = await validate_provider_key(body, request)
 
         assert response.valid is False
         assert "Authentication failed" in response.error
@@ -264,7 +280,8 @@ class TestValidateProviderKey:
                 provider="openai",
                 api_key="sk-rate-limited-key",
             )
-            response = await validate_provider_key(body)
+            request = _make_mock_request()
+            response = await validate_provider_key(body, request)
 
         assert response.valid is True
 
@@ -287,13 +304,14 @@ class TestValidateProviderKey:
                 provider="anthropic",
                 api_key="ant-valid-key",
             )
-            response = await validate_provider_key(body)
+            request = _make_mock_request()
+            response = await validate_provider_key(body, request)
 
         assert response.valid is True
 
     @pytest.mark.asyncio
-    async def test_google_uses_query_param_auth(self):
-        """Google validation should pass key as query parameter."""
+    async def test_google_uses_header_auth_not_query_string(self):
+        """Google validation should use x-goog-api-key header, not a query parameter."""
         mock_response = MagicMock()
         mock_response.status_code = 200
 
@@ -307,13 +325,19 @@ class TestValidateProviderKey:
                 provider="google",
                 api_key="google-test-key",
             )
-            response = await validate_provider_key(body)
+            request = _make_mock_request()
+            response = await validate_provider_key(body, request)
 
         assert response.valid is True
-        # Verify the URL contained the key as query param
+        # Verify the key was passed as a header, NOT in the URL
         call_args = mock_client.get.call_args
         url_used = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
-        assert "key=google-test-key" in url_used
+        headers_used = call_args[1].get("headers", {}) if call_args[1] else {}
+        # Key must NOT appear in the URL query string
+        assert "key=" not in url_used
+        assert "google-test-key" not in url_used
+        # Key must appear in the x-goog-api-key header
+        assert headers_used.get("x-goog-api-key") == "google-test-key"
 
     @pytest.mark.asyncio
     async def test_timeout_handled_gracefully(self):
@@ -332,29 +356,71 @@ class TestValidateProviderKey:
                 provider="openai",
                 api_key="sk-timeout-key",
             )
-            response = await validate_provider_key(body)
+            request = _make_mock_request()
+            response = await validate_provider_key(body, request)
 
         assert response.valid is False
         assert "timed out" in response.error.lower()
 
     @pytest.mark.asyncio
-    async def test_uses_configured_key_when_none_provided(self, monkeypatch):
+    async def test_no_fallback_to_configured_key(self, monkeypatch):
+        """Even when a server key is configured, omitting api_key must fail."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env-123")
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
+        body = ProviderValidateRequest(provider="openai")
+        request = _make_mock_request()
+        response = await validate_provider_key(body, request)
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        # Must NOT fall back to the server's configured key
+        assert response.valid is False
+        assert "api_key is required" in response.error
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            body = ProviderValidateRequest(provider="openai")
-            response = await validate_provider_key(body)
 
-        assert response.valid is True
-        # Verify it used the env key in the request
-        call_args = mock_client.get.call_args
-        headers = call_args[1].get("headers", {}) if call_args[1] else {}
-        assert "sk-from-env-123" in headers.get("Authorization", "")
+# ---------------------------------------------------------------------------
+# Tests for rate limiting on validate-provider
+# ---------------------------------------------------------------------------
+
+
+class TestValidateProviderRateLimit:
+    @pytest.fixture(autouse=True)
+    def _clear_rate_limit_state(self):
+        """Reset the in-memory rate limiter between tests."""
+        _validate_call_log.clear()
+        yield
+        _validate_call_log.clear()
+
+    def test_allows_up_to_limit(self):
+        """5 calls from the same IP should succeed."""
+        for _ in range(5):
+            _check_validate_rate_limit("10.0.0.1")  # should not raise
+
+    def test_rejects_over_limit(self):
+        """6th call from the same IP should raise 429."""
+        for _ in range(5):
+            _check_validate_rate_limit("10.0.0.2")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            _check_validate_rate_limit("10.0.0.2")
+        assert exc_info.value.status_code == 429
+
+    def test_different_ips_independent(self):
+        """Each IP has its own counter."""
+        for _ in range(5):
+            _check_validate_rate_limit("10.0.0.3")
+        # Different IP should still be allowed
+        _check_validate_rate_limit("10.0.0.4")  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_endpoint_returns_429_when_rate_limited(self):
+        """The endpoint itself should return HTTP 429 when rate-limited."""
+        # Exhaust the limit for this IP
+        for _ in range(5):
+            _check_validate_rate_limit("10.0.0.5")
+
+        body = ProviderValidateRequest(provider="openai", api_key="sk-test")
+        request = _make_mock_request(client_host="10.0.0.5")
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await validate_provider_key(body, request)
+        assert exc_info.value.status_code == 429
