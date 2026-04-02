@@ -125,10 +125,13 @@ quickstart-docker: quickstart-docker-bootstrap
 	@echo "[quickstart-docker] Starting tldw_server via Docker Compose..."
 	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker] docker not found. Install Docker and retry." && exit 1)
 	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
-	@echo "[quickstart-docker] First-use auth initialization is handled automatically by the app entrypoint."
+	@echo ""
 	@echo "[quickstart-docker] Server running at http://localhost:8000"
-	@echo "[quickstart-docker] Verify with: curl http://localhost:8000/health"
-	@echo "[quickstart-docker] API docs at: http://localhost:8000/docs"
+	@echo "[quickstart-docker] API docs at:    http://localhost:8000/docs"
+	@echo "[quickstart-docker] Setup wizard:   http://localhost:8000/setup"
+	@echo "[quickstart-docker] Verify with:    curl http://localhost:8000/health"
+	@echo "[quickstart-docker] Your API key:   run 'make show-api-key' to retrieve"
+	@echo ""
 
 quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] Starting API + WebUI via Docker Compose..."
@@ -142,9 +145,34 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE="$(NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE)" \
 	TLDW_INTERNAL_API_ORIGIN="$(TLDW_INTERNAL_API_ORIGIN)" \
 	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d $(DOCKER_BUILD_FLAG)
-	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
-	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
-	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  tldw is starting up!                                       ║"
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  API:         http://localhost:8000                          ║"
+	@echo "║  WebUI:       http://localhost:8080                          ║"
+	@echo "║  Admin Panel: http://localhost:3001                          ║"
+	@echo "║  API Docs:    http://localhost:8000/docs                     ║"
+	@echo "║  Setup:       http://localhost:8000/setup                    ║"
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  Your API Key:                                               ║"
+	@if [ -f "$(TLDW_ENV_FILE)" ]; then \
+		KEY=$$(grep '^SINGLE_USER_API_KEY=' "$(TLDW_ENV_FILE)" | cut -d= -f2-); \
+		echo "║    $$KEY"; \
+	else \
+		echo "║    (run 'make show-api-key' to retrieve)"; \
+	fi
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  Next steps:                                                 ║"
+	@echo "║  1. Open WebUI at http://localhost:8080                      ║"
+	@echo "║  2. Paste your API key when prompted                         ║"
+	@echo "║  3. Add an LLM provider key (OpenAI, Anthropic, etc.)       ║"
+	@echo "║     → Edit tldw_Server_API/Config_Files/.env                 ║"
+	@echo "║     → Add OPENAI_API_KEY=sk-... (or other provider)         ║"
+	@echo "║     → Restart: docker compose restart                        ║"
+	@echo "║  4. Try chatting or ingesting a YouTube URL!                 ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
 
 model-cycle:
 	@command -v docker >/dev/null 2>&1 || (echo "[model-cycle] docker not found. Install Docker and retry." && exit 1)
