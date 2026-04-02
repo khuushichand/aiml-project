@@ -828,6 +828,19 @@ class ChatMetricsCollector:
             ChatMetricLabels.INELIGIBLE_REASON.value: normalized_ineligible_reason,
         }
 
+    def _safe_counter_add(
+        self,
+        counter: Any,
+        value: int,
+        labels: dict[str, str],
+        metric_name: str,
+    ) -> None:
+        """Emit a counter update without allowing telemetry failures to escape."""
+        try:
+            counter.add(value, labels)
+        except Exception as metrics_error:
+            logger.debug("{} emission failed", metric_name, exc_info=metrics_error)
+
     def track_run_first_rollout(
         self,
         *,
@@ -848,7 +861,12 @@ class ChatMetricsCollector:
             eligible=eligible,
             ineligible_reason=ineligible_reason,
         )
-        self.metrics.run_first_rollout.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_rollout,
+            1,
+            labels,
+            "chat_run_first_rollout_total",
+        )
 
     def track_run_first_first_tool(
         self,
@@ -871,7 +889,12 @@ class ChatMetricsCollector:
             ineligible_reason=None,
         )
         labels[ChatMetricLabels.FIRST_TOOL.value] = str(first_tool or "").strip() or "unknown"
-        self.metrics.run_first_first_tool.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_first_tool,
+            1,
+            labels,
+            "chat_run_first_first_tool_total",
+        )
 
     def track_run_first_fallback_after_run(
         self,
@@ -894,7 +917,12 @@ class ChatMetricsCollector:
             ineligible_reason=None,
         )
         labels[ChatMetricLabels.FALLBACK_TOOL.value] = str(fallback_tool or "").strip() or "unknown"
-        self.metrics.run_first_fallback_after_run.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_fallback_after_run,
+            1,
+            labels,
+            "chat_run_first_fallback_after_run_total",
+        )
 
     def track_run_first_completion_proxy(
         self,
@@ -917,7 +945,12 @@ class ChatMetricsCollector:
             ineligible_reason=None,
         )
         labels[ChatMetricLabels.OUTCOME.value] = str(outcome or "").strip() or "unknown"
-        self.metrics.run_first_completion_proxy.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_completion_proxy,
+            1,
+            labels,
+            "chat_run_first_completion_proxy_total",
+        )
 
     # ---------------- Moderation helpers ----------------
     def track_moderation_input(self, user_id: str, action: str, category: str = "default"):

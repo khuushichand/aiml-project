@@ -286,6 +286,7 @@ class TestChatMetricsCollector:
             ineligible_reason="provider_not_in_rollout_allowlist",
         )
 
+        collector.metrics.run_first_rollout.add.assert_called_once()
         _, labels = collector.metrics.run_first_rollout.add.call_args.args
         assert labels["presentation_variant"] == "chat_phase2b_v1"
         assert labels["cohort"] == "out_of_cohort"
@@ -320,8 +321,28 @@ class TestChatMetricsCollector:
             ineligible_reason=raw_reason,
         )
 
+        collector.metrics.run_first_rollout.add.assert_called_once()
         _, labels = collector.metrics.run_first_rollout.add.call_args.args
         assert labels[ChatMetricLabels.INELIGIBLE_REASON.value] == expected
+
+    def test_chat_metrics_run_first_rollout_fails_open_when_counter_add_raises(self):
+        collector = ChatMetricsCollector()
+        collector.metrics.run_first_rollout = MagicMock()
+        collector.metrics.run_first_rollout.add = MagicMock(side_effect=RuntimeError("metrics down"))
+
+        with patch('tldw_Server_API.app.core.Chat.chat_metrics.logger') as mock_logger:
+            collector.track_run_first_rollout(
+                presentation_variant="chat_phase2b_v1",
+                cohort="default_on",
+                provider="openai",
+                model="gpt-4o-mini",
+                streaming=False,
+                eligible=True,
+                ineligible_reason=None,
+            )
+
+        collector.metrics.run_first_rollout.add.assert_called_once()
+        mock_logger.debug.assert_called_once()
 
     def test_chat_metrics_records_run_first_tool_path_and_completion_labels(self):
         collector = ChatMetricsCollector()

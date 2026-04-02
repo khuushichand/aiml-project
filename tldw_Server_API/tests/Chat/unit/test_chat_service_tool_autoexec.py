@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.chat_service import execute_non_stream_call
@@ -1158,7 +1159,7 @@ async def test_non_stream_completion_metric_records_error_when_structured_valida
         saved_payloads.append(payload)
         return f"m-{len(saved_payloads)}"
 
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException, match="structured_output_parse_error"):
         await _run_execute_non_stream_call(
             llm_call_func=lambda: {
                 "choices": [{"message": {"role": "assistant", "content": "{\"bad\": true}"}}],
