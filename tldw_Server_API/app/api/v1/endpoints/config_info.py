@@ -8,6 +8,7 @@ Also includes provider status and validation endpoints for first-run UX.
 import asyncio
 import configparser
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -107,6 +108,9 @@ def load_safe_config() -> dict:
 
     safe_config["configured_llm_providers"] = configured_providers
 
+    # FFmpeg availability (needed by clients to gate video/audio ingestion UX)
+    safe_config["ffmpeg_available"] = shutil.which("ffmpeg") is not None
+
     # Feature flags / capabilities (safe to expose)
     try:
         has_audio_http = bool(config_mod.route_enabled("audio", default_stable=True))
@@ -170,6 +174,8 @@ async def get_documentation_config():
         "api_key_configured": bool(config.get("api_key_configured", False)),
         "base_url": base_url,
         "configured_providers": config.get("configured_llm_providers", []),
+        # FFmpeg availability for client-side video/audio ingestion hints
+        "ffmpeg_available": config.get("ffmpeg_available", False),
         # Surface capabilities map so WebUI can dynamically hide/show experimental tabs
         "capabilities": config.get("capabilities", config.get("supported_features", {})),
         # Keep supported_features for older clients

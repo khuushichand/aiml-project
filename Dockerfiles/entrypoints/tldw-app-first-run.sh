@@ -129,14 +129,24 @@ if [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [ "$should_run_auth_init" = "1" ]; th
   # --- Standard AuthNZ initialization (single_user and multi_user) ---
   if [ ! -f "$AUTH_MARKER_FILE" ]; then
     echo "[entrypoint] Running first-use auth initialization..."
-    # Note: `if !` suppresses set -e for this command; the explicit exit 1
-    # below is load-bearing — do not remove it.
-    if ! python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive; then
-      echo "[entrypoint] ERROR: Auth initialization failed. Fix configuration and restart." >&2
-      exit 1
+    if python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive 2>&1; then
+      touch "$AUTH_MARKER_FILE"
+      echo "[entrypoint] Auth initialization complete."
+    else
+      echo "" >&2
+      echo "╔══════════════════════════════════════════════════════════════╗" >&2
+      echo "║  AUTH INITIALIZATION FAILED                                  ║" >&2
+      echo "║                                                              ║" >&2
+      echo "║  Check the error above and verify:                           ║" >&2
+      echo "║  - MCP_JWT_SECRET is set in .env (min 32 chars)             ║" >&2
+      echo "║  - MCP_API_KEY_SALT is set in .env (min 32 chars)           ║" >&2
+      echo "║  - BYOK_ENCRYPTION_KEY is set (base64 encoded)              ║" >&2
+      echo "║  - DATABASE_URL is correct (if multi-user)                   ║" >&2
+      echo "╚══════════════════════════════════════════════════════════════╝" >&2
+      echo "" >&2
+      # Still start the server so /setup is accessible for configuration
+      echo "[first-run] Starting server despite init failure (setup wizard may be available)..." >&2
     fi
-    touch "$AUTH_MARKER_FILE"
-    echo "[entrypoint] Auth initialization complete."
   fi
 
   # --- Multi-user admin bootstrap via environment variables ---
