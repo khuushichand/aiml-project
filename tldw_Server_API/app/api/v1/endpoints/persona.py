@@ -2550,14 +2550,15 @@ async def create_persona_profile(
     try:
         create_data = payload.model_dump(exclude_none=True)
         create_data["user_id"] = user_id
-        persona_id = db.create_persona_profile(create_data)
-        if not db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id):
-            _ = db.replace_persona_policy_rules(
+        persona_id = await _run_persona_db_call(db.create_persona_profile, create_data)
+        if not await _run_persona_db_call(db.list_persona_policy_rules, persona_id=persona_id, user_id=user_id):
+            _ = await _run_persona_db_call(
+                db.replace_persona_policy_rules,
                 persona_id=persona_id,
                 user_id=user_id,
                 rules=_DEFAULT_PERSONA_POLICY_RULES,
-        )
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+            )
+        profile = await _run_persona_db_call(db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
             raise HTTPException(status_code=500, detail="Failed to load created persona profile")
         try:
@@ -2625,10 +2626,13 @@ async def update_persona_profile(
     try:
         previous_profile: dict[str, Any] | None = None
         if expected_version is not None:
-            previous_profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+            previous_profile = await _run_persona_db_call(
+                db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False,
+            )
             if previous_profile is None:
                 raise HTTPException(status_code=404, detail="Persona profile not found")
-        ok = db.update_persona_profile(
+        ok = await _run_persona_db_call(
+            db.update_persona_profile,
             persona_id=persona_id,
             user_id=user_id,
             update_data=update_data,
@@ -2636,7 +2640,9 @@ async def update_persona_profile(
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Persona profile not found")
-        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        profile = await _run_persona_db_call(
+            db.get_persona_profile, persona_id, user_id=user_id, include_deleted=False,
+        )
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
         try:
@@ -2707,7 +2713,8 @@ async def delete_persona_profile(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     try:
-        ok = db.soft_delete_persona_profile(
+        ok = await _run_persona_db_call(
+            db.soft_delete_persona_profile,
             persona_id=persona_id,
             user_id=user_id,
             expected_version=expected_version,
@@ -2754,6 +2761,7 @@ async def restore_persona_profile(
         )
         if profile is None:
             raise HTTPException(status_code=404, detail="Persona profile not found")
+        await _run_persona_db_call(_ensure_persona_buddy_after_profile_mutation, db=db, profile=profile)
         return _persona_profile_to_response(profile)
     except HTTPException:
         raise
