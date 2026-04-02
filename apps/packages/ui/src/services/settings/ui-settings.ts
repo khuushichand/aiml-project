@@ -327,6 +327,17 @@ export const SIDEBAR_SHORTCUTS_COLLAPSED_SETTING = defineSetting(
   }
 )
 
+export const PERSONA_BUDDY_SHELL_ENABLED_SETTING = defineSetting(
+  "tldw:personaBuddyShellEnabled",
+  true,
+  (value) => coerceBoolean(value, true),
+  {
+    area: "local",
+    localStorageKey: "tldw:personaBuddyShellEnabled",
+    mirrorToLocalStorage: true
+  }
+)
+
 export const SIDEBAR_SHORTCUT_MAX_COUNT = 10
 
 export const HEADER_SHORTCUT_IDS = [
