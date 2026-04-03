@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   listDecks,
   listFlashcards,
+  listFlashcardTagSuggestions,
   createFlashcard,
   createFlashcardsBulk,
   updateFlashcardsBulk,
@@ -51,6 +52,11 @@ export interface UseFlashcardQueriesOptions {
   enabled?: boolean
   includeWorkspaceItems?: boolean
   workspaceId?: string | null
+}
+
+export interface UseGlobalFlashcardTagSuggestionsQueryOptions {
+  enabled?: boolean
+  limit?: number
 }
 
 const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
@@ -437,6 +443,29 @@ export function useTagSuggestionsQuery(
         left.localeCompare(right, undefined, { sensitivity: "base" })
       )
     },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching global flashcard tag suggestions for create/edit tag autocompletion.
+ */
+export function useGlobalFlashcardTagSuggestionsQuery(
+  query: string | null | undefined,
+  options?: UseGlobalFlashcardTagSuggestionsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const limit = options?.limit ?? 50
+  const normalizedQuery = query?.trim() || undefined
+
+  return useQuery({
+    queryKey: ["flashcards:tags:suggestions:global", normalizedQuery ?? null, limit],
+    queryFn: ({ signal }) =>
+      listFlashcardTagSuggestions({
+        q: normalizedQuery,
+        limit,
+        signal
+      }),
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }

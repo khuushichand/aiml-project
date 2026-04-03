@@ -22,16 +22,21 @@ def test_rollout_modes_resolve_off_shadow_enforce(monkeypatch):
     assert app_config.resolve_governance_rollout_mode() == "shadow"
 
 
-def test_run_first_rollout_resolvers_default_off(monkeypatch):
+def test_run_first_rollout_resolvers_default_off_without_config(monkeypatch):
     monkeypatch.delenv("ACP_RUN_FIRST_ROLLOUT_MODE", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
-
     monkeypatch.setattr(app_config, "load_comprehensive_config", lambda: configparser.ConfigParser())
 
     assert app_config.resolve_acp_run_first_rollout_mode() == "off"
     assert app_config.resolve_acp_run_first_provider_allowlist() == []
-    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2a_v1"
+    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2b_v1"
+
+
+def test_run_first_rollout_resolvers_accept_default_on(monkeypatch):
+    monkeypatch.setenv("ACP_RUN_FIRST_ROLLOUT_MODE", "default_on")
+
+    assert app_config.resolve_acp_run_first_rollout_mode() == "default_on"
 
 
 def test_run_first_rollout_provider_allowlist_parses_csv(monkeypatch):
@@ -107,3 +112,11 @@ def test_audit_trace_persists_policy_and_rule_revision_refs():
     assert trace["policy_revision_ref"] == "policy:v2"
     assert trace["rule_revision_ref"] == "rule:17"
     assert trace["rollout_mode"] == "shadow"
+
+
+def test_resolve_run_first_cohort_label_maps_override_off_when_rollout_off():
+    assert app_config.resolve_run_first_cohort_label(
+        "off",
+        eligible=False,
+        ineligible_reason="rollout_off",
+    ) == "override_off"

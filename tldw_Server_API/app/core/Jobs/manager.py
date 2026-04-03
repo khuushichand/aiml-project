@@ -773,6 +773,33 @@ class JobManager:
         finally:
             conn.close()
 
+    def delete_sla_policy(
+        self,
+        *,
+        domain: str,
+        queue: str,
+        job_type: str,
+    ) -> bool:
+        """Delete an SLA policy. Returns True if a row was deleted."""
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "DELETE FROM job_sla_policies WHERE domain=%s AND queue=%s AND job_type=%s",
+                        (domain, queue, job_type),
+                    )
+                    return (cur.rowcount or 0) > 0
+            else:
+                with conn:
+                    cur = conn.execute(
+                        "DELETE FROM job_sla_policies WHERE domain=? AND queue=? AND job_type=?",
+                        (domain, queue, job_type),
+                    )
+                    return (cur.rowcount or 0) > 0
+        finally:
+            conn.close()
+
     def _get_sla_policy(self, domain: str, queue: str, job_type: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:

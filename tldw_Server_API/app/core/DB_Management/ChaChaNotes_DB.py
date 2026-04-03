@@ -10386,12 +10386,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 derived_core=item["derived_core"],
                 overlay_preferences=item["overlay_preferences"],
             )
-        except (TypeError, KeyError, ValueError):
+        except (TypeError, KeyError, ValueError) as exc:
             logger.warning(
-                "Unable to resolve persona buddy profile for persona_id={}.",
+                "Unable to resolve persona buddy profile for persona_id={}: {}",
                 buddy_label,
+                exc,
             )
-            item["resolved_profile"] = None
+            raise CharactersRAGDBError(
+                f"Unable to resolve persona buddy profile for persona_id={buddy_label}."
+            ) from exc
         return item
 
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
@@ -10652,7 +10655,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND pe.user_id = ?
                AND (? OR pe.enabled = 1)
                AND (? OR pe.deleted = 0)
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
              LIMIT 1
         """
         params = (
@@ -10688,7 +10691,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                AND (? IS NULL OR pe.persona_id = ?)
                AND (? OR pe.enabled = 1)
                AND (? OR pe.deleted = 0)
-               AND (? OR pp.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
              ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC
              LIMIT ? OFFSET ?
         """
@@ -11223,6 +11226,54 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         cursor = self.execute_query(query, params)
         return self._persona_buddy_row_to_dict(cursor.fetchone())
+
+    def list_persona_buddies(
+        self,
+        *,
+        user_id: str,
+        persona_ids: list[str],
+        include_deleted_personas: bool = False,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Fetch buddy rows for a batch of user-owned persona profiles."""
+        normalized_persona_ids = list(
+            dict.fromkeys(
+                str(persona_id or "").strip()
+                for persona_id in persona_ids
+                if str(persona_id or "").strip()
+            )
+        )
+        if not normalized_persona_ids:
+            return {}
+
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        placeholders = ", ".join("?" for _ in normalized_persona_ids)
+        query = (
+            "SELECT pb.* "
+            "FROM persona_buddies pb "
+            "JOIN persona_profiles pp "
+            "  ON pp.id = pb.persona_id "
+            " AND pp.user_id = pb.user_id "
+            f"WHERE pb.user_id = ? AND pb.persona_id IN ({placeholders}) "  # nosec B608
+            "AND (? OR pp.deleted = ?)"
+        )
+        params: list[Any] = [
+            user_id,
+            *normalized_persona_ids,
+            bool(include_deleted_personas),
+            deleted_false,
+        ]
+        cursor = self.execute_query(query, tuple(params))
+        buddies: dict[str, dict[str, Any] | None] = {
+            persona_id: None for persona_id in normalized_persona_ids
+        }
+        for row in cursor.fetchall():
+            buddy = self._persona_buddy_row_to_dict(row)
+            if buddy is None:
+                continue
+            persona_id = str(buddy.get("persona_id") or "").strip()
+            if persona_id:
+                buddies[persona_id] = buddy
+        return buddies
 
     def upsert_persona_buddy(
         self,
@@ -21614,6 +21665,67 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def list_flashcard_tag_suggestions(
+        self,
+        q: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List global flashcard tag suggestions with per-tag usage counts."""
+        if limit <= 0:
+            return []
+
+        keyword_table = self._map_table_for_backend("keywords")
+        normalized_q = (q or "").strip()
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            where_clauses.extend(
+                [
+                    "f.deleted = FALSE",
+                    "kw.deleted = FALSE",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = FALSE))",
+                ]
+            )
+        else:
+            where_clauses.extend(
+                [
+                    "f.deleted = 0",
+                    "kw.deleted = 0",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = 0))",
+                ]
+            )
+
+        if normalized_q:
+            where_clauses.append("LOWER(kw.keyword) LIKE ?")
+            params.append(f"%{normalized_q.lower()}%")
+
+        order_keyword = self._case_insensitive_order_expression("kw.keyword")
+        where_sql = " AND ".join(where_clauses)
+        query = """
+            SELECT
+                kw.keyword AS tag,
+                COUNT(DISTINCT f.id) AS usage_count
+            FROM flashcards f
+            JOIN flashcard_keywords fk ON fk.card_id = f.id
+            JOIN {keyword_table} kw ON kw.id = fk.keyword_id
+            LEFT JOIN decks d ON d.id = f.deck_id
+            WHERE {where_sql}
+            GROUP BY kw.keyword
+            ORDER BY usage_count DESC, {order_keyword}
+            LIMIT ?
+        """.format_map(locals())  # nosec B608
+        params.append(limit)
+
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [
+                {"tag": str(row["tag"]), "count": int(row["usage_count"] or 0)}
+                for row in cursor.fetchall()
+            ]
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 

@@ -45,6 +45,27 @@ class PersonaInfo(BaseModel):
     avatar_url: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     default_tools: list[str] = Field(default_factory=list)
+    buddy_summary: PersonaBuddySummary | None = None
+
+
+class PersonaBuddyVisualSummary(BaseModel):
+    """Compact visual traits used to render a persona buddy preview."""
+
+    species_id: str
+    silhouette_id: str
+    palette_id: str
+    accessory_id: str | None = None
+    eye_style: str | None = None
+    expression_profile: str | None = None
+
+
+class PersonaBuddySummary(BaseModel):
+    """Small buddy summary embedded into persona profile and catalog responses."""
+
+    has_buddy: bool = False
+    persona_name: str
+    role_summary: str | None = None
+    visual: PersonaBuddyVisualSummary | None = None
 
 
 class PersonaSessionRequest(BaseModel):
@@ -272,9 +293,12 @@ class PersonaProfileResponse(BaseModel):
     created_at: str
     last_modified: str
     version: int = 1
+    buddy_summary: PersonaBuddySummary | None = None
 
 
 class PersonaBuddyResolvedProfile(BaseModel):
+    """Fully resolved buddy configuration returned by the dedicated buddy endpoint."""
+
     derivation_version: int
     species_id: str
     silhouette_id: str
@@ -287,6 +311,8 @@ class PersonaBuddyResolvedProfile(BaseModel):
 
 
 class PersonaBuddyResponse(BaseModel):
+    """API response for one resolved persona buddy."""
+
     persona_id: str
     resolved_profile: PersonaBuddyResolvedProfile | None = None
     created_at: str

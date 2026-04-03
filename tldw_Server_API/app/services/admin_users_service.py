@@ -131,6 +131,7 @@ async def list_users(
     role: str | None,
     admin_capable: bool,
     is_active: bool | None,
+    mfa_enabled: bool | None = None,
     search: str | None,
     org_id: int | None,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -146,6 +147,7 @@ async def list_users(
             role=role,
             admin_capable=admin_capable,
             is_active=is_active,
+            mfa_enabled=mfa_enabled,
             search=search,
             org_ids=org_ids,
         )
