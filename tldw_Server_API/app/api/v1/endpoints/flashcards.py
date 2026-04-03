@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
@@ -930,15 +930,19 @@ def list_flashcards(
         raise HTTPException(status_code=500, detail="Failed to list flashcards") from e
 
 
-@router.get("/tags", response_model=FlashcardTagSuggestionsResponse)
+@router.get(
+    "/tags",
+    response_model=FlashcardTagSuggestionsResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
 def list_flashcard_tag_suggestions(
     q: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=100),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> FlashcardTagSuggestionsResponse:
     try:
         items = db.list_flashcard_tag_suggestions(q=q, limit=limit)
-        return {"items": items, "count": len(items)}
+        return FlashcardTagSuggestionsResponse(items=items, count=len(items))
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list flashcard tag suggestions: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcard tag suggestions") from e

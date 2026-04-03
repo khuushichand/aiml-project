@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 
 import { useDebounce } from "@/hooks/useDebounce"
 import { useGlobalFlashcardTagSuggestionsQuery } from "../hooks"
+import { normalizeFlashcardTags } from "../utils/tag-normalization"
 
 type FlashcardTagPickerProps = {
   value: string[]
@@ -17,24 +18,6 @@ type FlashcardTagPickerProps = {
 
 const DEFAULT_WRAPPER_TEST_ID = "flashcard-tag-picker"
 const SEARCH_DEBOUNCE_MS = 250
-
-const normalizeTags = (tags: string[]) => {
-  const seen = new Set<string>()
-  const normalized: string[] = []
-
-  for (const rawTag of tags) {
-    const tag = rawTag.trim()
-    if (!tag) continue
-
-    const dedupeKey = tag.toLowerCase()
-    if (seen.has(dedupeKey)) continue
-
-    seen.add(dedupeKey)
-    normalized.push(tag)
-  }
-
-  return normalized
-}
 
 export const FlashcardTagPicker: React.FC<FlashcardTagPickerProps> = ({
   value,
@@ -53,7 +36,7 @@ export const FlashcardTagPicker: React.FC<FlashcardTagPickerProps> = ({
   const searchInputTestId = `${wrapperTestId}-search-input`
 
   const debouncedSearchText = useDebounce(searchText, SEARCH_DEBOUNCE_MS)
-  const normalizedValue = React.useMemo(() => normalizeTags(value ?? []), [value])
+  const normalizedValue = React.useMemo(() => normalizeFlashcardTags(value), [value])
   const queryEnabled = active && dropdownOpen
 
   const tagSuggestionsQuery = useGlobalFlashcardTagSuggestionsQuery(debouncedSearchText, {
@@ -71,16 +54,30 @@ export const FlashcardTagPicker: React.FC<FlashcardTagPickerProps> = ({
   )
 
   React.useEffect(() => {
-    const searchInput = wrapperRef.current?.querySelector<HTMLInputElement>("input.ant-select-input")
-    if (searchInput && searchInput.getAttribute("data-testid") !== searchInputTestId) {
-      searchInput.setAttribute("data-testid", searchInputTestId)
+    if (!dropdownOpen) return
+
+    const setSearchInputTestId = () => {
+      const searchInput = wrapperRef.current?.querySelector<HTMLInputElement>(
+        "input.ant-select-selection-search-input, input.ant-select-input"
+      )
+      if (searchInput && searchInput.getAttribute("data-testid") !== searchInputTestId) {
+        searchInput.setAttribute("data-testid", searchInputTestId)
+      }
     }
-  }, [searchInputTestId])
+
+    if (typeof window.requestAnimationFrame === "function") {
+      const frameId = window.requestAnimationFrame(setSearchInputTestId)
+      return () => window.cancelAnimationFrame(frameId)
+    }
+
+    const timeoutId = window.setTimeout(setSearchInputTestId, 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [dropdownOpen, searchInputTestId])
 
   const handleChange = React.useCallback(
     (nextValue: unknown) => {
       const nextTags = Array.isArray(nextValue) ? nextValue.map((tag) => String(tag)) : []
-      onChange(normalizeTags(nextTags))
+      onChange(normalizeFlashcardTags(nextTags))
     },
     [onChange]
   )
@@ -106,7 +103,7 @@ export const FlashcardTagPicker: React.FC<FlashcardTagPickerProps> = ({
           })
         }
         options={options}
-        loading={Boolean(tagSuggestionsQuery.isLoading || tagSuggestionsQuery.isFetching)}
+        loading={tagSuggestionsQuery.isFetching}
         notFoundContent={tagSuggestionsQuery.isError ? null : undefined}
       />
     </div>

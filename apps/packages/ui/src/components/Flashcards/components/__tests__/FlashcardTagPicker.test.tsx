@@ -95,6 +95,7 @@ describe("FlashcardTagPicker", () => {
             }
           : undefined,
         isError: false,
+        isFetching: false,
         isLoading: false,
         error: null
       })
@@ -125,6 +126,7 @@ describe("FlashcardTagPicker", () => {
             }
           : undefined,
         isError: false,
+        isFetching: false,
         isLoading: false,
         error: null
       })
@@ -150,6 +152,7 @@ describe("FlashcardTagPicker", () => {
     mockUseGlobalFlashcardTagSuggestionsQuery.mockImplementation(() => ({
       data: undefined,
       isError: false,
+      isFetching: false,
       isLoading: false,
       error: null
     }))
@@ -176,6 +179,7 @@ describe("FlashcardTagPicker", () => {
     mockUseGlobalFlashcardTagSuggestionsQuery.mockImplementation(() => ({
       data: undefined,
       isError: false,
+      isFetching: false,
       isLoading: false,
       error: null
     }))
@@ -202,6 +206,7 @@ describe("FlashcardTagPicker", () => {
     mockUseGlobalFlashcardTagSuggestionsQuery.mockImplementation(() => ({
       data: undefined,
       isError: false,
+      isFetching: false,
       isLoading: false,
       error: null
     }))
@@ -228,6 +233,7 @@ describe("FlashcardTagPicker", () => {
     mockUseGlobalFlashcardTagSuggestionsQuery.mockImplementation(() => ({
       data: undefined,
       isError: true,
+      isFetching: false,
       isLoading: false,
       error: new Error("tag lookup failed")
     }))

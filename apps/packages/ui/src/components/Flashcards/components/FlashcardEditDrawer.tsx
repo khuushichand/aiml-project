@@ -20,6 +20,7 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useDebouncedFormField } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import { normalizeOptionalFlashcardTags } from "../utils/tag-normalization"
 import {
   FLASHCARD_FIELD_MAX_BYTES,
   getFlashcardFieldLimitState,
@@ -41,14 +42,6 @@ import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 const { Text } = Typography
 dayjs.extend(relativeTime)
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
-
-const normalizeTagValues = (tags?: string[] | null) => {
-  const normalized = Array.isArray(tags)
-    ? tags.map((tag) => tag.trim()).filter(Boolean)
-    : undefined
-
-  return normalized && normalized.length > 0 ? normalized : undefined
-}
 
 type FlashcardModelType = Flashcard["model_type"]
 type EditableTextField = "front" | "back" | "extra" | "notes"
@@ -216,7 +209,7 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
       const rawValues = (await form.validateFields()) as FlashcardUpdate
       const values = normalizeFlashcardTemplateFields({
         ...rawValues,
-        tags: normalizeTagValues(rawValues.tags)
+        tags: normalizeOptionalFlashcardTags(rawValues.tags)
       })
       await onSave(values)
     } catch (e: any) {

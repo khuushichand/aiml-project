@@ -21670,6 +21670,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def list_flashcard_tag_suggestions(self, q: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """List global flashcard tag suggestions with per-tag usage counts."""
+        if limit <= 0:
+            return []
+
         keyword_table = self._map_table_for_backend("keywords")
         normalized_q = (q or "").strip()
         where_clauses: list[str] = []

@@ -46,6 +46,9 @@ def _build_flashcards_test_app() -> FastAPI:
     return app
 
 
+fastapi_app = _build_flashcards_test_app()
+
+
 @pytest.fixture(scope="function")
 def flashcards_db(tmp_path):
     db_path = tmp_path / "flashcards.db"
@@ -3078,3 +3081,15 @@ def test_flashcard_tag_suggestions_route_precedence_over_alias_path(
     assert response.status_code == 200
     payload = response.json()
     assert set(payload.keys()) == {"items", "count"}
+
+
+def test_flashcard_tag_suggestions_rejects_limit_over_max(
+    client_with_flashcards_db: TestClient,
+):
+    response = client_with_flashcards_db.get(
+        "/api/v1/flashcards/tags",
+        params={"limit": 101},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422

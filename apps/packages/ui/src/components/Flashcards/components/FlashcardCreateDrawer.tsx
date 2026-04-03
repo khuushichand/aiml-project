@@ -28,6 +28,7 @@ import { FlashcardTagPicker } from "./FlashcardTagPicker"
 import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
 import { formatDeckDisplayName } from "../utils/deck-display"
+import { normalizeOptionalFlashcardTags } from "../utils/tag-normalization"
 import {
   getSelectionFromElement,
   insertTextAtSelection,
@@ -47,14 +48,6 @@ const { Text } = Typography
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
 type FlashcardModelType = NonNullable<FlashcardCreate["model_type"]>
 type EditableTextField = "front" | "back" | "extra" | "notes"
-
-const normalizeTagValues = (tags?: string[] | null) => {
-  const normalized = Array.isArray(tags)
-    ? tags.map((tag) => tag.trim()).filter(Boolean)
-    : undefined
-
-  return normalized && normalized.length > 0 ? normalized : undefined
-}
 
 interface PreviewProps {
   content?: string
@@ -247,7 +240,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       await createMutation.mutateAsync(
         normalizeFlashcardTemplateFields({
           ...values,
-          tags: normalizeTagValues(values.tags)
+          tags: normalizeOptionalFlashcardTags(values.tags)
         })
       )
       message.success(t("common:created", { defaultValue: "Created" }))
@@ -268,7 +261,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       await createMutation.mutateAsync(
         normalizeFlashcardTemplateFields({
           ...values,
-          tags: normalizeTagValues(values.tags)
+          tags: normalizeOptionalFlashcardTags(values.tags)
         })
       )
       message.success(t("common:created", { defaultValue: "Created" }))
