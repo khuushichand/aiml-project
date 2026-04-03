@@ -405,11 +405,15 @@ class StudyAssistantRespondResponse(BaseModel):
 
 
 class FlashcardTagSuggestionItem(BaseModel):
+    """A single tag suggestion and the number of flashcards using it."""
+
     tag: str
     count: int
 
 
 class FlashcardTagSuggestionsResponse(BaseModel):
+    """Global flashcard tag suggestions with item details and total result count."""
+
     items: list[FlashcardTagSuggestionItem] = Field(default_factory=list)
     count: int
 

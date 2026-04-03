@@ -255,4 +255,37 @@ describe("FlashcardTagPicker", () => {
       expect(onChangeSpy).toHaveBeenCalledWith(["Cardiology"])
     })
   })
+
+  it("does not throw before Form.Item injects value and onChange", async () => {
+    mockUseGlobalFlashcardTagSuggestionsQuery.mockImplementation(() => ({
+      data: undefined,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      error: null
+    }))
+
+    render(
+      <FlashcardTagPicker
+        active
+        dataTestId="flashcards-form-controlled-tag-picker"
+      />
+    )
+
+    fireEvent.mouseDown(screen.getByRole("combobox"))
+
+    const searchInput = await screen.findByTestId(
+      "flashcards-form-controlled-tag-picker-search-input"
+    )
+    fireEvent.change(searchInput, { target: { value: "Cardiology" } })
+
+    expect(() => {
+      fireEvent.keyDown(searchInput, {
+        key: "Enter",
+        code: "Enter",
+        charCode: 13,
+        keyCode: 13
+      })
+    }).not.toThrow()
+  })
 })

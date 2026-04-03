@@ -940,6 +940,16 @@ def list_flashcard_tag_suggestions(
     limit: int = Query(50, ge=1, le=100),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> FlashcardTagSuggestionsResponse:
+    """List global flashcard tag suggestions.
+
+    Args:
+        q: Optional trimmed substring filter applied case-insensitively to tag names.
+        limit: Maximum number of suggestions to return.
+        db: Flashcards database dependency for the current user.
+
+    Returns:
+        A typed response containing matching tag suggestions and the number returned.
+    """
     try:
         items = db.list_flashcard_tag_suggestions(q=q, limit=limit)
         return FlashcardTagSuggestionsResponse(items=items, count=len(items))

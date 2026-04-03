@@ -7,8 +7,8 @@ import { useGlobalFlashcardTagSuggestionsQuery } from "../hooks"
 import { normalizeFlashcardTags } from "../utils/tag-normalization"
 
 type FlashcardTagPickerProps = {
-  value: string[]
-  onChange: (value: string[]) => void
+  value?: string[]
+  onChange?: (value: string[]) => void
   active?: boolean
   disabled?: boolean
   placeholder?: string
@@ -77,7 +77,7 @@ export const FlashcardTagPicker: React.FC<FlashcardTagPickerProps> = ({
   const handleChange = React.useCallback(
     (nextValue: unknown) => {
       const nextTags = Array.isArray(nextValue) ? nextValue.map((tag) => String(tag)) : []
-      onChange(normalizeFlashcardTags(nextTags))
+      onChange?.(normalizeFlashcardTags(nextTags))
     },
     [onChange]
   )

@@ -21668,7 +21668,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
-    def list_flashcard_tag_suggestions(self, q: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def list_flashcard_tag_suggestions(
+        self,
+        q: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
         """List global flashcard tag suggestions with per-tag usage counts."""
         if limit <= 0:
             return []
