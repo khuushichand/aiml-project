@@ -219,14 +219,13 @@ export const FlashcardsManager: React.FC = () => {
             label: (
               <span className="inline-flex items-center gap-1.5">
                 {t("option:flashcards.tabTransfer", { defaultValue: "Transfer" })}
-                <span
-                  className="rounded bg-surface2 px-1 py-px text-[10px] font-medium text-text-muted"
-                  title={t("option:flashcards.llmBadgeTooltip", {
-                    defaultValue: "Some features in this tab require an LLM provider"
-                  })}
-                >
-                  LLM
-                </span>
+                <Tooltip title={t("option:flashcards.llmBadgeTooltip", {
+                  defaultValue: "Some features in this tab require an LLM provider"
+                })}>
+                  <span className="rounded bg-surface2 px-1 py-px text-[10px] font-medium text-text-muted">
+                    LLM
+                  </span>
+                </Tooltip>
               </span>
             ),
             children: <ImportExportTab generateIntent={initialGenerateIntent} />

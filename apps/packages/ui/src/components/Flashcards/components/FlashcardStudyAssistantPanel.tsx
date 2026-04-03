@@ -11,6 +11,18 @@ import type {
   StudyAssistantRespondRequest
 } from "@/services/flashcards"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
+
+type AssistantErrorKind = "network" | "server" | "no_llm"
+
+function classifyAssistantError(err: unknown): AssistantErrorKind {
+  const isNetwork =
+    err instanceof TypeError ||
+    (err instanceof Error && /network|fetch|timeout/i.test(err.message))
+  if (isNetwork) return "network"
+  const httpStatus = (err as { response?: { status?: number } })?.response?.status
+  if (typeof httpStatus === "number" && httpStatus >= 400) return "server"
+  return "no_llm"
+}
 import { VoiceTranscriptComposer } from "./VoiceTranscriptComposer"
 
 const { Text, Title } = Typography
@@ -160,18 +172,14 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
       }
       return true
     } catch (err) {
-      const isNetwork =
-        err instanceof TypeError ||
-        (err instanceof Error && /network|fetch|timeout/i.test(err.message))
-      const httpStatus = (err as { response?: { status?: number } })?.response?.status
-      const isServerError = typeof httpStatus === "number" && httpStatus >= 400
+      const kind = classifyAssistantError(err)
       setAssistantError(
-        isNetwork
+        kind === "network"
           ? t("option:flashcards.studyAssistantNetworkError", {
               defaultValue:
                 "Could not reach the server. Check your connection and try again."
             })
-          : isServerError
+          : kind === "server"
             ? t("option:flashcards.studyAssistantServerError", {
                 defaultValue:
                   "The server returned an error. Please try again or check server logs."
@@ -203,18 +211,14 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
           }
           return "conflict"
         }
-        const isNetwork =
-          error instanceof TypeError ||
-          (error instanceof Error && /network|fetch|timeout/i.test(error.message))
-        const httpStatus = (error as { response?: { status?: number } })?.response?.status
-        const isServerError = typeof httpStatus === "number" && httpStatus >= 400
+        const kind = classifyAssistantError(error)
         setAssistantError(
-          isNetwork
+          kind === "network"
             ? t("option:flashcards.studyAssistantNetworkError", {
                 defaultValue:
                   "Could not reach the server. Check your connection and try again."
               })
-            : isServerError
+            : kind === "server"
               ? t("option:flashcards.studyAssistantServerError", {
                   defaultValue:
                     "The server returned an error. Please try again or check server logs."

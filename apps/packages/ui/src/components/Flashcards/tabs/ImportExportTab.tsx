@@ -2401,7 +2401,7 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
           <Alert
             type="info"
             showIcon
-            className="mb-3"
+            className="mb-3 md:col-span-2"
             data-testid="flashcards-generate-no-llm-banner"
             message={t("option:flashcards.generateNoLlmBanner", {
               defaultValue:

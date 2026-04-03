@@ -8,6 +8,7 @@ const { Text, Title } = Typography
 
 export default function SidepanelFlashcards() {
   const { t } = useTranslation()
+  const hasAutoOpenedRef = React.useRef(false)
 
   const openFlashcards = React.useCallback(() => {
     const url = browser.runtime.getURL("/options.html#/flashcards")
@@ -21,6 +22,8 @@ export default function SidepanelFlashcards() {
   }, [])
 
   React.useEffect(() => {
+    if (hasAutoOpenedRef.current) return
+    hasAutoOpenedRef.current = true
     openFlashcards()
   }, [openFlashcards])
 

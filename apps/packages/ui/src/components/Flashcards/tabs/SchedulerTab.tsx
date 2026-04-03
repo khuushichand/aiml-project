@@ -529,17 +529,15 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
                     children: (
                       <div className="space-y-2 text-xs text-text-muted">
                         <p>
-                          <Text strong>SM-2+</Text>{" "}
                           {t("option:flashcards.schedulerSm2Description", {
                             defaultValue:
-                              "is the classic algorithm used by Anki for decades. It adjusts review intervals based on a simple ease factor. Predictable and well-understood."
+                              "SM-2+ is the classic algorithm used by Anki for decades. It adjusts review intervals based on a simple ease factor. Predictable and well-understood."
                           })}
                         </p>
                         <p>
-                          <Text strong>FSRS</Text>{" "}
                           {t("option:flashcards.schedulerFsrsDescription", {
                             defaultValue:
-                              "is a newer algorithm that uses a memory model to predict when you'll forget each card. Often more efficient — fewer reviews for the same retention."
+                              "FSRS is a newer algorithm that uses a memory model to predict when you'll forget each card. Often more efficient — fewer reviews for the same retention."
                           })}
                         </p>
                         <p>
