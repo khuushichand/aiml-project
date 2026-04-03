@@ -20,6 +20,7 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useDebouncedFormField } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import { normalizeOptionalFlashcardTags } from "../utils/tag-normalization"
 import {
   FLASHCARD_FIELD_MAX_BYTES,
   getFlashcardFieldLimitState,
@@ -34,6 +35,7 @@ import {
 } from "../utils/text-selection"
 import { formatDeckDisplayName } from "../utils/deck-display"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { FlashcardTagPicker } from "./FlashcardTagPicker"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 
@@ -204,9 +206,11 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
 
   const handleSave = async () => {
     try {
-      const values = normalizeFlashcardTemplateFields(
-        (await form.validateFields()) as FlashcardUpdate
-      )
+      const rawValues = (await form.validateFields()) as FlashcardUpdate
+      const values = normalizeFlashcardTemplateFields({
+        ...rawValues,
+        tags: normalizeOptionalFlashcardTags(rawValues.tags)
+      })
       await onSave(values)
     } catch (e: any) {
       // Validation errors handled by form
@@ -384,10 +388,9 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
             name="tags"
             label={t("option:flashcards.tags", { defaultValue: "Tags" })}
           >
-            <Select
-              mode="tags"
-              open={false}
-              allowClear
+            <FlashcardTagPicker
+              active={open}
+              dataTestId="flashcards-edit-tag-picker"
               placeholder={t("option:flashcards.tagsPlaceholder", {
                 defaultValue: "Add tags..."
               })}

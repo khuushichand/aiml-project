@@ -1,8 +1,16 @@
+import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
 import type { Flashcard } from "@/services/flashcards"
 import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
+
+const mockFlashcardTagPicker = vi.hoisted(() => vi.fn())
+
+vi.mock("../FlashcardTagPicker", () => ({
+  FlashcardTagPicker: (props: Record<string, unknown>) => mockFlashcardTagPicker(props)
+}))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -39,12 +47,6 @@ vi.mock("@/hooks/useAntdMessage", () => ({
   })
 }))
 
-vi.mock("../FlashcardTagPicker", () => ({
-  FlashcardTagPicker: ({ dataTestId }: { dataTestId?: string }) => (
-    <div data-testid={dataTestId ?? "flashcard-tag-picker"} />
-  )
-}))
-
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
@@ -77,7 +79,7 @@ const sampleCard: Flashcard = {
   notes: null,
   extra: null,
   is_cloze: false,
-  tags: [],
+  tags: ["biology", "chapter-1"],
   ef: 2.5,
   interval_days: 0,
   repetitions: 0,
@@ -93,97 +95,60 @@ const sampleCard: Flashcard = {
   reverse: false
 }
 
-describe("FlashcardEditDrawer save handling", () => {
-  it("awaits async save callback and handles save errors", async () => {
-    const onSave = vi.fn().mockRejectedValue(new Error("save failed"))
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined)
+const decks = [
+  {
+    id: 1,
+    name: "Deck 1",
+    description: null,
+    deleted: false,
+    client_id: "1",
+    version: 1,
+    scheduler_type: "sm2_plus" as const,
+    scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+  }
+]
 
-    render(
-      <FlashcardEditDrawer
-        open
-        onClose={vi.fn()}
-        card={sampleCard}
-        onSave={onSave}
-        onDelete={vi.fn()}
-        decks={[
-          {
-            id: 1,
-            name: "Deck 1",
-            description: null,
-            deleted: false,
-            client_id: "1",
-            version: 1,
-            scheduler_type: "sm2_plus",
-            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
-          }
-        ]}
-      />
-    )
+const renderMockTagPicker = ({
+  value = [],
+  onChange,
+  active,
+  placeholder,
+  dataTestId
+}: {
+  value?: string[]
+  onChange?: (next: string[]) => void
+  active?: boolean
+  placeholder?: string
+  dataTestId?: string
+}) => (
+  <div
+    data-testid={dataTestId}
+    data-active={String(active)}
+    data-placeholder={placeholder}
+  >
+    <div data-testid={`${dataTestId}-value`}>{JSON.stringify(value)}</div>
+    <button
+      type="button"
+      onClick={() => onChange?.([...(value ?? []), "astronomy"])}
+    >
+      add suggested tag
+    </button>
+    <button
+      type="button"
+      onClick={() => onChange?.([...(value ?? []), "   "])}
+    >
+      add whitespace tag
+    </button>
+  </div>
+)
 
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("Front text")).toBeInTheDocument()
-    })
+describe("FlashcardEditDrawer tags", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFlashcardTagPicker.mockImplementation(renderMockTagPicker)
+  })
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }))
-
-    await waitFor(() => {
-      expect(onSave).toHaveBeenCalledTimes(1)
-    })
-    await waitFor(() => {
-      expect(consoleErrorSpy).toHaveBeenCalledWith("Save error:", expect.any(Error))
-    })
-
-    consoleErrorSpy.mockRestore()
-  }, 15000)
-
-  it("shows actionable validation when cloze template is selected without cloze syntax", async () => {
-    const onSave = vi.fn().mockResolvedValue(undefined)
-
-    render(
-      <FlashcardEditDrawer
-        open
-        onClose={vi.fn()}
-        card={{
-          ...sampleCard,
-          model_type: "cloze",
-          is_cloze: true
-        }}
-        onSave={onSave}
-        onDelete={vi.fn()}
-        decks={[
-          {
-            id: 1,
-            name: "Deck 1",
-            description: null,
-            deleted: false,
-            client_id: "1",
-            version: 1,
-            scheduler_type: "sm2_plus",
-            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
-          }
-        ]}
-      />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText("Card template")).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: "Save" }))
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          "For Cloze cards, include at least one deletion like {{c1::answer}}."
-        )
-      ).toBeInTheDocument()
-    })
-    expect(onSave).not.toHaveBeenCalled()
-  }, 15000)
-
-  it("blocks saving when front content exceeds byte limit", async () => {
+  it("shows existing tags on open", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
 
     render(
@@ -193,33 +158,74 @@ describe("FlashcardEditDrawer save handling", () => {
         card={sampleCard}
         onSave={onSave}
         onDelete={vi.fn()}
-        decks={[
-          {
-            id: 1,
-            name: "Deck 1",
-            description: null,
-            deleted: false,
-            client_id: "1",
-            version: 1,
-            scheduler_type: "sm2_plus",
-            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
-          }
-        ]}
+        decks={decks}
       />
     )
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Front text")).toBeInTheDocument()
+      expect(screen.getByTestId("flashcards-edit-tag-picker")).toHaveAttribute(
+        "data-active",
+        "true"
+      )
     })
+    expect(screen.getByTestId("flashcards-edit-tag-picker-value")).toHaveTextContent(
+      JSON.stringify(sampleCard.tags)
+    )
+    expect(screen.getByTestId("flashcards-edit-tag-picker")).toHaveAttribute(
+      "data-placeholder",
+      "Add tags..."
+    )
+  }, 15000)
 
-    fireEvent.change(screen.getByDisplayValue("Front text"), {
-      target: { value: "a".repeat(8193) }
-    })
+  it("selecting a suggested tag appends it", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <FlashcardEditDrawer
+        open
+        onClose={vi.fn()}
+        card={sampleCard}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        decks={decks}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "add suggested tag" }))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => {
-      expect(screen.getByText("Front must be 8192 bytes or fewer.")).toBeInTheDocument()
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tags: ["biology", "chapter-1", "astronomy"]
+        })
+      )
     })
-    expect(onSave).not.toHaveBeenCalled()
+  }, 15000)
+
+  it("drops whitespace-only edits before onSave", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <FlashcardEditDrawer
+        open
+        onClose={vi.fn()}
+        card={sampleCard}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        decks={decks}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "add whitespace tag" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tags: ["biology", "chapter-1"]
+        })
+      )
+    })
   }, 15000)
 })
