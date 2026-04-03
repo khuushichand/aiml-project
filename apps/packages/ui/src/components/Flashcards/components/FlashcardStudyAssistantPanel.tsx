@@ -159,11 +159,20 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
         setReloadedContext(latestContext)
       }
       return true
-    } catch {
+    } catch (err) {
+      const isNetwork =
+        err instanceof TypeError ||
+        (err instanceof Error && /network|fetch|timeout/i.test(err.message))
       setAssistantError(
-        t("option:flashcards.studyAssistantUnavailable", {
-          defaultValue: "Study assistant unavailable"
-        })
+        isNetwork
+          ? t("option:flashcards.studyAssistantNetworkError", {
+              defaultValue:
+                "Could not reach the server. Check your connection and try again."
+            })
+          : t("option:flashcards.studyAssistantNoLlm", {
+              defaultValue:
+                "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+            })
       )
       return false
     } finally {
@@ -187,10 +196,19 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
           }
           return "conflict"
         }
+        const isNetwork =
+          error instanceof TypeError ||
+          (error instanceof Error && /network|fetch|timeout/i.test(error.message))
         setAssistantError(
-          t("option:flashcards.studyAssistantUnavailable", {
-            defaultValue: "Study assistant unavailable"
-          })
+          isNetwork
+            ? t("option:flashcards.studyAssistantNetworkError", {
+                defaultValue:
+                  "Could not reach the server. Check your connection and try again."
+              })
+            : t("option:flashcards.studyAssistantNoLlm", {
+                defaultValue:
+                  "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+              })
         )
         return "error"
       }

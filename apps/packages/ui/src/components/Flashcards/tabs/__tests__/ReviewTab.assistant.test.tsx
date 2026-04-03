@@ -350,7 +350,7 @@ describe("ReviewTab study assistant panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Explain" }))
 
     await waitFor(() => {
-      expect(screen.getByText("Study assistant unavailable")).toBeInTheDocument()
+      expect(screen.getByText("Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers.")).toBeInTheDocument()
     })
     expect(screen.getByTestId("flashcards-review-show-answer")).toBeInTheDocument()
   })
