@@ -2468,6 +2468,7 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_task = None
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
+    study_pack_jobs_task = None
     reminder_jobs_task = None
     admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
@@ -2480,6 +2481,7 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_stop_event = None
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
+    study_pack_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reminders_sched_task = None
@@ -2693,6 +2695,24 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         # startup/shutdown guard; log and continue
         logger.warning(f"Failed to start Prompt Studio Jobs worker: {e}")
+
+    # Study-pack Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_PACK_JOBS_WORKER_ENABLED", "flashcards")
+        if _enabled:
+            from tldw_Server_API.app.services.study_pack_jobs_worker import (
+                run_study_pack_jobs_worker as _run_study_pack_jobs,
+            )
+
+            study_pack_jobs_stop_event = _asyncio.Event()
+            study_pack_jobs_task = _asyncio.create_task(_run_study_pack_jobs(study_pack_jobs_stop_event))
+            logger.info("Study-pack Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-pack Jobs worker disabled by flag (STUDY_PACK_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-pack Jobs worker: {e}")
 
     # Privilege snapshot worker
     try:
@@ -4035,6 +4055,16 @@ async def lifespan(app: FastAPI):
                     reading_digest_jobs_task.cancel()
             else:
                 reading_digest_jobs_task.cancel()
+        if "study_pack_jobs_task" in locals() and study_pack_jobs_task:
+            if "study_pack_jobs_stop_event" in locals() and study_pack_jobs_stop_event:
+                try:
+                    study_pack_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_pack_jobs_task, timeout=5.0)
+                    logger.info("Study-pack Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_pack_jobs_task.cancel()
+            else:
+                study_pack_jobs_task.cancel()
         if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
             if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
                 try:

@@ -49,6 +49,7 @@ import {
   hasMediaFilterParams
 } from '@/components/Review/mediaFilterParams'
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { buildStudyPackRoute } from "@/services/tldw/study-pack-handoff"
 import {
   getMediaNavigationResumeEntry,
   resolveMediaNavigationResumeSelection,
@@ -955,6 +956,34 @@ const MediaPageContent: React.FC = () => {
     [message, navigate, nav.selected, t]
   )
 
+  const handleCreateStudyPackFromMedia = useCallback(() => {
+    const selectedMedia = nav.selected?.kind === "media" ? nav.selected : null
+    const mediaTitle = selectedMedia?.title?.trim() || ""
+    const mediaId = selectedMedia?.id
+
+    if (!mediaTitle || mediaId == null) {
+      message.warning(
+        t("review:mediaPage.studyPackMissingSelection", {
+          defaultValue: "Select media before creating a study pack."
+        })
+      )
+      return
+    }
+
+    navigate(
+      buildStudyPackRoute({
+        title: mediaTitle,
+        sourceItems: [
+          {
+            sourceType: "media",
+            sourceId: String(mediaId),
+            sourceTitle: mediaTitle
+          }
+        ]
+      })
+    )
+  }, [message, nav.selected, navigate, t])
+
   const handleCreateNoteWithContent = useCallback(async (noteContent: string, title: string) => {
     try {
       await bgRequest({
@@ -1595,6 +1624,18 @@ const MediaPageContent: React.FC = () => {
           ) : null}
 
           <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex items-center justify-end gap-2 border-b border-border bg-surface px-3 py-2">
+              <button
+                type="button"
+                onClick={handleCreateStudyPackFromMedia}
+                className="inline-flex items-center rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!nav.selected || !nav.selected?.title?.trim()}
+              >
+                {t("review:mediaPage.createStudyPack", {
+                  defaultValue: "Create study pack"
+                })}
+              </button>
+            </div>
             {nav.staleSelectionNotice ? (
               <div
                 className="mx-3 mt-3 rounded-md border border-border bg-surface2 px-3 py-2 text-sm text-text"
