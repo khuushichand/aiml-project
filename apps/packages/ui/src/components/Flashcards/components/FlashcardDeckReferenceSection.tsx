@@ -50,10 +50,13 @@ export const FlashcardDeckReferenceSection: React.FC<
     }
   }, [searchInput])
 
+  const liveTrimmedSearchInput = searchInput.trim()
   const trimmedDebouncedSearchInput = debouncedSearchInput.trim()
   const sectionExpanded = open && expanded && expandedForDeckId === deckId
   const sectionEnabled = sectionExpanded && deckId != null
   const searchEnabled = sectionEnabled && trimmedDebouncedSearchInput.length > 0
+  const searchAreaActive = sectionEnabled && liveTrimmedSearchInput.length > 0
+  const searchQuerySettled = liveTrimmedSearchInput === trimmedDebouncedSearchInput
 
   const recentQuery = useFlashcardDeckRecentCardsQuery(deckId, {
     enabled: sectionEnabled,
@@ -89,7 +92,6 @@ export const FlashcardDeckReferenceSection: React.FC<
   const isSearchLoading = Boolean(searchQuery.isLoading)
   const isRecentError = Boolean(recentQuery.isError)
   const isSearchError = Boolean(searchQuery.isError)
-  const hasSearchTerm = trimmedDebouncedSearchInput.length > 0
 
   const renderRecentState = () => {
     if (isRecentLoading) {
@@ -155,11 +157,11 @@ export const FlashcardDeckReferenceSection: React.FC<
   }
 
   const renderSearchState = () => {
-    if (!hasSearchTerm) {
+    if (!searchAreaActive) {
       return null
     }
 
-    if (isSearchLoading) {
+    if (!searchQuerySettled || isSearchLoading) {
       return (
         <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
           <Spin size="small" />
@@ -249,19 +251,38 @@ export const FlashcardDeckReferenceSection: React.FC<
               </div>
             ),
             children: (
-              <div className="space-y-3 px-1 pt-2">
-                <Input
-                  allowClear
-                  value={searchInput}
-                  placeholder="Search this deck"
-                  onChange={(event) => {
-                    setSearchInput(event.target.value)
-                  }}
-                />
-                <div className="space-y-3">
+              <div className="space-y-4 px-1 pt-2">
+                <section className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Text className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Recent cards
+                    </Text>
+                    <Text className="text-[11px] text-muted-foreground">
+                      Latest additions in this deck
+                    </Text>
+                  </div>
                   {renderRecentState()}
+                </section>
+
+                <section className="space-y-2 border-t border-border pt-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <Text className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Search this deck
+                    </Text>
+                    <Text className="text-[11px] text-muted-foreground">
+                      Search front and back content
+                    </Text>
+                  </div>
+                  <Input
+                    allowClear
+                    value={searchInput}
+                    placeholder="Search this deck"
+                    onChange={(event) => {
+                      setSearchInput(event.target.value)
+                    }}
+                  />
                   {renderSearchState()}
-                </div>
+                </section>
               </div>
             )
           }

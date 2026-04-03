@@ -132,6 +132,8 @@ describe("FlashcardDeckReferenceSection", () => {
     fireEvent.click(screen.getByRole("button", { name: /biology/i }))
 
     expect(screen.getByText("Existing cards in this deck")).toBeInTheDocument()
+    expect(screen.getByText("Recent cards")).toBeInTheDocument()
+    expect(screen.getByText("Search this deck")).toBeInTheDocument()
     expect(await screen.findByText("Front 1")).toBeInTheDocument()
     expect(screen.getByText("Back 1")).toBeInTheDocument()
   })
@@ -195,6 +197,39 @@ describe("FlashcardDeckReferenceSection", () => {
     expect(
       vi.mocked(useFlashcardDeckSearchQuery).mock.calls.at(-1)?.[0]
     ).not.toHaveProperty("limit")
+  })
+
+  it("hides stale search results immediately when the input is cleared", async () => {
+    vi.useFakeTimers()
+    recentState = {
+      ...recentState,
+      data: [makeCard()]
+    }
+    searchState = {
+      ...searchState,
+      data: [
+        makeCard({ uuid: "match-1", front: "Matched front", back: "Matched back" })
+      ]
+    }
+
+    render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
+    fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
+
+    const input = screen.getByPlaceholderText("Search this deck")
+    fireEvent.change(input, { target: { value: "match" } })
+
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+
+    expect(screen.getByText("Matched front")).toBeInTheDocument()
+    expect(screen.getByText("Matched back")).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: "   " } })
+
+    expect(screen.queryByText("Matched front")).not.toBeInTheDocument()
+    expect(screen.queryByText("Matched back")).not.toBeInTheDocument()
+    expect(screen.queryByText("No matching cards.")).not.toBeInTheDocument()
   })
 
   it("keeps queries disabled for a new deck until it is re-expanded", async () => {
@@ -303,6 +338,34 @@ describe("FlashcardDeckReferenceSection", () => {
     fireEvent.click(screen.getByRole("button", { name: /physics/i }))
 
     expect(await screen.findByText("Unable to load reference cards.")).toBeInTheDocument()
+  })
+
+  it("shows the search error state and retries the search query", async () => {
+    vi.useFakeTimers()
+    recentState = {
+      ...recentState,
+      data: [makeCard()]
+    }
+    searchState = {
+      ...searchState,
+      isError: true,
+      error: new Error("search failed")
+    }
+
+    render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
+    fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
+
+    const input = screen.getByPlaceholderText("Search this deck")
+    fireEvent.change(input, { target: { value: "alpha" } })
+
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+
+    expect(screen.getByText("Unable to load search results.")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    expect(searchRefetch).toHaveBeenCalledTimes(1)
   })
 
   it("wires the retry button to the recent query refetch", async () => {
