@@ -889,17 +889,6 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                   {t("watchlists:runs.detail.openMonitor", "Open monitor settings")}
                 </Button>
               </Descriptions.Item>
-              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.outputs", "Reports")}>
-                <Button
-                  size="small"
-                  type="link"
-                  className="px-0"
-                  onClick={handleOpenOutputs}
-                  data-testid="watchlists-run-detail-open-outputs"
-                >
-                  {t("watchlists:runs.detail.openOutputs", "Open reports for this run")}
-                </Button>
-              </Descriptions.Item>
             </Descriptions>
           )}
 
@@ -1165,7 +1154,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                 ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
                 : t("watchlists:runs.cancelRun", "Cancel run")}
           </Button>
-        ) : data && runStatus === "failed" ? (
+        ) : data && runStatus === "failed" && !data.error_msg ? (
           <Button
             size="small"
             type="primary"

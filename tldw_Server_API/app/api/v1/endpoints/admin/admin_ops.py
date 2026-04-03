@@ -156,6 +156,12 @@ def _public_exception_label(exc: Exception) -> str:
     return exc.__class__.__name__ or "operation_failed"
 
 
+def _raise_internal_admin_error(message: str, exc: Exception) -> None:
+    """Raise a generic 500 without reflecting backend exception details to clients."""
+    logger.warning("{}: {}", message, exc.__class__.__name__)
+    raise HTTPException(status_code=500, detail=message) from exc
+
+
 def _require_platform_admin(principal: AuthPrincipal) -> None:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
@@ -1528,7 +1534,7 @@ async def create_report_schedule(
             ) from exc
         raise HTTPException(status_code=400, detail=error_key) from exc
     except _OPS_NONCRITICAL_EXCEPTIONS as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_admin_error("Failed to create report schedule.", exc)
     return schedule
 
 
@@ -1556,7 +1562,7 @@ async def update_report_schedule(
             raise HTTPException(status_code=404, detail="Schedule not found.") from exc
         raise HTTPException(status_code=400, detail=error_key) from exc
     except _OPS_NONCRITICAL_EXCEPTIONS as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_admin_error("Failed to update report schedule.", exc)
     return schedule
 
 
@@ -1577,7 +1583,7 @@ async def delete_report_schedule(
             raise HTTPException(status_code=404, detail="Schedule not found.") from exc
         raise HTTPException(status_code=400, detail=error_key) from exc
     except _OPS_NONCRITICAL_EXCEPTIONS as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_admin_error("Failed to delete report schedule.", exc)
     return {"message": "Schedule deleted.", "schedule": removed}
 
 
@@ -1597,7 +1603,7 @@ async def send_report_now(
     try:
         schedules = await asyncio.to_thread(svc_list_report_schedules)
     except _OPS_NONCRITICAL_EXCEPTIONS as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_admin_error("Failed to load report schedules.", exc)
 
     schedule = next((s for s in schedules if s.get("id") == schedule_id), None)
     if not schedule:
@@ -1661,7 +1667,10 @@ async def send_report_now(
                     error=_public_exception_label(send_exc),
                 )
     except Exception as exc:
-        logger.warning("Compliance report send-now: email service unavailable: {}", exc)
+        logger.warning(
+            "Compliance report send-now: email service unavailable: {}",
+            exc.__class__.__name__,
+        )
         errors.append("email service: unavailable")
 
     # Mark as sent

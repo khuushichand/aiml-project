@@ -16,6 +16,22 @@ def _b64_key(byte_char: bytes) -> str:
     return base64.b64encode(byte_char * 32).decode("ascii")
 
 
+def test_normalize_shared_workspace_root_rejects_paths_outside_allowed_bases(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    allowed_root = tmp_path / "allowed"
+    disallowed_root = tmp_path / "disallowed"
+    allowed_root.mkdir()
+    disallowed_root.mkdir()
+    monkeypatch.setenv("ACP_WORKSPACE_ALLOWED_BASE_PATHS", str(allowed_root))
+
+    with pytest.raises(BadRequestError, match="allowed base paths"):
+        McpHubService._normalize_shared_workspace_root(str(disallowed_root))
+
+
 @pytest.mark.asyncio
 async def test_set_external_secret_encrypts_and_never_returns_plaintext(tmp_path, monkeypatch) -> None:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool

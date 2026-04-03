@@ -116,14 +116,27 @@ export function CommandPalette({
   const shortcutEnabled = location.pathname !== WORKSPACE_PLAYGROUND_PATH
   const { shortcuts: configuredShortcuts } = useShortcutConfig()
 
-  // Register ⌘K shortcut to open
+  const openPalette = useCallback(() => {
+    setOpen(true)
+  }, [])
+
+  // Register Cmd/Ctrl+K shortcut to open
   useShortcut({
     key: "k",
     modifiers: ["meta"],
-    action: () => setOpen(true),
+    action: openPalette,
     description: "Open command palette",
     enabled: registerGlobalOpenShortcut && shortcutEnabled,
-    allowInInput: false,
+    allowInInput: true,
+  })
+
+  useShortcut({
+    key: "k",
+    modifiers: ["ctrl"],
+    action: openPalette,
+    description: "Open command palette",
+    enabled: registerGlobalOpenShortcut && shortcutEnabled,
+    allowInInput: true,
   })
 
   // Also allow Escape to close
