@@ -65,7 +65,8 @@ const SM2_ADVANCED_FIELDS: Sm2FieldConfig[] = [
   }
 ]
 
-const SM2_FIELD_TOOLTIPS: Record<string, string> = {
+/** Default tooltip strings for SM-2+ fields — used as i18n defaultValue fallbacks. */
+const SM2_FIELD_TOOLTIP_DEFAULTS: Record<string, string> = {
   new_steps_minutes:
     "Minutes between first reviews of a new card. E.g. '1, 10' means you see it again after 1 min, then 10 min.",
   relearn_steps_minutes:
@@ -84,14 +85,16 @@ const SM2_FIELD_TOOLTIPS: Record<string, string> = {
     "Number of times you can forget a card before it's flagged as a 'leech' — a card that isn't sticking."
 }
 
-const FSRS_FIELD_TOOLTIPS: Record<string, string> = {
+/** Default tooltip strings for FSRS fields — used as i18n defaultValue fallbacks. */
+const FSRS_FIELD_TOOLTIP_DEFAULTS: Record<string, string> = {
   target_retention:
     "Your target recall rate (0.0–1.0). Higher values (e.g. 0.95) mean more frequent reviews but better memory. Default is 0.9 (90%).",
   maximum_interval_days:
     "The longest any card can wait between reviews, in days."
 }
 
-const PRESET_DESCRIPTIONS: Record<string, string> = {
+/** Default tooltip strings for scheduler presets — used as i18n defaultValue fallbacks. */
+const PRESET_DESCRIPTION_DEFAULTS: Record<string, string> = {
   default: "Balanced settings suitable for most learners. Good starting point.",
   fast_acquisition: "Shorter intervals for rapid initial learning. More reviews per day.",
   conservative_review: "Longer intervals, gentler pace. Fewer daily reviews.",
@@ -153,7 +156,7 @@ export const DeckSchedulerSettingsEditor: React.FC<DeckSchedulerSettingsEditorPr
       </Text>
       <div className="flex flex-wrap gap-2">
         {presets.map((preset) => (
-          <Tooltip key={preset.id} title={PRESET_DESCRIPTIONS[preset.id] ?? ""}>
+          <Tooltip key={preset.id} title={t(`option:flashcards.schedulerPresetDesc.${preset.id}`, { defaultValue: PRESET_DESCRIPTION_DEFAULTS[preset.id] ?? "" })}>
             <Button
               size="small"
               onClick={() => schedulerDraft.applyPreset(preset.id as SchedulerPresetId)}
@@ -232,7 +235,7 @@ export const DeckSchedulerSettingsEditor: React.FC<DeckSchedulerSettingsEditorPr
             <div className="grid gap-4 md:grid-cols-2">
               {SM2_ADVANCED_FIELDS.map((field) => (
                 <label key={field.key} className="flex flex-col gap-1">
-                  <Tooltip title={SM2_FIELD_TOOLTIPS[field.key]}>
+                  <Tooltip title={t(`option:flashcards.schedulerTooltip.${field.key}`, { defaultValue: SM2_FIELD_TOOLTIP_DEFAULTS[field.key] })}>
                     <Text strong className="cursor-help underline decoration-dotted">{field.label}</Text>
                   </Tooltip>
                   <Input
@@ -267,7 +270,7 @@ export const DeckSchedulerSettingsEditor: React.FC<DeckSchedulerSettingsEditorPr
         <div className="grid gap-4 md:grid-cols-2">
           {FSRS_FIELDS.map((field) => (
             <label key={field.key} className="flex flex-col gap-1">
-              <Tooltip title={FSRS_FIELD_TOOLTIPS[field.key]}>
+              <Tooltip title={t(`option:flashcards.schedulerTooltip.${field.key}`, { defaultValue: FSRS_FIELD_TOOLTIP_DEFAULTS[field.key] })}>
                 <Text strong className="cursor-help underline decoration-dotted">{field.label}</Text>
               </Tooltip>
               <Input
