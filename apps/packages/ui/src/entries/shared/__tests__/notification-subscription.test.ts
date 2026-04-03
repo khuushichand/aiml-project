@@ -81,6 +81,33 @@ describe("notification subscription", () => {
     expect(notifyMock).toHaveBeenCalledTimes(2)
   })
 
+  it("swallows unread count storage failures during notification events", async () => {
+    let onEvent: ((event: NotificationStreamEvent) => Promise<void> | void) | null = null
+    const error = new Error("storage unavailable")
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {})
+
+    subscribeNotificationsStreamMock.mockImplementation((options: { onEvent: typeof onEvent }) => {
+      onEvent = options.onEvent
+      return vi.fn()
+    })
+    getUnreadCountMock.mockResolvedValue({ unread_count: 0 })
+    storageMock.get.mockRejectedValue(error)
+
+    await startNotificationSubscription()
+
+    await expect(
+      onEvent?.({
+        event: "notification",
+        payload: { title: "Broken", message: "Write" }
+      })
+    ).resolves.toBeUndefined()
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      "[background] Failed to update unread count from notification event:",
+      error
+    )
+  })
+
   it("coalesces concurrent startup into a single subscription", async () => {
     let releaseFetch: (() => void) | null = null
     const fetchGate = new Promise<void>((resolve) => {

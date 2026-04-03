@@ -62,6 +62,12 @@ export async function startNotificationSubscription(): Promise<void> {
                 const current = toUnreadCount(await storage.get<number>(UNREAD_COUNT_KEY))
                 await storage.set(UNREAD_COUNT_KEY, current + 1)
               })
+              .catch((error) => {
+                console.debug(
+                  "[background] Failed to update unread count from notification event:",
+                  error
+                )
+              })
             await unreadCountWrite
           }
 
