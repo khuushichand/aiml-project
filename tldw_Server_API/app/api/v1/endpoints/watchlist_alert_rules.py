@@ -7,8 +7,9 @@ based on watchlist run statistics.
 
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Watchlists.alert_rules import (
+    ALERT_CONDITION_TYPE_VALUES,
     create_alert_rule,
     delete_alert_rule,
     ensure_alert_rules_table,
@@ -78,7 +80,6 @@ def _get_db_path(user_id: str) -> str:
         base_dir_override=base_override,
     )
     db_path = user_dir / DatabasePaths.CHACHA_DB_NAME
-    ensure_alert_rules_table(str(db_path))
     return str(db_path)
 
 
@@ -101,7 +102,8 @@ async def list_rules(
     """List all alert rules for the current user, optionally filtered by job."""
     user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
-    rules = list_alert_rules(db_path, user_id, job_id=job_id)
+    await asyncio.to_thread(ensure_alert_rules_table, db_path)
+    rules = await asyncio.to_thread(list_alert_rules, db_path, user_id, job_id=job_id)
     return AlertRuleListResponse(
         items=[AlertRuleResponse(**vars(r)) for r in rules]
     )
@@ -113,12 +115,16 @@ async def create_rule(
     current_user: User = Depends(get_request_user),
 ):
     """Create a new alert rule."""
-    valid_types = {"no_items", "error_rate_above", "items_below", "items_above", "run_failed"}
-    if body.condition_type not in valid_types:
-        raise HTTPException(400, f"Invalid condition_type. Must be one of: {', '.join(sorted(valid_types))}")
+    if body.condition_type not in ALERT_CONDITION_TYPE_VALUES:
+        raise HTTPException(
+            400,
+            f"Invalid condition_type. Must be one of: {', '.join(sorted(ALERT_CONDITION_TYPE_VALUES))}",
+        )
     user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
-    rule = create_alert_rule(
+    await asyncio.to_thread(ensure_alert_rules_table, db_path)
+    rule = await asyncio.to_thread(
+        create_alert_rule,
         db_path,
         user_id=user_id,
         name=body.name,
@@ -137,15 +143,26 @@ async def update_rule(
     current_user: User = Depends(get_request_user),
 ):
     """Update an existing alert rule."""
+    if body.condition_type is not None and body.condition_type not in ALERT_CONDITION_TYPE_VALUES:
+        raise HTTPException(
+            400,
+            f"Invalid condition_type. Must be one of: {', '.join(sorted(ALERT_CONDITION_TYPE_VALUES))}",
+        )
     user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
-    updated = update_alert_rule(db_path, rule_id, user_id, **body.model_dump(exclude_none=True))
-    if not updated:
-        raise HTTPException(404, "Rule not found or no changes applied")
-    rules = list_alert_rules(db_path, user_id)
-    rule = next((r for r in rules if r.id == rule_id), None)
+    await asyncio.to_thread(ensure_alert_rules_table, db_path)
+    try:
+        rule = await asyncio.to_thread(
+            update_alert_rule,
+            db_path,
+            rule_id,
+            user_id,
+            **body.model_dump(exclude_none=True),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if not rule:
-        raise HTTPException(404, "Rule not found")
+        raise HTTPException(404, "Rule not found or no changes applied")
     return AlertRuleResponse(**vars(rule))
 
 
@@ -157,7 +174,8 @@ async def delete_rule(
     """Delete an alert rule."""
     user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
-    deleted = delete_alert_rule(db_path, rule_id, user_id)
+    await asyncio.to_thread(ensure_alert_rules_table, db_path)
+    deleted = await asyncio.to_thread(delete_alert_rule, db_path, rule_id, user_id)
     if not deleted:
         raise HTTPException(404, "Rule not found")
     return {"deleted": True}
