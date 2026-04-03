@@ -10,8 +10,7 @@ import {
   Button,
   Select,
   Collapse,
-  Tag,
-  Tabs
+  Tag
 } from "antd"
 import { Link, useNavigate } from "react-router-dom"
 import React, { useEffect, useState } from "react"
@@ -35,6 +34,7 @@ import {
   type CoreStatus,
   type RagStatus
 } from "./tldw-connection-status"
+import { TldwSettingsTabs } from "./tldw-settings-tabs"
 import { probeServerHealth } from "./server-health-probe"
 
 type TimeoutPresetKey = 'balanced' | 'extended'
@@ -398,7 +398,7 @@ export const TldwSettings = () => {
           apiKey: config.apiKey,
           authMode: config.authMode
         })
-        
+
         // Check if logged in for multi-user mode
         if (config.authMode === 'multi-user' && config.accessToken) {
           setIsLoggedIn(true)
@@ -467,7 +467,7 @@ export const TldwSettings = () => {
 
       await tldwClient.updateConfig(config)
       message.success(t("settings:savedSuccessfully"))
-      
+
       // Test connection after saving
       await testConnection({
         triggerSplashOnSuccess: values.authMode === "single-user"
@@ -602,7 +602,7 @@ export const TldwSettings = () => {
     setConnectionDetail("")
     setCoreStatus("checking")
     setRagStatus("unknown")
-    
+
     let values: any = {}
     try {
       values = form.getFieldsValue()
@@ -691,7 +691,7 @@ export const TldwSettings = () => {
       } catch (e) {
         setRagStatus('unhealthy')
       }
-      
+
       if (success) {
         message.success(t('settings:tldw.connection.success', 'Connection successful!'))
         if (options?.triggerSplashOnSuccess) {
@@ -792,18 +792,18 @@ export const TldwSettings = () => {
     try {
       const values = await form.validateFields(['username', 'password'])
       setLoading(true)
-      
+
       await tldwAuth.login({
         username: values.username,
         password: values.password
       })
-      
+
       setIsLoggedIn(true)
       message.success(t('settings:tldw.login.success', 'Login successful!'))
-      
+
       // Clear password field
       form.setFieldValue('password', '')
-      
+
       // Test connection after login
       await testConnection()
     } catch (error: any) {
@@ -1116,24 +1116,12 @@ export const TldwSettings = () => {
             <Button type="primary" onClick={() => { void testConnection() }} loading={testingConnection}>{t('settings:tldw.buttons.recheck', 'Recheck')}</Button>
           </Space>
         </div>
-        <Tabs
-          size="small"
-          className="mb-4"
-          items={[
-            { key: 'connection', label: t('settings:tldw.tabs.connection', 'Connection') },
-            { key: 'timeouts', label: t('settings:tldw.tabs.timeouts', 'Timeouts') },
-            ...(authMode === 'multi-user' && isLoggedIn ? [
-              { key: 'billing', label: t('settings:tldw.tabs.billing', 'Billing') },
-            ] : []),
-          ]}
-          onChange={(key) => {
-            const el = document.getElementById(`tldw-settings-${key}`)
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }}
-        />
-        <div id="tldw-settings-connection" />
-        <h2 className="text-base font-semibold mb-4 text-text">{t('settings:tldw.serverConfigTitle', 'tldw Server Configuration')}</h2>
-        
+        <TldwSettingsTabs authMode={authMode} isLoggedIn={isLoggedIn} />
+        <h2
+          id="tldw-settings-connection"
+          className="mb-4 scroll-mt-24 text-base font-semibold text-text">
+          {t('settings:tldw.serverConfigTitle', 'tldw Server Configuration')}
+        </h2>
         <Form
           form={form}
           onFinish={handleSave}
@@ -1405,9 +1393,9 @@ export const TldwSettings = () => {
               </div>
             </div>
           </Space>
-          <div id="tldw-settings-timeouts" />
           <Collapse
-            className="mt-4"
+            id="tldw-settings-timeouts"
+            className="mt-4 scroll-mt-24"
             items={[
               {
                 key: 'adv',
@@ -1736,7 +1724,9 @@ export const TldwSettings = () => {
         </Form>
 
         {authMode === 'multi-user' && isLoggedIn && (
-          <div id="tldw-settings-billing" className="mt-6 rounded-lg border border-border bg-surface2 p-4">
+          <div
+            id="tldw-settings-billing"
+            className="mt-6 scroll-mt-24 rounded-lg border border-border bg-surface2 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-text">
