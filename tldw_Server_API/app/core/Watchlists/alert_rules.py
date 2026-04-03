@@ -9,18 +9,23 @@ Supported condition types:
 - error_rate_above: Error rate exceeds threshold (0.0–1.0)
 - items_below: Total items below threshold
 - items_above: Total items above threshold (unusual activity)
+- run_failed: Run ended with failed status
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.watchlist_alert_rules_db import (
+    ensure_watchlist_alert_rules_table,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -45,28 +50,23 @@ class AlertRule:
 # Schema migration
 # ---------------------------------------------------------------------------
 
-ALERT_RULES_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS watchlist_alert_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    job_id INTEGER,
-    name TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    condition_type TEXT NOT NULL,
-    condition_value TEXT NOT NULL DEFAULT '{}',
-    severity TEXT NOT NULL DEFAULT 'warning',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_alert_rules_user_job
-    ON watchlist_alert_rules(user_id, job_id);
-"""
+class AlertConditionType(str, Enum):
+    NO_ITEMS = "no_items"
+    ERROR_RATE_ABOVE = "error_rate_above"
+    ITEMS_BELOW = "items_below"
+    ITEMS_ABOVE = "items_above"
+    RUN_FAILED = "run_failed"
+
+
+ALERT_CONDITION_TYPE_VALUES = frozenset(condition.value for condition in AlertConditionType)
+DEFAULT_ERROR_RATE_THRESHOLD = 0.5
+DEFAULT_ITEMS_BELOW_THRESHOLD = 1
+DEFAULT_ITEMS_ABOVE_THRESHOLD = 1000
 
 
 def ensure_alert_rules_table(db_path: str) -> None:
     """Create the alert rules table if it doesn't exist."""
-    with sqlite3.connect(db_path) as conn:
-        conn.executescript(ALERT_RULES_TABLE_SQL)
+    ensure_watchlist_alert_rules_table(db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +98,7 @@ def create_alert_rule(
     job_id: int | None = None,
     severity: str = "warning",
 ) -> AlertRule:
+    _validate_condition_type(condition_type)
     now = datetime.now(timezone.utc).isoformat()
     cv = json.dumps(condition_value or {})
     with sqlite3.connect(db_path) as conn:
@@ -121,23 +122,66 @@ def create_alert_rule(
         )
 
 
-def update_alert_rule(db_path: str, rule_id: int, user_id: str, **fields: Any) -> bool:
-    allowed = {"name", "enabled", "condition_type", "condition_value", "severity", "job_id"}
-    updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+def get_alert_rule(db_path: str, rule_id: int, user_id: str) -> AlertRule | None:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM watchlist_alert_rules WHERE id = ? AND user_id = ?",
+            (rule_id, user_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return _row_to_rule(row)
+
+
+def update_alert_rule(db_path: str, rule_id: int, user_id: str, **fields: Any) -> AlertRule | None:
+    current_rule = get_alert_rule(db_path, rule_id, user_id)
+    if current_rule is None:
+        return None
+
+    updates = {key: value for key, value in fields.items() if value is not None}
     if not updates:
-        return False
+        return None
+
+    if "condition_type" in updates:
+        _validate_condition_type(str(updates["condition_type"]))
     if "condition_value" in updates and isinstance(updates["condition_value"], dict):
         updates["condition_value"] = json.dumps(updates["condition_value"])
     if "enabled" in updates:
         updates["enabled"] = 1 if updates["enabled"] else 0
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
+
+    updated_at = datetime.now(timezone.utc).isoformat()
+    merged_values = {
+        "name": updates.get("name", current_rule.name),
+        "enabled": updates.get("enabled", 1 if current_rule.enabled else 0),
+        "condition_type": updates.get("condition_type", current_rule.condition_type),
+        "condition_value": updates.get("condition_value", current_rule.condition_value),
+        "severity": updates.get("severity", current_rule.severity),
+        "job_id": updates.get("job_id", current_rule.job_id),
+    }
     with sqlite3.connect(db_path) as conn:
         cur = conn.execute(
-            f"UPDATE watchlist_alert_rules SET {set_clause} WHERE id = ? AND user_id = ?",
-            (*updates.values(), rule_id, user_id),
+            """
+            UPDATE watchlist_alert_rules
+            SET name = ?, enabled = ?, condition_type = ?, condition_value = ?,
+                severity = ?, job_id = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                merged_values["name"],
+                merged_values["enabled"],
+                merged_values["condition_type"],
+                merged_values["condition_value"],
+                merged_values["severity"],
+                merged_values["job_id"],
+                updated_at,
+                rule_id,
+                user_id,
+            ),
         )
-        return cur.rowcount > 0
+        if cur.rowcount <= 0:
+            return None
+    return get_alert_rule(db_path, rule_id, user_id)
 
 
 def delete_alert_rule(db_path: str, rule_id: int, user_id: str) -> bool:
@@ -186,26 +230,50 @@ def evaluate_rules_for_run(
         match = False
         detail = ""
 
-        if rule.condition_type == "no_items":
+        if rule.condition_type == AlertConditionType.NO_ITEMS.value:
             match = items_ingested == 0
             detail = f"Run produced 0 items (found {items_found})"
 
-        elif rule.condition_type == "error_rate_above":
-            threshold = float(cv.get("threshold", 0.5))
+        elif rule.condition_type == AlertConditionType.ERROR_RATE_ABOVE.value:
+            threshold = _coerce_threshold(
+                cv.get("threshold", DEFAULT_ERROR_RATE_THRESHOLD),
+                default=DEFAULT_ERROR_RATE_THRESHOLD,
+                caster=float,
+                rule=rule,
+            )
+            if threshold is None:
+                detail = "Invalid threshold configured for error_rate_above"
+                continue
             match = error_rate > threshold
             detail = f"Error rate {error_rate:.0%} exceeds {threshold:.0%} threshold"
 
-        elif rule.condition_type == "items_below":
-            threshold = int(cv.get("threshold", 1))
+        elif rule.condition_type == AlertConditionType.ITEMS_BELOW.value:
+            threshold = _coerce_threshold(
+                cv.get("threshold", DEFAULT_ITEMS_BELOW_THRESHOLD),
+                default=DEFAULT_ITEMS_BELOW_THRESHOLD,
+                caster=int,
+                rule=rule,
+            )
+            if threshold is None:
+                detail = "Invalid threshold configured for items_below"
+                continue
             match = items_ingested < threshold
             detail = f"Only {items_ingested} items ingested (threshold: {threshold})"
 
-        elif rule.condition_type == "items_above":
-            threshold = int(cv.get("threshold", 1000))
+        elif rule.condition_type == AlertConditionType.ITEMS_ABOVE.value:
+            threshold = _coerce_threshold(
+                cv.get("threshold", DEFAULT_ITEMS_ABOVE_THRESHOLD),
+                default=DEFAULT_ITEMS_ABOVE_THRESHOLD,
+                caster=int,
+                rule=rule,
+            )
+            if threshold is None:
+                detail = "Invalid threshold configured for items_above"
+                continue
             match = items_ingested > threshold
             detail = f"{items_ingested} items ingested exceeds {threshold} threshold"
 
-        elif rule.condition_type == "run_failed":
+        elif rule.condition_type == AlertConditionType.RUN_FAILED.value:
             match = status == "failed"
             detail = f"Run failed: {stats.get('error_msg', 'unknown error')}"
 
@@ -242,3 +310,30 @@ def _row_to_rule(row: sqlite3.Row) -> AlertRule:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _validate_condition_type(condition_type: str) -> None:
+    if condition_type not in ALERT_CONDITION_TYPE_VALUES:
+        raise ValueError(
+            f"Invalid condition_type. Must be one of: {', '.join(sorted(ALERT_CONDITION_TYPE_VALUES))}"
+        )
+
+
+def _coerce_threshold(
+    raw_value: Any,
+    *,
+    default: float | int,
+    caster: type[float] | type[int],
+    rule: AlertRule,
+) -> float | int | None:
+    value = default if raw_value is None else raw_value
+    try:
+        return caster(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Skipping alert rule {} because threshold {!r} is invalid for condition_type={}",
+            rule.id,
+            raw_value,
+            rule.condition_type,
+        )
+        return None
