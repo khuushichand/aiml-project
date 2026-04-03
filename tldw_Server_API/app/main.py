@@ -2468,6 +2468,7 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_task = None
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
+    study_pack_jobs_task = None
     reminder_jobs_task = None
     admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
@@ -2480,6 +2481,7 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_stop_event = None
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
+    study_pack_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reminders_sched_task = None
@@ -4053,6 +4055,16 @@ async def lifespan(app: FastAPI):
                     reading_digest_jobs_task.cancel()
             else:
                 reading_digest_jobs_task.cancel()
+        if "study_pack_jobs_task" in locals() and study_pack_jobs_task:
+            if "study_pack_jobs_stop_event" in locals() and study_pack_jobs_stop_event:
+                try:
+                    study_pack_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_pack_jobs_task, timeout=5.0)
+                    logger.info("Study-pack Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_pack_jobs_task.cancel()
+            else:
+                study_pack_jobs_task.cancel()
         if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
             if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
                 try:

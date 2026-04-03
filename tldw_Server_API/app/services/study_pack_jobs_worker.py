@@ -1,7 +1,8 @@
+"""Jobs worker for study-pack generation requests."""
+
 from __future__ import annotations
 
 import asyncio
-import inspect
 import os
 from typing import Any
 
@@ -55,10 +56,10 @@ async def handle_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
     note_db = None
     media_db = None
     try:
-        databases = _get_databases_for_user(owner_user_id)
-        if inspect.isawaitable(databases):
-            databases = await databases
-        note_db, media_db = databases
+        if asyncio.iscoroutinefunction(_get_databases_for_user):
+            note_db, media_db = await _get_databases_for_user(owner_user_id)
+        else:
+            note_db, media_db = _get_databases_for_user(owner_user_id)
         service = StudyPackGenerationService(
             note_db=note_db,
             media_db=media_db,

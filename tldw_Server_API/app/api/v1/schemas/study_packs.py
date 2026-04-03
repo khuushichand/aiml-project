@@ -1,6 +1,9 @@
+"""Pydantic schemas for study-pack requests, jobs, and provenance responses."""
+
+from collections.abc import Mapping
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 StudyPackSourceType = Literal["note", "media", "message"]
@@ -8,8 +11,18 @@ StudyPackStatus = Literal["active", "superseded"]
 
 
 class StudyPackSourceSelection(BaseModel):
+    """API-facing source selection for study-pack generation requests."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     source_type: StudyPackSourceType
     source_id: str = Field(..., min_length=1)
+    label: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("label", "source_title"),
+    )
+    excerpt_text: Optional[str] = None
+    locator: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("source_id", mode="before")
     @classmethod
@@ -20,8 +33,31 @@ class StudyPackSourceSelection(BaseModel):
             raise ValueError("source_id must not be blank")
         return str(value)
 
+    @field_validator("label", "excerpt_text", mode="before")
+    @classmethod
+    def validate_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("locator", mode="before")
+    @classmethod
+    def validate_locator(cls, value: Any) -> dict[str, Any]:
+        if value in (None, "", [], ()):
+            return {}
+        if not isinstance(value, Mapping):
+            raise ValueError("locator must be a mapping")
+        return {
+            str(key): item
+            for key, item in value.items()
+            if item not in (None, "", [], {})
+        }
+
 
 class StudyPackCreateJobRequest(BaseModel):
+    """Request body for enqueuing a new study-pack generation job."""
+
     title: str = Field(..., min_length=1)
     workspace_id: Optional[str] = None
     deck_mode: Literal["new"] = "new"
@@ -29,6 +65,8 @@ class StudyPackCreateJobRequest(BaseModel):
 
 
 class StudyPackSummaryResponse(BaseModel):
+    """Serialized study-pack metadata returned by the API."""
+
     id: int
     workspace_id: Optional[str] = None
     title: str
@@ -48,6 +86,8 @@ StudyPackJobApiStatus = Literal["queued", "running", "completed", "failed", "can
 
 
 class StudyPackJobSummaryResponse(BaseModel):
+    """Summary fields for a study-pack generation job."""
+
     id: int
     status: StudyPackJobApiStatus
     domain: str
@@ -56,16 +96,22 @@ class StudyPackJobSummaryResponse(BaseModel):
 
 
 class StudyPackJobAcceptedResponse(BaseModel):
+    """Envelope returned when a study-pack job is accepted."""
+
     job: StudyPackJobSummaryResponse
 
 
 class StudyPackJobStatusResponse(BaseModel):
+    """Job status plus any completed study-pack result payload."""
+
     job: StudyPackJobSummaryResponse
     study_pack: Optional[StudyPackSummaryResponse] = None
     error: Optional[str] = None
 
 
 class FlashcardCitationResponse(BaseModel):
+    """Serialized flashcard citation row used by remediation UI."""
+
     id: int
     flashcard_uuid: str
     source_type: StudyPackSourceType
@@ -81,6 +127,8 @@ class FlashcardCitationResponse(BaseModel):
 
 
 class FlashcardDeepDiveTarget(BaseModel):
+    """Resolved deep-dive target for a provenance-backed flashcard."""
+
     source_type: StudyPackSourceType
     source_id: str
     citation_ordinal: Optional[int] = Field(default=None, ge=0)

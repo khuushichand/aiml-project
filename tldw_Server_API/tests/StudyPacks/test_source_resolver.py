@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tldw_Server_API.app.api.v1.schemas.study_packs import StudyPackSourceSelection as ApiStudyPackSourceSelection
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 
@@ -72,6 +73,30 @@ def test_note_source_keeps_extra_locator_fields_but_canonical_note_id_wins():
     item = bundle.items[0]
     assert item.locator["note_id"] == "note-1"  # nosec B101
     assert item.locator["anchor"] == "section-2"  # nosec B101
+
+
+def test_resolver_accepts_api_schema_source_selection_models():
+    db = MagicMock(spec=CharactersRAGDB)
+    db.get_note_by_id.return_value = {
+        "id": "note-1",
+        "title": "Congestion control",
+        "content": "Slow start increases the congestion window aggressively.",
+    }
+
+    bundle = _resolver(db=db).resolve(
+        [
+            ApiStudyPackSourceSelection(
+                source_type="note",
+                source_id="note-1",
+                source_title="Congestion control",
+                excerpt_text="Slow start increases the congestion window aggressively.",
+            )
+        ]
+    )
+
+    item = bundle.items[0]
+    assert item.label == "Congestion control"  # nosec B101
+    assert item.evidence_text == "Slow start increases the congestion window aggressively."  # nosec B101
 
 
 def test_media_source_resolves_chunks_via_package_native_helpers(monkeypatch: pytest.MonkeyPatch):
@@ -207,6 +232,63 @@ def test_media_source_falls_back_to_transcript_and_timestamp(monkeypatch: pytest
     ]
 
 
+def test_media_source_accepts_fractional_timestamp_strings(monkeypatch: pytest.MonkeyPatch):
+    _, resolver_mod = _load_study_modules()
+
+    monkeypatch.setattr(
+        resolver_mod,
+        "get_media_by_id",
+        lambda db, media_id, **_: {"id": media_id, "title": "Packet Capture Walkthrough"},
+    )
+    monkeypatch.setattr(
+        resolver_mod,
+        "get_latest_transcription",
+        lambda db, media_id: "At sixty one point five seconds the speaker explains fast recovery.",
+    )
+
+    bundle = _resolver(media_db=SimpleNamespace()).resolve(
+        [
+            _selection(
+                source_type="media",
+                source_id="9",
+                locator={"timestamp_seconds": "61.5"},
+            )
+        ]
+    )
+
+    item = bundle.items[0]
+    assert item.locator["timestamp_seconds"] == 61.5  # nosec B101
+    assert "fast recovery" in item.evidence_text  # nosec B101
+
+
+def test_media_source_falls_back_to_transcript_without_locator(monkeypatch: pytest.MonkeyPatch):
+    _, resolver_mod = _load_study_modules()
+
+    monkeypatch.setattr(
+        resolver_mod,
+        "get_media_by_id",
+        lambda db, media_id, **_: {"id": media_id, "title": "Packet Capture Walkthrough"},
+    )
+    monkeypatch.setattr(
+        resolver_mod,
+        "get_latest_transcription",
+        lambda db, media_id: "The transcript remains usable even without a specific timestamp.",
+    )
+
+    bundle = _resolver(media_db=SimpleNamespace()).resolve(
+        [
+            _selection(
+                source_type="media",
+                source_id="9",
+            )
+        ]
+    )
+
+    item = bundle.items[0]
+    assert item.locator == {"media_id": 9}  # nosec B101
+    assert "without a specific timestamp" in item.evidence_text  # nosec B101
+
+
 def test_message_source_requires_stable_message_and_conversation_identity():
     db = MagicMock(spec=CharactersRAGDB)
     db.get_message_by_id.return_value = {
@@ -284,11 +366,6 @@ def test_study_source_bundle_normalizes_items_and_rejects_non_bundle_items():
             {"source_type": "unsupported", "source_id": "x-1"},
             None,
             "Unsupported study source type",
-        ),
-        (
-            {"source_type": "media", "source_id": "5"},
-            None,
-            "requires either chunk locators or timestamp_seconds",
         ),
         (
             {"source_type": "message", "source_id": "msg-2"},

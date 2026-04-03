@@ -11,7 +11,8 @@ from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_owner, get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
@@ -272,10 +273,6 @@ def _is_admin_principal(principal: AuthPrincipal) -> bool:
     return bool("admin" in roles or perms & _ADMIN_CLAIM_PERMISSIONS or FLASHCARDS_ADMIN.lower() in perms)
 
 
-def _get_jobs_manager() -> JobManager:
-    return JobManager()
-
-
 def _serialize_study_pack(pack: dict[str, Any]) -> dict[str, Any]:
     return StudyPackSummaryResponse.model_validate(pack).model_dump(mode="json")
 
@@ -306,6 +303,23 @@ def _study_pack_from_job_result(db: CharactersRAGDB, job: dict[str, Any]) -> dic
         return None
     pack = db.get_study_pack(int(pack_id))
     return _serialize_study_pack(pack) if pack else None
+
+
+async def _study_pack_db_for_job(
+    job: dict[str, Any],
+    *,
+    request_db: CharactersRAGDB,
+    current_user: User,
+    principal: AuthPrincipal,
+) -> CharactersRAGDB:
+    if not _is_admin_principal(principal):
+        return request_db
+
+    owner_user_id = str(job.get("owner_user_id") or "").strip()
+    if not owner_user_id or owner_user_id == str(current_user.id):
+        return request_db
+
+    return await get_chacha_db_for_owner(int(owner_user_id))
 
 
 def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
@@ -1702,10 +1716,11 @@ def create_study_pack_job(
     payload: StudyPackCreateJobRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
 ):
     try:
         _ensure_workspace_exists(db, payload.workspace_id)
-        job = _get_jobs_manager().create_job(
+        job = jm.create_job(
             domain=STUDY_PACKS_DOMAIN,
             queue=study_pack_jobs_queue(),
             job_type=STUDY_PACKS_JOB_TYPE,
@@ -1720,13 +1735,14 @@ def create_study_pack_job(
 
 
 @router.get("/study-packs/jobs/{job_id}", response_model=StudyPackJobStatusResponse)
-def get_study_pack_job_status(
+async def get_study_pack_job_status(
     job_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
 ):
-    job = _get_jobs_manager().get_job(job_id)
+    job = jm.get_job(job_id)
     if not job or str(job.get("domain") or "").strip().lower() != STUDY_PACKS_DOMAIN:
         raise HTTPException(status_code=404, detail="Study-pack job not found")
     _ensure_study_pack_job_access(job, current_user=current_user, principal=principal)
@@ -1734,7 +1750,13 @@ def get_study_pack_job_status(
     study_pack = None
     raw_status = str(job.get("status") or "").strip().lower()
     if raw_status == "completed":
-        study_pack = _study_pack_from_job_result(db, job)
+        study_pack_db = await _study_pack_db_for_job(
+            job,
+            request_db=db,
+            current_user=current_user,
+            principal=principal,
+        )
+        study_pack = _study_pack_from_job_result(study_pack_db, job)
     error = str(job.get("error_message") or job.get("last_error") or "").strip() or None
     return {
         "job": _serialize_study_pack_job(job),
@@ -1759,6 +1781,7 @@ def regenerate_study_pack(
     pack_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
 ):
     pack = db.get_study_pack(pack_id)
     if not pack:
@@ -1776,7 +1799,7 @@ def regenerate_study_pack(
             "source_items": source_items,
         }
     )
-    job = _get_jobs_manager().create_job(
+    job = jm.create_job(
         domain=STUDY_PACKS_DOMAIN,
         queue=study_pack_jobs_queue(),
         job_type=STUDY_PACKS_JOB_TYPE,

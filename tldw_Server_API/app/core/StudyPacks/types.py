@@ -1,3 +1,5 @@
+"""Immutable internal types used by study-pack resolution and persistence."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -19,6 +21,8 @@ def _normalize_locator(locator: Mapping[str, Any] | None) -> dict[str, Any]:
 
 @dataclass(slots=True, frozen=True)
 class StudySourceSelection:
+    """Normalized internal representation of a requested study-pack source."""
+
     source_type: str
     source_id: str
     locator: dict[str, Any] = field(default_factory=dict)
@@ -45,6 +49,8 @@ class StudySourceSelection:
 
 @dataclass(slots=True, frozen=True)
 class StudySourceBundleItem:
+    """Resolved evidence bundle entry ready for generation prompts and citations."""
+
     source_type: str
     source_id: str
     label: str
@@ -75,6 +81,8 @@ class StudySourceBundleItem:
 
 @dataclass(slots=True, frozen=True)
 class StudySourceBundle:
+    """Collection of resolved study sources used to generate one study pack."""
+
     items: list[StudySourceBundleItem]
 
     def __post_init__(self) -> None:
@@ -87,6 +95,8 @@ class StudySourceBundle:
 
 @dataclass(slots=True, frozen=True)
 class StudyCitationDraft:
+    """Validated citation draft attached to a generated flashcard."""
+
     source_type: str
     source_id: str
     citation_text: str
@@ -112,6 +122,8 @@ class StudyCitationDraft:
 
 @dataclass(slots=True, frozen=True)
 class StudyPackCardDraft:
+    """Validated flashcard draft produced by the strict generation flow."""
+
     front: str
     back: str
     citations: list[StudyCitationDraft]
@@ -157,6 +169,8 @@ class StudyPackCardDraft:
 
 @dataclass(slots=True, frozen=True)
 class StudyPackGenerationResult:
+    """Validated generation output plus repair metadata."""
+
     cards: list[StudyPackCardDraft]
     raw_response: str | None = None
     repair_attempted: bool = False
@@ -175,6 +189,8 @@ class StudyPackGenerationResult:
 
 @dataclass(slots=True, frozen=True)
 class StudyPackCreationResult:
+    """Persistence result returned after a study pack is committed."""
+
     pack_id: int
     deck_id: int
     deck_name: str

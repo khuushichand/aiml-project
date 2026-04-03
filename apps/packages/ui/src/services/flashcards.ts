@@ -127,7 +127,10 @@ export type StudyPackSourceType = "note" | "media" | "message"
 export type StudyPackSourceSelection = {
   source_type: StudyPackSourceType
   source_id: string
+  label?: string | null
   source_title?: string | null
+  excerpt_text?: string | null
+  locator?: Record<string, unknown> | null
 }
 
 export type StudyPackCreateJobRequest = {
@@ -626,16 +629,32 @@ export async function generateFlashcards(
 
 const sanitizeStudyPackSourceItem = (
   item: StudyPackSourceSelection
-): Pick<StudyPackSourceSelection, "source_type" | "source_id"> => ({
-  source_type: item.source_type,
-  source_id: item.source_id
-})
+): StudyPackSourceSelection => {
+  const sanitized: StudyPackSourceSelection = {
+    source_type: item.source_type,
+    source_id: item.source_id
+  }
+
+  const label = typeof item.label === "string" ? item.label.trim() : ""
+  const sourceTitle = typeof item.source_title === "string" ? item.source_title.trim() : ""
+  const excerptText = typeof item.excerpt_text === "string" ? item.excerpt_text.trim() : ""
+
+  if (label) sanitized.label = label
+  else if (sourceTitle) sanitized.source_title = sourceTitle
+
+  if (excerptText) sanitized.excerpt_text = excerptText
+  if (item.locator && typeof item.locator === "object" && !Array.isArray(item.locator)) {
+    sanitized.locator = item.locator
+  }
+
+  return sanitized
+}
 
 const sanitizeStudyPackRequest = (
   request: StudyPackCreateJobRequest
 ): Omit<StudyPackCreateJobRequest, "source_items"> & {
   deck_mode: "new"
-  source_items: Array<Pick<StudyPackSourceSelection, "source_type" | "source_id">>
+  source_items: StudyPackSourceSelection[]
 } => ({
   title: request.title,
   workspace_id: request.workspace_id,

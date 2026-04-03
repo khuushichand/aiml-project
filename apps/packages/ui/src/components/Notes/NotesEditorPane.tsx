@@ -426,7 +426,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         onCopy={(mode) => {
           void copySelected(mode)
         }}
-        canCreateStudyPack={!editorDisabled && selectedId != null && Boolean(title.trim())}
+        canCreateStudyPack={!editorDisabled && selectedId != null && !isDirty && Boolean(title.trim())}
         onGenerateFlashcards={handleGenerateFlashcardsFromNote}
         onCreateStudyPack={handleCreateStudyPackFromNote}
         onOpenNotesStudio={handleOpenNotesStudio}

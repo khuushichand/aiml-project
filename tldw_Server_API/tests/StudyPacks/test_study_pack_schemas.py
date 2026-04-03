@@ -60,6 +60,20 @@ def test_study_pack_source_selection_rejects_whitespace_only_source_id():
         StudyPackSourceSelection(source_type="note", source_id="   ")
 
 
+def test_study_pack_source_selection_accepts_locator_excerpt_and_source_title_alias():
+    selection = StudyPackSourceSelection(
+        source_type="media",
+        source_id="42",
+        source_title="Lecture 42",
+        locator={"timestamp_seconds": 61.5},
+        excerpt_text="The lecture explains additive increase.",
+    )
+
+    assert selection.label == "Lecture 42"  # nosec B101
+    assert selection.locator["timestamp_seconds"] == 61.5  # nosec B101
+    assert selection.excerpt_text == "The lecture explains additive increase."  # nosec B101
+
+
 def test_study_pack_summary_status_only_allows_active_or_superseded():
     active = StudyPackSummaryResponse(
         id=11,

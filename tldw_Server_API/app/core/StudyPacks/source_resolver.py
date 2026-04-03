@@ -1,3 +1,5 @@
+"""Resolve study-pack source selections into evidence-backed prompt bundles."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -26,6 +28,8 @@ def _clean_text(value: Any) -> str:
 
 
 def _coerce_selection(selection: StudySourceSelection | Mapping[str, Any]) -> StudySourceSelection:
+    if hasattr(selection, "model_dump") and callable(selection.model_dump):
+        return StudySourceSelection(**selection.model_dump())
     if isinstance(selection, StudySourceSelection):
         return selection
     if isinstance(selection, Mapping):
@@ -53,6 +57,16 @@ def _parse_non_negative_int(value: Any, field_name: str) -> int:
     return parsed
 
 
+def _parse_non_negative_float(value: Any, field_name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a non-negative number") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be a non-negative number")
+    return parsed
+
+
 def _pick_evidence_text(selection: StudySourceSelection, *candidates: Any) -> str:
     if selection.excerpt_text:
         return selection.excerpt_text
@@ -64,6 +78,8 @@ def _pick_evidence_text(selection: StudySourceSelection, *candidates: Any) -> st
 
 
 class StudySourceResolver:
+    """Resolves supported workspace objects into stable study-pack evidence bundles."""
+
     def __init__(self, *, db: Any | None = None, media_db: Any | None = None):
         self.db = db
         self.media_db = media_db
@@ -190,23 +206,24 @@ class StudySourceResolver:
                 )
 
         timestamp_value = locator.get("timestamp_seconds")
-        if timestamp_value is None:
-            raise ValueError("Media source requires either chunk locators or timestamp_seconds")
-        timestamp_seconds = int(timestamp_value)
         transcript = _clean_text(get_latest_transcription(self.media_db, media_id))
         evidence_text = _pick_evidence_text(selection, transcript)
         if not evidence_text:
             raise ValueError(f"Media {media_id} has no transcript evidence to resolve")
+
+        normalized_locator: dict[str, Any] = {"media_id": media_id}
+        if timestamp_value is not None:
+            normalized_locator["timestamp_seconds"] = _parse_non_negative_float(
+                timestamp_value,
+                "timestamp_seconds",
+            )
 
         return StudySourceBundleItem(
             source_type="media",
             source_id=str(media_id),
             label=label,
             evidence_text=evidence_text,
-            locator={
-                "media_id": media_id,
-                "timestamp_seconds": timestamp_seconds,
-            },
+            locator=normalized_locator,
         )
 
 

@@ -221,3 +221,69 @@ def test_failed_study_pack_jobs_return_diagnostics_without_partial_pack(
     assert body["job"]["status"] == "failed"  # nosec B101
     assert "llm exploded" in (body.get("error") or "")  # nosec B101
     assert body["study_pack"] is None  # nosec B101
+
+
+def test_admin_job_status_reads_completed_pack_from_owner_database(
+    jobs_db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    admin_db = CharactersRAGDB(str(tmp_path / "study-pack-admin.db"), client_id="study-pack-admin-tests")
+    owner_db = CharactersRAGDB(str(tmp_path / "study-pack-owner.db"), client_id="study-pack-owner-tests")
+    admin_db.upsert_workspace("ws-1", "Workspace 1")
+    owner_db.upsert_workspace("ws-1", "Workspace 1")
+
+    async def _override_user() -> User:
+        return User(id=1, username="admin", email="admin@example.com", is_active=True, roles=["admin"], is_admin=True)
+
+    async def _override_principal() -> AuthPrincipal:
+        return AuthPrincipal(kind="user", user_id=1, roles=["admin"], permissions=["*"], is_admin=True)
+
+    async def _owner_db_lookup(owner_user_id: int):
+        assert owner_user_id == 2  # nosec B101
+        return owner_db
+
+    monkeypatch.setattr(flashcards_endpoints, "get_chacha_db_for_owner", _owner_db_lookup, raising=False)
+
+    app = FastAPI()
+    app.include_router(flashcards_endpoints.router, prefix="/api/v1")
+    app.dependency_overrides[get_chacha_db_for_user] = lambda: admin_db
+    app.dependency_overrides[get_request_user] = _override_user
+    app.dependency_overrides[get_auth_principal] = _override_principal
+
+    try:
+        pack_id, deck_id = _seed_pack(owner_db, title="Owner Networks 101")
+        jm = _jobs_manager(jobs_db_path)
+        job = jm.create_job(
+            domain="study_packs",
+            queue="default",
+            job_type="study_pack_generate",
+            payload={
+                "title": "Owner Networks 101",
+                "workspace_id": "ws-1",
+                "source_items": [{"source_type": "note", "source_id": "note-1"}],
+            },
+            owner_user_id="2",
+            priority=5,
+            max_retries=2,
+        )
+        acquired = _complete_job(jm, int(job["id"]))
+        jm.complete_job(
+            int(job["id"]),
+            result={"pack_id": pack_id, "deck_id": deck_id},
+            worker_id="study-pack-test",
+            lease_id=str(acquired["lease_id"]),
+        )
+
+        with TestClient(app) as test_client:
+            response = test_client.get(f"/api/v1/flashcards/study-packs/jobs/{job['id']}")
+
+        assert response.status_code == 200  # nosec B101
+        body = response.json()
+        assert body["job"]["status"] == "completed"  # nosec B101
+        assert int(body["study_pack"]["id"]) == pack_id  # nosec B101
+        assert int(body["study_pack"]["deck_id"]) == deck_id  # nosec B101
+    finally:
+        app.dependency_overrides.clear()
+        admin_db.close_connection()
+        owner_db.close_connection()

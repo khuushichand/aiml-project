@@ -246,3 +246,35 @@ async def test_worker_sdk_cancellation_marks_study_pack_job_cancelled_without_ru
 
     assert stored is not None  # nosec B101
     assert stored["status"] == "cancelled"  # nosec B101
+
+
+async def test_handle_study_pack_job_resolves_default_provider_and_model(
+    db: CharactersRAGDB,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    types_mod, generation_mod, worker_mod = _load_modules()
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_MODEL_OPENAI", "gpt-default-study-pack")
+    monkeypatch.setattr(worker_mod, "_get_databases_for_user", lambda user_id: (db, SimpleNamespace()))
+
+    captured: dict[str, Any] = {}
+
+    async def fake_create_from_request(self, request: Any, *, regenerate_from_pack_id: int | None = None):
+        captured["provider"] = self.provider
+        captured["model"] = self.model
+        return types_mod.StudyPackCreationResult(
+            pack_id=11,
+            deck_id=22,
+            deck_name="TCP Fundamentals",
+            card_uuids=["card-1"],
+            cards=_generation_result(types_mod).cards,
+            regenerated_from_pack_id=regenerate_from_pack_id,
+        )
+
+    monkeypatch.setattr(generation_mod.StudyPackGenerationService, "create_from_request", fake_create_from_request)
+
+    result = await worker_mod.handle_study_pack_job(_fake_job())
+
+    assert captured["provider"] == "openai"  # nosec B101
+    assert captured["model"] == "gpt-default-study-pack"  # nosec B101
+    assert int(result["pack_id"]) == 11  # nosec B101

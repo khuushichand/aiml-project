@@ -344,3 +344,63 @@ async def test_create_study_pack_from_request_only_supersedes_prior_pack_after_r
     assert replacement_pack is not None  # nosec B101
     assert original_row["status"] == "superseded"  # nosec B101
     assert int(original_row["superseded_by_pack_id"]) == result.pack_id  # nosec B101
+
+
+async def test_create_study_pack_from_request_passes_expected_version_when_superseding(
+    db: CharactersRAGDB,
+    bundle: Any,
+    study_pack_request: StudyPackCreateJobRequest,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    types_mod, service_mod = _load_generation_modules()
+    original_deck_id = db.add_deck("TCP Fundamentals Original", workspace_id="ws-1")
+    original_pack_id = db.create_study_pack(
+        title="TCP Fundamentals Original",
+        workspace_id="ws-1",
+        deck_id=original_deck_id,
+        source_bundle_json={"items": [{"source_type": "note", "source_id": "note-seed"}]},
+        generation_options_json={"deck_mode": "new"},
+    )
+
+    monkeypatch.setattr(service_mod.StudySourceResolver, "resolve", lambda self, selections: bundle)
+
+    async def fake_generate_validated_cards(self, resolved_bundle: Any, generation_request: Any):
+        return _generation_result(types_mod)
+
+    monkeypatch.setattr(
+        service_mod.StudyPackGenerationService,
+        "generate_validated_cards",
+        fake_generate_validated_cards,
+    )
+
+    captured: dict[str, Any] = {}
+    original_supersede = db.supersede_study_pack
+
+    def capture_supersede(
+        pack_id: int,
+        *,
+        superseded_by_pack_id: int,
+        expected_version: int | None = None,
+    ) -> bool:
+        captured["pack_id"] = pack_id
+        captured["superseded_by_pack_id"] = superseded_by_pack_id
+        captured["expected_version"] = expected_version
+        return original_supersede(
+            pack_id,
+            superseded_by_pack_id=superseded_by_pack_id,
+            expected_version=expected_version,
+        )
+
+    monkeypatch.setattr(db, "supersede_study_pack", capture_supersede)
+
+    await service_mod.create_study_pack_from_request(
+        note_db=db,
+        media_db=SimpleNamespace(),
+        request=study_pack_request,
+        regenerate_from_pack_id=original_pack_id,
+        provider="openai",
+        model="gpt-test",
+    )
+
+    assert captured["pack_id"] == original_pack_id  # nosec B101
+    assert captured["expected_version"] == 1  # nosec B101

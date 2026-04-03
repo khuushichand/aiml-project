@@ -1,3 +1,5 @@
+"""Job payload helpers for async study-pack generation."""
+
 from __future__ import annotations
 
 import os
@@ -11,6 +13,8 @@ STUDY_PACKS_JOB_TYPE = "study_pack_generate"
 
 
 def study_pack_jobs_queue() -> str:
+    """Return the queue name used by the study-pack Jobs worker."""
+
     queue = (os.getenv("STUDY_PACK_JOBS_QUEUE") or "default").strip()
     return queue or "default"
 
@@ -20,7 +24,18 @@ def build_study_pack_job_payload(
     *,
     regenerate_from_pack_id: int | None = None,
 ) -> dict[str, Any]:
-    payload = request.model_dump(mode="json")
+    """Serialize a study-pack request into a Jobs payload."""
+
+    payload = request.model_dump(mode="json", exclude_none=True)
+    payload["source_items"] = [
+        {
+            key: value
+            for key, value in source_item.items()
+            if value not in (None, "", [], {})
+        }
+        for source_item in payload.get("source_items", [])
+        if isinstance(source_item, dict)
+    ]
     if regenerate_from_pack_id is not None:
         payload["regenerate_from_pack_id"] = int(regenerate_from_pack_id)
     return payload
@@ -33,6 +48,8 @@ def build_study_pack_job_result(
     deck_name: str | None = None,
     regenerated_from_pack_id: int | None = None,
 ) -> dict[str, Any]:
+    """Serialize the completed job result returned by the worker."""
+
     result: dict[str, Any] = {
         "pack_id": int(pack_id),
         "deck_id": int(deck_id),
@@ -45,6 +62,8 @@ def build_study_pack_job_result(
 
 
 def extract_study_pack_source_items(source_bundle_json: Any) -> list[dict[str, str]]:
+    """Recover minimal source selections from a persisted study-pack bundle."""
+
     if isinstance(source_bundle_json, dict):
         items = source_bundle_json.get("items")
     elif isinstance(source_bundle_json, list):

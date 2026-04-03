@@ -721,7 +721,25 @@ const NotesManagerPage: React.FC = () => {
       return
     }
 
-    const noteTitle = ed.title.trim() || `Note ${selectedNoteId}`
+    if (ed.isDirty) {
+      message.warning(
+        t('option:notesSearch.createStudyPackDirty', {
+          defaultValue: 'Save this note before creating a study pack.'
+        })
+      )
+      return
+    }
+
+    const noteTitle = ed.title.trim()
+    if (!noteTitle) {
+      message.warning(
+        t('option:notesSearch.createStudyPackEmpty', {
+          defaultValue: 'Save and title this note before creating a study pack.'
+        })
+      )
+      return
+    }
+
     navigate(
       buildStudyPackRoute({
         title: noteTitle,
@@ -734,7 +752,7 @@ const NotesManagerPage: React.FC = () => {
         ]
       })
     )
-  }, [ed.selectedId, ed.title, message, navigate, t])
+  }, [ed.isDirty, ed.selectedId, ed.title, message, navigate, t])
 
   const duplicateSelectedNote = React.useCallback(async () => {
     if (editorDisabled) return
@@ -1599,31 +1617,6 @@ const NotesManagerPage: React.FC = () => {
     }))
   }, [ed, message, navigate, t])
 
-  const handleCreateStudyPackFromNote = React.useCallback(() => {
-    const noteTitle = ed.title.trim()
-    if (ed.selectedId == null || !noteTitle) {
-      message.warning(
-        t("option:notesSearch.createStudyPackEmpty", {
-          defaultValue: "Save and title this note before creating a study pack."
-        })
-      )
-      return
-    }
-
-    navigate(
-      buildStudyPackRoute({
-        title: noteTitle,
-        sourceItems: [
-          {
-            sourceType: "note",
-            sourceId: String(ed.selectedId),
-            sourceTitle: noteTitle
-          }
-        ]
-      })
-    )
-  }, [ed.selectedId, ed.title, message, navigate, t])
-
   // Open linked conversation
   const openLinkedConversation = async () => {
     const okToLeave = await ed.confirmDiscardIfDirty()
@@ -1914,7 +1907,7 @@ const NotesManagerPage: React.FC = () => {
           type="primary"
           size="small"
           onClick={handleCreateStudyPackFromNote}
-          disabled={ed.selectedId == null}
+          disabled={ed.selectedId == null || ed.isDirty || !ed.title.trim()}
           data-testid="notes-create-study-pack-button"
         >
           {t('option:notesSearch.createStudyPack', { defaultValue: 'Create study pack' })}

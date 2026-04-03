@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.study_packs import StudyPackCreateJobRequest
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import get_default_scheduler_settings
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config, normalize_provider, resolve_provider_model
 from tldw_Server_API.app.core.StudyPacks.provenance import (
     FlashcardProvenanceStore,
     normalize_citations_for_persistence,
@@ -39,6 +43,7 @@ if TYPE_CHECKING:
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _MAX_REPAIR_ATTEMPTS = 1
+_MAX_DECK_NAME_ATTEMPTS = 1000
 
 
 class StudyPackGenerationError(ValueError):
@@ -113,6 +118,44 @@ def _coerce_locator_mapping(value: Any) -> dict[str, Any]:
     return {"locator": locator_text}
 
 
+def _config_default_llm_provider(app_config: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(app_config, Mapping):
+        return None
+
+    for section in ("llm_api_settings", "API"):
+        section_data = app_config.get(section)
+        if not isinstance(section_data, Mapping):
+            continue
+        default_api = section_data.get("default_api")
+        if isinstance(default_api, str) and default_api.strip():
+            return default_api.strip()
+    return None
+
+
+def _resolve_generation_provider_and_model(
+    provider: str | None,
+    model: str | None,
+) -> tuple[str, str | None, dict[str, Any]]:
+    app_config = ensure_app_config()
+
+    resolved_provider = normalize_provider(provider)
+    if not resolved_provider:
+        resolved_provider = normalize_provider(_config_default_llm_provider(app_config))
+    if not resolved_provider:
+        resolved_provider = normalize_provider(os.getenv("DEFAULT_LLM_PROVIDER"))
+    if not resolved_provider:
+        resolved_provider = normalize_provider(DEFAULT_LLM_PROVIDER or "openai") or "openai"
+
+    resolved_model = _clean_text(model) or None
+    if resolved_model is None:
+        env_model_key = f"DEFAULT_MODEL_{resolved_provider.replace('.', '_').replace('-', '_').upper()}"
+        resolved_model = _clean_text(os.getenv(env_model_key)) or None
+    if resolved_model is None:
+        resolved_model = resolve_provider_model(resolved_provider, app_config)
+
+    return resolved_provider, resolved_model, app_config
+
+
 class StudyPackGenerationService:
     """Generates validated flashcards from a resolved study source bundle and persists them atomically."""
 
@@ -126,8 +169,7 @@ class StudyPackGenerationService:
     ) -> None:
         self.note_db = note_db
         self.media_db = media_db
-        self.provider = provider
-        self.model = model
+        self.provider, self.model, self.app_config = _resolve_generation_provider_and_model(provider, model)
         self.source_resolver = StudySourceResolver(db=note_db, media_db=media_db)
         self.provenance_store = FlashcardProvenanceStore(note_db)
 
@@ -137,7 +179,7 @@ class StudyPackGenerationService:
         *,
         regenerate_from_pack_id: int | None = None,
     ) -> StudyPackCreationResult:
-        bundle = self.source_resolver.resolve(request.source_items)
+        bundle = await asyncio.to_thread(self.source_resolver.resolve, request.source_items)
         generated = await self.generate_validated_cards(bundle, request)
         return self._persist_generated_cards(
             bundle=bundle,
@@ -179,76 +221,109 @@ class StudyPackGenerationService:
         generated: StudyPackGenerationResult,
         regenerate_from_pack_id: int | None,
     ) -> StudyPackCreationResult:
-        with self.note_db.transaction():
-            deck_id, deck_name = self._create_destination_deck(request.title, workspace_id=request.workspace_id)
-            card_payloads = [
-                {
-                    "deck_id": deck_id,
-                    "front": card.front,
-                    "back": card.back,
-                    "notes": card.notes,
-                    "extra": card.extra,
-                    "model_type": card.model_type,
-                    "tags_json": json.dumps(card.tags) if card.tags else None,
-                }
-                for card in generated.cards
-            ]
-            card_uuids = self.note_db.add_flashcards_bulk(card_payloads)
-            pack_id = self.note_db.create_study_pack(
-                title=request.title,
-                workspace_id=request.workspace_id,
-                deck_id=deck_id,
-                source_bundle_json=_serialize_bundle(bundle),
-                generation_options_json={
-                    "deck_mode": request.deck_mode,
-                    "provider": self.provider,
-                    "model": self.model,
-                    "repair_attempted": generated.repair_attempted,
-                },
-            )
-            inserted_memberships = self.note_db.add_study_pack_cards(pack_id, card_uuids)
-            if inserted_memberships != len(card_uuids):
-                raise CharactersRAGDBError(
-                    f"Expected {len(card_uuids)} study-pack membership rows, inserted {inserted_memberships}"
-                )
+        expected_supersede_version = self._expected_supersede_version(regenerate_from_pack_id)
+        cleaned_base_name = _clean_text(request.title) or "Study Pack"
+        card_template_payloads = [
+            {
+                "front": card.front,
+                "back": card.back,
+                "notes": card.notes,
+                "extra": card.extra,
+                "model_type": card.model_type,
+                "tags_json": json.dumps(card.tags) if card.tags else None,
+            }
+            for card in generated.cards
+        ]
 
-            for card_uuid, card in zip(card_uuids, generated.cards, strict=True):
-                self.provenance_store.persist_flashcard_citations(
-                    card_uuid,
-                    _serialize_citations(card.citations),
-                )
-
-            if regenerate_from_pack_id is not None:
-                self.note_db.supersede_study_pack(
-                    regenerate_from_pack_id,
-                    superseded_by_pack_id=pack_id,
-                )
-
-        return StudyPackCreationResult(
-            pack_id=pack_id,
-            deck_id=deck_id,
-            deck_name=deck_name,
-            card_uuids=card_uuids,
-            cards=generated.cards,
-            repair_attempted=generated.repair_attempted,
-            regenerated_from_pack_id=regenerate_from_pack_id,
-        )
-
-    def _create_destination_deck(self, base_name: str, *, workspace_id: str | None) -> tuple[int, str]:
-        cleaned_base_name = _clean_text(base_name) or "Study Pack"
-        default_scheduler_settings = get_default_scheduler_settings()
-        for suffix in range(1, 1001):
-            candidate_name = cleaned_base_name if suffix == 1 else f"{cleaned_base_name} ({suffix})"
+        for _ in range(_MAX_DECK_NAME_ATTEMPTS):
+            deck_name = self._next_destination_deck_name(request.title)
             try:
-                deck_id = self.note_db.add_deck(
-                    candidate_name,
-                    workspace_id=workspace_id,
-                    scheduler_type="sm2_plus",
-                    scheduler_settings=default_scheduler_settings,
+                with self.note_db.transaction():
+                    deck_id = self.note_db.add_deck(
+                        deck_name,
+                        workspace_id=request.workspace_id,
+                        scheduler_type="sm2_plus",
+                        scheduler_settings=get_default_scheduler_settings(),
+                    )
+                    card_payloads = [
+                        {
+                            **card_payload,
+                            "deck_id": deck_id,
+                        }
+                        for card_payload in card_template_payloads
+                    ]
+                    card_uuids = self.note_db.add_flashcards_bulk(card_payloads)
+                    pack_id = self.note_db.create_study_pack(
+                        title=request.title,
+                        workspace_id=request.workspace_id,
+                        deck_id=deck_id,
+                        source_bundle_json=_serialize_bundle(bundle),
+                        generation_options_json={
+                            "deck_mode": request.deck_mode,
+                            "provider": self.provider,
+                            "model": self.model,
+                            "repair_attempted": generated.repair_attempted,
+                        },
+                    )
+                    inserted_memberships = self.note_db.add_study_pack_cards(pack_id, card_uuids)
+                    if inserted_memberships != len(card_uuids):
+                        raise CharactersRAGDBError(
+                            f"Expected {len(card_uuids)} study-pack membership rows, inserted {inserted_memberships}"
+                        )
+
+                    for card_uuid, card in zip(card_uuids, generated.cards, strict=True):
+                        self.provenance_store.persist_flashcard_citations(
+                            card_uuid,
+                            _serialize_citations(card.citations),
+                        )
+
+                    if regenerate_from_pack_id is not None:
+                        self.note_db.supersede_study_pack(
+                            regenerate_from_pack_id,
+                            superseded_by_pack_id=pack_id,
+                            expected_version=expected_supersede_version,
+                        )
+
+                return StudyPackCreationResult(
+                    pack_id=pack_id,
+                    deck_id=deck_id,
+                    deck_name=deck_name,
+                    card_uuids=card_uuids,
+                    cards=generated.cards,
+                    repair_attempted=generated.repair_attempted,
+                    regenerated_from_pack_id=regenerate_from_pack_id,
                 )
-                return deck_id, candidate_name
-            except ConflictError:
+            except ConflictError as exc:
+                if exc.entity != "decks":
+                    raise
                 continue
+
+        raise CharactersRAGDBError(f"Could not allocate a unique deck name for '{cleaned_base_name}'")  # noqa: TRY003
+
+    def _expected_supersede_version(self, pack_id: int | None) -> int | None:
+        if pack_id is None:
+            return None
+        original_pack = self.note_db.get_study_pack(pack_id)
+        if not original_pack:
+            return None
+        version = original_pack.get("version")
+        return int(version) if version is not None else None
+
+    def _next_destination_deck_name(self, base_name: str) -> str:
+        cleaned_base_name = _clean_text(base_name) or "Study Pack"
+        existing_names = {
+            _clean_text(deck.get("name"))
+            for deck in self.note_db.list_decks(limit=10_000, include_deleted=True, include_workspace_items=True)
+            if _clean_text(deck.get("name"))
+        }
+        if cleaned_base_name not in existing_names:
+            return cleaned_base_name
+
+        for suffix in range(2, _MAX_DECK_NAME_ATTEMPTS + 1):
+            candidate_name = f"{cleaned_base_name} ({suffix})"
+            if candidate_name not in existing_names:
+                return candidate_name
+
         raise CharactersRAGDBError(f"Could not allocate a unique deck name for '{cleaned_base_name}'")  # noqa: TRY003
 
     async def _call_generation_model(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -256,6 +331,7 @@ class StudyPackGenerationService:
             messages=[{"role": "user", "content": user_prompt}],
             api_provider=self.provider,
             model=self.model,
+            app_config=self.app_config,
             system_message=system_prompt,
             max_tokens=4000,
             temperature=0.2,

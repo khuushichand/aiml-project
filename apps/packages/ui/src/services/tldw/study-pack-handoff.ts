@@ -4,6 +4,8 @@ export type StudyPackHandoffSourceItem = {
   sourceType: StudyPackHandoffSourceType
   sourceId: string
   sourceTitle?: string
+  excerptText?: string
+  locator?: Record<string, unknown>
 }
 
 export type StudyPackIntent = {
@@ -50,6 +52,16 @@ const normalizeSourceItem = (value: unknown): StudyPackHandoffSourceItem | null 
   const sourceTitle = toNonEmptyString(payload.sourceTitle ?? payload.source_title)
   if (sourceTitle) {
     normalized.sourceTitle = sourceTitle
+  }
+
+  const excerptText = toNonEmptyString(payload.excerptText ?? payload.excerpt_text)
+  if (excerptText) {
+    normalized.excerptText = excerptText
+  }
+
+  const locator = payload.locator
+  if (locator && typeof locator === "object" && !Array.isArray(locator)) {
+    normalized.locator = locator as Record<string, unknown>
   }
 
   return normalized

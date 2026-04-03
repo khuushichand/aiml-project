@@ -37,7 +37,9 @@ const normalizeIntentSources = (
     ? intent.sourceItems.map((item) => ({
         source_type: item.sourceType,
         source_id: item.sourceId,
-        source_title: item.sourceTitle
+        source_title: item.sourceTitle,
+        excerpt_text: item.excerptText,
+        locator: item.locator
       }))
     : []
 
