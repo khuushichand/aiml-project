@@ -1994,15 +1994,15 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   })
 
   const hasLlmProviders = React.useMemo(() => {
-    if (llmProvidersQuery.isLoading) return true // optimistic while loading
-    if (llmProvidersQuery.data == null) return false
+    if (llmProvidersQuery.isLoading || llmProvidersQuery.isError) return true // optimistic while loading or on error
+    if (llmProvidersQuery.data == null) return true // no data yet — assume available
     // Unwrap ApiSendResponse envelope: actual payload is in .data
     const raw = llmProvidersQuery.data as any
     const data = raw?.data ?? raw
     if (Array.isArray(data?.providers)) return data.providers.length > 0
     if (typeof data?.total_configured === "number") return data.total_configured > 0
     return true // fallback: assume available if shape unknown
-  }, [llmProvidersQuery.data, llmProvidersQuery.isLoading])
+  }, [llmProvidersQuery.data, llmProvidersQuery.isLoading, llmProvidersQuery.isError])
 
   const sourceContext = React.useMemo<GenerateSourceContext | null>(() => {
     if (!initialIntent) return null

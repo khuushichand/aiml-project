@@ -15,12 +15,28 @@ import { VoiceTranscriptComposer } from "./VoiceTranscriptComposer"
 
 type AssistantErrorKind = "network" | "server" | "no_llm"
 
+function extractHttpStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined
+  const e = err as Record<string, unknown>
+  // Top-level: err.status, err.statusCode
+  if (typeof e.status === "number") return e.status
+  if (typeof e.statusCode === "number") return e.statusCode
+  // Nested: err.response.status, err.response.statusCode
+  const resp = e.response
+  if (resp && typeof resp === "object") {
+    const r = resp as Record<string, unknown>
+    if (typeof r.status === "number") return r.status
+    if (typeof r.statusCode === "number") return r.statusCode
+  }
+  return undefined
+}
+
 function classifyAssistantError(err: unknown): AssistantErrorKind {
   const isNetwork =
     err instanceof TypeError ||
     (err instanceof Error && /network|fetch|timeout/i.test(err.message))
   if (isNetwork) return "network"
-  const httpStatus = (err as { response?: { status?: number } })?.response?.status
+  const httpStatus = extractHttpStatus(err)
   if (typeof httpStatus === "number" && httpStatus >= 400) return "server"
   return "no_llm"
 }

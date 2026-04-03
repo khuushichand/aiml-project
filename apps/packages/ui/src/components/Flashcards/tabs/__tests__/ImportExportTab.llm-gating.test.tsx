@@ -175,17 +175,15 @@ describe("ImportExportTab LLM provider gating", () => {
   })
 
   it("shows no-LLM banner when providers query returns empty list", () => {
-    let callIndex = 0
     useQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
-      // The LLM providers query uses ["flashcards", "llm-providers"]
       if (opts?.queryKey?.[1] === "llm-providers") {
         return {
-          data: { providers: [], total_configured: 0 },
-          isLoading: false
+          data: { ok: true, status: 200, data: { providers: [], total_configured: 0 } },
+          isLoading: false,
+          isError: false
         }
       }
-      // Default for other useQuery calls (e.g. export preview count)
-      return { data: 42, isLoading: false }
+      return { data: 42, isLoading: false, isError: false }
     })
 
     render(<ImportExportTab />)
@@ -204,11 +202,12 @@ describe("ImportExportTab LLM provider gating", () => {
     useQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
       if (opts?.queryKey?.[1] === "llm-providers") {
         return {
-          data: { providers: [], total_configured: 0 },
-          isLoading: false
+          data: { ok: true, status: 200, data: { providers: [], total_configured: 0 } },
+          isLoading: false,
+          isError: false
         }
       }
-      return { data: 42, isLoading: false }
+      return { data: 42, isLoading: false, isError: false }
     })
 
     render(<ImportExportTab />)
@@ -221,11 +220,31 @@ describe("ImportExportTab LLM provider gating", () => {
     useQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
       if (opts?.queryKey?.[1] === "llm-providers") {
         return {
-          data: { providers: [{ id: "openai" }], total_configured: 1 },
-          isLoading: false
+          data: { ok: true, status: 200, data: { providers: [{ id: "openai" }], total_configured: 1 } },
+          isLoading: false,
+          isError: false
         }
       }
-      return { data: 42, isLoading: false }
+      return { data: 42, isLoading: false, isError: false }
+    })
+
+    render(<ImportExportTab />)
+
+    expect(
+      screen.queryByTestId("flashcards-generate-no-llm-banner")
+    ).not.toBeInTheDocument()
+  })
+
+  it("treats query errors optimistically (no banner shown)", () => {
+    useQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
+      if (opts?.queryKey?.[1] === "llm-providers") {
+        return {
+          data: null,
+          isLoading: false,
+          isError: true
+        }
+      }
+      return { data: 42, isLoading: false, isError: false }
     })
 
     render(<ImportExportTab />)

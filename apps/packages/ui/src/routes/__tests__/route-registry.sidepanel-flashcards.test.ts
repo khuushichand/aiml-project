@@ -47,15 +47,15 @@ describe("sidepanel flashcards route registration", () => {
   })
 
   it("sidepanel-flashcards.tsx imports browser from wxt/browser", () => {
-    if (!flashcardsComponentPath) return
-    const source = readFileSync(flashcardsComponentPath, "utf8")
+    expect(flashcardsComponentPath).toBeDefined()
+    const source = readFileSync(flashcardsComponentPath!, "utf8")
     expect(source).toContain('from "wxt/browser"')
     expect(source).not.toContain("browser-polyfill")
   })
 
   it("sidepanel-flashcards.tsx opens options page at /flashcards", () => {
-    if (!flashcardsComponentPath) return
-    const source = readFileSync(flashcardsComponentPath, "utf8")
+    expect(flashcardsComponentPath).toBeDefined()
+    const source = readFileSync(flashcardsComponentPath!, "utf8")
     expect(source).toContain("/options.html#/flashcards")
   })
 })
