@@ -400,10 +400,22 @@ class StudyAssistantContextResponse(BaseModel):
     messages: list[StudyAssistantMessage] = Field(default_factory=list)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     available_actions: list[StudyAssistantAction] = Field(default_factory=list)
-    citations: list[FlashcardCitationResponse] = Field(default_factory=list)
-    primary_citation: Optional[FlashcardCitationResponse] = None
-    deep_dive_target: Optional[FlashcardDeepDiveTarget] = None
-    study_pack: Optional[StudyPackSummaryResponse] = None
+    citations: list[FlashcardCitationResponse] = Field(
+        default_factory=list,
+        description="Persisted provenance citations for the flashcard, empty for legacy cards.",
+    )
+    primary_citation: Optional[FlashcardCitationResponse] = Field(
+        default=None,
+        description="The citation mirrored by the legacy source_ref summary fields.",
+    )
+    deep_dive_target: Optional[FlashcardDeepDiveTarget] = Field(
+        default=None,
+        description="The preferred source target for remediation deep-dive actions.",
+    )
+    study_pack: Optional[StudyPackSummaryResponse] = Field(
+        default=None,
+        description="The owning study pack when the flashcard belongs to one.",
+    )
 
 
 class StudyAssistantRespondResponse(BaseModel):

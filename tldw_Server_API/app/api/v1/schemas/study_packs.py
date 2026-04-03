@@ -71,3 +71,7 @@ class FlashcardDeepDiveTarget(BaseModel):
     source_type: StudyPackSourceType
     source_id: str
     citation_ordinal: Optional[int] = Field(default=None, ge=0)
+    route_kind: Optional[Literal["exact_locator", "workspace_route", "citation_only"]] = None
+    route: Optional[str] = None
+    available: bool = True
+    fallback_reason: Optional[str] = None

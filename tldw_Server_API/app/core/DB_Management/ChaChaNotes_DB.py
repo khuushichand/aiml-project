@@ -23366,6 +23366,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
             if normalized_source_id is None:
                 raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
             try:
                 ordinal = int(citation.get("ordinal", 0) or 0)
             except (TypeError, ValueError) as exc:
@@ -23378,7 +23381,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     source_type,
                     normalized_source_id,
                     self._normalize_nullable_text(citation.get("citation_text")),
-                    self._normalize_nullable_text(citation.get("locator")),
+                    normalized_locator,
                     ordinal,
                     now,
                     now,
@@ -23407,6 +23410,70 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
 
+    def replace_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Replace the active citation set for a flashcard with the provided rows."""
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+
     def list_flashcard_citations(self, flashcard_uuid: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
         """List citations for a flashcard ordered by ordinal."""
         deleted_clause = "1=1" if include_deleted else "deleted = 0"
@@ -23420,6 +23487,69 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             cursor = self.execute_query(query, (flashcard_uuid,))
             return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def set_flashcard_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> bool:
+        """Persist the legacy flashcard source summary from the primary citation only."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                cursor = conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                return cursor.rowcount > 0
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack_for_flashcard(self, flashcard_uuid: str) -> dict[str, Any] | None:
+        """Return the first active study pack containing the flashcard."""
+        query = """
+            SELECT sp.id, sp.workspace_id, sp.title, sp.deck_id, sp.source_bundle_json, sp.generation_options_json,
+                   sp.status, sp.superseded_by_pack_id, sp.created_at, sp.last_modified, sp.deleted, sp.client_id, sp.version
+              FROM study_pack_cards spc
+              JOIN study_packs sp ON sp.id = spc.study_pack_id
+             WHERE spc.flashcard_uuid = ? AND spc.deleted = 0 AND sp.deleted = 0
+             ORDER BY spc.id ASC, sp.id ASC
+             LIMIT 1
+        """
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 

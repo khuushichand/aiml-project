@@ -1638,6 +1638,10 @@ def get_flashcard_assistant(
             "messages": context["history"],
             "context_snapshot": _build_assistant_context_snapshot(context),
             "available_actions": context["available_actions"],
+            "citations": context.get("citations") or [],
+            "primary_citation": context.get("primary_citation"),
+            "deep_dive_target": context.get("deep_dive_target"),
+            "study_pack": context.get("study_pack"),
         }
     except HTTPException:
         raise
