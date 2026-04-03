@@ -41,8 +41,15 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     StructuredQaImportPreviewResponse,
     FlashcardUpdate,
 )
+from tldw_Server_API.app.api.v1.schemas.study_packs import (
+    StudyPackCreateJobRequest,
+    StudyPackJobAcceptedResponse,
+    StudyPackJobStatusResponse,
+    StudyPackSummaryResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -69,6 +76,14 @@ from tldw_Server_API.app.core.Flashcards.apkg_importer import (
     import_rows_from_apkg_bytes,
 )
 from tldw_Server_API.app.core.Flashcards.structured_qa_import import parse_structured_qa_preview
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.StudyPacks.jobs import (
+    STUDY_PACKS_DOMAIN,
+    STUDY_PACKS_JOB_TYPE,
+    build_study_pack_job_payload,
+    extract_study_pack_source_items,
+    study_pack_jobs_queue,
+)
 from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_flashcard_assistant_context,
     generate_study_assistant_reply,
@@ -186,6 +201,13 @@ _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
 )
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+_STUDY_PACK_JOB_STATUS_MAP = {
+    "queued": "queued",
+    "processing": "running",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "cancelled",
+}
 
 
 def _int_env(name: str, default: int) -> int:
@@ -234,6 +256,56 @@ def _resolve_flashcard_generation_provider(request_provider: str | None) -> str:
 
     fallback = str(DEFAULT_LLM_PROVIDER or "openai").strip().lower()
     return fallback or "openai"
+
+
+def _is_admin_principal(principal: AuthPrincipal) -> bool:
+    perms = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    return bool("admin" in roles or perms & _ADMIN_CLAIM_PERMISSIONS or FLASHCARDS_ADMIN.lower() in perms)
+
+
+def _get_jobs_manager() -> JobManager:
+    return JobManager()
+
+
+def _serialize_study_pack(pack: dict[str, Any]) -> dict[str, Any]:
+    return StudyPackSummaryResponse.model_validate(pack).model_dump(mode="json")
+
+
+def _serialize_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
+    raw_status = str(job.get("status") or "").strip().lower()
+    return {
+        "id": int(job["id"]),
+        "status": _STUDY_PACK_JOB_STATUS_MAP.get(raw_status, "queued"),
+        "domain": str(job.get("domain") or ""),
+        "queue": str(job.get("queue") or ""),
+        "job_type": str(job.get("job_type") or ""),
+    }
+
+
+def _ensure_study_pack_job_access(job: dict[str, Any], *, current_user: User, principal: AuthPrincipal) -> None:
+    if _is_admin_principal(principal):
+        return
+    owner_user_id = str(job.get("owner_user_id") or "").strip()
+    if owner_user_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Study-pack job not found")
+
+
+def _study_pack_from_job_result(db: CharactersRAGDB, job: dict[str, Any]) -> dict[str, Any] | None:
+    result = job.get("result") or {}
+    pack_id = result.get("pack_id") if isinstance(result, dict) else None
+    if pack_id is None:
+        return None
+    pack = db.get_study_pack(int(pack_id))
+    return _serialize_study_pack(pack) if pack else None
 
 
 def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
@@ -1623,6 +1695,97 @@ def get_next_review_card(
     except CharactersRAGDBError as e:
         logger.error(f"Failed to fetch next review card: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch next review card") from e
+
+
+@router.post("/study-packs/jobs", response_model=StudyPackJobAcceptedResponse, status_code=202)
+def create_study_pack_job(
+    payload: StudyPackCreateJobRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        _ensure_workspace_exists(db, payload.workspace_id)
+        job = _get_jobs_manager().create_job(
+            domain=STUDY_PACKS_DOMAIN,
+            queue=study_pack_jobs_queue(),
+            job_type=STUDY_PACKS_JOB_TYPE,
+            payload=build_study_pack_job_payload(payload),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=2,
+        )
+        return {"job": _serialize_study_pack_job(job)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/study-packs/jobs/{job_id}", response_model=StudyPackJobStatusResponse)
+def get_study_pack_job_status(
+    job_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    job = _get_jobs_manager().get_job(job_id)
+    if not job or str(job.get("domain") or "").strip().lower() != STUDY_PACKS_DOMAIN:
+        raise HTTPException(status_code=404, detail="Study-pack job not found")
+    _ensure_study_pack_job_access(job, current_user=current_user, principal=principal)
+
+    study_pack = None
+    raw_status = str(job.get("status") or "").strip().lower()
+    if raw_status == "completed":
+        study_pack = _study_pack_from_job_result(db, job)
+    error = str(job.get("error_message") or job.get("last_error") or "").strip() or None
+    return {
+        "job": _serialize_study_pack_job(job),
+        "study_pack": study_pack,
+        "error": error,
+    }
+
+
+@router.get("/study-packs/{pack_id}", response_model=StudyPackSummaryResponse)
+def get_study_pack_detail(
+    pack_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    pack = db.get_study_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Study pack not found")
+    return _serialize_study_pack(pack)
+
+
+@router.post("/study-packs/{pack_id}/regenerate", response_model=StudyPackJobAcceptedResponse, status_code=202)
+def regenerate_study_pack(
+    pack_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    pack = db.get_study_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Study pack not found")
+
+    source_items = extract_study_pack_source_items(pack.get("source_bundle_json"))
+    if not source_items:
+        raise HTTPException(status_code=400, detail="Study pack source bundle is empty")
+
+    request = StudyPackCreateJobRequest.model_validate(
+        {
+            "title": pack.get("title"),
+            "workspace_id": pack.get("workspace_id"),
+            "deck_mode": "new",
+            "source_items": source_items,
+        }
+    )
+    job = _get_jobs_manager().create_job(
+        domain=STUDY_PACKS_DOMAIN,
+        queue=study_pack_jobs_queue(),
+        job_type=STUDY_PACKS_JOB_TYPE,
+        payload=build_study_pack_job_payload(request, regenerate_from_pack_id=pack_id),
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=2,
+    )
+    return {"job": _serialize_study_pack_job(job)}
 
 
 @router.get("/{card_uuid}/assistant", response_model=StudyAssistantContextResponse)

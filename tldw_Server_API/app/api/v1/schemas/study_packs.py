@@ -44,11 +44,24 @@ class StudyPackSummaryResponse(BaseModel):
     version: int
 
 
+StudyPackJobApiStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+
+
+class StudyPackJobSummaryResponse(BaseModel):
+    id: int
+    status: StudyPackJobApiStatus
+    domain: str
+    queue: str
+    job_type: str
+
+
+class StudyPackJobAcceptedResponse(BaseModel):
+    job: StudyPackJobSummaryResponse
+
+
 class StudyPackJobStatusResponse(BaseModel):
-    job_id: str
-    status: Literal["queued", "running", "completed", "failed"]
+    job: StudyPackJobSummaryResponse
     study_pack: Optional[StudyPackSummaryResponse] = None
-    destination_deck_id: Optional[int] = None
     error: Optional[str] = None
 
 

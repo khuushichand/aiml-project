@@ -2694,6 +2694,24 @@ async def lifespan(app: FastAPI):
         # startup/shutdown guard; log and continue
         logger.warning(f"Failed to start Prompt Studio Jobs worker: {e}")
 
+    # Study-pack Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_PACK_JOBS_WORKER_ENABLED", "flashcards")
+        if _enabled:
+            from tldw_Server_API.app.services.study_pack_jobs_worker import (
+                run_study_pack_jobs_worker as _run_study_pack_jobs,
+            )
+
+            study_pack_jobs_stop_event = _asyncio.Event()
+            study_pack_jobs_task = _asyncio.create_task(_run_study_pack_jobs(study_pack_jobs_stop_event))
+            logger.info("Study-pack Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-pack Jobs worker disabled by flag (STUDY_PACK_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-pack Jobs worker: {e}")
+
     # Privilege snapshot worker
     try:
         import asyncio as _asyncio
