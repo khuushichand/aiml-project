@@ -21810,6 +21810,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
+    def get_deck_by_name(self, name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        """Fetch one deck row by name using the repository-wide unique-name invariant."""
+        if include_deleted:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? "
+                "ORDER BY id LIMIT 1"
+            )
+        else:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? AND deleted = 0 "
+                "ORDER BY id LIMIT 1"
+            )
+        try:
+            cursor = self.execute_query(query, (name,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
     def update_deck(
         self,
         deck_id: int,
