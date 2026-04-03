@@ -93,6 +93,7 @@ describe("web notifications adapter", () => {
 
   it("uses the web apiClient transport for inbox CRUD", async () => {
     await listNotifications({ limit: 20, offset: 0 })
+    await listNotifications({ limit: 25, offset: 5, include_archived: true, only_snoozed: true })
     await getUnreadCount()
     await markNotificationsRead([1])
     await dismissNotification(1)
@@ -103,6 +104,10 @@ describe("web notifications adapter", () => {
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
       "/notifications?limit=20&offset=0&include_archived=false",
+      { withCredentials: false }
+    )
+    expect(mocks.apiGet).toHaveBeenCalledWith(
+      "/notifications?limit=25&offset=5&include_archived=true&only_snoozed=true",
       { withCredentials: false }
     )
     expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/unread-count", {

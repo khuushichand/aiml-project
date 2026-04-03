@@ -4530,6 +4530,22 @@ class CollectionsDatabase:
         rows = self.backend.execute(q, tuple(params)).rows
         return [self._notification_row_from_db(row) for row in rows]
 
+    def list_user_dismissed_notifications(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserNotificationRow]:
+        rows = self.backend.execute(
+            (
+                "SELECT * FROM user_notifications "
+                "WHERE user_id = ? AND dismissed_at IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            ),
+            (self.user_id, limit, offset),
+        ).rows
+        return [self._notification_row_from_db(row) for row in rows]
+
     def list_user_notifications_after_id(
         self,
         *,

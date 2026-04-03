@@ -243,6 +243,7 @@ export async function listNotifications(params?: {
   limit?: number
   offset?: number
   include_archived?: boolean
+  only_snoozed?: boolean
 }): Promise<NotificationsListResponse> {
   return bgRequest<NotificationsListResponse>({
     path: `/api/v1/notifications${buildNotificationsQuery(params || {})}` as any,

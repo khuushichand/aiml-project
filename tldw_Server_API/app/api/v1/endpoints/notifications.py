@@ -28,7 +28,10 @@ from tldw_Server_API.app.api.v1.schemas.reminders_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import NOTIFICATIONS_CONTROL, NOTIFICATIONS_READ
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, UserNotificationRow
-from tldw_Server_API.app.core.Reminders.reminders_service import RemindersService
+from tldw_Server_API.app.core.Reminders.reminders_service import (
+    NotificationSnoozeMatch,
+    RemindersService,
+)
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.services.reminders_scheduler import get_reminders_scheduler
 
@@ -163,16 +166,23 @@ async def list_notifications(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     include_archived: bool = Query(False),
+    only_snoozed: bool = Query(False),
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_READ)),  # noqa: B008
 ) -> NotificationsListResponse:
     """List notifications for the authenticated user."""
 
-    rows = db.list_user_notifications(include_archived=include_archived, limit=limit, offset=offset)
-    snooze_matches = {}
-    if include_archived and rows:
-        service = RemindersService(user_id=db.user_id, collections_db=db)
-        snooze_matches = service.list_notification_snoozes(notifications=rows)
+    rows: list[UserNotificationRow]
+    total: int
+    snooze_matches: dict[int, NotificationSnoozeMatch] = {}
+    service = RemindersService(user_id=db.user_id, collections_db=db)
+    if only_snoozed:
+        rows, snooze_matches, total = service.list_snoozed_notifications(limit=limit, offset=offset)
+    else:
+        rows = db.list_user_notifications(include_archived=include_archived, limit=limit, offset=offset)
+        total = len(rows)
+        if include_archived and rows:
+            snooze_matches = service.list_notification_snoozes(notifications=rows)
     return NotificationsListResponse(
         items=[
             _notification_to_response(
@@ -181,7 +191,7 @@ async def list_notifications(
             )
             for row in rows
         ],
-        total=len(rows),
+        total=total,
     )
 
 

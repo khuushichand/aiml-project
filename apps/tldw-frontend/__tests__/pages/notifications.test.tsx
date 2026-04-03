@@ -128,9 +128,16 @@ describe('NotificationsPage', () => {
   });
 
   it('shows snoozed notifications instead of the empty state when only snoozed items remain', async () => {
-    mocks.listNotifications.mockImplementation(({ include_archived }: { include_archived?: boolean } = {}) =>
-      Promise.resolve({
-        items: include_archived
+    const calls: Array<{ include_archived?: boolean; only_snoozed?: boolean }> = [];
+    mocks.listNotifications.mockImplementation((
+      {
+        include_archived,
+        only_snoozed,
+      }: { include_archived?: boolean; only_snoozed?: boolean } = {}
+    ) => {
+      calls.push({ include_archived, only_snoozed });
+      return Promise.resolve({
+        items: only_snoozed
           ? [
               {
                 id: 201,
@@ -147,7 +154,7 @@ describe('NotificationsPage', () => {
           : [],
         total: 1,
       })
-    );
+    });
     mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
     const user = userEvent.setup();
 
@@ -159,25 +166,14 @@ describe('NotificationsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Show snoozed (1)' }));
 
     expect(await screen.findByText('Snoozed item')).toBeInTheDocument();
+    expect(calls).toContainEqual(expect.objectContaining({ include_archived: true, only_snoozed: true }));
   });
 
   it('does not treat dismissed-only archived notifications as snoozed without an active reminder', async () => {
-    mocks.listNotifications.mockImplementation(({ include_archived }: { include_archived?: boolean } = {}) =>
+    mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
       Promise.resolve({
-        items: include_archived
-          ? [
-              {
-                id: 301,
-                kind: 'job_failed',
-                title: 'Dismissed only',
-                message: 'Already dealt with.',
-                severity: 'error',
-                created_at: '2026-02-26T00:00:00+00:00',
-                read_at: null,
-                dismissed_at: '2026-02-26T00:05:00+00:00',
-                snooze_until: null,
-              },
-            ]
+        items: only_snoozed
+          ? []
           : [],
         total: 1,
       })
@@ -208,9 +204,9 @@ describe('NotificationsPage', () => {
   });
 
   it('cancels a snoozed reminder from the snoozed view', async () => {
-    mocks.listNotifications.mockImplementation(({ include_archived }: { include_archived?: boolean } = {}) =>
+    mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
       Promise.resolve({
-        items: include_archived
+        items: only_snoozed
           ? [
               {
                 id: 401,

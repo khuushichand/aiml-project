@@ -99,12 +99,14 @@ export async function listNotifications(params?: {
   limit?: number
   offset?: number
   include_archived?: boolean
+  only_snoozed?: boolean
 }): Promise<NotificationsListResponse> {
   return apiClient.get<NotificationsListResponse>(
     `/notifications${buildNotificationsQueryShared({
       limit: params?.limit ?? 100,
       offset: params?.offset ?? 0,
-      include_archived: params?.include_archived ?? false
+      include_archived: params?.include_archived ?? false,
+      only_snoozed: params?.only_snoozed
     })}`,
     { withCredentials: !hasExplicitAuthHeaders() }
   )

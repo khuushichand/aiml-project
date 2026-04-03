@@ -21,10 +21,6 @@ const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_SNOOZE_MINUTES = 15;
 const NOTIFICATIONS_FETCH_LIMIT = 100;
 
-function extractSnoozedItems(archivedItems: NotificationItem[]): NotificationItem[] {
-  return archivedItems.filter((item) => Boolean(item.snooze_until));
-}
-
 function resolveRouteForLinkType(linkType: string | null | undefined): string | undefined {
   if (!linkType) return undefined
   const lt = linkType.toLowerCase()
@@ -68,13 +64,18 @@ export default function NotificationsPage() {
 
   const refreshInbox = useCallback(async () => {
     try {
-      const [list, archived, unread] = await Promise.all([
+      const [list, snoozed, unread] = await Promise.all([
         listNotifications({ limit: NOTIFICATIONS_FETCH_LIMIT, offset: 0, include_archived: false }),
-        listNotifications({ limit: NOTIFICATIONS_FETCH_LIMIT, offset: 0, include_archived: true }),
+        listNotifications({
+          limit: NOTIFICATIONS_FETCH_LIMIT,
+          offset: 0,
+          include_archived: true,
+          only_snoozed: true,
+        }),
         getUnreadCount(),
       ]);
       setItems(list.items);
-      setSnoozedItems(extractSnoozedItems(archived.items));
+      setSnoozedItems(snoozed.items);
       setUnreadCount(unread.unread_count);
       const maxSeen = list.items.reduce((maxId, item) => Math.max(maxId, item.id), cursorRef.current);
       cursorRef.current = maxSeen;

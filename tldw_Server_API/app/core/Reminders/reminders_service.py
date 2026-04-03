@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import (
 MIN_SNOOZE_MINUTES = 1
 MAX_SNOOZE_MINUTES = 10080
 SNOOZE_TASK_TITLE_PREFIX = "Snoozed: "
+SNOOZED_NOTIFICATIONS_SCAN_SIZE = 250
 
 
 @dataclass(frozen=True)
@@ -153,19 +154,22 @@ class RemindersService:
     def delete_task(self, task_id: str) -> bool:
         return self.collections.delete_reminder_task(task_id)
 
-    def list_notification_snoozes(
-        self,
-        *,
-        notifications: Sequence[UserNotificationRow],
-    ) -> dict[int, NotificationSnoozeMatch]:
-        dismissed_notifications = [notification for notification in notifications if notification.dismissed_at]
-        if not dismissed_notifications:
-            return {}
-        active_tasks = {
+    def _list_active_snooze_tasks(self) -> dict[str, ReminderTaskRow]:
+        return {
             task.id: task
             for task in self.collections.list_reminder_tasks(include_disabled=False)
             if _task_snooze_signature(task) is not None
         }
+
+    def _match_notification_snoozes(
+        self,
+        *,
+        notifications: Sequence[UserNotificationRow],
+        active_tasks: dict[str, ReminderTaskRow],
+    ) -> dict[int, NotificationSnoozeMatch]:
+        dismissed_notifications = [notification for notification in notifications if notification.dismissed_at]
+        if not dismissed_notifications:
+            return {}
 
         matches: dict[int, NotificationSnoozeMatch] = {}
         legacy_notifications: list[UserNotificationRow] = []
@@ -190,6 +194,61 @@ class RemindersService:
                 matches.setdefault(notification_id, match)
 
         return matches
+
+    def list_notification_snoozes(
+        self,
+        *,
+        notifications: Sequence[UserNotificationRow],
+    ) -> dict[int, NotificationSnoozeMatch]:
+        return self._match_notification_snoozes(
+            notifications=notifications,
+            active_tasks=self._list_active_snooze_tasks(),
+        )
+
+    def list_snoozed_notifications(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[UserNotificationRow], dict[int, NotificationSnoozeMatch], int]:
+        bounded_limit = max(1, int(limit))
+        bounded_offset = max(0, int(offset))
+        batch_size = max(SNOOZED_NOTIFICATIONS_SCAN_SIZE, bounded_limit)
+        active_tasks = self._list_active_snooze_tasks()
+        if not active_tasks:
+            return [], {}, 0
+
+        rows: list[UserNotificationRow] = []
+        matches_for_rows: dict[int, NotificationSnoozeMatch] = {}
+        total = 0
+        scan_offset = 0
+
+        while True:
+            dismissed_rows = self.collections.list_user_dismissed_notifications(
+                limit=batch_size,
+                offset=scan_offset,
+            )
+            if not dismissed_rows:
+                break
+
+            dismissed_matches = self._match_notification_snoozes(
+                notifications=dismissed_rows,
+                active_tasks=active_tasks,
+            )
+            for row in dismissed_rows:
+                match = dismissed_matches.get(row.id)
+                if match is None:
+                    continue
+                if total >= bounded_offset and len(rows) < bounded_limit:
+                    rows.append(row)
+                    matches_for_rows[row.id] = match
+                total += 1
+
+            scan_offset += len(dismissed_rows)
+            if len(dismissed_rows) < batch_size:
+                break
+
+        return rows, matches_for_rows, total
 
     def cancel_notification_snooze(self, *, notification_id: int) -> list[str]:
         notification = self.collections.get_user_notification(notification_id)

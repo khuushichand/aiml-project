@@ -289,3 +289,68 @@ def test_duplicate_notifications_keep_distinct_snooze_tasks(notifications_app, m
 
     assert cdb.get_reminder_task(second_payload["task_id"]).run_at == second_payload["run_at"]
     assert unschedule_calls == [first_payload["task_id"]]
+
+
+def test_notifications_only_snoozed_query_excludes_active_rows(notifications_app, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import notifications as notifications_endpoint
+
+    cdb = CollectionsDatabase.for_user(user_id=881)
+    for idx in range(120):
+        cdb.create_user_notification(
+            kind="job_completed",
+            title=f"Active {idx}",
+            message="Still in inbox",
+            severity="info",
+        )
+
+    snoozed = cdb.create_user_notification(
+        kind="reminder_due",
+        title="Return later",
+        message="This is snoozed",
+        severity="info",
+        link_type="note",
+        link_id="note-99",
+        link_url="/notes/note-99",
+    )
+
+    class _FakeScheduler:
+        async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+            return None
+
+    monkeypatch.setattr(notifications_endpoint, "get_reminders_scheduler", lambda: _FakeScheduler(), raising=False)
+
+    with TestClient(notifications_app) as client:
+        snooze_response = client.post(f"/api/v1/notifications/{snoozed.id}/snooze", json={"minutes": 15})
+        assert snooze_response.status_code == 200, snooze_response.text
+        run_at = snooze_response.json()["run_at"]
+
+        response = client.get("/api/v1/notifications?only_snoozed=true&limit=10")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+
+    assert payload["total"] == 1
+    assert payload["items"] == [
+        {
+            "id": snoozed.id,
+            "user_id": payload["items"][0]["user_id"],
+            "kind": "reminder_due",
+            "title": "Return later",
+            "message": "This is snoozed",
+            "severity": "info",
+            "source_task_id": None,
+            "source_task_run_id": None,
+            "source_job_id": None,
+            "source_domain": None,
+            "source_job_type": None,
+            "link_type": "note",
+            "link_id": "note-99",
+            "link_url": "/notes/note-99",
+            "dedupe_key": None,
+            "retention_until": None,
+            "archived_at": None,
+            "created_at": payload["items"][0]["created_at"],
+            "read_at": None,
+            "dismissed_at": payload["items"][0]["dismissed_at"],
+            "snooze_until": run_at,
+        }
+    ]
