@@ -320,6 +320,10 @@ export const FlashcardsWorkspace: React.FC = () => {
           t("option:flashcards.offlineExample2", {
             defaultValue:
               "After upgrading, reload the extension and return to Flashcards."
+          }),
+          t("option:flashcards.offlineExample3", {
+            defaultValue:
+              "If you just updated your server, it may take a moment for capabilities to refresh."
           })
         ]}
         primaryActionLabel={t("settings:healthSummary.diagnostics", {
