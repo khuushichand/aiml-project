@@ -81,6 +81,27 @@ describe("notification subscription", () => {
     expect(notifyMock).toHaveBeenCalledTimes(2)
   })
 
+  it("coalesces concurrent startup into a single subscription", async () => {
+    let releaseFetch: (() => void) | null = null
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve
+    })
+
+    subscribeNotificationsStreamMock.mockReturnValue(vi.fn())
+    getUnreadCountMock.mockImplementation(async () => {
+      await fetchGate
+      return { unread_count: 0 }
+    })
+
+    const first = startNotificationSubscription()
+    const second = startNotificationSubscription()
+
+    releaseFetch?.()
+    await Promise.all([first, second])
+
+    expect(subscribeNotificationsStreamMock).toHaveBeenCalledTimes(1)
+  })
+
   it("logs debug details when the initial unread count fetch fails", async () => {
     const error = new Error("offline")
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {})
@@ -134,6 +155,21 @@ describe("notification subscription", () => {
       "[background] Failed to start notification subscription:",
       error
     )
+    expect(storageState.get("tldw:notifications:subscriptionActive")).toBe(false)
     expect(storageState.get("tldw:notifications:unreadCount")).toBe(0)
+  })
+
+  it("clears the active subscription flag when stopping", async () => {
+    subscribeNotificationsStreamMock.mockReturnValue(vi.fn())
+    getUnreadCountMock.mockResolvedValue({ unread_count: 1 })
+
+    await startNotificationSubscription()
+
+    expect(storageState.get("tldw:notifications:subscriptionActive")).toBe(true)
+
+    stopNotificationSubscription()
+    await Promise.resolve()
+
+    expect(storageState.get("tldw:notifications:subscriptionActive")).toBe(false)
   })
 })
