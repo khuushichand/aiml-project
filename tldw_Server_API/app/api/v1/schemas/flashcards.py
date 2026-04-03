@@ -4,6 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from tldw_Server_API.app.api.v1.schemas.study_packs import (
+    FlashcardCitationResponse,
+    FlashcardDeepDiveTarget,
+    StudyPackSummaryResponse,
+)
+
 
 DeckSchedulerType = Literal["sm2_plus", "fsrs"]
 
@@ -394,6 +400,10 @@ class StudyAssistantContextResponse(BaseModel):
     messages: list[StudyAssistantMessage] = Field(default_factory=list)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     available_actions: list[StudyAssistantAction] = Field(default_factory=list)
+    citations: list[FlashcardCitationResponse] = Field(default_factory=list)
+    primary_citation: Optional[FlashcardCitationResponse] = None
+    deep_dive_target: Optional[FlashcardDeepDiveTarget] = None
+    study_pack: Optional[StudyPackSummaryResponse] = None
 
 
 class StudyAssistantRespondResponse(BaseModel):
