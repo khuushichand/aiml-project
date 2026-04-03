@@ -11,6 +11,7 @@ import type {
   StudyAssistantRespondRequest
 } from "@/services/flashcards"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
+import { VoiceTranscriptComposer } from "./VoiceTranscriptComposer"
 
 type AssistantErrorKind = "network" | "server" | "no_llm"
 
@@ -23,7 +24,6 @@ function classifyAssistantError(err: unknown): AssistantErrorKind {
   if (typeof httpStatus === "number" && httpStatus >= 400) return "server"
   return "no_llm"
 }
-import { VoiceTranscriptComposer } from "./VoiceTranscriptComposer"
 
 const { Text, Title } = Typography
 
