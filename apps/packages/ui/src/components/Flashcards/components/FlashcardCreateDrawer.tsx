@@ -26,6 +26,7 @@ import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
 import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import { formatDeckDisplayName } from "../utils/deck-display"
 import {
   getSelectionFromElement,
   insertTextAtSelection,
@@ -371,7 +372,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                 loading={decksLoading}
                 className="w-full"
                 options={decks.map((d) => ({
-                  label: d.name,
+                  label: formatDeckDisplayName(d, `Deck ${d.id}`),
                   value: d.id
                 }))}
                 popupRender={(menu) => (

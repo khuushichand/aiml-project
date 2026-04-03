@@ -1,4 +1,5 @@
 export * from "./MarkdownWithBoundary"
+export * from "./FlashcardMarkdownSnippet"
 export * from "./FileDropZone"
 export * from "./FlashcardActionsMenu"
 export * from "./ReviewProgress"

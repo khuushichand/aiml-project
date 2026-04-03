@@ -32,6 +32,7 @@ import {
   restoreSelection,
   type TextSelection
 } from "../utils/text-selection"
+import { formatDeckDisplayName } from "../utils/deck-display"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
@@ -330,7 +331,7 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
                 defaultValue: "Select deck"
               })}
               options={decks.map((d) => ({
-                label: d.name,
+                label: formatDeckDisplayName(d, `Deck ${d.id}`),
                 value: d.id
               }))}
             />
