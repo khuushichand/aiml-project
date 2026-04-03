@@ -1021,6 +1021,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
               availableActions={assistantQuery.data?.available_actions ?? null}
               isLoading={assistantQuery.isLoading}
               isError={assistantQuery.isError}
+              queryError={assistantQuery.error}
               isResponding={assistantRespondMutation.isPending}
               onReloadContext={() => assistantQuery.refetch()}
               onRespond={handleAssistantRespond}

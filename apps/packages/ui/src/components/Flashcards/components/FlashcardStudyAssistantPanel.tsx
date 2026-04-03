@@ -58,6 +58,7 @@ interface FlashcardStudyAssistantPanelProps {
   availableActions?: StudyAssistantAction[] | null
   isLoading?: boolean
   isError?: boolean
+  queryError?: unknown
   isResponding?: boolean
   onReloadContext?: () => Promise<unknown>
   onRespond: (request: StudyAssistantRespondRequest) => Promise<unknown>
@@ -113,12 +114,32 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   availableActions,
   isLoading = false,
   isError = false,
+  queryError,
   isResponding = false,
   onReloadContext,
   onRespond,
   autoSubmitRequest = null
 }) => {
   const { t } = useTranslation(["option", "common"])
+
+  const classifiedQueryError = React.useMemo(() => {
+    if (!isError || !queryError) return null
+    const kind = classifyAssistantError(queryError)
+    if (kind === "network") {
+      return t("option:flashcards.studyAssistantNetworkError", {
+        defaultValue: "Could not reach the server. Check your connection and try again."
+      })
+    }
+    if (kind === "server") {
+      return t("option:flashcards.studyAssistantServerError", {
+        defaultValue: "The server returned an error. Please try again or check server logs."
+      })
+    }
+    return t("option:flashcards.studyAssistantNoLlm", {
+      defaultValue: "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+    })
+  }, [isError, queryError, t])
+
   const { speak, isSpeaking } = useTTS()
   const {
     supported,
@@ -368,6 +389,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
             type="warning"
             title={
               assistantError ??
+              classifiedQueryError ??
               t("option:flashcards.studyAssistantUnavailable", {
                 defaultValue: "Study assistant unavailable"
               })
