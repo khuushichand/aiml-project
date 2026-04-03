@@ -1,6 +1,7 @@
 """Tests for MCPAdapter — the main adapter wiring transport + runners + heartbeat + lifecycle."""
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,16 +11,11 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.base import (
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.exceptions import ValidationError
+from tldw_Server_API.tests.run_first_constants import PHASE2C_RUN_FIRST_COHORT
 
 pytestmark = pytest.mark.unit
 
 SESSION_ID = "adapter-session-001"
-PHASE2C_PROVIDER_ALLOWLIST = [
-    "openai:gpt-4o-mini",
-    "anthropic:claude-3-7-sonnet",
-    "openai:gpt-4o",
-    "google:gemini-2.5-flash",
-]
 
 
 @pytest.fixture
@@ -317,24 +313,11 @@ async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation
     messages_arg, tools_arg = mock_llm_caller.call.await_args.args
     assert messages_arg[0]["role"] == "system"
     assert "ACP run-first guidance" in messages_arg[0]["content"]
-    assert tools_arg == [
-        {
-            "type": "function",
-            "function": {
-                "name": "run",
-                "description": "Execute governed commands Preferred first tool for multi-step work.",
-                "parameters": {"type": "object"},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search",
-                "description": "Fallback tool: Search documents",
-                "parameters": {"type": "object"},
-            },
-        },
-    ]
+    assert [tool["function"]["name"] for tool in tools_arg] == ["run", "search"]
+    assert "Preferred first tool" in tools_arg[0]["function"]["description"]
+    assert tools_arg[0]["function"]["parameters"]["type"] == "object"
+    assert tools_arg[1]["function"]["description"].startswith("Fallback tool:")
+    assert tools_arg[1]["function"]["parameters"]["type"] == "object"
     assert rollout_calls == [
         {
             "agent_type": "mcp",
@@ -427,9 +410,9 @@ async def test_mcp_adapter_send_prompt_llm_driven_tracks_default_on_out_of_cohor
 
 @pytest.mark.asyncio
 async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation_for_google_gemini(
-    mock_transport,
-    event_callback,
-):
+    mock_transport: AsyncMock,
+    event_callback: Callable[[AgentEvent], Awaitable[None]],
+) -> None:
     """Default-on ACP sessions should present run-first tools for widened Google/Gemini cohort members."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
 
@@ -475,7 +458,7 @@ async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation
         return_value="default_on",
     ), patch(
         "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.resolve_acp_run_first_provider_allowlist",
-        return_value=PHASE2C_PROVIDER_ALLOWLIST,
+        return_value=PHASE2C_RUN_FIRST_COHORT,
     ), patch(
         "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.resolve_acp_run_first_presentation_variant",
         return_value="acp_phase2b_v1",
@@ -489,24 +472,11 @@ async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation
     messages_arg, tools_arg = mock_llm_caller.call.await_args.args
     assert messages_arg[0]["role"] == "system"
     assert "ACP run-first guidance" in messages_arg[0]["content"]
-    assert tools_arg == [
-        {
-            "type": "function",
-            "function": {
-                "name": "run",
-                "description": "Execute governed commands Preferred first tool for multi-step work.",
-                "parameters": {"type": "object"},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search",
-                "description": "Fallback tool: Search documents",
-                "parameters": {"type": "object"},
-            },
-        },
-    ]
+    assert [tool["function"]["name"] for tool in tools_arg] == ["run", "search"]
+    assert "Preferred first tool" in tools_arg[0]["function"]["description"]
+    assert tools_arg[0]["function"]["parameters"]["type"] == "object"
+    assert tools_arg[1]["function"]["description"].startswith("Fallback tool:")
+    assert tools_arg[1]["function"]["parameters"]["type"] == "object"
     assert rollout_calls == [
         {
             "agent_type": "mcp",

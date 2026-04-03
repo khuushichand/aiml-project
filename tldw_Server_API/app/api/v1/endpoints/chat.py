@@ -2343,6 +2343,8 @@ async def create_chat_completion(
         if str((routing_debug or {}).get("policy", {}).get("boundary_mode") or "").strip().lower() == "pinned_provider":
             allow_provider_fallback_for_request = False
 
+    request_model_was_explicit = bool(str(getattr(request_data, "model", None) or "").strip())
+
     (
         metrics_provider,
         metrics_model,
@@ -2986,6 +2988,41 @@ async def create_chat_completion(
         provider = selected_provider
         model = selected_model or model
 
+        def _get_default_model_for_provider_name(target_provider: str) -> str | None:
+            override_default = get_override_default_model(target_provider)
+            if override_default:
+                return override_default
+            override = get_llm_provider_override(target_provider)
+            if override and override.allowed_models:
+                return override.allowed_models[0]
+            normalized = target_provider.replace(".", "_").replace("-", "_")
+            env_key = f"DEFAULT_MODEL_{normalized.upper()}"
+            env_val = os.getenv(env_key)
+            if env_val:
+                return env_val
+            config_key = f"default_model_{normalized.lower()}"
+            if _chat_config:
+                cfg_val = _chat_config.get(config_key)
+                if cfg_val:
+                    return cfg_val
+            return None
+
+        if not request_model_was_explicit:
+            default_model_for_provider = _get_default_model_for_provider_name(provider)
+            if default_model_for_provider:
+                model = default_model_for_provider
+                request_data.model = default_model_for_provider
+        if not model:
+            # Fail fast with a clear client error instead of cascading into a 500
+            # when downstream provider adapters require an explicit model.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Model is required for provider '{provider}'. Please select a model in the WebUI "
+                    f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
+                ),
+            )
+
         override_error = validate_provider_override(provider, model)
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
@@ -3384,50 +3421,10 @@ async def create_chat_completion(
                 final_system_message=llm_final_system_message,
                 app_config=app_config_override,
                 grammar_record=llamacpp_grammar_record,
+                resolved_model=model,
             )
             cleaned_args["request"] = request
-
-            def _get_default_model_for_provider_name(target_provider: str) -> str | None:
-                override_default = get_override_default_model(target_provider)
-                if override_default:
-                    return override_default
-                override = get_llm_provider_override(target_provider)
-                if override and override.allowed_models:
-                    return override.allowed_models[0]
-                normalized = target_provider.replace(".", "_").replace("-", "_")
-                env_key = f"DEFAULT_MODEL_{normalized.upper()}"
-                env_val = os.getenv(env_key)
-                if env_val:
-                    return env_val
-                config_key = f"default_model_{normalized.lower()}"
-                if _chat_config:
-                    cfg_val = _chat_config.get(config_key)
-                    if cfg_val:
-                        return cfg_val
-                return None
-
-            if not cleaned_args.get("model"):
-                default_model_for_provider = _get_default_model_for_provider_name(provider)
-                if default_model_for_provider:
-                    cleaned_args["model"] = default_model_for_provider
-                    if not request_data.model:
-                        request_data.model = default_model_for_provider
-                    model = default_model_for_provider
-                else:
-                    # Fail fast with a clear client error instead of cascading into a 500
-                    # when downstream provider adapters require an explicit model.
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=(
-                            f"Model is required for provider '{provider}'. Please select a model in the WebUI "
-                            f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
-                        ),
-                    )
-
-            # Re-validate provider override after applying a default model.
-            override_error = validate_provider_override(provider, cleaned_args.get("model") or request_data.model)
-            if override_error:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
+            cleaned_args["model"] = cleaned_args.get("model") or model
 
             async def rebuild_call_params_for_provider(
                 target_provider: str,

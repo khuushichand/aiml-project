@@ -12,14 +12,7 @@ from tldw_Server_API.app.core.Chat.tool_auto_exec import (
     ToolExecutionBatchResult,
     ToolExecutionRecord,
 )
-
-
-PHASE2C_PROVIDER_ALLOWLIST = [
-    "openai:gpt-4o-mini",
-    "anthropic:claude-3-7-sonnet",
-    "openai:gpt-4o",
-    "google:gemini-2.5-flash",
-]
+from tldw_Server_API.tests.run_first_constants import PHASE2C_RUN_FIRST_COHORT
 
 
 class _DummyMetrics:
@@ -409,7 +402,7 @@ async def test_build_call_params_marks_default_on_cohort_when_provider_is_in_rol
     monkeypatch.setattr(
         chat_service,
         "resolve_chat_run_first_provider_allowlist",
-        lambda raw_allowlist=None: PHASE2C_PROVIDER_ALLOWLIST,
+        lambda raw_allowlist=None: PHASE2C_RUN_FIRST_COHORT,
     )
     monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
 
@@ -486,7 +479,7 @@ async def test_build_call_params_marks_google_gemini_flash_default_on_when_in_ro
     monkeypatch.setattr(
         chat_service,
         "resolve_chat_run_first_provider_allowlist",
-        lambda raw_allowlist=None: PHASE2C_PROVIDER_ALLOWLIST,
+        lambda raw_allowlist=None: PHASE2C_RUN_FIRST_COHORT,
     )
     monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
 
@@ -543,6 +536,85 @@ async def test_build_call_params_marks_google_gemini_flash_default_on_when_in_ro
     assert cleaned_args["_chat_run_first_eligible"] is True
     assert cleaned_args["_chat_run_first_cohort"] == "default_on"
     assert cleaned_args["_chat_effective_tool_names"] == ["run", "notes.search"]
+    assert "run(command)" in cleaned_args["system_message"]
+
+
+@pytest.mark.unit
+def test_build_call_params_uses_resolved_model_for_default_on_run_first_eligibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_rollout_mode",
+        lambda raw_mode=None, default="off": "default_on",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_presentation_variant",
+        lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2b_v1",
+    )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: PHASE2C_RUN_FIRST_COHORT,
+    )
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
+
+    request_data = SimpleNamespace(
+        model=None,
+        stream=False,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "run",
+                    "description": "Execute shell commands.",
+                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "notes.search",
+                    "description": "Search notes for relevant passages.",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                },
+            },
+        ],
+        tool_choice=None,
+        temperature=0.2,
+    )
+
+    def _model_dump(*, exclude_none=True, exclude=None):
+        payload = {
+            "model": request_data.model,
+            "stream": request_data.stream,
+            "tools": request_data.tools,
+            "temperature": request_data.temperature,
+        }
+        if exclude:
+            payload = {k: v for k, v in payload.items() if k not in exclude}
+        if exclude_none:
+            payload = {k: v for k, v in payload.items() if v is not None}
+        return payload
+
+    request_data.model_dump = _model_dump  # type: ignore[attr-defined]
+
+    cleaned_args = chat_service.build_call_params_from_request(
+        request_data=request_data,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message="Base system prompt.",
+        app_config=None,
+        grammar_record=None,
+        resolved_model="gpt-4o-mini",
+    )
+
+    assert cleaned_args["model"] == "gpt-4o-mini"
+    assert cleaned_args["_chat_run_first_eligible"] is True
+    assert cleaned_args["_chat_run_first_cohort"] == "default_on"
+    assert [tool["function"]["name"] for tool in cleaned_args["tools"]] == ["run", "notes.search"]
     assert "run(command)" in cleaned_args["system_message"]
 
 

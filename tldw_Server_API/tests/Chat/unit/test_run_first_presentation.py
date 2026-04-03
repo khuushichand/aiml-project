@@ -3,14 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tldw_Server_API.app.core.Chat.run_first_presentation import present_chat_tools
-
-
-PHASE2C_PROVIDER_ALLOWLIST = [
-    "openai:gpt-4o-mini",
-    "anthropic:claude-3-7-sonnet",
-    "openai:gpt-4o",
-    "google:gemini-2.5-flash",
-]
+from tldw_Server_API.tests.run_first_constants import PHASE2C_RUN_FIRST_COHORT
 
 
 RUN_TOOL = {
@@ -72,7 +65,7 @@ def test_present_chat_tools_orders_run_first_when_default_on_and_in_cohort() -> 
         allow_catalog=["run", "notes.*"],
         rollout_mode="default_on",
         provider_key="openai:gpt-4o",
-        provider_allowlist=PHASE2C_PROVIDER_ALLOWLIST,
+        provider_allowlist=PHASE2C_RUN_FIRST_COHORT,
         streaming=False,
     )
 
@@ -88,7 +81,7 @@ def test_present_chat_tools_marks_google_gemini_flash_default_on_when_in_cohort(
         allow_catalog=["run", "notes.*"],
         rollout_mode="default_on",
         provider_key="google:gemini-2.5-flash",
-        provider_allowlist=PHASE2C_PROVIDER_ALLOWLIST,
+        provider_allowlist=PHASE2C_RUN_FIRST_COHORT,
         streaming=False,
     )
 

@@ -7,16 +7,9 @@ import pytest
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_tool_presentation import (
     present_acp_tools,
 )
-
+from tldw_Server_API.tests.run_first_constants import PHASE2C_RUN_FIRST_COHORT
 
 pytestmark = pytest.mark.unit
-
-PHASE2C_PROVIDER_ALLOWLIST = [
-    "openai:gpt-4o-mini",
-    "anthropic:claude-3-7-sonnet",
-    "openai:gpt-4o",
-    "google:gemini-2.5-flash",
-]
 
 
 RUN_TOOL = {
@@ -63,7 +56,7 @@ def test_present_acp_tools_orders_run_first_for_default_on_session() -> None:
         tools=[NOTES_TOOL, RUN_TOOL],
         rollout_mode="default_on",
         provider_key="openai:gpt-4o",
-        provider_allowlist=PHASE2C_PROVIDER_ALLOWLIST,
+        provider_allowlist=PHASE2C_RUN_FIRST_COHORT,
     )
 
     assert [tool["function"]["name"] for tool in presented.openai_tools] == [
@@ -82,7 +75,7 @@ def test_present_acp_tools_orders_run_first_for_google_gemini_default_on_session
         tools=[NOTES_TOOL, RUN_TOOL],
         rollout_mode="default_on",
         provider_key="google:gemini-2.5-flash",
-        provider_allowlist=PHASE2C_PROVIDER_ALLOWLIST,
+        provider_allowlist=PHASE2C_RUN_FIRST_COHORT,
     )
 
     assert [tool["function"]["name"] for tool in presented.openai_tools] == [
