@@ -1342,6 +1342,12 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                                   "Rate recall with Again/Hard/Good/Easy so the next review is scheduled automatically."
                               })}
                             </li>
+                            <li className="text-text-muted/70">
+                              {t("option:flashcards.onboardingStepLlmNote", {
+                                defaultValue:
+                                  "Card generation and the study assistant require an LLM provider (configure in Settings)."
+                              })}
+                            </li>
                           </ol>
                           <a
                             href={FLASHCARDS_HELP_LINKS.ratings}
