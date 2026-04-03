@@ -1772,6 +1772,7 @@ def build_call_params_from_request(
     final_system_message: str | None,
     app_config: dict[str, Any] | None = None,
     grammar_record: Mapping[str, Any] | None = None,
+    resolved_model: str | None = None,
 ) -> dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
@@ -1805,6 +1806,8 @@ def build_call_params_from_request(
             "grammar_override",
         },
     )
+    if not call_params.get("model") and resolved_model:
+        call_params["model"] = resolved_model
 
     # Rename keys to match chat_api_call's generic signature
     if "temperature" in call_params:

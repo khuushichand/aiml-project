@@ -7,7 +7,7 @@ import pytest
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_tool_presentation import (
     present_acp_tools,
 )
-
+from tldw_Server_API.tests.run_first_constants import PHASE2C_RUN_FIRST_COHORT
 
 pytestmark = pytest.mark.unit
 
@@ -55,8 +55,27 @@ def test_present_acp_tools_orders_run_first_for_default_on_session() -> None:
         session_id="s1-default",
         tools=[NOTES_TOOL, RUN_TOOL],
         rollout_mode="default_on",
-        provider_key="openai:gpt-4o-mini",
-        provider_allowlist=["openai:gpt-4o-mini"],
+        provider_key="openai:gpt-4o",
+        provider_allowlist=PHASE2C_RUN_FIRST_COHORT,
+    )
+
+    assert [tool["function"]["name"] for tool in presented.openai_tools] == [
+        "run",
+        "notes.search",
+    ]
+    assert presented.effective_tool_names == ["run", "notes.search"]
+    assert presented.prompt_fragment is not None
+    assert presented.eligible is True
+    assert presented.ineligible_reason is None
+
+
+def test_present_acp_tools_orders_run_first_for_google_gemini_default_on_session() -> None:
+    presented = present_acp_tools(
+        session_id="s1-google-default",
+        tools=[NOTES_TOOL, RUN_TOOL],
+        rollout_mode="default_on",
+        provider_key="google:gemini-2.5-flash",
+        provider_allowlist=PHASE2C_RUN_FIRST_COHORT,
     )
 
     assert [tool["function"]["name"] for tool in presented.openai_tools] == [
