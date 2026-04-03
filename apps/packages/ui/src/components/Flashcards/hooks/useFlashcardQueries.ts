@@ -196,8 +196,11 @@ export function useFlashcardDeckRecentCardsQuery(
   return useQuery({
     queryKey: ["flashcards:deck:recent", deckId ?? null, limit, visibilityParams],
     queryFn: async (): Promise<Flashcard[]> => {
+      if (deckId == null) {
+        return []
+      }
       const response = await listFlashcards({
-        deck_id: deckId ?? undefined,
+        deck_id: deckId,
         due_status: "all",
         limit,
         offset: 0,
@@ -235,8 +238,11 @@ export function useFlashcardDeckSearchQuery(
       visibilityParams
     ],
     queryFn: async (): Promise<Flashcard[]> => {
+      if (params.deckId == null || trimmedQuery.length === 0) {
+        return []
+      }
       const response = await listFlashcards({
-        deck_id: params.deckId ?? undefined,
+        deck_id: params.deckId,
         q: trimmedQuery,
         due_status: "all",
         limit,
