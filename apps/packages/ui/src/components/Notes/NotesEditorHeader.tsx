@@ -34,6 +34,7 @@ interface NotesEditorHeaderProps {
   hasContent: boolean
   canSave: boolean
   canGenerateFlashcards: boolean
+  canCreateStudyPack?: boolean
   canOpenNotesStudio?: boolean
   canExport: boolean
   canDuplicate?: boolean
@@ -53,6 +54,7 @@ interface NotesEditorHeaderProps {
   onChangeEditorMode: (mode: 'edit' | 'split' | 'preview') => void
   onCopy: (mode: 'content' | 'markdown') => void
   onGenerateFlashcards: () => void
+  onCreateStudyPack?: () => void
   onOpenNotesStudio?: () => void
   onExport: (format: 'md' | 'json' | 'print') => void
   onSave: () => void
@@ -73,6 +75,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   hasContent,
   canSave,
   canGenerateFlashcards,
+  canCreateStudyPack = false,
   canOpenNotesStudio = false,
   canExport,
   canDuplicate = false,
@@ -92,6 +95,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   onChangeEditorMode,
   onCopy,
   onGenerateFlashcards,
+  onCreateStudyPack,
   onOpenNotesStudio,
   onExport,
   onSave,
@@ -211,6 +215,14 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             }),
             icon: (<SparklesIcon className="w-4 h-4" />),
             disabled: !canGenerateFlashcards
+          },
+          {
+            key: 'study-pack',
+            label: t('option:notesSearch.createStudyPackAction', {
+              defaultValue: 'Create study pack'
+            }),
+            icon: (<SparklesIcon className="w-4 h-4" />),
+            disabled: !canCreateStudyPack
           }
         ]
       })
@@ -289,6 +301,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
     isPinned,
     canOpenNotesStudio,
     canGenerateFlashcards,
+    canCreateStudyPack,
     canExport,
     canDelete,
     hasContent,
@@ -313,6 +326,9 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         break
       case 'flashcards':
         onGenerateFlashcards()
+        break
+      case 'study-pack':
+        onCreateStudyPack?.()
         break
       case 'notes-studio':
         onOpenNotesStudio?.()

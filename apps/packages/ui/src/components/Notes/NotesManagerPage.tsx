@@ -32,6 +32,7 @@ import {
 import type { NoteListItem } from "@/components/Notes/notes-manager-types"
 import { clearSetting, getSetting } from "@/services/settings/registry"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { buildStudyPackRoute } from "@/services/tldw/study-pack-handoff"
 import { deriveNoteStudio, getNoteStudioState, regenerateNoteStudio } from "@/services/notes-studio"
 import { useMobile } from "@/hooks/useMediaQuery"
 import {
@@ -708,6 +709,32 @@ const NotesManagerPage: React.FC = () => {
       ed.titleInputRef.current?.focus()
     }, 0)
   }, [ed, isMobileViewport, list, message])
+
+  const handleCreateStudyPackFromNote = React.useCallback(() => {
+    const selectedNoteId = ed.selectedId
+    if (selectedNoteId == null) {
+      message.warning(
+        t('option:notesSearch.createStudyPackMissingSelection', {
+          defaultValue: 'Select a note before creating a study pack.'
+        })
+      )
+      return
+    }
+
+    const noteTitle = ed.title.trim() || `Note ${selectedNoteId}`
+    navigate(
+      buildStudyPackRoute({
+        title: noteTitle,
+        sourceItems: [
+          {
+            sourceType: 'note',
+            sourceId: String(selectedNoteId),
+            sourceTitle: noteTitle
+          }
+        ]
+      })
+    )
+  }, [ed.selectedId, ed.title, message, navigate, t])
 
   const duplicateSelectedNote = React.useCallback(async () => {
     if (editorDisabled) return
@@ -1572,6 +1599,31 @@ const NotesManagerPage: React.FC = () => {
     }))
   }, [ed, message, navigate, t])
 
+  const handleCreateStudyPackFromNote = React.useCallback(() => {
+    const noteTitle = ed.title.trim()
+    if (ed.selectedId == null || !noteTitle) {
+      message.warning(
+        t("option:notesSearch.createStudyPackEmpty", {
+          defaultValue: "Save and title this note before creating a study pack."
+        })
+      )
+      return
+    }
+
+    navigate(
+      buildStudyPackRoute({
+        title: noteTitle,
+        sourceItems: [
+          {
+            sourceType: "note",
+            sourceId: String(ed.selectedId),
+            sourceTitle: noteTitle
+          }
+        ]
+      })
+    )
+  }, [ed.selectedId, ed.title, message, navigate, t])
+
   // Open linked conversation
   const openLinkedConversation = async () => {
     const okToLeave = await ed.confirmDiscardIfDirty()
@@ -1857,6 +1909,17 @@ const NotesManagerPage: React.FC = () => {
       <p id={NOTES_SHORTCUTS_SUMMARY_ID} className="sr-only">
         {t('option:notesSearch.shortcutSummaryText', { defaultValue: 'Keyboard shortcuts: Ctrl or Command plus S to save, question mark to open keyboard shortcuts help, Escape to close dialogs.' })}
       </p>
+      <div className="absolute right-4 top-4 z-20">
+        <Button
+          type="primary"
+          size="small"
+          onClick={handleCreateStudyPackFromNote}
+          disabled={ed.selectedId == null}
+          data-testid="notes-create-study-pack-button"
+        >
+          {t('option:notesSearch.createStudyPack', { defaultValue: 'Create study pack' })}
+        </Button>
+      </div>
       {isMobileViewport && mobileSidebarOpen && (
         <button type="button" aria-label={t('option:notesSearch.closeMobileSidebar', { defaultValue: 'Close notes list' })} data-testid="notes-mobile-sidebar-backdrop" className="absolute inset-0 z-30 bg-black/35" onClick={() => setMobileSidebarOpen(false)} />
       )}
@@ -2049,6 +2112,7 @@ const NotesManagerPage: React.FC = () => {
         toggleNotePinned={ed.toggleNotePinned}
         copySelected={exp.copySelected}
         handleGenerateFlashcardsFromNote={handleGenerateFlashcardsFromNote}
+        handleCreateStudyPackFromNote={handleCreateStudyPackFromNote}
         handleOpenNotesStudio={handleOpenNotesStudio}
         exportSelected={exp.exportSelected}
         saveNote={ed.saveNote}
