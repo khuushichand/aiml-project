@@ -28,6 +28,22 @@ function extractHttpStatus(err: unknown): number | undefined {
     if (typeof r.status === "number") return r.status
     if (typeof r.statusCode === "number") return r.statusCode
   }
+  // Data envelope: err.data.status, err.data.statusCode
+  const data = e.data
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>
+    if (typeof d.status === "number") return d.status
+    if (typeof d.statusCode === "number") return d.statusCode
+  }
+  // Deep nested: err.response.data.status, err.response.data.statusCode
+  if (resp && typeof resp === "object") {
+    const rData = (resp as Record<string, unknown>).data
+    if (rData && typeof rData === "object") {
+      const rd = rData as Record<string, unknown>
+      if (typeof rd.status === "number") return rd.status
+      if (typeof rd.statusCode === "number") return rd.statusCode
+    }
+  }
   return undefined
 }
 

@@ -235,8 +235,8 @@ export const DeckSchedulerSettingsEditor: React.FC<DeckSchedulerSettingsEditorPr
             <div className="grid gap-4 md:grid-cols-2">
               {SM2_ADVANCED_FIELDS.map((field) => (
                 <label key={field.key} className="flex flex-col gap-1">
-                  <Tooltip title={t(`option:flashcards.schedulerTooltip.${field.key}`, { defaultValue: SM2_FIELD_TOOLTIP_DEFAULTS[field.key] })}>
-                    <Text strong className="cursor-help underline decoration-dotted">{field.label}</Text>
+                  <Tooltip trigger={["hover", "focus"]} title={t(`option:flashcards.schedulerTooltip.${field.key}`, { defaultValue: SM2_FIELD_TOOLTIP_DEFAULTS[field.key] })}>
+                    <Text strong tabIndex={0} className="cursor-help underline decoration-dotted">{field.label}</Text>
                   </Tooltip>
                   <Input
                     value={schedulerDraft.draft.sm2_plus[field.key]}
@@ -270,8 +270,8 @@ export const DeckSchedulerSettingsEditor: React.FC<DeckSchedulerSettingsEditorPr
         <div className="grid gap-4 md:grid-cols-2">
           {FSRS_FIELDS.map((field) => (
             <label key={field.key} className="flex flex-col gap-1">
-              <Tooltip title={t(`option:flashcards.schedulerTooltip.${field.key}`, { defaultValue: FSRS_FIELD_TOOLTIP_DEFAULTS[field.key] })}>
-                <Text strong className="cursor-help underline decoration-dotted">{field.label}</Text>
+              <Tooltip trigger={["hover", "focus"]} title={t(`option:flashcards.schedulerTooltip.${field.key}`, { defaultValue: FSRS_FIELD_TOOLTIP_DEFAULTS[field.key] })}>
+                <Text strong tabIndex={0} className="cursor-help underline decoration-dotted">{field.label}</Text>
               </Tooltip>
               <Input
                 value={schedulerDraft.draft.fsrs[field.key]}
