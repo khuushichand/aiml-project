@@ -7,7 +7,6 @@ from typing import Any
 
 from tldw_Server_API.app.api.v1.schemas.study_packs import StudyPackCreateJobRequest
 
-
 STUDY_PACKS_DOMAIN = "study_packs"
 STUDY_PACKS_JOB_TYPE = "study_pack_generate"
 

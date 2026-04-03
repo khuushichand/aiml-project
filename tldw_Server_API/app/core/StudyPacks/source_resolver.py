@@ -17,7 +17,6 @@ from .types import (
     StudySourceSelection,
 )
 
-
 SUPPORTED_SOURCE_TYPES = frozenset({"note", "media", "message"})
 
 

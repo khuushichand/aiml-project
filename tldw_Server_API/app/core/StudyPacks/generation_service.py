@@ -15,7 +15,11 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_
 from tldw_Server_API.app.api.v1.schemas.study_packs import StudyPackCreateJobRequest
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import get_default_scheduler_settings
-from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config, normalize_provider, resolve_provider_model
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_model,
+)
 from tldw_Server_API.app.core.StudyPacks.provenance import (
     FlashcardProvenanceStore,
     normalize_citations_for_persistence,
