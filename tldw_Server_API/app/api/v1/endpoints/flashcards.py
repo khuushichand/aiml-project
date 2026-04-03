@@ -305,6 +305,20 @@ def _study_pack_from_job_result(db: CharactersRAGDB, job: dict[str, Any]) -> dic
     return _serialize_study_pack(pack) if pack else None
 
 
+def _public_study_pack_job_error(job: dict[str, Any]) -> str | None:
+    raw_status = str(job.get("status") or "").strip().lower()
+    if raw_status == "cancelled":
+        reason = str(job.get("cancellation_reason") or "").strip()
+        return reason or "Study pack generation was cancelled."
+    if raw_status != "failed":
+        return None
+
+    raw_error = str(job.get("last_error") or job.get("error_message") or "").strip()
+    if raw_error:
+        logger.warning("Study-pack job {} failed: {}", int(job["id"]), raw_error)
+    return "Study pack generation failed."
+
+
 async def _study_pack_db_for_job(
     job: dict[str, Any],
     *,
@@ -1757,7 +1771,7 @@ async def get_study_pack_job_status(
             principal=principal,
         )
         study_pack = _study_pack_from_job_result(study_pack_db, job)
-    error = str(job.get("error_message") or job.get("last_error") or "").strip() or None
+    error = _public_study_pack_job_error(job)
     return {
         "job": _serialize_study_pack_job(job),
         "study_pack": study_pack,
@@ -1803,7 +1817,11 @@ def regenerate_study_pack(
         domain=STUDY_PACKS_DOMAIN,
         queue=study_pack_jobs_queue(),
         job_type=STUDY_PACKS_JOB_TYPE,
-        payload=build_study_pack_job_payload(request, regenerate_from_pack_id=pack_id),
+        payload=build_study_pack_job_payload(
+            request,
+            regenerate_from_pack_id=pack_id,
+            expected_version=int(pack["version"]) if pack.get("version") is not None else None,
+        ),
         owner_user_id=str(current_user.id),
         priority=5,
         max_retries=2,

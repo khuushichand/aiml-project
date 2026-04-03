@@ -196,6 +196,26 @@ describe("study pack query hooks", () => {
     expect(getStudyPack).toHaveBeenCalledWith(31)
   })
 
+  it("respects explicit disabled flags for job and pack queries", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false }
+      }
+    })
+
+    renderHook(() => useStudyPackJobQuery(91, { enabled: false }), {
+      wrapper: buildWrapper(queryClient)
+    })
+    renderHook(() => useStudyPackQuery(31, { enabled: false }), {
+      wrapper: buildWrapper(queryClient)
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(getStudyPackJob)).not.toHaveBeenCalled()
+      expect(vi.mocked(getStudyPack)).not.toHaveBeenCalled()
+    })
+  })
+
   it("treats completed, failed, and cancelled jobs as terminal", () => {
     expect(isTerminalStudyPackJobStatus("completed")).toBe(true)
     expect(isTerminalStudyPackJobStatus("failed")).toBe(true)

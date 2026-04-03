@@ -58,12 +58,7 @@ def _normalize_citation_row(raw_citation: Mapping[str, Any], *, fallback_ordinal
     source_type = source_type.lower()
     if source_type not in _SUPPORTED_SOURCE_TYPES:
         return None
-    try:
-        ordinal = int(raw_citation.get("ordinal", fallback_ordinal) or fallback_ordinal)
-    except (TypeError, ValueError):
-        ordinal = fallback_ordinal
-    if ordinal < 0:
-        ordinal = fallback_ordinal
+    ordinal = _coerce_ordinal(raw_citation.get("ordinal", None), fallback_ordinal=fallback_ordinal)
 
     citation = dict(raw_citation)
     citation["source_type"] = source_type
@@ -72,6 +67,19 @@ def _normalize_citation_row(raw_citation: Mapping[str, Any], *, fallback_ordinal
     citation["locator"] = _normalize_locator(raw_citation.get("locator"))
     citation["ordinal"] = ordinal
     return citation
+
+
+def _coerce_ordinal(value: Any, *, fallback_ordinal: int) -> int:
+    if value in (None, ""):
+        ordinal = fallback_ordinal
+    else:
+        try:
+            ordinal = int(value)
+        except (TypeError, ValueError):
+            ordinal = fallback_ordinal
+    if ordinal < 0:
+        return fallback_ordinal
+    return ordinal
 
 
 def _route_kind_rank(route_kind: Any) -> int:
@@ -87,7 +95,7 @@ def _citation_route_rank(citation: Mapping[str, Any]) -> int:
 
 
 def _primary_selection_key(citation: Mapping[str, Any], index: int) -> tuple[int, int, int]:
-    ordinal = int(citation.get("ordinal", index) or index)
+    ordinal = _coerce_ordinal(citation.get("ordinal", None), fallback_ordinal=index)
     return (
         _citation_route_rank(citation),
         ordinal,
@@ -96,7 +104,7 @@ def _primary_selection_key(citation: Mapping[str, Any], index: int) -> tuple[int
 
 
 def _deep_dive_selection_key(citation: Mapping[str, Any], index: int) -> tuple[int, int, int]:
-    ordinal = int(citation.get("ordinal", index) or index)
+    ordinal = _coerce_ordinal(citation.get("ordinal", None), fallback_ordinal=index)
     target = _build_deep_dive_target(citation)
     return (
         _route_kind_rank(target.get("route_kind")),
@@ -179,7 +187,7 @@ def _build_message_route(source_id: str, locator: dict[str, Any] | str | None) -
 def _build_deep_dive_target(citation: Mapping[str, Any]) -> dict[str, Any]:
     source_type = str(citation["source_type"])
     source_id = str(citation["source_id"])
-    citation_ordinal = int(citation.get("ordinal", 0) or 0)
+    citation_ordinal = _coerce_ordinal(citation.get("ordinal", None), fallback_ordinal=0)
     locator = _parse_locator(citation.get("locator"))
 
     if source_type == "note":

@@ -23,6 +23,7 @@ def build_study_pack_job_payload(
     request: StudyPackCreateJobRequest,
     *,
     regenerate_from_pack_id: int | None = None,
+    expected_version: int | None = None,
 ) -> dict[str, Any]:
     """Serialize a study-pack request into a Jobs payload."""
 
@@ -38,6 +39,8 @@ def build_study_pack_job_payload(
     ]
     if regenerate_from_pack_id is not None:
         payload["regenerate_from_pack_id"] = int(regenerate_from_pack_id)
+    if expected_version is not None:
+        payload["expected_version"] = int(expected_version)
     return payload
 
 

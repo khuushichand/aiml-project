@@ -178,6 +178,7 @@ class StudyPackGenerationService:
         request: StudyPackCreateJobRequest,
         *,
         regenerate_from_pack_id: int | None = None,
+        expected_regenerate_version: int | None = None,
     ) -> StudyPackCreationResult:
         bundle = await asyncio.to_thread(self.source_resolver.resolve, request.source_items)
         generated = await self.generate_validated_cards(bundle, request)
@@ -186,6 +187,7 @@ class StudyPackGenerationService:
             request=request,
             generated=generated,
             regenerate_from_pack_id=regenerate_from_pack_id,
+            expected_regenerate_version=expected_regenerate_version,
         )
 
     async def generate_validated_cards(
@@ -202,8 +204,11 @@ class StudyPackGenerationService:
         try:
             cards = self._parse_and_validate_response(raw_response, bundle=bundle)
             return StudyPackGenerationResult(cards=cards, raw_response=raw_response, repair_attempted=False)
-        except StudyPackMalformedResponseError as exc:
-            logger.warning("Study-pack generation output was malformed, attempting a single repair pass: {}", exc)
+        except (StudyPackMalformedResponseError, StudyPackValidationError) as exc:
+            logger.warning(
+                "Study-pack generation output failed strict validation, attempting a single repair pass: {}",
+                exc,
+            )
 
         repaired_response = await self._repair_generation_response(
             broken_response=raw_response,
@@ -220,8 +225,12 @@ class StudyPackGenerationService:
         request: StudyPackCreateJobRequest,
         generated: StudyPackGenerationResult,
         regenerate_from_pack_id: int | None,
+        expected_regenerate_version: int | None,
     ) -> StudyPackCreationResult:
-        expected_supersede_version = self._expected_supersede_version(regenerate_from_pack_id)
+        expected_supersede_version = self._expected_supersede_version(
+            regenerate_from_pack_id,
+            explicit_version=expected_regenerate_version,
+        )
         cleaned_base_name = _clean_text(request.title) or "Study Pack"
         card_template_payloads = [
             {
@@ -300,7 +309,14 @@ class StudyPackGenerationService:
 
         raise CharactersRAGDBError(f"Could not allocate a unique deck name for '{cleaned_base_name}'")  # noqa: TRY003
 
-    def _expected_supersede_version(self, pack_id: int | None) -> int | None:
+    def _expected_supersede_version(
+        self,
+        pack_id: int | None,
+        *,
+        explicit_version: int | None = None,
+    ) -> int | None:
+        if explicit_version is not None:
+            return int(explicit_version)
         if pack_id is None:
             return None
         original_pack = self.note_db.get_study_pack(pack_id)
@@ -514,7 +530,10 @@ class StudyPackGenerationService:
         if isinstance(raw_locator, Mapping):
             for key, value in raw_locator.items():
                 if value not in (None, "", [], {}):
-                    locator[str(key)] = value
+                    key_text = str(key)
+                    existing_value = locator.get(key_text)
+                    if key_text not in locator or existing_value in (None, "", [], {}):
+                        locator[key_text] = value
         else:
             raw_locator_text = _clean_text(raw_locator)
             if raw_locator_text:
@@ -555,6 +574,7 @@ async def create_study_pack_from_request(
     media_db: MediaDatabase | Any,
     request: StudyPackCreateJobRequest,
     regenerate_from_pack_id: int | None = None,
+    expected_regenerate_version: int | None = None,
     provider: str | None,
     model: str | None,
 ) -> StudyPackCreationResult:
@@ -568,6 +588,7 @@ async def create_study_pack_from_request(
     return await service.create_from_request(
         request,
         regenerate_from_pack_id=regenerate_from_pack_id,
+        expected_regenerate_version=expected_regenerate_version,
     )
 
 

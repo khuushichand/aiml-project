@@ -22,13 +22,6 @@ from tldw_Server_API.app.core.StudyPacks.jobs import (
 )
 
 
-async def _get_databases_for_user(user_id: str) -> tuple[Any, Any]:
-    normalized_user_id = int(str(user_id).strip())
-    note_db = await get_chacha_db_for_user_id(normalized_user_id, client_id=f"study-pack-worker-{normalized_user_id}")
-    media_db = get_media_db_for_owner(normalized_user_id)
-    return note_db, media_db
-
-
 def _close_worker_database(db: Any) -> None:
     if db is None:
         return
@@ -37,6 +30,20 @@ def _close_worker_database(db: Any) -> None:
         return
     if hasattr(db, "close_connection"):
         db.close_connection()
+
+
+async def _get_databases_for_user(user_id: str) -> tuple[Any, Any]:
+    normalized_user_id = int(str(user_id).strip())
+    note_db = await get_chacha_db_for_user_id(
+        normalized_user_id,
+        client_id=f"study-pack-worker-{normalized_user_id}",
+    )
+    try:
+        media_db = get_media_db_for_owner(normalized_user_id)
+    except Exception:
+        _close_worker_database(note_db)
+        raise
+    return note_db, media_db
 
 
 async def handle_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -52,14 +59,14 @@ async def handle_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
     regenerate_from_pack_id = payload.get("regenerate_from_pack_id")
     if regenerate_from_pack_id is not None:
         regenerate_from_pack_id = int(regenerate_from_pack_id)
+    expected_version = payload.get("expected_version")
+    if expected_version is not None:
+        expected_version = int(expected_version)
 
     note_db = None
     media_db = None
     try:
-        if asyncio.iscoroutinefunction(_get_databases_for_user):
-            note_db, media_db = await _get_databases_for_user(owner_user_id)
-        else:
-            note_db, media_db = _get_databases_for_user(owner_user_id)
+        note_db, media_db = await _get_databases_for_user(owner_user_id)
         service = StudyPackGenerationService(
             note_db=note_db,
             media_db=media_db,
@@ -69,6 +76,7 @@ async def handle_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
         created = await service.create_from_request(
             request,
             regenerate_from_pack_id=regenerate_from_pack_id,
+            expected_regenerate_version=expected_version,
         )
         return build_study_pack_job_result(
             pack_id=created.pack_id,

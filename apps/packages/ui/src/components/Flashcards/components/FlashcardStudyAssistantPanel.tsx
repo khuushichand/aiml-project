@@ -2,6 +2,7 @@ import React from "react"
 import { Alert, Button, Card, Empty, Input, Space, Tag, Typography } from "antd"
 import { Lightbulb, MessageSquareText, Sparkles, Volume2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { Link as RouterLink, useInRouterContext } from "react-router-dom"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useTTS } from "@/hooks/useTTS"
 import type {
@@ -173,6 +174,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   autoSubmitRequest = null
 }) => {
   const { t } = useTranslation(["option", "common"])
+  const inRouterContext = useInRouterContext()
   const { speak, isSpeaking } = useTTS()
   const {
     supported,
@@ -203,6 +205,10 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   }, [reloadedContext, threadVersion])
 
   const displayedMessages = activeContextOverride?.messages ?? messages
+  const activeAssistantContext = React.useMemo(
+    () => activeContextOverride ?? extractStudyAssistantContext(assistantContext),
+    [activeContextOverride, assistantContext]
+  )
   const resolvedActions = React.useMemo(() => {
     const sourceActions = activeContextOverride?.available_actions ?? availableActions
     return Array.from(new Set((sourceActions && sourceActions.length ? sourceActions : DEFAULT_ACTIONS)))
@@ -212,7 +218,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
     [displayedMessages]
   )
   const remediationContext = React.useMemo(() => {
-    const assistantRoot = isRecord(assistantContext) ? assistantContext : null
+    const assistantRoot = isRecord(activeAssistantContext) ? activeAssistantContext : null
     const assistantPayload = isRecord(latestAssistantMessage?.structured_payload)
       ? latestAssistantMessage.structured_payload
       : null
@@ -241,7 +247,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
       deepDiveTarget,
       supportingQuote
     }
-  }, [assistantContext, latestAssistantMessage?.structured_payload])
+  }, [activeAssistantContext, latestAssistantMessage?.structured_payload])
 
   React.useEffect(() => {
     setAssistantError(null)
@@ -579,12 +585,21 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
                 </div>
               )}
               {remediationContext.deepDiveTarget?.route ? (
-                <Typography.Link
-                  href={remediationContext.deepDiveTarget.route}
-                  className="text-sm"
-                >
-                  {deepDiveLabel}
-                </Typography.Link>
+                remediationContext.deepDiveTarget.route.startsWith("/") && inRouterContext ? (
+                  <RouterLink
+                    to={remediationContext.deepDiveTarget.route}
+                    className="text-sm text-primary hover:text-primary/80"
+                  >
+                    {deepDiveLabel}
+                  </RouterLink>
+                ) : (
+                  <Typography.Link
+                    href={remediationContext.deepDiveTarget.route}
+                    className="text-sm"
+                  >
+                    {deepDiveLabel}
+                  </Typography.Link>
+                )
               ) : null}
             </Space>
           </div>

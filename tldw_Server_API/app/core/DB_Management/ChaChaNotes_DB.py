@@ -7891,7 +7891,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               source_bundle_json TEXT NOT NULL,
               generation_options_json TEXT,
               status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
-              superseded_by_pack_id INTEGER REFERENCES study_packs(id) ON DELETE SET NULL,
+              superseded_by_pack_id BIGINT REFERENCES study_packs(id) ON DELETE SET NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
               last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
               deleted BOOLEAN NOT NULL DEFAULT FALSE,
@@ -7902,7 +7902,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """
             CREATE TABLE IF NOT EXISTS study_pack_cards(
               id BIGSERIAL PRIMARY KEY,
-              study_pack_id INTEGER NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+              study_pack_id BIGINT NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
               flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
               last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -23718,7 +23718,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         identifier=pack_id,
                     )
                 return True
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, BackendDatabaseError) as exc:
             raise CharactersRAGDBError(f"Failed to delete study pack: {exc}") from exc  # noqa: TRY003
 
     def supersede_study_pack(
@@ -23800,7 +23800,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         identifier=pack_id,
                     )
                 return True
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, BackendDatabaseError) as exc:
             raise CharactersRAGDBError(f"Failed to supersede study pack: {exc}") from exc  # noqa: TRY003
 
     # ==========================

@@ -957,8 +957,9 @@ const MediaPageContent: React.FC = () => {
   )
 
   const handleCreateStudyPackFromMedia = useCallback(() => {
-    const mediaTitle = nav.selected?.title?.trim() || ""
-    const mediaId = nav.selected?.id
+    const selectedMedia = nav.selected?.kind === "media" ? nav.selected : null
+    const mediaTitle = selectedMedia?.title?.trim() || ""
+    const mediaId = selectedMedia?.id
 
     if (!mediaTitle || mediaId == null) {
       message.warning(

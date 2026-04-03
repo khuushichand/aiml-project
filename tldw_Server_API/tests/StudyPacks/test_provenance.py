@@ -179,6 +179,29 @@ def test_resolve_deep_dive_target_prefers_exact_locator_then_workspace_route_the
     }
 
 
+def test_select_primary_citation_preserves_explicit_zero_ordinal_even_when_not_first(db: CharactersRAGDB):
+    module = _load_provenance_module()
+
+    selected = module.select_primary_citation(
+        [
+            {
+                "source_type": "note",
+                "source_id": "note-later",
+                "ordinal": 4,
+            },
+            {
+                "source_type": "note",
+                "source_id": "note-primary",
+                "ordinal": 0,
+            },
+        ]
+    )
+
+    assert selected is not None  # nosec B101
+    assert selected["source_id"] == "note-primary"  # nosec B101
+    assert selected["ordinal"] == 0  # nosec B101
+
+
 def test_persist_flashcard_citations_mirrors_only_primary_legacy_source_ref(db: CharactersRAGDB):
     card_uuid = _create_card(db, front="What is additive increase?")
     store = _store(db)

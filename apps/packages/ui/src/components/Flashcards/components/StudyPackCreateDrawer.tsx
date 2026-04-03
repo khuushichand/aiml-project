@@ -24,12 +24,6 @@ type StudyPackCreateDrawerProps = {
 
 const DEFAULT_SOURCE_TYPE: StudyPackSourceType = "media"
 
-const SOURCE_TYPE_OPTIONS: Array<{ label: string; value: StudyPackSourceType }> = [
-  { label: "Media", value: "media" },
-  { label: "Note", value: "note" },
-  { label: "Message", value: "message" }
-]
-
 const normalizeIntentSources = (
   intent: StudyPackIntent | null | undefined
 ): StudyPackSourceSelection[] =>
@@ -65,6 +59,29 @@ export const StudyPackCreateDrawer: React.FC<StudyPackCreateDrawerProps> = ({
   const jobQuery = useStudyPackJobQuery(jobId, {
     enabled: open && jobId != null
   })
+  const sourceTypeOptions = React.useMemo<Array<{ label: string; value: StudyPackSourceType }>>(
+    () => [
+      {
+        label: t("option:flashcards.studyPackSourceType.media", {
+          defaultValue: "Media"
+        }),
+        value: "media"
+      },
+      {
+        label: t("option:flashcards.studyPackSourceType.note", {
+          defaultValue: "Note"
+        }),
+        value: "note"
+      },
+      {
+        label: t("option:flashcards.studyPackSourceType.message", {
+          defaultValue: "Message"
+        }),
+        value: "message"
+      }
+    ],
+    [t]
+  )
 
   React.useEffect(() => {
     if (!open) return
@@ -132,13 +149,29 @@ export const StudyPackCreateDrawer: React.FC<StudyPackCreateDrawerProps> = ({
   const handleSubmit = React.useCallback(async () => {
     if (!canSubmit) return
 
-    const accepted = await createMutation.mutateAsync({
-      title: trimmedTitle,
-      source_items: sourceItems,
-      deck_mode: "new"
-    })
-    setJobId(accepted.job.id)
-  }, [canSubmit, createMutation, sourceItems, trimmedTitle])
+    try {
+      const accepted = await createMutation.mutateAsync({
+        title: trimmedTitle,
+        source_items: sourceItems,
+        deck_mode: "new"
+      })
+      setJobId(accepted.job.id)
+    } catch (error) {
+      const detail =
+        typeof error === "object" &&
+        error !== null &&
+        "response" in error &&
+        typeof (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail === "string"
+          ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null
+      message.error(
+        detail ||
+          t("option:flashcards.studyPackCreateFailed", {
+            defaultValue: "Study pack generation failed."
+          })
+      )
+    }
+  }, [canSubmit, createMutation, message, sourceItems, t, trimmedTitle])
 
   const drawerTitle = t("option:flashcards.studyPackDrawerTitle", {
     defaultValue: "Create study pack"
@@ -204,7 +237,7 @@ export const StudyPackCreateDrawer: React.FC<StudyPackCreateDrawerProps> = ({
               aria-label="Source Type"
               value={sourceType}
               onChange={(value) => setSourceType(value)}
-              options={SOURCE_TYPE_OPTIONS}
+              options={sourceTypeOptions}
               className="min-w-[120px]"
             />
             <Input

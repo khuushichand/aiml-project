@@ -93,9 +93,28 @@ def test_study_pack_summary_status_only_allows_active_or_superseded():
 
     assert active.status == "active"  # nosec B101
 
+    superseded = StudyPackSummaryResponse(
+        id=12,
+        workspace_id="ws-1",
+        title="Networking (Updated)",
+        deck_id=23,
+        source_bundle_json={"items": [{"source_type": "note", "source_id": "n1"}]},
+        generation_options_json={"deck_mode": "new"},
+        status="superseded",
+        superseded_by_pack_id=99,
+        created_at="2026-04-01T12:00:00Z",
+        last_modified="2026-04-01T12:05:00Z",
+        deleted=False,
+        client_id="tests",
+        version=2,
+    )
+
+    assert superseded.status == "superseded"  # nosec B101
+    assert superseded.superseded_by_pack_id == 99  # nosec B101
+
     with pytest.raises(ValidationError):
         StudyPackSummaryResponse(
-            id=12,
+            id=13,
             workspace_id="ws-1",
             title="Networking",
             deck_id=22,

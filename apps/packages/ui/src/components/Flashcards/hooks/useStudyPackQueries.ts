@@ -57,7 +57,7 @@ export function useStudyPackJobQuery(
       }
       return await getStudyPackJob(jobId)
     },
-    enabled: (options?.enabled ?? flashcardsEnabled) && jobId != null,
+    enabled: (options?.enabled ?? true) && flashcardsEnabled && jobId != null,
     retry: false,
     refetchIntervalInBackground: true,
     refetchInterval: (query) => {
@@ -81,7 +81,7 @@ export function useStudyPackQuery(
       }
       return await getStudyPack(packId)
     },
-    enabled: (options?.enabled ?? flashcardsEnabled) && packId != null,
+    enabled: (options?.enabled ?? true) && flashcardsEnabled && packId != null,
     retry: false
   })
 }

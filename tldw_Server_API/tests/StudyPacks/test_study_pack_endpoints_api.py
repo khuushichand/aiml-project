@@ -183,6 +183,7 @@ def test_regenerate_study_pack_job_uses_stored_source_bundle(
 
     assert job is not None  # nosec B101
     assert int(job["payload"]["regenerate_from_pack_id"]) == pack_id  # nosec B101
+    assert int(job["payload"]["expected_version"]) == 1  # nosec B101
     assert job["payload"]["title"] == "OSI Model"  # nosec B101
     assert job["payload"]["source_items"] == [{"source_type": "note", "source_id": "note-1"}]  # nosec B101
 
@@ -219,7 +220,7 @@ def test_failed_study_pack_jobs_return_diagnostics_without_partial_pack(
     assert response.status_code == 200  # nosec B101
     body = response.json()
     assert body["job"]["status"] == "failed"  # nosec B101
-    assert "llm exploded" in (body.get("error") or "")  # nosec B101
+    assert body["error"] == "Study pack generation failed."  # nosec B101
     assert body["study_pack"] is None  # nosec B101
 
 

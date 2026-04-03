@@ -8,6 +8,15 @@ import type { StudyPackIntent } from "@/services/tldw/study-pack-handoff"
 const navigateMock = vi.hoisted(() => vi.fn())
 const createStudyPackJobMock = vi.hoisted(() => vi.fn())
 const useStudyPackJobQueryMock = vi.hoisted(() => vi.fn())
+const messageSpies = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warning: vi.fn(),
+  loading: vi.fn(),
+  open: vi.fn(),
+  destroy: vi.fn()
+}))
 
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock
@@ -37,15 +46,7 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("@/hooks/useAntdMessage", () => ({
-  useAntdMessage: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    loading: vi.fn(),
-    open: vi.fn(),
-    destroy: vi.fn()
-  })
+  useAntdMessage: () => messageSpies
 }))
 
 vi.mock("../../hooks", async () => {
@@ -203,5 +204,25 @@ describe("StudyPackCreateDrawer", () => {
         replace: true
       })
     })
+  })
+
+  it("shows a friendly error when job creation fails", async () => {
+    createStudyPackJobMock.mockRejectedValue(new Error("request failed"))
+
+    render(<StudyPackCreateDrawer open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Networks" }
+    })
+    fireEvent.change(screen.getByLabelText("Source ID"), {
+      target: { value: "42" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add source" }))
+    fireEvent.click(screen.getByRole("button", { name: "Create study pack" }))
+
+    await waitFor(() => {
+      expect(messageSpies.error).toHaveBeenCalledWith("Study pack generation failed.")
+    })
+    expect(navigateMock).not.toHaveBeenCalled()
   })
 })

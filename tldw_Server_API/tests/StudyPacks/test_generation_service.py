@@ -138,7 +138,10 @@ async def test_generate_validated_cards_rejects_uncited_cards(
     service, _ = _build_service(
         db,
         monkeypatch,
-        ['{"cards":[{"front":"What is TCP slow start?","back":"It doubles the congestion window each RTT.","citations":[]}]}'],
+        [
+            '{"cards":[{"front":"What is TCP slow start?","back":"It doubles the congestion window each RTT.","citations":[]}]}',
+            '{"cards":[{"front":"What is TCP slow start?","back":"It doubles the congestion window each RTT.","citations":[]}]}',
+        ],
     )
 
     with pytest.raises(service_mod.StudyPackValidationError, match="citation"):
@@ -155,7 +158,10 @@ async def test_generate_validated_cards_rejects_citations_outside_source_bundle(
     service, _ = _build_service(
         db,
         monkeypatch,
-        [_valid_generation_payload(source_id="note-does-not-exist")],
+        [
+          _valid_generation_payload(source_id="note-does-not-exist"),
+          _valid_generation_payload(source_id="note-does-not-exist"),
+        ],
     )
 
     with pytest.raises(service_mod.StudyPackValidationError, match="source bundle"):
@@ -183,6 +189,55 @@ async def test_generate_validated_cards_repairs_malformed_output_exactly_once(
     assert result.cards[0].front  # nosec B101
     assert result.cards[0].back  # nosec B101
     assert result.cards[0].citations[0].source_id in {"note-1", "42", "msg-1"}  # nosec B101
+
+
+async def test_generate_validated_cards_repairs_validation_failures_exactly_once(
+    db: CharactersRAGDB,
+    bundle: Any,
+    study_pack_request: StudyPackCreateJobRequest,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service, calls = _build_service(
+        db,
+        monkeypatch,
+        [
+            '{"cards":[{"front":"What is TCP slow start?","back":"It doubles the congestion window each RTT.","citations":[]}]}',
+            _valid_generation_payload(),
+        ],
+    )
+
+    result = await service.generate_validated_cards(bundle, study_pack_request)
+
+    assert len(calls) == 2  # nosec B101
+    assert result.repair_attempted is True  # nosec B101
+    assert result.cards[0].citations[0].source_id == "note-1"  # nosec B101
+
+
+def test_validate_citation_payload_preserves_bundle_locator_over_conflicting_model_locator(
+    db: CharactersRAGDB,
+    bundle: Any,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service, _ = _build_service(db, monkeypatch, [])
+    citation = service._validate_citation_payload(
+        {
+            "source_type": "media",
+            "source_id": "42",
+            "citation_text": "At 61 seconds the lecture explains exponential growth.",
+            "locator": {
+                "media_id": 999,
+                "timestamp_seconds": 999,
+                "chunk_id": "chunk-99",
+            },
+        },
+        bundle_lookup={
+            ("media", "42"): bundle.items[1],
+        },
+    )
+
+    assert citation["locator"]["media_id"] == 42  # nosec B101
+    assert citation["locator"]["timestamp_seconds"] == 61  # nosec B101
+    assert citation["locator"]["chunk_id"] == "chunk-99"  # nosec B101
 
 
 async def test_create_study_pack_from_request_uses_collision_safe_deck_suffixing(

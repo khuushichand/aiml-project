@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,7 +112,11 @@ async def test_handle_study_pack_job_rolls_back_late_persistence_failures(
     monkeypatch: pytest.MonkeyPatch,
 ):
     types_mod, generation_mod, worker_mod = _load_modules()
-    monkeypatch.setattr(worker_mod, "_get_databases_for_user", lambda user_id: (db, SimpleNamespace()))
+    async def fake_get_databases_for_user(user_id: str):
+        assert user_id == "1"  # nosec B101
+        return db, SimpleNamespace()
+
+    monkeypatch.setattr(worker_mod, "_get_databases_for_user", fake_get_databases_for_user)
     monkeypatch.setattr(generation_mod.StudySourceResolver, "resolve", lambda self, selections: _bundle(types_mod))
 
     async def fake_generate_validated_cards(self, resolved_bundle: Any, request: Any):
@@ -155,7 +160,11 @@ async def test_handle_study_pack_job_regeneration_supersedes_only_after_successf
         generation_options_json={"deck_mode": "new"},
     )
 
-    monkeypatch.setattr(worker_mod, "_get_databases_for_user", lambda user_id: (db, SimpleNamespace()))
+    async def fake_get_databases_for_user(user_id: str):
+        assert user_id == "1"  # nosec B101
+        return db, SimpleNamespace()
+
+    monkeypatch.setattr(worker_mod, "_get_databases_for_user", fake_get_databases_for_user)
     monkeypatch.setattr(generation_mod.StudySourceResolver, "resolve", lambda self, selections: _bundle(types_mod))
 
     async def fake_generate_validated_cards(self, resolved_bundle: Any, request: Any):
@@ -233,19 +242,56 @@ async def test_worker_sdk_cancellation_marks_study_pack_job_cancelled_without_ru
     async def handler(job_row: dict[str, Any]):
         pytest.fail("Study-pack handler should not run when cancel_check returns true")
 
+    cancel_check_started = asyncio.Event()
+
     async def cancel_check(job_row: dict[str, Any]) -> bool:
+        cancel_check_started.set()
         jm.cancel_job(int(job_row["id"]), reason="requested")
         return await worker_mod._should_cancel(job_row, job_manager=jm)
 
     task = asyncio.create_task(sdk.run(handler=handler, cancel_check=cancel_check))
-    await asyncio.sleep(0)
+    await asyncio.wait_for(cancel_check_started.wait(), timeout=1)
     sdk.stop()
-    await asyncio.wait_for(task, timeout=1)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
 
     stored = jm.get_job(int(job["id"]))
 
     assert stored is not None  # nosec B101
     assert stored["status"] == "cancelled"  # nosec B101
+
+
+async def test_get_databases_for_user_closes_note_db_when_media_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _types_mod, _generation_mod, worker_mod = _load_modules()
+
+    class FakeNoteDb:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close_connection(self) -> None:
+            self.closed = True
+
+    note_db = FakeNoteDb()
+
+    async def fake_get_chacha_db_for_user_id(user_id: int, *, client_id: str):
+        assert user_id == 1  # nosec B101
+        assert client_id == "study-pack-worker-1"  # nosec B101
+        return note_db
+
+    def fake_get_media_db_for_owner(user_id: int):
+        assert user_id == 1  # nosec B101
+        raise RuntimeError("media lookup failed")
+
+    monkeypatch.setattr(worker_mod, "get_chacha_db_for_user_id", fake_get_chacha_db_for_user_id)
+    monkeypatch.setattr(worker_mod, "get_media_db_for_owner", fake_get_media_db_for_owner)
+
+    with pytest.raises(RuntimeError, match="media lookup failed"):
+        await worker_mod._get_databases_for_user("1")
+
+    assert note_db.closed is True  # nosec B101
 
 
 async def test_handle_study_pack_job_resolves_default_provider_and_model(
@@ -255,13 +301,24 @@ async def test_handle_study_pack_job_resolves_default_provider_and_model(
     types_mod, generation_mod, worker_mod = _load_modules()
     monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
     monkeypatch.setenv("DEFAULT_MODEL_OPENAI", "gpt-default-study-pack")
-    monkeypatch.setattr(worker_mod, "_get_databases_for_user", lambda user_id: (db, SimpleNamespace()))
+    async def fake_get_databases_for_user(user_id: str):
+        assert user_id == "1"  # nosec B101
+        return db, SimpleNamespace()
+
+    monkeypatch.setattr(worker_mod, "_get_databases_for_user", fake_get_databases_for_user)
 
     captured: dict[str, Any] = {}
 
-    async def fake_create_from_request(self, request: Any, *, regenerate_from_pack_id: int | None = None):
+    async def fake_create_from_request(
+        self,
+        request: Any,
+        *,
+        regenerate_from_pack_id: int | None = None,
+        expected_regenerate_version: int | None = None,
+    ):
         captured["provider"] = self.provider
         captured["model"] = self.model
+        captured["expected_regenerate_version"] = expected_regenerate_version
         return types_mod.StudyPackCreationResult(
             pack_id=11,
             deck_id=22,
@@ -277,4 +334,5 @@ async def test_handle_study_pack_job_resolves_default_provider_and_model(
 
     assert captured["provider"] == "openai"  # nosec B101
     assert captured["model"] == "gpt-default-study-pack"  # nosec B101
+    assert captured["expected_regenerate_version"] is None  # nosec B101
     assert int(result["pack_id"]) == 11  # nosec B101
