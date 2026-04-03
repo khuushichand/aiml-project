@@ -19,13 +19,18 @@ import {
   useDecksQuery,
   useCreateFlashcardMutation,
   useCreateDeckMutation,
-  useDebouncedFormField
+  useDebouncedFormField,
+  type UseFlashcardQueriesOptions
 } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { FlashcardDeckReferenceSection } from "./FlashcardDeckReferenceSection"
+import { FlashcardTagPicker } from "./FlashcardTagPicker"
 import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import { formatDeckDisplayName } from "../utils/deck-display"
+import { normalizeOptionalFlashcardTags } from "../utils/tag-normalization"
 import {
   getSelectionFromElement,
   insertTextAtSelection,
@@ -72,12 +77,21 @@ interface FlashcardCreateDrawerProps {
   onSuccess?: () => void
 }
 
-export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
+type FlashcardCreateDrawerVisibilityProps = Pick<
+  UseFlashcardQueriesOptions,
+  "includeWorkspaceItems" | "workspaceId"
+>
+
+export const FlashcardCreateDrawer: React.FC<
+  FlashcardCreateDrawerProps & FlashcardCreateDrawerVisibilityProps
+> = ({
   open,
   onClose,
   decks: propDecks,
   decksLoading: propDecksLoading,
-  onSuccess
+  onSuccess,
+  includeWorkspaceItems,
+  workspaceId
 }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
@@ -124,7 +138,11 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const inlineSchedulerDraft = useDeckSchedulerDraft()
 
   // Queries and mutations - use props if provided, otherwise fetch
-  const decksQuery = useDecksQuery({ enabled: !propDecks })
+  const decksQuery = useDecksQuery({
+    enabled: !propDecks,
+    includeWorkspaceItems,
+    workspaceId
+  })
   const decks = propDecks ?? decksQuery.data ?? []
   const decksLoading = propDecksLoading ?? decksQuery.isLoading
   const selectedDeck = React.useMemo(
@@ -234,7 +252,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const handleCreate = async () => {
     try {
       const values = await form.validateFields()
-      await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
+      await createMutation.mutateAsync(
+        normalizeFlashcardTemplateFields({
+          ...values,
+          tags: normalizeOptionalFlashcardTags(values.tags)
+        })
+      )
       message.success(t("common:created", { defaultValue: "Created" }))
       form.resetFields()
       onSuccess?.()
@@ -250,13 +273,14 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const handleCreateAndAddAnother = async () => {
     try {
       const values = await form.validateFields()
-      await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
+      await createMutation.mutateAsync(
+        normalizeFlashcardTemplateFields({
+          ...values,
+          tags: normalizeOptionalFlashcardTags(values.tags)
+        })
+      )
       message.success(t("common:created", { defaultValue: "Created" }))
-      // Keep deck selection but clear content
-      const deckId = form.getFieldValue("deck_id")
-      const modelType = form.getFieldValue("model_type")
-      form.resetFields()
-      form.setFieldsValue({ deck_id: deckId, model_type: modelType })
+      form.resetFields(["front", "back", "extra", "notes", "tags"])
       onSuccess?.()
     } catch (e: unknown) {
       if (e && typeof e === "object" && "errorFields" in e) return
@@ -371,7 +395,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                 loading={decksLoading}
                 className="w-full"
                 options={decks.map((d) => ({
-                  label: d.name,
+                  label: formatDeckDisplayName(d, `Deck ${d.id}`),
                   value: d.id
                 }))}
                 popupRender={(menu) => (
@@ -498,6 +522,14 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             </Text>
           )}
         </div>
+
+        <FlashcardDeckReferenceSection
+          open={open}
+          deckId={selectedDeckId ?? null}
+          deckName={selectedDeck?.name ?? null}
+          includeWorkspaceItems={includeWorkspaceItems}
+          workspaceId={workspaceId}
+        />
 
         {/* Hidden fields for API compatibility */}
         <Form.Item name="reverse" hidden>
@@ -693,13 +725,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                     label={t("option:flashcards.tags", { defaultValue: "Tags" })}
                     className="!mb-0"
                   >
-                    <Select
-                      mode="tags"
+                    <FlashcardTagPicker
+                      active={open}
+                      dataTestId="flashcards-create-tag-picker"
                       placeholder={t("option:flashcards.tagsPlaceholder", {
                         defaultValue: "tag1, tag2"
                       })}
-                      open={false}
-                      allowClear
                     />
                   </Form.Item>
 

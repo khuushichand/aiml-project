@@ -2,6 +2,7 @@ import React from "react"
 import { Alert, Button, Card, Empty, Input, Space, Tag, Typography } from "antd"
 import { Lightbulb, MessageSquareText, Sparkles, Volume2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { Link as RouterLink, useInRouterContext } from "react-router-dom"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useTTS } from "@/hooks/useTTS"
 import type {
@@ -72,6 +73,7 @@ interface FlashcardStudyAssistantPanelProps {
   threadVersion?: number | null
   messages: StudyAssistantMessage[]
   availableActions?: StudyAssistantAction[] | null
+  assistantContext?: unknown
   isLoading?: boolean
   isError?: boolean
   queryError?: unknown
@@ -123,11 +125,92 @@ const ACTION_LABELS: Record<StudyAssistantAction, string> = {
   freeform: "Ask assistant"
 }
 
+type RemediationCitationLike = {
+  citation_text?: unknown
+  quote?: unknown
+  label?: unknown
+  source_type?: unknown
+  source_id?: unknown
+  locator?: unknown
+  ordinal?: unknown
+}
+
+type RemediationDeepDiveTargetLike = {
+  source_type?: unknown
+  source_id?: unknown
+  citation_ordinal?: unknown
+  route_kind?: unknown
+  route?: unknown
+  available?: unknown
+  fallback_reason?: unknown
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const toCleanString = (value: unknown): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const toSafeHref = (value: unknown): string | null => {
+  if (typeof value !== "string") return null
+  const href = value.trim()
+  if (!href) return null
+  if (href.startsWith("/")) return href
+
+  try {
+    const parsed = new URL(href)
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null
+  } catch {
+    return null
+  }
+}
+
+const normalizeCitation = (value: unknown): RemediationCitationLike | null => {
+  if (!isRecord(value)) return null
+  const sourceType = toCleanString(value.source_type)
+  const sourceId = toCleanString(value.source_id)
+  if (!sourceType || !sourceId) return null
+  return {
+    citation_text: toCleanString(value.citation_text),
+    quote: toCleanString(value.quote),
+    label: toCleanString(value.label),
+    source_type: sourceType,
+    source_id: sourceId,
+    locator: toCleanString(value.locator),
+    ordinal: value.ordinal
+  }
+}
+
+const normalizeCitationList = (value: unknown): RemediationCitationLike[] => {
+  if (!Array.isArray(value)) return []
+  return value.map(normalizeCitation).filter((entry): entry is RemediationCitationLike => entry != null)
+}
+
+const normalizeDeepDiveTarget = (value: unknown): RemediationDeepDiveTargetLike | null => {
+  if (!isRecord(value)) return null
+  const sourceType = toCleanString(value.source_type)
+  const sourceId = toCleanString(value.source_id)
+  if (!sourceType || !sourceId) return null
+  return {
+    source_type: sourceType,
+    source_id: sourceId,
+    citation_ordinal: value.citation_ordinal,
+    route_kind: toCleanString(value.route_kind),
+    route: toSafeHref(value.route),
+    available: typeof value.available === "boolean" ? value.available : true,
+    fallback_reason: toCleanString(value.fallback_reason)
+  }
+}
+
 export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanelProps> = ({
   cardUuid,
   threadVersion = null,
   messages,
   availableActions,
+  assistantContext = null,
   isLoading = false,
   isError = false,
   queryError,
@@ -137,6 +220,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   autoSubmitRequest = null
 }) => {
   const { t } = useTranslation(["option", "common"])
+  const inRouterContext = useInRouterContext()
 
   const classifiedQueryError = React.useMemo(() => {
     if (!isError || !queryError) return null
@@ -186,10 +270,49 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   }, [reloadedContext, threadVersion])
 
   const displayedMessages = activeContextOverride?.messages ?? messages
+  const activeAssistantContext = React.useMemo(
+    () => activeContextOverride ?? extractStudyAssistantContext(assistantContext),
+    [activeContextOverride, assistantContext]
+  )
   const resolvedActions = React.useMemo(() => {
     const sourceActions = activeContextOverride?.available_actions ?? availableActions
     return Array.from(new Set((sourceActions && sourceActions.length ? sourceActions : DEFAULT_ACTIONS)))
   }, [activeContextOverride?.available_actions, availableActions])
+  const latestAssistantMessage = React.useMemo(
+    () => [...displayedMessages].reverse().find((message) => message.role === "assistant") ?? null,
+    [displayedMessages]
+  )
+  const remediationContext = React.useMemo(() => {
+    const assistantRoot = isRecord(activeAssistantContext) ? activeAssistantContext : null
+    const assistantPayload = isRecord(latestAssistantMessage?.structured_payload)
+      ? latestAssistantMessage.structured_payload
+      : null
+    const rootCitations = normalizeCitationList(assistantRoot?.citations)
+    const payloadCitations = normalizeCitationList(assistantPayload?.citations)
+    const citations = rootCitations.length > 0 ? rootCitations : payloadCitations
+    const primaryCitation =
+      normalizeCitation(assistantRoot?.primary_citation) ??
+      normalizeCitation(assistantPayload?.primary_citation) ??
+      citations[0] ??
+      null
+    const deepDiveTarget =
+      normalizeDeepDiveTarget(assistantRoot?.deep_dive_target) ??
+      normalizeDeepDiveTarget(assistantPayload?.deep_dive_target)
+    const supportingQuote =
+      toCleanString(primaryCitation?.citation_text) ??
+      toCleanString(primaryCitation?.quote) ??
+      toCleanString(assistantPayload?.supporting_quote) ??
+      toCleanString(assistantPayload?.supporting_quote_text) ??
+      toCleanString(citations[0]?.citation_text) ??
+      toCleanString(citations[0]?.quote) ??
+      null
+    return {
+      citations,
+      primaryCitation,
+      deepDiveTarget,
+      supportingQuote
+    }
+  }, [activeAssistantContext, latestAssistantMessage?.structured_payload])
 
   React.useEffect(() => {
     setAssistantError(null)
@@ -382,6 +505,12 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
       defaultValue: "Retry my message"
     })
   }, [conflictRequest, t])
+  const remediationLabel = t("option:flashcards.studyAssistantRemediation", {
+    defaultValue: "Remediation"
+  })
+  const deepDiveLabel = t("option:flashcards.studyAssistantDeepDive", {
+    defaultValue: "Deep dive to source"
+  })
 
   return (
     <Card
@@ -526,6 +655,45 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
             </Space>
           </div>
         ) : null}
+        {(remediationContext.supportingQuote || remediationContext.deepDiveTarget) && (
+          <div
+            className="rounded border border-border bg-surface p-3"
+            data-testid="flashcards-study-assistant-remediation"
+          >
+            <Space orientation="vertical" size={8} className="w-full">
+              <Text strong>{remediationLabel}</Text>
+              {remediationContext.supportingQuote && (
+                <div className="rounded border border-border/70 bg-background p-3">
+                  <Text type="secondary" className="mb-1 block text-xs uppercase tracking-wide">
+                    {t("option:flashcards.studyAssistantSupportingQuote", {
+                      defaultValue: "Supporting quote"
+                    })}
+                  </Text>
+                  <Text className="block text-sm text-text">
+                    “{remediationContext.supportingQuote}”
+                  </Text>
+                </div>
+              )}
+              {remediationContext.deepDiveTarget?.route ? (
+                remediationContext.deepDiveTarget.route.startsWith("/") && inRouterContext ? (
+                  <RouterLink
+                    to={remediationContext.deepDiveTarget.route}
+                    className="text-sm text-primary hover:text-primary/80"
+                  >
+                    {deepDiveLabel}
+                  </RouterLink>
+                ) : (
+                  <Typography.Link
+                    href={remediationContext.deepDiveTarget.route}
+                    className="text-sm"
+                  >
+                    {deepDiveLabel}
+                  </Typography.Link>
+                )
+              ) : null}
+            </Space>
+          </div>
+        )}
         <div>
           <Title level={5} className="!mb-2">
             {t("option:flashcards.studyAssistantHistory", {

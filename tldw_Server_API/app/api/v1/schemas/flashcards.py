@@ -4,6 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from tldw_Server_API.app.api.v1.schemas.study_packs import (
+    FlashcardCitationResponse,
+    FlashcardDeepDiveTarget,
+    StudyPackSummaryResponse,
+)
+
 
 DeckSchedulerType = Literal["sm2_plus", "fsrs"]
 
@@ -394,6 +400,22 @@ class StudyAssistantContextResponse(BaseModel):
     messages: list[StudyAssistantMessage] = Field(default_factory=list)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     available_actions: list[StudyAssistantAction] = Field(default_factory=list)
+    citations: list[FlashcardCitationResponse] = Field(
+        default_factory=list,
+        description="Persisted provenance citations for the flashcard, empty for legacy cards.",
+    )
+    primary_citation: Optional[FlashcardCitationResponse] = Field(
+        default=None,
+        description="The citation mirrored by the legacy source_ref summary fields.",
+    )
+    deep_dive_target: Optional[FlashcardDeepDiveTarget] = Field(
+        default=None,
+        description="The preferred source target for remediation deep-dive actions.",
+    )
+    study_pack: Optional[StudyPackSummaryResponse] = Field(
+        default=None,
+        description="The owning study pack when the flashcard belongs to one.",
+    )
 
 
 class StudyAssistantRespondResponse(BaseModel):
@@ -402,6 +424,20 @@ class StudyAssistantRespondResponse(BaseModel):
     assistant_message: StudyAssistantMessage
     structured_payload: dict[str, Any] = Field(default_factory=dict)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
+class FlashcardTagSuggestionItem(BaseModel):
+    """A single tag suggestion and the number of flashcards using it."""
+
+    tag: str
+    count: int
+
+
+class FlashcardTagSuggestionsResponse(BaseModel):
+    """Global flashcard tag suggestions with item details and total result count."""
+
+    items: list[FlashcardTagSuggestionItem] = Field(default_factory=list)
+    count: int
 
 
 class FlashcardTagsUpdate(BaseModel):

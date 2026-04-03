@@ -48,6 +48,8 @@ import {
 } from "@/services/flashcards"
 import type { FlashcardsGenerateIntent } from "@/services/tldw/flashcards-generate-handoff"
 import { getLlmProviders } from "@/services/prompt-studio"
+import type { StudyPackIntent } from "@/services/tldw/study-pack-handoff"
+import { StudyPackCreateDrawer } from "../components/StudyPackCreateDrawer"
 
 const { Text } = Typography
 
@@ -2551,13 +2553,24 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
  */
 type ImportExportTabProps = {
   generateIntent?: FlashcardsGenerateIntent | null
+  studyPackIntent?: StudyPackIntent | null
 }
 
-export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent }) => {
+export const ImportExportTab: React.FC<ImportExportTabProps> = ({
+  generateIntent,
+  studyPackIntent
+}) => {
   const { t } = useTranslation(["option", "common"])
   const limitsQuery = useImportLimitsQuery()
   const [lastTransferAction, setLastTransferAction] =
     React.useState<TransferActionSummary | null>(null)
+  const [studyPackDrawerOpen, setStudyPackDrawerOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    if (studyPackIntent) {
+      setStudyPackDrawerOpen(true)
+    }
+  }, [studyPackIntent])
 
   const handleTransferAction = React.useCallback((summary: TransferActionSummaryInput) => {
     setLastTransferAction({
@@ -2594,6 +2607,38 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
 
   return (
     <div className="grid gap-4 grid-cols-1 xl:grid-cols-4">
+      <Card
+        className="xl:col-span-4"
+        title={t("option:flashcards.studyPackLauncherTitle", {
+          defaultValue: "Study packs"
+        })}
+        data-testid="flashcards-study-pack-launcher"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="max-w-3xl space-y-1">
+            <Text strong className="block">
+              {t("option:flashcards.studyPackLauncherHeadline", {
+                defaultValue: "Turn media or notes into a review queue."
+              })}
+            </Text>
+            <Text type="secondary">
+              {t("option:flashcards.studyPackLauncherBody", {
+                defaultValue:
+                  "Create a study pack from supported sources, then review the generated deck in Flashcards."
+              })}
+            </Text>
+          </div>
+          <Button
+            type="primary"
+            onClick={() => setStudyPackDrawerOpen(true)}
+            data-testid="study-pack-launcher-button"
+          >
+            {t("option:flashcards.studyPackLaunchButton", {
+              defaultValue: "Create study pack"
+            })}
+          </Button>
+        </div>
+      </Card>
       <Card
         className="xl:col-span-4"
         title={t("option:flashcards.transferSummaryTitle", {
@@ -2684,6 +2729,11 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
       >
         <ImageOcclusionTransferPanel onTransferAction={handleTransferAction} />
       </Card>
+      <StudyPackCreateDrawer
+        open={studyPackDrawerOpen}
+        onClose={() => setStudyPackDrawerOpen(false)}
+        initialIntent={studyPackIntent || null}
+      />
     </div>
   )
 }

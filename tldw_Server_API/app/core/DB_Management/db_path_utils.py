@@ -128,11 +128,6 @@ def resolve_trusted_database_path(
     if not raw_path:
         raise InvalidStoragePathError("invalid_path")
 
-    try:
-        resolved = Path(raw_path).expanduser().resolve(strict=False)
-    except Exception as exc:
-        raise InvalidStoragePathError("invalid_path") from exc
-
     trusted_roots: list[Path] = []
     project_root = Path(get_project_root()).resolve()
     trusted_roots.append(project_root)
@@ -162,14 +157,24 @@ def resolve_trusted_database_path(
         if root not in unique_roots:
             unique_roots.append(root)
 
+    try:
+        candidate = Path(raw_path).expanduser()
+    except Exception as exc:
+        raise InvalidStoragePathError("invalid_path") from exc
+
+    if candidate.is_absolute():
+        normalized = Path(os.path.normpath(str(candidate)))
+    else:
+        normalized = Path(os.path.normpath(str(project_root / candidate)))
+
     for root in unique_roots:
         try:
-            resolved.relative_to(root)
-            return resolved
+            normalized.relative_to(root)
+            return normalized
         except ValueError:
             continue
 
-    logger.warning("Rejected {} path outside trusted roots: {}", label, resolved)
+    logger.warning("Rejected {} path outside trusted roots: {}", label, normalized)
     raise InvalidStoragePathError("invalid_path")
 
 

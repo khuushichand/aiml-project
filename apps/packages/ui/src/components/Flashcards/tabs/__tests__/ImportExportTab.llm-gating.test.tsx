@@ -11,7 +11,11 @@ import {
   useImportFlashcardsApkgMutation,
   useImportFlashcardsJsonMutation,
   useImportLimitsQuery,
-  usePreviewStructuredQaImportMutation
+  usePreviewStructuredQaImportMutation,
+  useStudyPackCreateMutation,
+  useStudyPackJobQuery,
+  useStudyPackQuery,
+  useStudyPackRegenerateMutation
 } from "../../hooks"
 
 const messageSpies = {
@@ -85,7 +89,11 @@ vi.mock("../../hooks", () => ({
   useImportFlashcardsApkgMutation: vi.fn(),
   useImportFlashcardsJsonMutation: vi.fn(),
   useImportLimitsQuery: vi.fn(),
-  usePreviewStructuredQaImportMutation: vi.fn()
+  usePreviewStructuredQaImportMutation: vi.fn(),
+  useStudyPackCreateMutation: vi.fn(),
+  useStudyPackJobQuery: vi.fn(),
+  useStudyPackQuery: vi.fn(),
+  useStudyPackRegenerateMutation: vi.fn()
 }))
 
 vi.mock("@/services/flashcards", async () => {
@@ -105,6 +113,17 @@ vi.mock("@/services/flashcards", async () => {
 vi.mock("@/services/prompt-studio", () => ({
   getLlmProviders: vi.fn()
 }))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+    useInRouterContext: () => false
+  }
+})
 
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
@@ -165,6 +184,22 @@ function setupMutationMocks() {
   vi.mocked(useImportLimitsQuery).mockReturnValue({
     data: null,
     isLoading: false
+  } as any)
+  vi.mocked(useStudyPackCreateMutation).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false
+  } as any)
+  vi.mocked(useStudyPackJobQuery).mockReturnValue({
+    data: null,
+    isLoading: false
+  } as any)
+  vi.mocked(useStudyPackQuery).mockReturnValue({
+    data: null,
+    isLoading: false
+  } as any)
+  vi.mocked(useStudyPackRegenerateMutation).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false
   } as any)
 }
 

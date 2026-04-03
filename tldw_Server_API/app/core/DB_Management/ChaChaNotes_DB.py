@@ -624,6 +624,9 @@ class CharactersRAGDB:
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("study_packs", "id"),
+        ("study_pack_cards", "id"),
+        ("flashcard_citations", "id"),
         ("study_assistant_threads", "id"),
         ("study_assistant_messages", "id"),
         ("writing_templates", "id"),
@@ -5976,6 +5979,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_workspace_subresource_schema_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                    self._ensure_study_pack_schema_sqlite(conn)
                     self._ensure_study_assistant_schema_sqlite(conn)
                     self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                     self._ensure_flashcard_fts_triggers_sqlite(conn)
@@ -6552,6 +6556,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_workspace_study_material_schema_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                self._ensure_study_pack_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
                 self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
@@ -7598,6 +7603,626 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL study assistant schema: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_study_pack_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure SQLite sync-log triggers exist for study pack tables."""
+        try:
+            table_names = {
+                str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading SQLite table inventory for study pack triggers: {exc}") from exc  # noqa: TRY003
+
+        if "sync_log" not in table_names:
+            return
+
+        study_packs_script = ""
+        if "study_packs" in table_names:
+            study_packs_script = """
+                CREATE TRIGGER study_packs_sync_create
+                AFTER INSERT ON study_packs BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_packs_sync_update
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.workspace_id IS NOT NEW.workspace_id OR
+                     OLD.title IS NOT NEW.title OR
+                     OLD.deck_id IS NOT NEW.deck_id OR
+                     OLD.source_bundle_json IS NOT NEW.source_bundle_json OR
+                     OLD.generation_options_json IS NOT NEW.generation_options_json OR
+                     OLD.status IS NOT NEW.status OR
+                     OLD.superseded_by_pack_id IS NOT NEW.superseded_by_pack_id OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_packs_sync_delete
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER study_packs_sync_undelete
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        study_pack_cards_script = ""
+        if "study_pack_cards" in table_names:
+            study_pack_cards_script = """
+                CREATE TRIGGER study_pack_cards_sync_create
+                AFTER INSERT ON study_pack_cards BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_update
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.study_pack_id IS NOT NEW.study_pack_id OR
+                     OLD.flashcard_uuid IS NOT NEW.flashcard_uuid OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_delete
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_undelete
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        flashcard_citations_script = ""
+        if "flashcard_citations" in table_names:
+            flashcard_citations_script = """
+                CREATE TRIGGER flashcard_citations_sync_create
+                AFTER INSERT ON flashcard_citations BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_update
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.flashcard_uuid IS NOT NEW.flashcard_uuid OR
+                     OLD.source_type IS NOT NEW.source_type OR
+                     OLD.source_id IS NOT NEW.source_id OR
+                     OLD.citation_text IS NOT NEW.citation_text OR
+                     OLD.locator IS NOT NEW.locator OR
+                     OLD.ordinal IS NOT NEW.ordinal OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_delete
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_undelete
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        try:
+            conn.executescript(
+                f"""
+                DROP TRIGGER IF EXISTS study_packs_sync_create;
+                DROP TRIGGER IF EXISTS study_packs_sync_update;
+                DROP TRIGGER IF EXISTS study_packs_sync_delete;
+                DROP TRIGGER IF EXISTS study_packs_sync_undelete;
+                {study_packs_script}
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_create;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_update;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_delete;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_undelete;
+                {study_pack_cards_script}
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_create;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_update;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_delete;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_undelete;
+                {flashcard_citations_script}
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study pack sync triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_pack_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure study pack tables exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_packs(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+                  title TEXT NOT NULL,
+                  deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  source_bundle_json TEXT NOT NULL,
+                  generation_options_json TEXT,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+                  superseded_by_pack_id INTEGER REFERENCES study_packs(id) ON DELETE SET NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_pack_cards(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  study_pack_id INTEGER NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+                  flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_citations(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  source_type TEXT NOT NULL CHECK(source_type IN ('note', 'media', 'message')),
+                  source_id TEXT NOT NULL,
+                  citation_text TEXT,
+                  locator TEXT,
+                  ordinal INTEGER NOT NULL DEFAULT 0,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deleted ON study_packs(deleted)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_pack_id ON study_pack_cards(study_pack_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_flashcard_uuid ON study_pack_cards(flashcard_uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_deleted ON study_pack_cards(deleted)")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_pack_cards_unique_active
+                    ON study_pack_cards(study_pack_id, flashcard_uuid)
+                 WHERE deleted = 0
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study pack schema: {exc}") from exc  # noqa: TRY003
+
+        self._ensure_study_pack_sync_triggers_sqlite(conn)
+
+    def _ensure_study_pack_schema_postgres(self, conn) -> None:
+        """Ensure study pack tables exist for PostgreSQL."""
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS study_packs(
+              id BIGSERIAL PRIMARY KEY,
+              workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+              title TEXT NOT NULL,
+              deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+              source_bundle_json TEXT NOT NULL,
+              generation_options_json TEXT,
+              status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+              superseded_by_pack_id BIGINT REFERENCES study_packs(id) ON DELETE SET NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS study_pack_cards(
+              id BIGSERIAL PRIMARY KEY,
+              study_pack_id BIGINT NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+              flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS flashcard_citations(
+              id BIGSERIAL PRIMARY KEY,
+              flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+              source_type TEXT NOT NULL CHECK(source_type IN ('note', 'media', 'message')),
+              source_id TEXT NOT NULL,
+              citation_text TEXT,
+              locator TEXT,
+              ordinal INTEGER NOT NULL DEFAULT 0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_deleted ON study_packs(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_pack_id ON study_pack_cards(study_pack_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_flashcard_uuid ON study_pack_cards(flashcard_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_deleted ON study_pack_cards(deleted)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_study_pack_cards_unique_active
+                ON study_pack_cards(study_pack_id, flashcard_uuid)
+             WHERE deleted = FALSE
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)",
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)",
+        ]
+        try:
+            for statement in statements:
+                self.backend.execute(statement, connection=conn)
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study pack schema: {exc}") from exc  # noqa: TRY003
+
+        try:
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION study_packs_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'workspace_id', NEW.workspace_id,
+                        'title', NEW.title,
+                        'deck_id', NEW.deck_id,
+                        'source_bundle_json', NEW.source_bundle_json,
+                        'generation_options_json', NEW.generation_options_json,
+                        'status', NEW.status,
+                        'superseded_by_pack_id', NEW.superseded_by_pack_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.workspace_id IS DISTINCT FROM NEW.workspace_id OR
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.deck_id IS DISTINCT FROM NEW.deck_id OR
+                    OLD.source_bundle_json IS DISTINCT FROM NEW.source_bundle_json OR
+                    OLD.generation_options_json IS DISTINCT FROM NEW.generation_options_json OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.superseded_by_pack_id IS DISTINCT FROM NEW.superseded_by_pack_id OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'workspace_id', NEW.workspace_id,
+                        'title', NEW.title,
+                        'deck_id', NEW.deck_id,
+                        'source_bundle_json', NEW.source_bundle_json,
+                        'generation_options_json', NEW.generation_options_json,
+                        'status', NEW.status,
+                        'superseded_by_pack_id', NEW.superseded_by_pack_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION study_pack_cards_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'study_pack_id', NEW.study_pack_id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.study_pack_id IS DISTINCT FROM NEW.study_pack_id OR
+                    OLD.flashcard_uuid IS DISTINCT FROM NEW.flashcard_uuid OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'study_pack_id', NEW.study_pack_id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION flashcard_citations_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'citation_text', NEW.citation_text,
+                        'locator', NEW.locator,
+                        'ordinal', NEW.ordinal,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.flashcard_uuid IS DISTINCT FROM NEW.flashcard_uuid OR
+                    OLD.source_type IS DISTINCT FROM NEW.source_type OR
+                    OLD.source_id IS DISTINCT FROM NEW.source_id OR
+                    OLD.citation_text IS DISTINCT FROM NEW.citation_text OR
+                    OLD.locator IS DISTINCT FROM NEW.locator OR
+                    OLD.ordinal IS DISTINCT FROM NEW.ordinal OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'citation_text', NEW.citation_text,
+                        'locator', NEW.locator,
+                        'ordinal', NEW.ordinal,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS study_packs_sync_log ON study_packs", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER study_packs_sync_log AFTER INSERT OR UPDATE ON study_packs "
+                "FOR EACH ROW EXECUTE FUNCTION study_packs_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS study_pack_cards_sync_log ON study_pack_cards", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER study_pack_cards_sync_log AFTER INSERT OR UPDATE ON study_pack_cards "
+                "FOR EACH ROW EXECUTE FUNCTION study_pack_cards_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS flashcard_citations_sync_log ON flashcard_citations", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER flashcard_citations_sync_log AFTER INSERT OR UPDATE ON flashcard_citations "
+                "FOR EACH ROW EXECUTE FUNCTION flashcard_citations_sync_log_fn()",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study pack sync triggers: {exc}") from exc  # noqa: TRY003
+
     def _ensure_quiz_remediation_conversion_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure quiz remediation conversion storage exists for SQLite."""
         try:
@@ -7885,6 +8510,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             self._ensure_flashcard_asset_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
+            self._ensure_study_pack_schema_postgres(conn)
             self._ensure_study_assistant_schema_postgres(conn)
             self._ensure_workspace_study_material_schema_postgres(conn)
             self._ensure_quiz_remediation_conversion_schema_postgres(conn)
@@ -13095,6 +13721,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
+    _STUDY_PACK_JSON_FIELDS = ['source_bundle_json', 'generation_options_json']
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
     _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
@@ -21183,6 +21810,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
+    def get_deck_by_name(self, name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        """Fetch one deck row by name using the repository-wide unique-name invariant."""
+        if include_deleted:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? "
+                "ORDER BY id LIMIT 1"
+            )
+        else:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? AND deleted = 0 "
+                "ORDER BY id LIMIT 1"
+            )
+        try:
+            cursor = self.execute_query(query, (name,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
     def update_deck(
         self,
         deck_id: int,
@@ -21665,6 +22313,67 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def list_flashcard_tag_suggestions(
+        self,
+        q: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List global flashcard tag suggestions with per-tag usage counts."""
+        if limit <= 0:
+            return []
+
+        keyword_table = self._map_table_for_backend("keywords")
+        normalized_q = (q or "").strip()
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            where_clauses.extend(
+                [
+                    "f.deleted = FALSE",
+                    "kw.deleted = FALSE",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = FALSE))",
+                ]
+            )
+        else:
+            where_clauses.extend(
+                [
+                    "f.deleted = 0",
+                    "kw.deleted = 0",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = 0))",
+                ]
+            )
+
+        if normalized_q:
+            where_clauses.append("LOWER(kw.keyword) LIKE ?")
+            params.append(f"%{normalized_q.lower()}%")
+
+        order_keyword = self._case_insensitive_order_expression("kw.keyword")
+        where_sql = " AND ".join(where_clauses)
+        query = """
+            SELECT
+                kw.keyword AS tag,
+                COUNT(DISTINCT f.id) AS usage_count
+            FROM flashcards f
+            JOIN flashcard_keywords fk ON fk.card_id = f.id
+            JOIN {keyword_table} kw ON kw.id = fk.keyword_id
+            LEFT JOIN decks d ON d.id = f.deck_id
+            WHERE {where_sql}
+            GROUP BY kw.keyword
+            ORDER BY usage_count DESC, {order_keyword}
+            LIMIT ?
+        """.format_map(locals())  # nosec B608
+        params.append(limit)
+
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [
+                {"tag": str(row["tag"]), "count": int(row["usage_count"] or 0)}
+                for row in cursor.fetchall()
+            ]
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
@@ -22575,6 +23284,585 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # unlink extras
         for kid in cur_kw_ids - desired_kw_ids:
             conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
+
+    # ==========================
+    # Study Packs
+    # ==========================
+    def create_study_pack(
+        self,
+        *,
+        title: str,
+        workspace_id: str | None,
+        deck_id: int | None,
+        source_bundle_json: dict[str, Any] | str,
+        generation_options_json: dict[str, Any] | str | None,
+        status: str = "active",
+        superseded_by_pack_id: int | None = None,
+    ) -> int:
+        """Create a study pack row and return its integer id."""
+        if status not in ("active", "superseded"):
+            raise InputError("Invalid study pack status; must be 'active' or 'superseded'")  # noqa: TRY003
+
+        source_bundle_candidate: Any = source_bundle_json
+        if isinstance(source_bundle_json, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                source_bundle_candidate = json.loads(source_bundle_json)
+        if isinstance(source_bundle_candidate, dict):
+            source_items = source_bundle_candidate.get("items")
+            if isinstance(source_items, list):
+                for source_item in source_items:
+                    if not isinstance(source_item, dict):
+                        continue
+                    if self._normalize_nullable_text(source_item.get("source_id")) is None:
+                        raise InputError("Study pack source_id is required")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        source_bundle = self._ensure_json_string_from_mixed(source_bundle_json)
+        generation_options = self._ensure_json_string_from_mixed(generation_options_json)
+
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    "INSERT INTO study_packs("
+                    "workspace_id, title, deck_id, source_bundle_json, generation_options_json, "
+                    "status, superseded_by_pack_id, created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    workspace_id,
+                    title,
+                    deck_id,
+                    source_bundle,
+                    generation_options,
+                    status,
+                    superseded_by_pack_id,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    pack_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    pack_id = int(cursor.lastrowid)
+
+                if pack_id is None:
+                    raise CharactersRAGDBError("Failed to determine study pack ID after insert")  # noqa: TRY003
+                return pack_id
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack(self, pack_id: int) -> dict[str, Any] | None:
+        """Fetch a single active study pack by id."""
+        query = """
+            SELECT id, workspace_id, title, deck_id, source_bundle_json, generation_options_json,
+                   status, superseded_by_pack_id, created_at, last_modified, deleted, client_id, version
+              FROM study_packs
+             WHERE id = ? AND deleted = 0
+        """
+        try:
+            cursor = self.execute_query(query, (pack_id,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def add_study_pack_cards(self, study_pack_id: int, flashcard_uuids: list[str]) -> int:
+        """Attach flashcards to a study pack by UUID without relying on deck membership."""
+        if not flashcard_uuids:
+            return 0
+
+        now = self._get_current_utc_timestamp_iso()
+        if self.backend_type == BackendType.POSTGRESQL:
+            insert_sql = (
+                "INSERT INTO study_pack_cards("
+                "study_pack_id, flashcard_uuid, created_at, last_modified, deleted, client_id, version"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING"
+            )
+        else:
+            insert_sql = (
+                "INSERT OR IGNORE INTO study_pack_cards("
+                "study_pack_id, flashcard_uuid, created_at, last_modified, deleted, client_id, version"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?)"
+            )
+
+        params = [
+            (study_pack_id, card_uuid, now, now, False, self.client_id, 1)
+            for card_uuid in flashcard_uuids
+        ]
+        try:
+            with self.transaction() as conn:
+                before_row = conn.execute(
+                    "SELECT COUNT(*) FROM study_pack_cards WHERE study_pack_id = ? AND deleted = 0",
+                    (study_pack_id,),
+                ).fetchone()
+                before_count = int(before_row[0]) if before_row else 0
+                self.execute_many(insert_sql, params, commit=False)
+                after_row = conn.execute(
+                    "SELECT COUNT(*) FROM study_pack_cards WHERE study_pack_id = ? AND deleted = 0",
+                    (study_pack_id,),
+                ).fetchone()
+                after_count = int(after_row[0]) if after_row else before_count
+            return max(0, after_count - before_count)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add study pack cards: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add study pack cards: {exc}") from exc  # noqa: TRY003
+
+    def list_study_pack_cards(self, study_pack_id: int, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        """List study pack membership rows in insertion order."""
+        deleted_clause = "1=1" if include_deleted else "spc.deleted = 0"
+        query = f"""
+            SELECT spc.id, spc.study_pack_id, spc.flashcard_uuid, spc.created_at, spc.last_modified,
+                   spc.deleted, spc.client_id, spc.version, f.deck_id
+              FROM study_pack_cards spc
+              LEFT JOIN flashcards f ON f.uuid = spc.flashcard_uuid
+             WHERE spc.study_pack_id = ? AND {deleted_clause}
+             ORDER BY spc.id
+        """  # nosec B608
+        try:
+            cursor = self.execute_query(query, (study_pack_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def add_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Insert provenance citations for a flashcard."""
+        if not citations:
+            return 0
+
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as _:
+                self.execute_many(
+                    """
+                    INSERT INTO flashcard_citations(
+                        flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                        created_at, last_modified, deleted, client_id, version
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params,
+                    commit=False,
+                )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
+
+    def replace_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Replace the active citation set for a flashcard with the provided rows."""
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+
+    def replace_flashcard_citations_and_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        citations: list[dict[str, Any]],
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> int:
+        """Atomically replace citations and mirror the primary legacy source reference."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_citation_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_citation_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_citation_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(
+                f"Failed to replace flashcard citations and source summary: {exc}"
+            ) from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(
+                f"Failed to replace flashcard citations and source summary: {exc}"
+            ) from exc  # noqa: TRY003
+
+    def list_flashcard_citations(self, flashcard_uuid: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        """List citations for a flashcard ordered by ordinal."""
+        deleted_clause = "1=1" if include_deleted else "deleted = 0"
+        query = f"""
+            SELECT id, flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                   created_at, last_modified, deleted, client_id, version
+              FROM flashcard_citations
+             WHERE flashcard_uuid = ? AND {deleted_clause}
+             ORDER BY ordinal, id
+        """  # nosec B608
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def set_flashcard_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> bool:
+        """Persist the legacy flashcard source summary from the primary citation only."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                cursor = conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                return cursor.rowcount > 0
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack_for_flashcard(self, flashcard_uuid: str) -> dict[str, Any] | None:
+        """Return the first active study pack containing the flashcard."""
+        query = """
+            SELECT sp.id, sp.workspace_id, sp.title, sp.deck_id, sp.source_bundle_json, sp.generation_options_json,
+                   sp.status, sp.superseded_by_pack_id, sp.created_at, sp.last_modified, sp.deleted, sp.client_id, sp.version
+              FROM study_pack_cards spc
+              JOIN study_packs sp ON sp.id = spc.study_pack_id
+             WHERE spc.flashcard_uuid = ? AND spc.deleted = 0 AND sp.deleted = 0
+             ORDER BY spc.id ASC, sp.id ASC
+             LIMIT 1
+        """
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def soft_delete_study_pack(self, pack_id: int, expected_version: int | None = None) -> bool:
+        """Soft delete a study pack with optional optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT version, deleted FROM study_packs WHERE id = ?", (pack_id,)).fetchone()
+                if not row:
+                    raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                current_version = int(row["version"])
+                deleted = bool(row["deleted"])
+                if deleted:
+                    return True
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch deleting study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                update_query = """
+                    UPDATE study_packs
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                """
+                update_params: list[Any] = [now, self.client_id, pack_id]
+                if expected_version is not None:
+                    update_query += " AND version = ?"
+                    update_params.append(expected_version)
+                cursor = conn.execute(update_query, tuple(update_params))
+                if cursor.rowcount == 0:
+                    changed_row = conn.execute(
+                        "SELECT version, deleted FROM study_packs WHERE id = ?",
+                        (pack_id,),
+                    ).fetchone()
+                    if not changed_row:
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if bool(changed_row["deleted"]):
+                        return True
+                    if expected_version is not None and int(changed_row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch deleting study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    raise ConflictError(
+                        "Concurrent update deleting study pack",
+                        entity="study_packs",
+                        identifier=pack_id,
+                    )
+                return True
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed to delete study pack: {exc}") from exc  # noqa: TRY003
+
+    def supersede_study_pack(
+        self,
+        pack_id: int,
+        *,
+        superseded_by_pack_id: int,
+        expected_version: int | None = None,
+    ) -> bool:
+        """Mark a study pack superseded by another pack."""
+        if superseded_by_pack_id == pack_id:
+            raise InputError("Study pack cannot self-supersede")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    locked_rows: dict[int, Any] = {}
+                    for locked_pack_id in sorted((pack_id, superseded_by_pack_id)):
+                        locked_row = conn.execute(
+                            "SELECT id, version, deleted FROM study_packs WHERE id = ? FOR UPDATE",
+                            (locked_pack_id,),
+                        ).fetchone()
+                        if locked_row:
+                            locked_rows[int(locked_row["id"])] = locked_row
+                    row = locked_rows.get(pack_id)
+                    replacement_row = locked_rows.get(superseded_by_pack_id)
+                else:
+                    row = conn.execute("SELECT version, deleted FROM study_packs WHERE id = ?", (pack_id,)).fetchone()
+                    replacement_row = conn.execute(
+                        "SELECT id, deleted FROM study_packs WHERE id = ?",
+                        (superseded_by_pack_id,),
+                    ).fetchone()
+
+                if not row or bool(row["deleted"]):
+                    raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                current_version = int(row["version"])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                if not replacement_row:
+                    raise ConflictError(
+                        "Study pack replacement pack not found",
+                        entity="study_packs",
+                        identifier=superseded_by_pack_id,
+                    )
+                if bool(replacement_row["deleted"]):
+                    raise ConflictError(
+                        "Study pack replacement pack is deleted",
+                        entity="study_packs",
+                        identifier=superseded_by_pack_id,
+                    )
+                update_query = """
+                    UPDATE study_packs
+                       SET status = 'superseded',
+                           superseded_by_pack_id = ?,
+                           last_modified = ?,
+                           version = version + 1,
+                           client_id = ?
+                     WHERE id = ? AND deleted = 0
+                """
+                update_params: list[Any] = [superseded_by_pack_id, now, self.client_id, pack_id]
+                if expected_version is not None:
+                    update_query += " AND version = ?"
+                    update_params.append(expected_version)
+                cursor = conn.execute(update_query, tuple(update_params))
+                if cursor.rowcount == 0:
+                    changed_row = conn.execute(
+                        "SELECT version, deleted FROM study_packs WHERE id = ?",
+                        (pack_id,),
+                    ).fetchone()
+                    if not changed_row:
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if bool(changed_row["deleted"]):
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if expected_version is not None and int(changed_row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch updating study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    raise ConflictError(
+                        "Concurrent update superseding study pack",
+                        entity="study_packs",
+                        identifier=pack_id,
+                    )
+                return True
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed to supersede study pack: {exc}") from exc  # noqa: TRY003
 
     # ==========================
     # Quizzes (V12)

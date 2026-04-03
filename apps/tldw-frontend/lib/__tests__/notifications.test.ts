@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
-  apiPatch: vi.fn(),
   apiPost: vi.fn(),
+  apiDelete: vi.fn(),
+  apiPatch: vi.fn(),
   buildAuthHeaders: vi.fn(),
   hasExplicitAuthHeaders: vi.fn(),
   getApiBaseUrl: vi.fn(),
@@ -17,8 +18,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@web/lib/api", () => ({
   apiClient: {
     get: (...args: unknown[]) => mocks.apiGet(...args),
-    patch: (...args: unknown[]) => mocks.apiPatch(...args),
-    post: (...args: unknown[]) => mocks.apiPost(...args)
+    post: (...args: unknown[]) => mocks.apiPost(...args),
+    delete: (...args: unknown[]) => mocks.apiDelete(...args),
+    patch: (...args: unknown[]) => mocks.apiPatch(...args)
   },
   buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
   hasExplicitAuthHeaders: (...args: unknown[]) =>
@@ -36,6 +38,7 @@ vi.mock("@/services/background-proxy", () => ({
 }))
 
 import {
+  cancelNotificationSnooze,
   dismissNotification,
   getNotificationPreferences,
   getUnreadCount,
@@ -56,14 +59,15 @@ describe("web notifications adapter", () => {
     mocks.hasExplicitAuthHeaders.mockReturnValue(true)
     mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
     mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
+    mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
+    mocks.apiDelete.mockResolvedValue({ cancelled: true, deleted_tasks: 1 })
     mocks.apiPatch.mockResolvedValue({
       user_id: "user-1",
       reminder_enabled: true,
-      job_completed_enabled: false,
+      job_completed_enabled: true,
       job_failed_enabled: true,
-      updated_at: "2026-04-02T00:01:00Z"
+      updated_at: "2026-03-20T00:00:00Z"
     })
-    mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
     mocks.streamStructuredSSE.mockImplementation(async (_url, _options, onEvent) => {
       onEvent({
         event: "notification",
@@ -89,13 +93,21 @@ describe("web notifications adapter", () => {
 
   it("uses the web apiClient transport for inbox CRUD", async () => {
     await listNotifications({ limit: 20, offset: 0 })
+    await listNotifications({ limit: 25, offset: 5, include_archived: true, only_snoozed: true })
     await getUnreadCount()
     await markNotificationsRead([1])
     await dismissNotification(1)
+    await cancelNotificationSnooze(1)
     await snoozeNotification(1, 15)
+    await getNotificationPreferences()
+    await updateNotificationPreferences({ reminder_enabled: false })
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
       "/notifications?limit=20&offset=0&include_archived=false",
+      { withCredentials: false }
+    )
+    expect(mocks.apiGet).toHaveBeenCalledWith(
+      "/notifications?limit=25&offset=5&include_archived=true&only_snoozed=true",
       { withCredentials: false }
     )
     expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/unread-count", {
@@ -107,9 +119,28 @@ describe("web notifications adapter", () => {
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/dismiss", undefined, {
       withCredentials: false
     })
+    expect(mocks.apiDelete).toHaveBeenCalledWith("/notifications/1/snooze", {
+      withCredentials: false
+    })
     expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/snooze", {
       minutes: 15
     }, { withCredentials: false })
+    expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/preferences", {
+      headers: expect.objectContaining({
+        Authorization: "Bearer web-token",
+        "X-CSRF-Token": "csrf-token"
+      }),
+      withCredentials: false
+    })
+    expect(mocks.apiPatch).toHaveBeenCalledWith("/notifications/preferences", {
+      reminder_enabled: false
+    }, {
+      headers: expect.objectContaining({
+        Authorization: "Bearer web-token",
+        "X-CSRF-Token": "csrf-token"
+      }),
+      withCredentials: false
+    })
   })
 
   it("uses the web apiClient transport for notification preferences", async () => {

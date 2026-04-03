@@ -1019,6 +1019,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
               threadVersion={assistantQuery.data?.thread.version ?? null}
               messages={assistantQuery.data?.messages ?? []}
               availableActions={assistantQuery.data?.available_actions ?? null}
+              assistantContext={assistantQuery.data}
               isLoading={assistantQuery.isLoading}
               isError={assistantQuery.isError}
               queryError={assistantQuery.error}
