@@ -76,16 +76,8 @@ export const FlashcardDeckReferenceSection: React.FC<
     return null
   }
 
-  const recentCards = (recentQuery.data as Array<{
-    uuid: string
-    front: string
-    back: string
-  }> | undefined) ?? []
-  const searchCards = (searchQuery.data as Array<{
-    uuid: string
-    front: string
-    back: string
-  }> | undefined) ?? []
+  const recentCards = recentQuery.data ?? []
+  const searchCards = searchQuery.data ?? []
   const hasRecentCards = recentCards.length > 0
   const hasSearchResults = searchCards.length > 0
   const isRecentLoading = Boolean(recentQuery.isLoading)
@@ -112,7 +104,7 @@ export const FlashcardDeckReferenceSection: React.FC<
             type="link"
             className="h-auto p-0"
             onClick={() => {
-              void recentQuery.refetch?.()
+              void recentQuery.refetch()
             }}
           >
             Retry
@@ -179,7 +171,7 @@ export const FlashcardDeckReferenceSection: React.FC<
             type="link"
             className="h-auto p-0"
             onClick={() => {
-              void searchQuery.refetch?.()
+              void searchQuery.refetch()
             }}
           >
             Retry
