@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# reset_admin_password.py
-# Description: CLI to reset an admin (or any) user's password in multi-user mode.
-#
-# Works with both SQLite and PostgreSQL backends by using the same UsersDB
-# abstraction as the rest of the AuthNZ subsystem.
-#
-# Usage:
-#   python -m tldw_Server_API.app.core.AuthNZ.reset_admin_password \
-#       --username admin --new-password 'N3wS3cure!'
-#
+"""
+CLI for resetting an admin or standard user's password in multi-user mode.
+
+This script works with both SQLite and PostgreSQL backends by using the same
+UsersDB abstraction as the rest of the AuthNZ subsystem.
+
+Usage:
+    python -m tldw_Server_API.app.core.AuthNZ.reset_admin_password \\
+        --username admin --new-password 'N3wS3cure!'
+"""
 
 import argparse
 import asyncio

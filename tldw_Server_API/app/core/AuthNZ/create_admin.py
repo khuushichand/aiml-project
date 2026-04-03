@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# create_admin.py
-# Description: Non-interactive CLI to create an initial admin user for multi-user mode.
-#
-# Designed to be called from Docker entrypoints or CI pipelines where interactive
-# input is not available. Idempotent: if an admin with the given username already
-# exists, the script exits successfully without making changes.
-#
-# Usage:
-#   python -m tldw_Server_API.app.core.AuthNZ.create_admin \
-#       --username myadmin --password 'S3cureP@ss!' [--email admin@example.com]
-#
+"""
+Non-interactive CLI for bootstrapping an initial admin user in multi-user mode.
+
+Designed for Docker entrypoints and CI environments where interactive input is
+not available. The command is idempotent: if an admin with the requested
+username already exists, it exits successfully without making changes.
+
+Usage:
+    python -m tldw_Server_API.app.core.AuthNZ.create_admin \\
+        --username myadmin --password 'S3cureP@ss!' [--email admin@example.com]
+"""
 
 import argparse
 import asyncio
