@@ -6595,15 +6595,15 @@ else:
             # config gating would normally disable them (e.g., workflows/scheduler).
             _test_ctx = bool(_TEST_MODE)
             if _test_ctx and route_key in {"workflows", "scheduler"}:
-                app.include_router(router, prefix=prefix, tags=tags)
+                include_router_idempotent(app, router, prefix=prefix, tags=tags)
                 return
             if route_enabled(route_key, default_stable=default_stable):
-                app.include_router(router, prefix=prefix, tags=tags)
+                include_router_idempotent(app, router, prefix=prefix, tags=tags)
             else:
                 logger.info(f"Route disabled by policy: {route_key}")
         except _STARTUP_GUARD_EXCEPTIONS as _rt_err:
             logger.warning(f"Route gating error for {route_key}; including by default. Error: {_rt_err}")
-            app.include_router(router, prefix=prefix, tags=tags)
+            include_router_idempotent(app, router, prefix=prefix, tags=tags)
 
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router

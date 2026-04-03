@@ -10,6 +10,7 @@ import {
   createNotificationStreamSubscription as createNotificationStreamSubscriptionShared
 } from "@/services/notifications"
 import type {
+  NotificationCancelSnoozeResponse,
   NotificationItem,
   NotificationSeverity,
   NotificationSnoozeResponse,
@@ -20,6 +21,7 @@ import type {
 } from "@/services/notifications"
 
 export type {
+  NotificationCancelSnoozeResponse,
   NotificationItem,
   NotificationSeverity,
   NotificationSnoozeResponse,
@@ -28,6 +30,20 @@ export type {
   NotificationsUnreadCountResponse,
   SubscribeNotificationsOptions
 } from "@/services/notifications"
+
+export type NotificationPreferences = {
+  user_id: string
+  reminder_enabled: boolean
+  job_completed_enabled: boolean
+  job_failed_enabled: boolean
+  updated_at: string
+}
+
+export type NotificationPreferencesUpdate = {
+  reminder_enabled?: boolean
+  job_completed_enabled?: boolean
+  job_failed_enabled?: boolean
+}
 
 const shouldUseCookieCredentials = (headers: Record<string, string>): boolean => {
   return !headers.Authorization && !headers["X-API-KEY"]
@@ -83,12 +99,14 @@ export async function listNotifications(params?: {
   limit?: number
   offset?: number
   include_archived?: boolean
+  only_snoozed?: boolean
 }): Promise<NotificationsListResponse> {
   return apiClient.get<NotificationsListResponse>(
     `/notifications${buildNotificationsQueryShared({
       limit: params?.limit ?? 100,
       offset: params?.offset ?? 0,
-      include_archived: params?.include_archived ?? false
+      include_archived: params?.include_archived ?? false,
+      only_snoozed: params?.only_snoozed
     })}`,
     { withCredentials: !hasExplicitAuthHeaders() }
   )
@@ -116,6 +134,17 @@ export async function dismissNotification(notificationId: number): Promise<{ dis
   )
 }
 
+export async function cancelNotificationSnooze(
+  notificationId: number
+): Promise<NotificationCancelSnoozeResponse> {
+  return apiClient.delete<NotificationCancelSnoozeResponse>(
+    `/notifications/${notificationId}/snooze`,
+    {
+      withCredentials: !hasExplicitAuthHeaders()
+    }
+  )
+}
+
 export async function snoozeNotification(
   notificationId: number,
   minutes: number
@@ -125,22 +154,6 @@ export async function snoozeNotification(
   }, {
     withCredentials: !hasExplicitAuthHeaders()
   })
-}
-
-// ── Notification Preferences ────────────────────────────────────────
-
-export type NotificationPreferences = {
-  user_id: string
-  reminder_enabled: boolean
-  job_completed_enabled: boolean
-  job_failed_enabled: boolean
-  updated_at: string
-}
-
-export type NotificationPreferencesUpdate = {
-  reminder_enabled?: boolean
-  job_completed_enabled?: boolean
-  job_failed_enabled?: boolean
 }
 
 export async function getNotificationPreferences(): Promise<NotificationPreferences> {
