@@ -435,6 +435,13 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         setReviewFailure(null)
         setShowAnswer(false)
         answerStartTimeRef.current = null
+        if (reviewedCount === 0) {
+          message.success(
+            t("option:flashcards.milestoneFirstReview", {
+              defaultValue: "First card reviewed! Review daily for best results."
+            })
+          )
+        }
         setReviewedCount((c) => c + 1)
         if (reviewOverrideCard) {
           onClearOverride?.()
@@ -1015,6 +1022,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
               assistantContext={assistantQuery.data}
               isLoading={assistantQuery.isLoading}
               isError={assistantQuery.isError}
+              queryError={assistantQuery.error}
               isResponding={assistantRespondMutation.isPending}
               onReloadContext={() => assistantQuery.refetch()}
               onRespond={handleAssistantRespond}
@@ -1341,6 +1349,12 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                               {t("option:flashcards.onboardingStepRate", {
                                 defaultValue:
                                   "Rate recall with Again/Hard/Good/Easy so the next review is scheduled automatically."
+                              })}
+                            </li>
+                            <li className="text-text-muted">
+                              {t("option:flashcards.onboardingStepLlmNote", {
+                                defaultValue:
+                                  "Card generation and the study assistant require an LLM provider (configure in Settings)."
                               })}
                             </li>
                           </ol>

@@ -14,6 +14,50 @@ import type {
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { VoiceTranscriptComposer } from "./VoiceTranscriptComposer"
 
+type AssistantErrorKind = "network" | "server" | "no_llm"
+
+function extractHttpStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined
+  const e = err as Record<string, unknown>
+  // Top-level: err.status, err.statusCode
+  if (typeof e.status === "number") return e.status
+  if (typeof e.statusCode === "number") return e.statusCode
+  // Nested: err.response.status, err.response.statusCode
+  const resp = e.response
+  if (resp && typeof resp === "object") {
+    const r = resp as Record<string, unknown>
+    if (typeof r.status === "number") return r.status
+    if (typeof r.statusCode === "number") return r.statusCode
+  }
+  // Data envelope: err.data.status, err.data.statusCode
+  const data = e.data
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>
+    if (typeof d.status === "number") return d.status
+    if (typeof d.statusCode === "number") return d.statusCode
+  }
+  // Deep nested: err.response.data.status, err.response.data.statusCode
+  if (resp && typeof resp === "object") {
+    const rData = (resp as Record<string, unknown>).data
+    if (rData && typeof rData === "object") {
+      const rd = rData as Record<string, unknown>
+      if (typeof rd.status === "number") return rd.status
+      if (typeof rd.statusCode === "number") return rd.statusCode
+    }
+  }
+  return undefined
+}
+
+function classifyAssistantError(err: unknown): AssistantErrorKind {
+  const isNetwork =
+    err instanceof TypeError ||
+    (err instanceof Error && /network|fetch|timeout/i.test(err.message))
+  if (isNetwork) return "network"
+  const httpStatus = extractHttpStatus(err)
+  if (typeof httpStatus === "number" && httpStatus >= 400) return "server"
+  return "no_llm"
+}
+
 const { Text, Title } = Typography
 
 const DEFAULT_ACTIONS: StudyAssistantAction[] = [
@@ -32,6 +76,7 @@ interface FlashcardStudyAssistantPanelProps {
   assistantContext?: unknown
   isLoading?: boolean
   isError?: boolean
+  queryError?: unknown
   isResponding?: boolean
   onReloadContext?: () => Promise<unknown>
   onRespond: (request: StudyAssistantRespondRequest) => Promise<unknown>
@@ -168,6 +213,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   assistantContext = null,
   isLoading = false,
   isError = false,
+  queryError,
   isResponding = false,
   onReloadContext,
   onRespond,
@@ -175,6 +221,25 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
 }) => {
   const { t } = useTranslation(["option", "common"])
   const inRouterContext = useInRouterContext()
+
+  const classifiedQueryError = React.useMemo(() => {
+    if (!isError || !queryError) return null
+    const kind = classifyAssistantError(queryError)
+    if (kind === "network") {
+      return t("option:flashcards.studyAssistantNetworkError", {
+        defaultValue: "Could not reach the server. Check your connection and try again."
+      })
+    }
+    if (kind === "server") {
+      return t("option:flashcards.studyAssistantServerError", {
+        defaultValue: "The server returned an error. Please try again or check server logs."
+      })
+    }
+    return t("option:flashcards.studyAssistantNoLlm", {
+      defaultValue: "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+    })
+  }, [isError, queryError, t])
+
   const { speak, isSpeaking } = useTTS()
   const {
     supported,
@@ -282,11 +347,23 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
         setReloadedContext(latestContext)
       }
       return true
-    } catch {
+    } catch (err) {
+      const kind = classifyAssistantError(err)
       setAssistantError(
-        t("option:flashcards.studyAssistantUnavailable", {
-          defaultValue: "Study assistant unavailable"
-        })
+        kind === "network"
+          ? t("option:flashcards.studyAssistantNetworkError", {
+              defaultValue:
+                "Could not reach the server. Check your connection and try again."
+            })
+          : kind === "server"
+            ? t("option:flashcards.studyAssistantServerError", {
+                defaultValue:
+                  "The server returned an error. Please try again or check server logs."
+              })
+            : t("option:flashcards.studyAssistantNoLlm", {
+                defaultValue:
+                  "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+              })
       )
       return false
     } finally {
@@ -310,10 +387,22 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
           }
           return "conflict"
         }
+        const kind = classifyAssistantError(error)
         setAssistantError(
-          t("option:flashcards.studyAssistantUnavailable", {
-            defaultValue: "Study assistant unavailable"
-          })
+          kind === "network"
+            ? t("option:flashcards.studyAssistantNetworkError", {
+                defaultValue:
+                  "Could not reach the server. Check your connection and try again."
+              })
+            : kind === "server"
+              ? t("option:flashcards.studyAssistantServerError", {
+                  defaultValue:
+                    "The server returned an error. Please try again or check server logs."
+                })
+              : t("option:flashcards.studyAssistantNoLlm", {
+                  defaultValue:
+                    "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+                })
         )
         return "error"
       }
@@ -445,6 +534,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
             type="warning"
             title={
               assistantError ??
+              classifiedQueryError ??
               t("option:flashcards.studyAssistantUnavailable", {
                 defaultValue: "Study assistant unavailable"
               })
