@@ -122,6 +122,64 @@ export type StudyAssistantRespondResponse = {
   context_snapshot: Record<string, unknown>
 }
 
+export type StudyPackSourceType = "note" | "media" | "message"
+
+export type StudyPackSourceSelection = {
+  source_type: StudyPackSourceType
+  source_id: string
+  source_title?: string | null
+}
+
+export type StudyPackCreateJobRequest = {
+  title: string
+  workspace_id?: string | null
+  deck_mode?: "new" | null
+  source_items: StudyPackSourceSelection[]
+}
+
+export type StudyPackStatus = "active" | "superseded"
+
+export type StudyPackJobApiStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export type StudyPackSummaryResponse = {
+  id: number
+  workspace_id?: string | null
+  title: string
+  deck_id?: number | null
+  source_bundle_json: Record<string, unknown>
+  generation_options_json?: Record<string, unknown> | null
+  status: StudyPackStatus
+  superseded_by_pack_id?: number | null
+  created_at?: string | null
+  last_modified?: string | null
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type StudyPackJobSummaryResponse = {
+  id: number
+  status: StudyPackJobApiStatus
+  domain: string
+  queue: string
+  job_type: string
+}
+
+export type StudyPackJobAcceptedResponse = {
+  job: StudyPackJobSummaryResponse
+}
+
+export type StudyPackJobStatusResponse = {
+  job: StudyPackJobSummaryResponse
+  study_pack?: StudyPackSummaryResponse | null
+  error?: string | null
+}
+
 // Minimal client types based on openapi.json
 export type Deck = {
   id: number
@@ -565,6 +623,73 @@ export async function generateFlashcards(
     timeoutMs: FLASHCARD_GENERATION_TIMEOUT_MS
   })
 }
+
+const sanitizeStudyPackSourceItem = (
+  item: StudyPackSourceSelection
+): Pick<StudyPackSourceSelection, "source_type" | "source_id"> => ({
+  source_type: item.source_type,
+  source_id: item.source_id
+})
+
+const sanitizeStudyPackRequest = (
+  request: StudyPackCreateJobRequest
+): Omit<StudyPackCreateJobRequest, "source_items"> & {
+  deck_mode: "new"
+  source_items: Array<Pick<StudyPackSourceSelection, "source_type" | "source_id">>
+} => ({
+  title: request.title,
+  workspace_id: request.workspace_id,
+  deck_mode: "new",
+  source_items: request.source_items.map(sanitizeStudyPackSourceItem)
+})
+
+export async function createStudyPackJob(
+  request: StudyPackCreateJobRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackJobAcceptedResponse> {
+  return await bgRequest<StudyPackJobAcceptedResponse, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/study-packs/jobs",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: sanitizeStudyPackRequest(request),
+    abortSignal: options?.signal
+  })
+}
+
+export async function getStudyPackJob(
+  jobId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackJobStatusResponse> {
+  return await bgRequest<StudyPackJobStatusResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/study-packs/jobs/${jobId}` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function getStudyPack(
+  packId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackSummaryResponse> {
+  return await bgRequest<StudyPackSummaryResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/study-packs/${packId}` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function regenerateStudyPackJob(
+  packId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackJobAcceptedResponse> {
+  return await bgRequest<StudyPackJobAcceptedResponse, AllowedPath, "POST">({
+    path: `/api/v1/flashcards/study-packs/${packId}/regenerate` as AllowedPath,
+    method: "POST",
+    abortSignal: options?.signal
+  })
+}
+
+export const regenerateStudyPack = regenerateStudyPackJob
 
 // Import
 export async function getFlashcardsImportLimits(): Promise<any> {
