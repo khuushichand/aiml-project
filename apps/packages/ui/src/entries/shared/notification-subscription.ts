@@ -12,17 +12,13 @@ import { subscribeNotificationsStream, getUnreadCount } from "@/services/notific
 import type { NotificationStreamEvent } from "@/services/notifications"
 import { notify } from "@/services/background-helpers"
 import { createSafeStorage } from "@/utils/safe-storage"
+import { toUnreadCount } from "@/utils/notifications"
 
 const UNREAD_COUNT_KEY = "tldw:notifications:unreadCount"
 const SUBSCRIPTION_ACTIVE_KEY = "tldw:notifications:subscriptionActive"
 
 let unsubscribe: (() => void) | null = null
 let startInFlight: Promise<void> | null = null
-
-const toUnreadCount = (value: unknown): number => {
-  const next = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(next) ? next : 0
-}
 
 /**
  * Start listening for notifications from the server.
