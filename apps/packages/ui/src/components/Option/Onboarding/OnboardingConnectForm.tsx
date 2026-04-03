@@ -478,7 +478,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       case "cors_blocked":
         return t(
           "settings:onboarding.errors.cors",
-          "Cross-origin request blocked. If running the WebUI separately from the API, add your browser's origin to ALLOWED_ORIGINS in .env"
+          "Your browser can't reach the server due to security settings. If you manage the server, add your browser's origin to ALLOWED_ORIGINS in the server's .env file. Otherwise, ask your server administrator for help."
         )
       case "ssl_error":
         return t(
