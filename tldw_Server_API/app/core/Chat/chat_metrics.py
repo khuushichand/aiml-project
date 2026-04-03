@@ -12,6 +12,17 @@ from loguru import logger
 
 from ..Metrics.telemetry import get_telemetry_manager
 
+RUN_FIRST_INELIGIBLE_REASONS = frozenset(
+    {
+        "no_effective_tools",
+        "no_tools",
+        "provider_not_in_rollout_allowlist",
+        "rollout_off",
+        "run_missing",
+        "run_missing_after_filtering",
+    }
+)
+
 
 class ChatMetricLabels(Enum):
     """Standard labels for chat metrics."""
@@ -797,10 +808,7 @@ class ChatMetricsCollector:
         "deepseek", "cohere", "huggingface", "openrouter",
         "local", "custom_openai", "unknown",
     })
-    _KNOWN_INELIGIBLE_REASONS: frozenset[str] = frozenset({
-        "none", "no_tools", "rollout_off", "run_missing",
-        "provider_not_in_rollout_allowlist",
-    })
+    _KNOWN_INELIGIBLE_REASONS: frozenset[str] = frozenset({"none", *RUN_FIRST_INELIGIBLE_REASONS})
     _KNOWN_TOOLS: frozenset[str] = frozenset({
         "run", "unknown",
     })
@@ -813,7 +821,6 @@ class ChatMetricsCollector:
     def _bound_label(value: str, known: frozenset[str]) -> str:
         candidate = str(value or "").strip().lower() or "unknown"
         return candidate if candidate in known else "other"
-
     def _run_first_base_labels(
         self,
         *,
@@ -839,6 +846,18 @@ class ChatMetricsCollector:
             ),
         }
 
+    def _safe_counter_add(
+        self,
+        counter: Any,
+        value: int,
+        labels: dict[str, str],
+        metric_name: str,
+    ) -> None:
+        """Emit a counter update without allowing telemetry failures to escape."""
+        try:
+            counter.add(value, labels)
+        except Exception as metrics_error:
+            logger.debug("{} emission failed", metric_name, exc_info=metrics_error)
     def track_run_first_rollout(
         self,
         *,
@@ -859,7 +878,12 @@ class ChatMetricsCollector:
             eligible=eligible,
             ineligible_reason=ineligible_reason,
         )
-        self.metrics.run_first_rollout.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_rollout,
+            1,
+            labels,
+            "chat_run_first_rollout_total",
+        )
 
     def track_run_first_first_tool(
         self,
@@ -883,7 +907,12 @@ class ChatMetricsCollector:
             ineligible_reason=ineligible_reason,
         )
         labels[ChatMetricLabels.FIRST_TOOL.value] = self._bound_label(first_tool, self._KNOWN_TOOLS)
-        self.metrics.run_first_first_tool.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_first_tool,
+            1,
+            labels,
+            "chat_run_first_first_tool_total",
+        )
 
     def track_run_first_fallback_after_run(
         self,
@@ -907,7 +936,12 @@ class ChatMetricsCollector:
             ineligible_reason=ineligible_reason,
         )
         labels[ChatMetricLabels.FALLBACK_TOOL.value] = self._bound_label(fallback_tool, self._KNOWN_TOOLS)
-        self.metrics.run_first_fallback_after_run.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_fallback_after_run,
+            1,
+            labels,
+            "chat_run_first_fallback_after_run_total",
+        )
 
     def track_run_first_completion_proxy(
         self,
@@ -931,7 +965,12 @@ class ChatMetricsCollector:
             ineligible_reason=ineligible_reason,
         )
         labels[ChatMetricLabels.OUTCOME.value] = self._bound_label(outcome, self._KNOWN_OUTCOMES)
-        self.metrics.run_first_completion_proxy.add(1, labels)
+        self._safe_counter_add(
+            self.metrics.run_first_completion_proxy,
+            1,
+            labels,
+            "chat_run_first_completion_proxy_total",
+        )
 
     # ---------------- Moderation helpers ----------------
     def track_moderation_input(self, user_id: str, action: str, category: str = "default"):

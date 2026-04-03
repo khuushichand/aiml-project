@@ -260,4 +260,12 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     fireEvent.click(screen.getByTestId("watchlists-orientation-restore"))
     expect(screen.getByTestId("watchlists-orientation-title")).toHaveTextContent("Activity")
   })
+
+  it("exposes an accessible label on the watchlists docs help icon", () => {
+    render(<WatchlistsPlaygroundPage />)
+
+    expect(
+      screen.getByRole("link", { name: "Open watchlists documentation" })
+    ).toHaveAttribute("data-testid", "watchlists-help-icon")
+  })
 })
