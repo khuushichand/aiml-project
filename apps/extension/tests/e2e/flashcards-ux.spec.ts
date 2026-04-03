@@ -136,9 +136,9 @@ test.describe("Flashcards workspace UX", () => {
     await fab.click()
 
     const drawer = page
-      .locator(".ant-drawer")
+      .locator(".ant-drawer.ant-drawer-open")
       .filter({ has: page.getByText(/Create Flashcard/i) })
-      .first()
+      .last()
     await expect(drawer).toBeVisible()
     return drawer
   }
@@ -557,8 +557,16 @@ test.describe("Flashcards workspace UX", () => {
       mark("cards tab: create")
       const createdFront = `${baseName} UI: Define recursion`
       const createdBack = `${baseName} UI: A function that calls itself`
+      const addAnotherFront = `${baseName} UI: Tail recursion`
+      const addAnotherBack = `${baseName} UI: Recursion with optimized tail calls`
       const createDrawer = await openCreateDrawer(page)
       mark("cards tab: create drawer open")
+      await expect(
+        createDrawer.getByText(/Existing cards in this deck/i)
+      ).toHaveCount(0)
+      const referenceToggle = createDrawer.getByRole("button", {
+        name: /Existing cards in this deck/i
+      })
       const drawerDeckSelected = await selectDeckInDrawer(
         page,
         createDrawer,
@@ -569,6 +577,13 @@ test.describe("Flashcards workspace UX", () => {
       } else {
         mark("cards tab: deck option not visible", fixture.deckName)
       }
+      await expect(referenceToggle).toBeVisible()
+      await referenceToggle.click()
+      const referenceSearch = createDrawer.getByPlaceholder(/Search this deck/i)
+      const referenceSearchTerm = fixture.cards[0].front
+      await expect(referenceSearch).toBeVisible()
+      await expect(createDrawer.getByText(fixture.cards[1].front)).toBeVisible()
+      await expect(createDrawer.getByText(fixture.cards[1].back)).toBeVisible()
       const createFrontField = await pick(
         createDrawer.getByLabel(/Front/i),
         createDrawer.getByPlaceholder(/Question or prompt/i)
@@ -577,6 +592,7 @@ test.describe("Flashcards workspace UX", () => {
         createDrawer.getByLabel(/Back/i),
         createDrawer.getByPlaceholder(/Answer/i)
       )
+      await referenceSearch.fill(referenceSearchTerm)
       mark("cards tab: fill create form")
       await createFrontField.fill(createdFront)
       await createBackField.fill(createdBack)
@@ -584,6 +600,80 @@ test.describe("Flashcards workspace UX", () => {
       await createDrawer.getByRole("button", { name: /^Create$/i }).click()
       mark("cards tab: wait for drawer close")
       await waitForDrawerToCloseOrError(page, createDrawer, "Create flashcard")
+      mark("cards tab: create drawer closed")
+
+      mark("cards tab: reopen create drawer for add another")
+      const reopenedCreateDrawer = await openCreateDrawer(page)
+      await expect(
+        reopenedCreateDrawer.getByText(/Existing cards in this deck/i)
+      ).toHaveCount(0)
+      const reopenedDeckSelected = await selectDeckInDrawer(
+        page,
+        reopenedCreateDrawer,
+        fixture.deckName
+      )
+      if (reopenedDeckSelected) {
+        mark("cards tab: drawer reopened deck selected", fixture.deckName)
+      } else {
+        mark("cards tab: drawer reopened deck option not visible", fixture.deckName)
+      }
+      const reopenedReferenceToggle = reopenedCreateDrawer.getByRole("button", {
+        name: /Existing cards in this deck/i
+      })
+      const reopenedDeckField = reopenedCreateDrawer.getByRole("combobox", {
+        name: /Deck/i
+      })
+      await expect(reopenedReferenceToggle).toBeVisible()
+      await reopenedReferenceToggle.click()
+      const reopenedReferenceSearch = reopenedCreateDrawer.getByPlaceholder(
+        /Search this deck/i
+      )
+      await expect(reopenedReferenceSearch).toHaveValue("")
+      await reopenedReferenceSearch.fill(referenceSearchTerm)
+      const reopenedFrontField = await pick(
+        reopenedCreateDrawer.getByLabel(/Front/i),
+        reopenedCreateDrawer.getByPlaceholder(/Question or prompt/i)
+      )
+      const reopenedBackField = await pick(
+        reopenedCreateDrawer.getByLabel(/Back/i),
+        reopenedCreateDrawer.getByPlaceholder(/Answer/i)
+      )
+      await reopenedFrontField.fill(addAnotherFront)
+      await reopenedBackField.fill(addAnotherBack)
+      await reopenedCreateDrawer
+        .getByRole("button", { name: /^Create & Add Another$/i })
+        .click()
+      await expect(reopenedCreateDrawer).toBeVisible()
+      await expect(reopenedFrontField).toHaveValue("")
+      await expect(reopenedBackField).toHaveValue("")
+      await expect(reopenedDeckField).toContainText(fixture.deckName)
+      await expect(reopenedReferenceSearch).toHaveValue(referenceSearchTerm)
+      await expect(reopenedCreateDrawer.getByText(addAnotherFront)).toBeVisible()
+      await expect(reopenedCreateDrawer.getByText(addAnotherBack)).toBeVisible()
+
+      mark("cards tab: close and reopen to verify search reset")
+      await reopenedCreateDrawer.getByRole("button", { name: /Cancel/i }).click()
+      await expect(reopenedCreateDrawer).toBeHidden()
+      const resetCreateDrawer = await openCreateDrawer(page)
+      const resetDeckSelected = await selectDeckInDrawer(
+        page,
+        resetCreateDrawer,
+        fixture.deckName
+      )
+      if (resetDeckSelected) {
+        mark("cards tab: drawer reopened after add another", fixture.deckName)
+      }
+      await expect(
+        resetCreateDrawer.getByRole("button", {
+          name: /Existing cards in this deck/i
+        })
+      ).toBeVisible()
+      await resetCreateDrawer
+        .getByRole("button", { name: /Existing cards in this deck/i })
+        .click()
+      await expect(resetCreateDrawer.getByPlaceholder(/Search this deck/i)).toHaveValue("")
+      await resetCreateDrawer.getByRole("button", { name: /Cancel/i }).click()
+      await expect(resetCreateDrawer).toBeHidden()
       mark("cards tab: create drawer closed")
 
       mark("cards tab")
