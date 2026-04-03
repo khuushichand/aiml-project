@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ImportExportTab } from "../ImportExportTab"
 import {
@@ -212,6 +212,11 @@ describe("ImportExportTab LLM provider gating", () => {
 
     render(<ImportExportTab />)
 
+    // Seed sourceText so the only disable reason is missing LLM providers
+    fireEvent.change(screen.getByTestId("flashcards-generate-text"), {
+      target: { value: "Some study material for testing" }
+    })
+
     const generateButton = screen.getByTestId("flashcards-generate-button")
     expect(generateButton).toBeDisabled()
   })
@@ -230,9 +235,16 @@ describe("ImportExportTab LLM provider gating", () => {
 
     render(<ImportExportTab />)
 
+    // Seed sourceText so button enable state reflects LLM availability
+    fireEvent.change(screen.getByTestId("flashcards-generate-text"), {
+      target: { value: "Some study material for testing" }
+    })
+
     expect(
       screen.queryByTestId("flashcards-generate-no-llm-banner")
     ).not.toBeInTheDocument()
+
+    expect(screen.getByTestId("flashcards-generate-button")).not.toBeDisabled()
   })
 
   it("treats query errors optimistically (no banner shown)", () => {
