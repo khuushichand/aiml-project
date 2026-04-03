@@ -436,6 +436,13 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         setShowAnswer(false)
         answerStartTimeRef.current = null
         setReviewedCount((c) => c + 1)
+        if (reviewedCount === 0) {
+          message.success(
+            t("option:flashcards.milestoneFirstReview", {
+              defaultValue: "First card reviewed! Review daily for best results."
+            })
+          )
+        }
         if (reviewOverrideCard) {
           onClearOverride?.()
         }
