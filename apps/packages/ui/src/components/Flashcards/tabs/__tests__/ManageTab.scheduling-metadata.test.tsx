@@ -20,10 +20,13 @@ import {
   getManageServerOrderBy
 } from "../../hooks"
 
-const { trackShortcutHintTelemetryMock, markdownWithBoundaryMock } = vi.hoisted(() => ({
+const { trackShortcutHintTelemetryMock, markdownSnippetMock, markdownWithBoundaryMock } = vi.hoisted(() => ({
   trackShortcutHintTelemetryMock: vi.fn().mockResolvedValue(undefined),
+  markdownSnippetMock: vi.fn(({ content }: { content: string }) => (
+    <div data-testid="markdown-snippet">{content}</div>
+  )),
   markdownWithBoundaryMock: vi.fn(({ content }: { content: string }) => (
-    <div data-testid="markdown-boundary">{content}</div>
+    <div data-testid="markdown-with-boundary">{content}</div>
   ))
 }))
 
@@ -103,6 +106,7 @@ vi.mock("../../hooks", () => ({
 }))
 
 vi.mock("../../components", () => ({
+  FlashcardMarkdownSnippet: (props: { content: string }) => markdownSnippetMock(props),
   MarkdownWithBoundary: (props: { content: string }) => markdownWithBoundaryMock(props),
   FlashcardActionsMenu: () => <div />,
   FlashcardEditDrawer: () => null,
@@ -164,6 +168,7 @@ describe("ManageTab scheduling metadata visibility", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
+    markdownSnippetMock.mockClear()
     markdownWithBoundaryMock.mockClear()
     await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
     vi.mocked(useDecksQuery).mockReturnValue({
@@ -279,7 +284,7 @@ describe("ManageTab scheduling metadata visibility", () => {
     )
 
     expect(
-      markdownWithBoundaryMock.mock.calls.some(
+      markdownSnippetMock.mock.calls.some(
         ([props]) => (props as { content?: string }).content === markdownFront
       )
     ).toBe(true)
@@ -303,7 +308,7 @@ describe("ManageTab scheduling metadata visibility", () => {
     expect(screen.getByText("Media #42")).toBeInTheDocument()
   }, 15000)
 
-  it("uses the markdown renderer for expanded front-and-answer previews", () => {
+  it("uses lightweight snippets in expanded rows and the full renderer for the answer preview", () => {
     const markdownFront = "## Heading"
     const markdownBack = "*Answer* details"
     vi.mocked(useManageQuery).mockReturnValue({
@@ -333,8 +338,13 @@ describe("ManageTab scheduling metadata visibility", () => {
     fireEvent.click(screen.getByTestId(`flashcard-item-${sampleCard.uuid}`))
 
     expect(
-      markdownWithBoundaryMock.mock.calls.some(
+      markdownSnippetMock.mock.calls.some(
         ([props]) => (props as { content?: string }).content === markdownFront
+      )
+    ).toBe(true)
+    expect(
+      markdownSnippetMock.mock.calls.some(
+        ([props]) => (props as { content?: string }).content === markdownBack
       )
     ).toBe(true)
     expect(

@@ -49,7 +49,13 @@ import {
   type DueStatus,
   type ManageSortBy
 } from "../hooks"
-import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
+import {
+  FlashcardActionsMenu,
+  FlashcardCreateDrawer,
+  FlashcardEditDrawer,
+  MarkdownWithBoundary,
+  FlashcardMarkdownSnippet
+} from "../components"
 import { FlashcardDocumentView } from "../components/FlashcardDocumentView"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
@@ -79,8 +85,6 @@ const { Text } = Typography
 const BULK_MUTATION_CHUNK_SIZE = 50
 const DELETE_UNDO_SECONDS = 30
 const DELETE_UNDO_MS = DELETE_UNDO_SECONDS * 1000
-const INLINE_MARKDOWN_SNIPPET_CLASS =
-  "[&_p]:m-0 [&_ul]:m-0 [&_ol]:m-0 [&_pre]:m-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_h1]:m-0 [&_h2]:m-0 [&_h3]:m-0 [&_h4]:m-0 [&_h5]:m-0 [&_h6]:m-0"
 
 type PendingDeletion = {
   card: Flashcard
@@ -2071,10 +2075,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       )}
                       <div className="min-w-0 flex-1 text-sm text-text">
                         <div className="line-clamp-1">
-                          <MarkdownWithBoundary
+                          <FlashcardMarkdownSnippet
                             content={item.front}
-                            size="xs"
-                            className={INLINE_MARKDOWN_SNIPPET_CLASS}
                           />
                         </div>
                       </div>
@@ -2153,20 +2155,16 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       <div className="flex min-w-0 items-start gap-2">
                         <div className="min-w-0 flex-1 text-sm font-semibold text-text">
                           <div className="line-clamp-1">
-                            <MarkdownWithBoundary
+                            <FlashcardMarkdownSnippet
                               content={item.front}
-                              size="xs"
-                              className={INLINE_MARKDOWN_SNIPPET_CLASS}
                             />
                           </div>
                         </div>
                         <span className="text-text-subtle">-</span>
                         <div className="min-w-0 flex-1 text-sm text-text-muted">
                           <div className="line-clamp-1">
-                            <MarkdownWithBoundary
+                            <FlashcardMarkdownSnippet
                               content={item.back}
-                              size="xs"
-                              className={INLINE_MARKDOWN_SNIPPET_CLASS}
                             />
                           </div>
                         </div>
