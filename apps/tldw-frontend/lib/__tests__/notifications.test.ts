@@ -143,6 +143,47 @@ describe("web notifications adapter", () => {
     })
   })
 
+  it("uses the web apiClient transport for notification preferences", async () => {
+    const initialPreferences = {
+      user_id: "user-1",
+      reminder_enabled: true,
+      job_completed_enabled: true,
+      job_failed_enabled: true,
+      updated_at: "2026-04-02T00:00:00Z"
+    }
+    const updatedPreferences = {
+      ...initialPreferences,
+      job_failed_enabled: false,
+      updated_at: "2026-04-02T00:01:00Z"
+    }
+    mocks.apiGet.mockResolvedValueOnce(initialPreferences)
+    mocks.apiPatch.mockResolvedValueOnce(updatedPreferences)
+
+    await expect(getNotificationPreferences()).resolves.toEqual(initialPreferences)
+    await expect(
+      updateNotificationPreferences({ job_failed_enabled: false })
+    ).resolves.toEqual(updatedPreferences)
+
+    expect(mocks.buildAuthHeaders).toHaveBeenCalledWith("GET")
+    expect(mocks.buildAuthHeaders).toHaveBeenCalledWith("PATCH")
+    expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/preferences", {
+      headers: {
+        Authorization: "Bearer web-token",
+        "X-CSRF-Token": "csrf-token"
+      },
+      withCredentials: false
+    })
+    expect(mocks.apiPatch).toHaveBeenCalledWith("/notifications/preferences", {
+      job_failed_enabled: false
+    }, {
+      headers: {
+        Authorization: "Bearer web-token",
+        "X-CSRF-Token": "csrf-token"
+      },
+      withCredentials: false
+    })
+  })
+
   it("omits cookie credentials for the notification stream when header auth is present", async () => {
     const unsubscribe = subscribeNotificationsStream({
       after: 42,

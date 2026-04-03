@@ -4476,9 +4476,24 @@ class CollectionsDatabase:
             "pending",
             None,
         )
-        res = self._execute_insert(q, params)
-        new_id = self._extract_lastrowid(res)
-        if not new_id and dedupe_key:
+        duplicate_dedupe_error = False
+        try:
+            res = self._execute_insert(q, params)
+        except DatabaseError as exc:
+            duplicate_dedupe_error = bool(
+                dedupe_key
+                and (
+                    "unique constraint failed: user_notifications.user_id, user_notifications.dedupe_key"
+                    in str(exc).lower()
+                    or "duplicate key value violates unique constraint" in str(exc).lower()
+                    or "ux_user_notifications_user_dedupe" in str(exc).lower()
+                )
+            )
+            if not duplicate_dedupe_error:
+                raise
+            res = None
+        new_id = self._extract_lastrowid(res) if res is not None else None
+        if (duplicate_dedupe_error or not new_id) and dedupe_key:
             existing = self.backend.execute(
                 "SELECT * FROM user_notifications WHERE user_id = ? AND dedupe_key = ? ORDER BY id DESC LIMIT 1",
                 (self.user_id, dedupe_key),

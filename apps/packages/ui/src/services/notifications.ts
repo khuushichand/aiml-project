@@ -42,6 +42,20 @@ export type NotificationCancelSnoozeResponse = {
   deleted_tasks: number
 }
 
+export type NotificationPreferences = {
+  user_id: string
+  reminder_enabled: boolean
+  job_completed_enabled: boolean
+  job_failed_enabled: boolean
+  updated_at: string
+}
+
+export type NotificationPreferencesUpdate = {
+  reminder_enabled?: boolean
+  job_completed_enabled?: boolean
+  job_failed_enabled?: boolean
+}
+
 export type NotificationStreamEvent = {
   event: string
   id?: number
@@ -293,6 +307,24 @@ export async function snoozeNotification(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: { minutes }
+  })
+}
+
+export async function getNotificationPreferences(): Promise<NotificationPreferences> {
+  return bgRequest<NotificationPreferences>({
+    path: "/api/v1/notifications/preferences" as any,
+    method: "GET"
+  })
+}
+
+export async function updateNotificationPreferences(
+  update: NotificationPreferencesUpdate
+): Promise<NotificationPreferences> {
+  return bgRequest<NotificationPreferences>({
+    path: "/api/v1/notifications/preferences" as any,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: update
   })
 }
 

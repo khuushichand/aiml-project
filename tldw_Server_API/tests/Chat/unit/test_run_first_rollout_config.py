@@ -8,7 +8,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_resolve_chat_run_first_rollout_mode_defaults_off(
+def test_resolve_chat_run_first_rollout_mode_defaults_off_without_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tldw_Server_API.app.core import config
@@ -19,12 +19,11 @@ def test_resolve_chat_run_first_rollout_mode_defaults_off(
     monkeypatch.delenv("ACP_RUN_FIRST_ROLLOUT_MODE", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
-
     monkeypatch.setattr(config, "load_comprehensive_config", lambda: configparser.ConfigParser())
 
     assert config.resolve_chat_run_first_rollout_mode() == "off"
     assert config.resolve_chat_run_first_provider_allowlist() == []
-    assert config.resolve_chat_run_first_presentation_variant() == "chat_phase2a_v1"
+    assert config.resolve_chat_run_first_presentation_variant() == "chat_phase2b_v1"
 
 
 def test_resolve_chat_run_first_provider_allowlist_parses_csv(
@@ -56,6 +55,16 @@ def test_resolve_chat_run_first_rollout_mode_uses_chat_module_config(
     monkeypatch.setattr(config, "load_comprehensive_config", lambda: parser)
 
     assert config.resolve_chat_run_first_rollout_mode() == "gated"
+
+
+def test_resolve_chat_run_first_rollout_mode_accepts_default_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app.core import config
+
+    monkeypatch.setenv("CHAT_RUN_FIRST_ROLLOUT_MODE", "default_on")
+
+    assert config.resolve_chat_run_first_rollout_mode() == "default_on"
 
 
 def test_resolve_chat_run_first_provider_allowlist_uses_chat_module_config(
@@ -93,3 +102,34 @@ def test_resolve_chat_run_first_presentation_variant_uses_chat_module_config(
     monkeypatch.setattr(config, "load_comprehensive_config", lambda: parser)
 
     assert config.resolve_chat_run_first_presentation_variant() == "chat_phase2a_v2"
+
+
+def test_resolve_run_first_cohort_label_maps_default_on_out_of_cohort() -> None:
+    from tldw_Server_API.app.core import config
+
+    assert config.resolve_run_first_cohort_label(
+        "default_on",
+        eligible=False,
+        ineligible_reason="provider_not_in_rollout_allowlist",
+    ) == "out_of_cohort"
+
+
+def test_resolve_run_first_cohort_label_maps_gated_allowlist_miss_to_out_of_cohort() -> None:
+    from tldw_Server_API.app.core import config
+
+    assert config.resolve_run_first_cohort_label(
+        "gated",
+        eligible=False,
+        ineligible_reason="provider_not_in_rollout_allowlist",
+    ) == "out_of_cohort"
+
+
+def test_run_first_resolvers_have_docstrings() -> None:
+    from tldw_Server_API.app.core import config
+
+    assert config.resolve_chat_run_first_rollout_mode.__doc__
+    assert config.resolve_chat_run_first_provider_allowlist.__doc__
+    assert config.resolve_chat_run_first_presentation_variant.__doc__
+    assert config.resolve_acp_run_first_rollout_mode.__doc__
+    assert config.resolve_acp_run_first_provider_allowlist.__doc__
+    assert config.resolve_acp_run_first_presentation_variant.__doc__

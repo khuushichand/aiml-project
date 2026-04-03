@@ -36,6 +36,8 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
     VoiceCommandResponse,
     VoiceCommandToggleRequest,
     VoiceCommandUsage,
+    VoiceCommandValidationResponse,
+    VoiceCommandValidationStep,
     VoiceSessionInfo,
     VoiceSessionListResponse,
     VoiceWorkflowTemplateInfo,
@@ -598,6 +600,61 @@ async def toggle_voice_command(
     ) or updated
 
     return _voice_command_to_info(saved)
+
+
+@router.post(
+    "/commands/{command_id}/validate",
+    response_model=VoiceCommandValidationResponse,
+    summary="Validate voice command (dry run)",
+    description=(
+        "Validate a voice command's action configuration without executing it. "
+        "Checks config schema, target existence (MCP tool, workflow template, "
+        "custom handler), and trigger phrases."
+    ),
+)
+async def validate_voice_command(
+    command_id: str,
+    persona_id: Optional[str] = Query(None, description="Optional persona scope"),
+    current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> VoiceCommandValidationResponse:
+    """Dry-run validation: check config without executing the command."""
+    registry = get_voice_command_registry()
+    registry.load_defaults()
+
+    command = get_voice_command_db(db, command_id, current_user.id, persona_id=persona_id)
+    if not command:
+        command = registry.get_command(command_id, current_user.id, persona_id=persona_id)
+
+    if not command:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Command not found",
+        )
+
+    if command.user_id not in (0, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to validate this command",
+        )
+
+    router_instance = get_voice_command_router()
+    raw_steps = await router_instance.validate_command_config(
+        command,
+        db=db,
+        persona_id=persona_id,
+    )
+
+    steps = [VoiceCommandValidationStep(**s) for s in raw_steps]
+    all_passed = all(s.passed for s in steps)
+
+    return VoiceCommandValidationResponse(
+        command_id=command.id,
+        command_name=command.name,
+        action_type=_action_type_to_voice(command.action_type),
+        valid=all_passed,
+        steps=steps,
+    )
 
 
 @router.get(

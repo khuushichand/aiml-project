@@ -326,6 +326,86 @@ async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation
 
 
 @pytest.mark.asyncio
+async def test_mcp_adapter_send_prompt_llm_driven_tracks_default_on_out_of_cohort(
+    mock_transport,
+    event_callback,
+):
+    """Default-on ACP sessions should keep fallback tools visible but emit out_of_cohort when filtered by allowlist."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
+
+    adapter = MCPAdapter()
+
+    mock_transport.list_tools.return_value = [
+        {
+            "name": "search",
+            "description": "Search documents",
+            "inputSchema": {"type": "object"},
+        },
+        {
+            "name": "run",
+            "description": "Execute governed commands",
+            "inputSchema": {"type": "object"},
+        },
+    ]
+
+    mock_llm_caller = AsyncMock()
+    mock_llm_response = AsyncMock()
+    mock_llm_response.text = "LLM final answer"
+    mock_llm_response.tool_calls = []
+    mock_llm_caller.call = AsyncMock(return_value=mock_llm_response)
+
+    mock_tool_gate = AsyncMock()
+    rollout_calls = []
+
+    config = _make_config(event_callback, protocol_config={
+        "mcp_transport": "stdio",
+        "command": "echo",
+        "mcp_orchestration": "llm_driven",
+        "llm_caller": mock_llm_caller,
+        "tool_gate": mock_tool_gate,
+        "mcp_llm_provider": "openai",
+        "mcp_llm_model": "gpt-4o-mini",
+    })
+
+    with patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.create_transport",
+        return_value=mock_transport,
+    ), patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.resolve_acp_run_first_rollout_mode",
+        return_value="default_on",
+    ), patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.resolve_acp_run_first_provider_allowlist",
+        return_value=["anthropic:claude-3-7-sonnet"],
+    ), patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.resolve_acp_run_first_presentation_variant",
+        return_value="acp_phase2b_v1",
+    ), patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_runners.acp_metrics.record_run_first_rollout",
+        side_effect=lambda **kwargs: rollout_calls.append(kwargs),
+    ):
+        await adapter.connect(config)
+        await adapter.send_prompt([{"role": "user", "content": "hello"}])
+
+    messages_arg, tools_arg = mock_llm_caller.call.await_args.args
+    assert all(
+        not (
+            message.get("role") == "system"
+            and "ACP run-first guidance" in str(message.get("content") or "")
+        )
+        for message in messages_arg
+    )
+    assert [tool["function"]["name"] for tool in tools_arg] == ["search", "run"]
+    assert rollout_calls == [
+        {
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2b_v1",
+            "cohort": "out_of_cohort",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": False,
+            "ineligible_reason": "provider_not_in_rollout_allowlist",
+        }
+    ]
 async def test_mcp_adapter_send_prompt_llm_driven_requires_llm_caller_and_tool_gate(
     mock_transport,
     event_callback,

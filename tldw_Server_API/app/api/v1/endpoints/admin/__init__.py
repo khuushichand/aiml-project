@@ -140,7 +140,6 @@ router.include_router(admin_identity_providers_endpoints.router)
 router.include_router(admin_storage_quotas_endpoints.router)
 router.include_router(admin_tenant_provisioning_endpoints.router)
 router.include_router(admin_impersonation_endpoints.router)
-router.include_router(admin_webhooks_endpoints.router)
 
 
 # Backend detection now standardized via core AuthNZ database helper

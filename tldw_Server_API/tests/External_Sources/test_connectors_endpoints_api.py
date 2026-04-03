@@ -2,6 +2,7 @@ import os
 from typing import Tuple
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncWebhookSubscription
@@ -756,6 +757,51 @@ def test_start_authorize_zotero_rejects_insecure_non_https_redirect_base(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must use https unless it targets localhost"
+
+
+@pytest.mark.integration
+def test_start_authorize_zotero_treats_whitespace_redirect_base_as_unconfigured(
+    connectors_client,
+    monkeypatch,
+):
+    base_client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            raise AssertionError("temporary credentials must not be requested when redirect base is blank")
+
+        def authorize_url(self, *a, **kw):
+            raise AssertionError("authorize_url must not be reached when redirect base is blank")
+
+    monkeypatch.setenv("CONNECTOR_REDIRECT_BASE_URL", "   ")
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    client = TestClient(base_client.app, base_url="http://localhost")
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must be configured before enabling OAuth connectors"
+
+
+def test_resolve_webhook_callback_base_treats_whitespace_redirect_base_as_missing(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    monkeypatch.setenv("CONNECTOR_REDIRECT_BASE_URL", "   ")
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        ep._resolve_webhook_callback_base(None, type("Conn", (), {"redirect_base": ""})())
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "CONNECTOR_REDIRECT_BASE_URL must be configured before enabling webhook subscriptions"
 
 
 @pytest.mark.integration

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import PlainTextResponse
 from loguru import logger
+from pydantic import BaseModel, EmailStr, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -29,6 +30,44 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.services import admin_users_service
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    create_invitation as svc_create_invitation,
+    list_invitations as svc_list_invitations,
+    resend_invitation as svc_resend_invitation,
+    revoke_invitation as svc_revoke_invitation,
+    update_invitation_email_status as svc_update_invitation_email_status,
+)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Invitation Schemas
+# ──────────────────────────────────────────────────────────────────────────────
+
+class InviteUserRequest(BaseModel):
+    email: EmailStr
+    role: str = Field(default="user", pattern=r"^(user|admin|service|viewer)$")
+    expiry_days: int = Field(default=7, ge=1, le=365)
+
+
+class InvitationItem(BaseModel):
+    id: str
+    email: str
+    role: str
+    status: str
+    token: str | None = None
+    invited_by: str | None = None
+    created_at: str | None = None
+    expires_at: str | None = None
+    accepted_at: str | None = None
+    email_sent: bool = False
+    email_error: str | None = None
+    resend_count: int = 0
+    last_resent_at: str | None = None
+
+
+class InvitationListResponse(BaseModel):
+    items: list[InvitationItem]
+    total: int
 
 router = APIRouter()
 
@@ -59,6 +98,7 @@ async def list_users(
     role: str | None = None,
     admin_capable: bool = Query(False, description="Restrict to admin-capable assignees"),
     is_active: bool | None = None,
+    mfa_enabled: bool | None = Query(None, description="Filter by MFA status: true=enabled, false=disabled"),
     search: str | None = None,
     org_id: int | None = Query(None, description="Restrict to a specific organization"),
 ) -> UserListResponse:
@@ -102,6 +142,7 @@ async def list_users(
             role=role,
             admin_capable=admin_capable,
             is_active=is_active,
+            mfa_enabled=mfa_enabled,
             search=search,
             org_id=org_id,
         )
@@ -171,6 +212,217 @@ async def export_users(
         logger.error("Failed to export users: {}", exc)
         raise HTTPException(status_code=500, detail="Failed to export users") from exc
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# User Invitations
+# NOTE: These static routes MUST be registered before /users/{user_id}
+# to avoid FastAPI matching "invite" or "invitations" as a user_id.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post("/users/invite", response_model=InvitationItem)
+async def invite_user(
+    payload: InviteUserRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> InvitationItem:
+    """
+    Create a user invitation and optionally send an invite email.
+
+    The invitation is always created even if email delivery fails.
+    Check `email_sent` in the response to determine delivery status.
+    """
+    actor = getattr(principal, "username", None) or str(getattr(principal, "user_id", "admin"))
+
+    try:
+        invitation = svc_create_invitation(
+            email=payload.email,
+            role=payload.role,
+            invited_by=actor,
+            expiry_days=payload.expiry_days,
+        )
+    except ValueError as exc:
+        error_key = str(exc)
+        if error_key == "duplicate_pending_invitation":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A pending invitation already exists for this email address.",
+            ) from exc
+        if error_key == "too_many_pending_invitations":
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many pending invitations. Please revoke some before creating new ones.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid invitation parameters: {error_key}",
+        ) from exc
+
+    # Attempt email delivery (best-effort)
+    email_sent = False
+    email_error: str | None = None
+    try:
+        from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
+        email_service = get_email_service()
+        email_sent = await email_service.send_user_invitation_email(
+            to_email=invitation["email"],
+            invite_token=invitation["token"],
+            role=invitation["role"],
+            expiry_days=payload.expiry_days,
+        )
+        if not email_sent:
+            email_error = "Email delivery returned false"
+    except Exception as exc:
+        email_error = str(exc)
+        logger.warning("Failed to send invitation email to {}: {}", invitation["email"], exc)
+
+    svc_update_invitation_email_status(
+        invitation_id=invitation["id"],
+        email_sent=email_sent,
+        email_error=email_error,
+    )
+
+    invitation["email_sent"] = email_sent
+    invitation["email_error"] = email_error
+
+    logger.info(
+        "User invitation created for {} by {} (email_sent={})",
+        invitation["email"],
+        actor,
+        email_sent,
+    )
+
+    return InvitationItem(**{
+        k: v for k, v in invitation.items() if k in InvitationItem.model_fields
+    })
+
+
+@router.get("/users/invitations", response_model=InvitationListResponse)
+async def list_user_invitations(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    invitation_status: str | None = Query(None, alias="status"),
+) -> InvitationListResponse:
+    """List all user invitations with optional status filter."""
+    invitations = svc_list_invitations(status=invitation_status)
+    items = []
+    for inv in invitations:
+        try:
+            items.append(InvitationItem(**{
+                k: v for k, v in inv.items() if k in InvitationItem.model_fields
+            }))
+        except Exception:
+            continue
+    return InvitationListResponse(items=items, total=len(items))
+
+
+@router.delete("/users/invitations/{invitation_id}", response_model=InvitationItem)
+async def revoke_user_invitation(
+    invitation_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> InvitationItem:
+    """Revoke a pending invitation."""
+    try:
+        result = svc_revoke_invitation(invitation_id=invitation_id)
+    except ValueError as exc:
+        error_key = str(exc)
+        if error_key == "not_found":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Invitation not found.",
+            ) from exc
+        if error_key == "not_pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only pending invitations can be revoked.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    actor = getattr(principal, "username", None) or str(getattr(principal, "user_id", "admin"))
+    logger.info("Invitation {} revoked by {}", invitation_id, actor)
+
+    return InvitationItem(**{
+        k: v for k, v in result.items() if k in InvitationItem.model_fields
+    })
+
+
+@router.post("/users/invitations/{invitation_id}/resend", response_model=InvitationItem)
+async def resend_user_invitation(
+    invitation_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> InvitationItem:
+    """Resend a pending invitation with a new token and extended expiry.
+
+    Rate-limited to 3 resends per invitation.
+    """
+    try:
+        invitation = svc_resend_invitation(invitation_id=invitation_id)
+    except ValueError as exc:
+        error_key = str(exc)
+        if error_key == "not_found":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Invitation not found.",
+            ) from exc
+        if error_key == "not_pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only pending invitations can be resent.",
+            ) from exc
+        if error_key == "resend_limit_reached":
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Maximum resend limit (3) reached for this invitation.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    # Attempt email re-delivery (best-effort)
+    email_sent = False
+    email_error: str | None = None
+    try:
+        from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
+        email_service = get_email_service()
+        email_sent = await email_service.send_user_invitation_email(
+            to_email=invitation["email"],
+            invite_token=invitation["token"],
+            role=invitation["role"],
+            expiry_days=7,
+        )
+        if not email_sent:
+            email_error = "Email delivery returned false"
+    except Exception as exc:
+        email_error = str(exc)
+        logger.warning("Failed to resend invitation email to {}: {}", invitation["email"], exc)
+
+    svc_update_invitation_email_status(
+        invitation_id=invitation["id"],
+        email_sent=email_sent,
+        email_error=email_error,
+    )
+
+    invitation["email_sent"] = email_sent
+    invitation["email_error"] = email_error
+
+    actor = getattr(principal, "username", None) or str(getattr(principal, "user_id", "admin"))
+    logger.info(
+        "Invitation {} resent by {} (attempt {}, email_sent={})",
+        invitation_id,
+        actor,
+        invitation.get("resend_count", 0),
+        email_sent,
+    )
+
+    return InvitationItem(**{
+        k: v for k, v in invitation.items() if k in InvitationItem.model_fields
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# User Detail Endpoints (dynamic user_id routes)
+# ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/users/{user_id}", response_model=UserDetailResponse)
 async def get_user_details(

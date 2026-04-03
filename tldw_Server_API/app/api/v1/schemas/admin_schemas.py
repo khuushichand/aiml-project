@@ -158,6 +158,7 @@ class UserSummary(BaseModel):
     role: str
     is_active: bool
     is_verified: bool
+    mfa_enabled: bool = False
     created_at: datetime
     last_login: datetime | None = None
     storage_quota_mb: int
@@ -515,6 +516,64 @@ class AuditLogResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Error Breakdown Schemas
+
+class ErrorBreakdownItem(BaseModel):
+    """A single row in the error breakdown aggregation."""
+    endpoint: str
+    status_code: int
+    count: int
+    last_occurred: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ErrorBreakdownResponse(BaseModel):
+    """Aggregated error breakdown over a recent period."""
+    items: list[ErrorBreakdownItem]
+    total_errors: int
+    period: str = "24h"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Rate Limit Summary Schemas
+
+class RateLimitThrottledEntity(BaseModel):
+    """A frequently throttled user/IP/entity."""
+    entity: str
+    rejections: int
+    last_rejected_at: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateLimitPolicyHeadroom(BaseModel):
+    """Headroom utilization for a single policy."""
+    policy_id: str
+    resource_type: str | None = None
+    scope: str | None = None
+    total_decisions: int = 0
+    total_denials: int = 0
+    utilization_pct: float = 0.0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateLimitSummaryResponse(BaseModel):
+    """Aggregated rate limit summary for a period."""
+    total_throttle_events: int
+    period: str = "24h"
+    top_throttled_entities: list[RateLimitThrottledEntity]
+    policy_headroom: list[RateLimitPolicyHeadroom]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1233,6 +1292,7 @@ class IncidentItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None = None
+    acknowledged_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
     timeline: list[IncidentEvent] = []
@@ -1287,6 +1347,7 @@ class IncidentUpdateRequest(BaseModel):
     assigned_to_user_id: int | None = None
     root_cause: str | None = None
     impact: str | None = None
+    acknowledged_at: datetime | None = None
     runbook_url: str | None = None
     action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
@@ -1301,12 +1362,112 @@ class IncidentEventCreateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class IncidentNotifyResponse(BaseModel):
-    """Response payload for notifying incident subscribers."""
+class IncidentNotifyRequest(BaseModel):
+    """Request to notify stakeholders about an incident."""
+    recipients: list[str]
+    message: str | None = None
 
-    notified: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyRecipientResult(BaseModel):
+    """Per-recipient delivery result."""
+    email: str
+    status: str
+    error: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyResponse(BaseModel):
+    """Response from incident stakeholder notification.
+
+    Used by both the email notification endpoint (populates ``notifications``)
+    and the webhook dispatch endpoint (populates ``webhooks_delivered``).
+    """
     incident_id: str
-    webhooks_delivered: int
+    notifications: list[IncidentNotifyRecipientResult] = []
+    notified: bool = True
+    webhooks_delivered: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Webhook Schemas
+
+
+class WebhookItem(BaseModel):
+    """Webhook summary (secret redacted)."""
+    id: str
+    url: str
+    events: list[str] = []
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreateResponse(BaseModel):
+    """Response for webhook creation, includes the secret (shown once)."""
+    id: str
+    url: str
+    secret: str
+    events: list[str] = []
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookListResponse(BaseModel):
+    """Response for webhook listing."""
+    items: list[WebhookItem]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreateRequest(BaseModel):
+    """Request to create a webhook."""
+    url: str
+    events: list[str]
+    enabled: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookUpdateRequest(BaseModel):
+    """Request to update a webhook (partial update)."""
+    url: str | None = None
+    events: list[str] | None = None
+    enabled: bool | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookDeliveryItem(BaseModel):
+    """A single webhook delivery record."""
+    id: str
+    webhook_id: str
+    event_type: str = ""
+    status_code: int | None = None
+    response_time_ms: int | None = None
+    success: bool = False
+    error: str | None = None
+    attempted_at: str | None = None
+    payload_preview: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookDeliveryListResponse(BaseModel):
+    """Response for webhook delivery listing."""
+    items: list[WebhookDeliveryItem]
+    total: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2243,6 +2404,44 @@ class AdminCircuitBreakerListFilters(BaseModel):
     name_prefix: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Per-API-Key Usage Attribution
+
+class ApiKeyDailySnapshot(BaseModel):
+    """A single day's usage snapshot for an API key."""
+    date: str
+    requests: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class ApiKeyUsageSummary(BaseModel):
+    """Aggregated usage summary for a single API key."""
+    key_id: str
+    request_count: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    last_used_at: str | None = None
+    daily_snapshots: list[ApiKeyDailySnapshot] = Field(default_factory=list)
+
+
+class ApiKeyUsageTopItem(BaseModel):
+    """A ranked entry in the top-keys-by-usage list."""
+    key_id: str
+    request_count: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    last_used_at: str | None = None
+
+
+class ApiKeyUsageTopResponse(BaseModel):
+    """Response for the top-keys-by-usage endpoint."""
+    items: list[ApiKeyUsageTopItem] = Field(default_factory=list)
 
 
 #######################################################################################################################

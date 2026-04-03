@@ -6,12 +6,12 @@ const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   listNotifications: vi.fn(),
   getUnreadCount: vi.fn(),
+  getNotificationPreferences: vi.fn(),
+  updateNotificationPreferences: vi.fn(),
   markNotificationsRead: vi.fn(),
   dismissNotification: vi.fn(),
   cancelNotificationSnooze: vi.fn(),
   snoozeNotification: vi.fn(),
-  getNotificationPreferences: vi.fn(),
-  updateNotificationPreferences: vi.fn(),
   subscribeNotificationsStream: vi.fn(),
   showToast: vi.fn(),
 }));
@@ -25,12 +25,12 @@ vi.mock('next/router', () => ({
 vi.mock('@web/lib/api/notifications', () => ({
   listNotifications: (...args: unknown[]) => mocks.listNotifications(...args),
   getUnreadCount: (...args: unknown[]) => mocks.getUnreadCount(...args),
+  getNotificationPreferences: (...args: unknown[]) => mocks.getNotificationPreferences(...args),
+  updateNotificationPreferences: (...args: unknown[]) => mocks.updateNotificationPreferences(...args),
   markNotificationsRead: (...args: unknown[]) => mocks.markNotificationsRead(...args),
   dismissNotification: (...args: unknown[]) => mocks.dismissNotification(...args),
   cancelNotificationSnooze: (...args: unknown[]) => mocks.cancelNotificationSnooze(...args),
   snoozeNotification: (...args: unknown[]) => mocks.snoozeNotification(...args),
-  getNotificationPreferences: (...args: unknown[]) => mocks.getNotificationPreferences(...args),
-  updateNotificationPreferences: (...args: unknown[]) => mocks.updateNotificationPreferences(...args),
   subscribeNotificationsStream: (...args: unknown[]) => mocks.subscribeNotificationsStream(...args),
 }));
 
@@ -43,19 +43,36 @@ import NotificationsPage from '@web/pages/notifications';
 describe('NotificationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    const activeItem = {
-      id: 101,
-      kind: 'job_failed',
-      title: 'Job failed',
-      message: 'chatbooks/export failed.',
-      severity: 'error',
-      created_at: '2026-02-26T00:00:00+00:00',
-      read_at: null,
-      dismissed_at: null,
-    };
-    mocks.listNotifications.mockImplementation(({ include_archived }: { include_archived?: boolean } = {}) =>
+    mocks.getNotificationPreferences.mockResolvedValue({
+      user_id: 'user-1',
+      reminder_enabled: true,
+      job_completed_enabled: true,
+      job_failed_enabled: true,
+      updated_at: '2026-04-02T00:00:00Z',
+    });
+    mocks.updateNotificationPreferences.mockImplementation(async (payload: Record<string, boolean>) => ({
+      user_id: 'user-1',
+      reminder_enabled: payload.reminder_enabled ?? true,
+      job_completed_enabled: payload.job_completed_enabled ?? true,
+      job_failed_enabled: payload.job_failed_enabled ?? true,
+      updated_at: '2026-04-02T00:01:00Z',
+    }));
+    mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
       Promise.resolve({
-        items: include_archived ? [activeItem] : [activeItem],
+        items: only_snoozed
+          ? []
+          : [
+              {
+                id: 101,
+                kind: 'job_failed',
+                title: 'Job failed',
+                message: 'chatbooks/export failed.',
+                severity: 'error',
+                created_at: '2026-02-26T00:00:00+00:00',
+                read_at: null,
+                dismissed_at: null,
+              },
+            ],
         total: 1,
       })
     );
@@ -67,20 +84,6 @@ describe('NotificationsPage', () => {
       task_id: 'task-123',
       run_at: '2026-02-26T00:15:00+00:00',
     });
-    mocks.getNotificationPreferences.mockResolvedValue({
-      user_id: 'user-1',
-      reminder_enabled: true,
-      job_completed_enabled: true,
-      job_failed_enabled: true,
-      updated_at: '2026-02-26T00:00:00+00:00',
-    });
-    mocks.updateNotificationPreferences.mockImplementation(async (payload: Record<string, boolean>) => ({
-      user_id: 'user-1',
-      reminder_enabled: payload.reminder_enabled ?? true,
-      job_completed_enabled: payload.job_completed_enabled ?? true,
-      job_failed_enabled: payload.job_failed_enabled ?? true,
-      updated_at: '2026-02-26T00:01:00+00:00',
-    }));
     mocks.subscribeNotificationsStream.mockImplementation(() => () => {});
   });
 
@@ -153,7 +156,7 @@ describe('NotificationsPage', () => {
             ]
           : [],
         total: 1,
-      })
+      });
     });
     mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
     const user = userEvent.setup();
@@ -172,9 +175,7 @@ describe('NotificationsPage', () => {
   it('does not treat dismissed-only archived notifications as snoozed without an active reminder', async () => {
     mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
       Promise.resolve({
-        items: only_snoozed
-          ? []
-          : [],
+        items: only_snoozed ? [] : [],
         total: 1,
       })
     );
@@ -238,15 +239,71 @@ describe('NotificationsPage', () => {
     expect(screen.queryByText('Cancel me')).not.toBeInTheDocument();
   });
 
-  it('shows an unavailable message when preferences cannot be loaded', async () => {
+  it('shows an unavailable state when notification preferences fail to load', async () => {
     const user = userEvent.setup();
     mocks.getNotificationPreferences.mockRejectedValueOnce(new Error('preferences unavailable'));
 
     render(<NotificationsPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Preferences' }));
+    expect(await screen.findByText('Unread: 2')).toBeInTheDocument();
 
-    expect(await screen.findByText('Notifications unavailable.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Preferences' }));
+
+    expect(
+      await screen.findByText('Notification preferences are currently unavailable.')
+    ).toBeInTheDocument();
     expect(screen.queryByText('Loading preferences...')).not.toBeInTheDocument();
+  });
+
+  it('disables preference toggles while a save is in flight and ignores duplicate clicks', async () => {
+    const user = userEvent.setup();
+    let resolveUpdate:
+      | ((value: {
+          user_id: string;
+          reminder_enabled: boolean;
+          job_completed_enabled: boolean;
+          job_failed_enabled: boolean;
+          updated_at: string;
+        }) => void)
+      | null = null;
+
+    mocks.updateNotificationPreferences.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        })
+    );
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('Unread: 2')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Preferences' }));
+
+    const [jobCompletedToggle] = await screen.findAllByRole('checkbox');
+
+    await user.click(jobCompletedToggle);
+
+    await waitFor(() => {
+      expect(mocks.updateNotificationPreferences).toHaveBeenCalledTimes(1);
+      expect(jobCompletedToggle).toBeDisabled();
+    });
+
+    await user.click(jobCompletedToggle);
+
+    expect(mocks.updateNotificationPreferences).toHaveBeenCalledTimes(1);
+
+    resolveUpdate?.({
+      user_id: 'user-1',
+      reminder_enabled: true,
+      job_completed_enabled: false,
+      job_failed_enabled: true,
+      updated_at: '2026-04-02T00:01:00Z',
+    });
+
+    await waitFor(() => {
+      expect(jobCompletedToggle).not.toBeDisabled();
+      expect(jobCompletedToggle).not.toBeChecked();
+    });
   });
 });
