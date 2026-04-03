@@ -74,17 +74,6 @@ def _normalize_citation_row(raw_citation: Mapping[str, Any], *, fallback_ordinal
     return citation
 
 
-def _has_exact_locator(citation: Mapping[str, Any]) -> bool:
-    return _normalize_text(citation.get("locator")) is not None
-
-
-def _has_workspace_route(citation: Mapping[str, Any]) -> bool:
-    return (
-        _normalize_text(citation.get("source_type")) in _SUPPORTED_SOURCE_TYPES
-        and _normalize_text(citation.get("source_id")) is not None
-    )
-
-
 def _route_kind_rank(route_kind: Any) -> int:
     return {
         "exact_locator": 0,
@@ -97,8 +86,13 @@ def _citation_route_rank(citation: Mapping[str, Any]) -> int:
     return _route_kind_rank(_build_deep_dive_target(citation).get("route_kind"))
 
 
-def _primary_selection_key(citation: Mapping[str, Any], index: int) -> tuple[int, int]:
-    return (_citation_route_rank(citation), index)
+def _primary_selection_key(citation: Mapping[str, Any], index: int) -> tuple[int, int, int]:
+    ordinal = int(citation.get("ordinal", index) or index)
+    return (
+        _citation_route_rank(citation),
+        ordinal,
+        index,
+    )
 
 
 def _deep_dive_selection_key(citation: Mapping[str, Any], index: int) -> tuple[int, int, int]:
@@ -264,17 +258,6 @@ def select_primary_citation(citations: Sequence[Mapping[str, Any]]) -> dict[str,
     if not normalized:
         return None
 
-    ordinal_zero = [citation for citation in normalized if int(citation.get("ordinal", 1)) == 0]
-    if ordinal_zero:
-        ordinal_zero.sort(
-            key=lambda item: (
-                _citation_route_rank(item),
-                int(item.get("id", 0) or 0),
-                _normalize_text(item.get("source_id")) or "",
-            )
-        )
-        return dict(ordinal_zero[0])
-
     selected = min(enumerate(normalized), key=lambda item: _primary_selection_key(item[1], item[0]))[1]
     return dict(selected)
 
@@ -337,10 +320,10 @@ class FlashcardProvenanceStore:
     ) -> dict[str, Any]:
         """Normalize and persist flashcard citations, then mirror the primary citation."""
         prepared = normalize_citations_for_persistence(citations)
-        inserted = self.db.replace_flashcard_citations(flashcard_uuid, prepared)
         primary = select_primary_citation(prepared)
-        self.db.set_flashcard_source_reference_summary(
+        inserted = self.db.replace_flashcard_citations_and_source_reference_summary(
             flashcard_uuid,
+            prepared,
             source_ref_type=str(primary["source_type"]) if primary is not None else None,
             source_ref_id=str(primary["source_id"]) if primary is not None else None,
         )

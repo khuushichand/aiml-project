@@ -251,6 +251,43 @@ def test_persist_flashcard_citations_replaces_existing_active_citation_set(db: C
     assert flashcard["source_ref_id"] == "note-current"  # nosec B101
 
 
+def test_persist_flashcard_citations_rolls_back_source_summary_when_insert_fails(
+    db: CharactersRAGDB,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    card_uuid = _create_card(db, front="What is selective acknowledgment?")
+    store = _store(db)
+    flashcard_before = db.get_flashcard(card_uuid)
+    assert flashcard_before is not None  # nosec B101
+
+    original_execute_many = db.execute_many
+
+    def fail_flashcard_citation_insert(query: str, params: list[tuple[Any, ...]], commit: bool = True):
+        if "INSERT INTO flashcard_citations(" in query:
+            raise RuntimeError("forced citation insert failure")
+        return original_execute_many(query, params, commit=commit)
+
+    monkeypatch.setattr(db, "execute_many", fail_flashcard_citation_insert)
+
+    with pytest.raises(RuntimeError, match="forced citation insert failure"):
+        store.persist_flashcard_citations(
+            card_uuid,
+            [
+                {
+                    "source_type": "note",
+                    "source_id": "note-sack",
+                    "citation_text": "Selective acknowledgment reports non-contiguous received blocks.",
+                }
+            ],
+        )
+
+    flashcard_after = db.get_flashcard(card_uuid)
+    assert flashcard_after is not None  # nosec B101
+    assert db.list_flashcard_citations(card_uuid) == []  # nosec B101
+    assert flashcard_after["source_ref_type"] == flashcard_before["source_ref_type"]  # nosec B101
+    assert flashcard_after["source_ref_id"] == flashcard_before["source_ref_id"]  # nosec B101
+
+
 def test_build_flashcard_assistant_context_includes_pack_and_provenance_payload(db: CharactersRAGDB):
     note_id = db.add_note("Slow Start", "Slow start expands the congestion window rapidly.")
     card_uuid = _create_card(db)
