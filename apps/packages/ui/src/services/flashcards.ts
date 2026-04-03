@@ -13,6 +13,10 @@ const flashcardsClient = createResourceClient({
   basePath: "/api/v1/flashcards" as AllowedPath
 })
 
+const flashcardTagsClient = createResourceClient({
+  basePath: "/api/v1/flashcards/tags" as AllowedPath
+})
+
 export const FLASHCARD_GENERATION_TIMEOUT_MS = 120000
 
 export type DeckSchedulerSettings = {
@@ -360,6 +364,16 @@ export type FlashcardNextReviewResponse = {
   selection_reason?: "learning_due" | "review_due" | "new" | "none" | null
 }
 
+export type FlashcardTagSuggestionItem = {
+  tag: string
+  count: number
+}
+
+export type FlashcardTagSuggestionsResponse = {
+  items: FlashcardTagSuggestionItem[]
+  count: number
+}
+
 export type FlashcardsImportRequest = {
   content: string
   delimiter?: string | null
@@ -500,6 +514,21 @@ export async function listFlashcards(params: {
     limit: params.limit,
     offset: params.offset,
     order_by: params.order_by
+  })
+}
+
+export async function listFlashcardTagSuggestions(params?: {
+  q?: string | null
+  limit?: number | null
+  signal?: AbortSignal
+}): Promise<FlashcardTagSuggestionsResponse> {
+  const normalizedQuery = params?.q?.trim()
+
+  return await flashcardTagsClient.list<FlashcardTagSuggestionsResponse>({
+    ...(normalizedQuery ? { q: normalizedQuery } : {}),
+    limit: params?.limit
+  }, {
+    abortSignal: params?.signal
   })
 }
 

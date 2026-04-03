@@ -84,14 +84,18 @@ That is enough for a first pass at:
 - deck-scoped recent cards
 - deck-scoped search
 
-### The current API has one small limitation for “recent first”
+### The recent-cards hook must not inherit Manage's created-sort behavior
 
-The flashcards list contract currently supports `order_by=created_at` but does not expose an explicit descending sort direction in the surfaced client contract. That means a drawer-level “recent cards” section either needs:
+The backend flashcards list query already returns `order_by=created_at` as newest-first.
 
-- a small backend enhancement for newest-first ordering, or
-- a frontend-scoped v1 strategy that fetches a bounded recent window and sorts it client-side by `created_at desc`
+However, the existing `Manage` query path re-sorts `"created"` client-side for its own UI behavior. That means this feature should not blindly reuse Manage's created-sort helper for the drawer reference section.
 
-This limitation affects implementation details, not the user-facing design.
+Design implication:
+
+- the deck reference recent-cards hook should use the raw API response ordering for `order_by=created_at`
+- the hook should not reverse or re-sort that response unless a proven API inconsistency is discovered during implementation
+
+This keeps `Recently created` aligned with the actual requirement: newest cards first.
 
 ## Approaches Considered
 
@@ -199,6 +203,7 @@ Behavior:
 
 - empty search shows no separate result list beyond `Recently created`
 - entering text triggers a debounced deck-scoped search
+- v1 search results should request `order_by=created_at` so the newest matching cards appear first
 - matching cards render with both front and back visible
 - search results remain read-only
 
@@ -227,6 +232,8 @@ After `Create & Add Another` succeeds:
 - preserve current behavior for form reset and deck/template retention
 - refresh the deck reference section for the selected deck
 - ensure the newly created card appears at the top of `Recently created`
+- preserve the reference section's expanded or collapsed state across repeated authoring in the same open drawer session
+- preserve the active deck-scoped search term across `Create & Add Another`; only deck changes or drawer close reset it
 
 After plain `Create` succeeds:
 
@@ -264,13 +271,13 @@ For v1, use the existing flashcards list API with:
 - `order_by=created_at`
 - a bounded `limit`
 
-Then sort or reverse the bounded result set client-side so the displayed list is newest-first.
+Use the response in its native backend order for the recent slice.
 
 Why this is acceptable for v1:
 
+- the backend already returns `created_at` newest-first for flashcards
 - the drawer only needs a small recent reference slice
-- the feature does not require perfect newest-first paging across an unlimited deck
-- it avoids expanding backend scope unless adjacent work already justifies it
+- the feature does not require additional sort-direction API work up front
 
 Future-friendly note:
 
@@ -283,6 +290,7 @@ Use the existing flashcards list API with:
 
 - `deck_id=<selected deck>`
 - `q=<debounced query>`
+- `order_by=created_at`
 - a modest `limit`
 - `due_status=all` if needed by the current client contract
 
@@ -440,6 +448,7 @@ If this workflow already has flashcards create-flow E2E coverage, extend it to v
 ## Implementation Notes For Planning
 
 - Keep the scope in the shared UI package so the WebUI and extension stay aligned.
-- Treat the backend ordering limitation as an implementation detail, not a reason to expand scope automatically.
+- Do not reuse `applyManageClientSort(..., "created")` for the drawer reference queries; that would invert the intended recent-cards ordering.
 - Prefer a bounded, drawer-specific solution over a general-purpose deck browser.
 - Do not add duplicate detection, inline edit affordances, or study actions unless separately requested.
+- Pin the exact default recent-slice size and search debounce delay in the implementation plan so the shared UI behaves consistently across surfaces.

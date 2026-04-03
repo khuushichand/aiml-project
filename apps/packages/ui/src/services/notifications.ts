@@ -20,6 +20,7 @@ export type NotificationItem = {
   created_at: string
   read_at?: string | null
   dismissed_at?: string | null
+  snooze_until?: string | null
 }
 
 export type NotificationsListResponse = {
@@ -34,6 +35,11 @@ export type NotificationsUnreadCountResponse = {
 export type NotificationSnoozeResponse = {
   task_id: string
   run_at: string
+}
+
+export type NotificationCancelSnoozeResponse = {
+  cancelled: boolean
+  deleted_tasks: number
 }
 
 export type NotificationPreferences = {
@@ -251,6 +257,7 @@ export async function listNotifications(params?: {
   limit?: number
   offset?: number
   include_archived?: boolean
+  only_snoozed?: boolean
 }): Promise<NotificationsListResponse> {
   return bgRequest<NotificationsListResponse>({
     path: `/api/v1/notifications${buildNotificationsQuery(params || {})}` as any,
@@ -279,6 +286,15 @@ export async function dismissNotification(notificationId: number): Promise<{ dis
     path: `/api/v1/notifications/${notificationId}/dismiss` as any,
     method: "POST",
     headers: { "Content-Type": "application/json" }
+  })
+}
+
+export async function cancelNotificationSnooze(
+  notificationId: number
+): Promise<NotificationCancelSnoozeResponse> {
+  return bgRequest<NotificationCancelSnoozeResponse>({
+    path: `/api/v1/notifications/${notificationId}/snooze` as any,
+    method: "DELETE"
   })
 }
 

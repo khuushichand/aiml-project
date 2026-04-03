@@ -6,6 +6,7 @@ import sqlite3
 import os
 from datetime import datetime
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from loguru import logger
 from PIL import Image
@@ -16,7 +17,8 @@ os.environ.setdefault("READING_DIGEST_JOBS_WORKER_ENABLED", "0")
 os.environ.setdefault("READING_DIGEST_SCHEDULER_ENABLED", "0")
 os.environ.setdefault("TEST_MODE", "1")
 
-from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
+from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Flashcards.asset_refs import extract_flashcard_asset_uuids
@@ -37,6 +39,16 @@ def _build_test_png_bytes() -> bytes:
 PNG_1X1_BYTES = _build_test_png_bytes()
 
 
+def _build_flashcards_test_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(config_info_router, prefix="/api/v1")
+    app.include_router(flashcards_router, prefix="/api/v1")
+    return app
+
+
+fastapi_app = _build_flashcards_test_app()
+
+
 @pytest.fixture(scope="function")
 def flashcards_db(tmp_path):
     db_path = tmp_path / "flashcards.db"
@@ -49,6 +61,8 @@ def flashcards_db(tmp_path):
 def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
     TestConfig.setup_test_environment()
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+    fastapi_app = _build_flashcards_test_app()
+
     def override_get_db():
         logger.info("[TEST] override get_chacha_db_for_user -> flashcards_db")
         try:
@@ -2855,3 +2869,227 @@ def test_bulk_create_with_invalid_deck_returns_400(client_with_flashcards_db: Te
     det = data.get("detail") or {}
     assert det.get("error")
     assert 42424242 in det.get("invalid_deck_ids", [])
+
+
+def test_flashcard_tag_suggestions_global_visibility_across_general_and_workspace_decks(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    flashcards_db.upsert_workspace("ws-tags-global", "Workspace Tags Global")
+
+    general_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Tags General Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert general_deck.status_code == 200
+    general_deck_id = general_deck.json()["id"]
+
+    workspace_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Tags Workspace Deck", "workspace_id": "ws-tags-global"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_deck.status_code == 200
+    workspace_deck_id = workspace_deck.json()["id"]
+
+    created_general = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": general_deck_id,
+            "front": "General card",
+            "back": "Answer",
+            "tags": ["general-only", "shared-tag"],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created_general.status_code == 200
+
+    created_workspace = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": workspace_deck_id,
+            "front": "Workspace card",
+            "back": "Answer",
+            "tags": ["workspace-only", "shared-tag"],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created_workspace.status_code == 200
+
+    suggestions = client_with_flashcards_db.get("/api/v1/flashcards/tags", headers=AUTH_HEADERS)
+    assert suggestions.status_code == 200
+    payload = suggestions.json()
+
+    counts = {item["tag"]: item["count"] for item in payload["items"]}
+    assert counts["shared-tag"] == 2
+    assert counts["general-only"] == 1
+    assert counts["workspace-only"] == 1
+
+
+def test_flashcard_tag_suggestions_orders_by_usage_then_alphabetically(
+    client_with_flashcards_db: TestClient,
+):
+    deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Tags Ordering Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_response.status_code == 200
+    deck_id = deck_response.json()["id"]
+
+    inputs = [
+        ("Card 1", ["zeta", "beta"]),
+        ("Card 2", ["alpha", "zeta"]),
+        ("Card 3", ["beta", "zeta"]),
+        ("Card 4", ["alpha"]),
+    ]
+    for front, tags in inputs:
+        response = client_with_flashcards_db.post(
+            "/api/v1/flashcards",
+            json={"deck_id": deck_id, "front": front, "back": "Answer", "tags": tags},
+            headers=AUTH_HEADERS,
+        )
+        assert response.status_code == 200
+
+    suggestions = client_with_flashcards_db.get("/api/v1/flashcards/tags", headers=AUTH_HEADERS)
+    assert suggestions.status_code == 200
+    items = suggestions.json()["items"]
+    top_three = items[:3]
+
+    assert [item["tag"] for item in top_three] == ["zeta", "alpha", "beta"]
+    assert [item["count"] for item in top_three] == [3, 2, 2]
+
+
+def test_flashcard_tag_suggestions_filters_with_trimmed_case_insensitive_q(
+    client_with_flashcards_db: TestClient,
+):
+    deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Tags Filter Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_response.status_code == 200
+    deck_id = deck_response.json()["id"]
+
+    cards = [
+        ("Alpha one", ["AlphaTag"]),
+        ("Alpha two", ["my-alpha-mix"]),
+        ("Beta one", ["beta"]),
+    ]
+    for front, tags in cards:
+        created = client_with_flashcards_db.post(
+            "/api/v1/flashcards",
+            json={"deck_id": deck_id, "front": front, "back": "Answer", "tags": tags},
+            headers=AUTH_HEADERS,
+        )
+        assert created.status_code == 200
+
+    suggestions = client_with_flashcards_db.get(
+        "/api/v1/flashcards/tags",
+        params={"q": "  AlPhA  "},
+        headers=AUTH_HEADERS,
+    )
+    assert suggestions.status_code == 200
+    payload = suggestions.json()
+
+    assert payload["count"] == 2
+    assert [item["tag"] for item in payload["items"]] == ["AlphaTag", "my-alpha-mix"]
+    assert [item["count"] for item in payload["items"]] == [1, 1]
+
+
+def test_flashcard_tag_suggestions_excludes_deleted_rows_and_keeps_deckless_cards(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    keep_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Tags Keep Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert keep_deck.status_code == 200
+    keep_deck_id = keep_deck.json()["id"]
+
+    deleted_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Tags Deleted Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert deleted_deck.status_code == 200
+    deleted_deck_id = deleted_deck.json()["id"]
+
+    keep_card = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": keep_deck_id, "front": "Keep", "back": "Answer", "tags": ["keep-tag"]},
+        headers=AUTH_HEADERS,
+    )
+    assert keep_card.status_code == 200
+
+    deleted_card = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": keep_deck_id, "front": "Deleted card", "back": "Answer", "tags": ["deleted-card-tag"]},
+        headers=AUTH_HEADERS,
+    )
+    assert deleted_card.status_code == 200
+    deleted_card_uuid = deleted_card.json()["uuid"]
+
+    deleted_keyword_card = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": keep_deck_id, "front": "Deleted keyword", "back": "Answer", "tags": ["deleted-keyword-tag"]},
+        headers=AUTH_HEADERS,
+    )
+    assert deleted_keyword_card.status_code == 200
+
+    deleted_deck_card = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deleted_deck_id, "front": "Deleted deck", "back": "Answer", "tags": ["deleted-deck-tag"]},
+        headers=AUTH_HEADERS,
+    )
+    assert deleted_deck_card.status_code == 200
+
+    deckless_card = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "Deckless card", "back": "Answer", "tags": ["deckless-tag"]},
+        headers=AUTH_HEADERS,
+    )
+    assert deckless_card.status_code == 200
+
+    keyword_table = flashcards_db._map_table_for_backend("keywords")
+    with flashcards_db.transaction() as conn:
+        conn.execute("UPDATE flashcards SET deleted = 1 WHERE uuid = ?", (deleted_card_uuid,))
+        conn.execute(
+            f"UPDATE {keyword_table} SET deleted = 1 WHERE keyword = ?",
+            ("deleted-keyword-tag",),
+        )
+        conn.execute("UPDATE decks SET deleted = 1 WHERE id = ?", (deleted_deck_id,))
+
+    suggestions = client_with_flashcards_db.get("/api/v1/flashcards/tags", headers=AUTH_HEADERS)
+    assert suggestions.status_code == 200
+    tags = {item["tag"]: item["count"] for item in suggestions.json()["items"]}
+
+    assert tags["keep-tag"] == 1
+    assert tags["deckless-tag"] == 1
+    assert "deleted-card-tag" not in tags
+    assert "deleted-keyword-tag" not in tags
+    assert "deleted-deck-tag" not in tags
+
+
+def test_flashcard_tag_suggestions_route_precedence_over_alias_path(
+    client_with_flashcards_db: TestClient,
+):
+    response = client_with_flashcards_db.get("/api/v1/flashcards/tags", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload.keys()) == {"items", "count"}
+
+
+def test_flashcard_tag_suggestions_rejects_limit_over_max(
+    client_with_flashcards_db: TestClient,
+):
+    response = client_with_flashcards_db.get(
+        "/api/v1/flashcards/tags",
+        params={"limit": 101},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422
