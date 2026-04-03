@@ -167,8 +167,6 @@ interface Props {
 }
 
 const QUICK_INGEST_OPEN_DELAY_MS = 120
-const QUICK_INGEST_OPEN_RETRY_INTERVAL_MS = 120
-const QUICK_INGEST_OPEN_MAX_ATTEMPTS = 25
 const LOCALHOST_PROBE_URL = "http://localhost:8000/health"
 const LOCALHOST_PROBE_TIMEOUT_MS = 2_000
 const TROUBLESHOOTING_URL =
@@ -807,19 +805,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       navigate(path)
       if (options?.openQuickIngestIntro && typeof window !== "undefined") {
         window.setTimeout(() => {
-          let attempts = 0
-          const dispatchWhenReady = () => {
-            const triggerReady = Boolean(
-              document.querySelector('[data-testid="open-quick-ingest"]')
-            )
-            if (triggerReady || attempts >= QUICK_INGEST_OPEN_MAX_ATTEMPTS) {
-              requestQuickIngestIntro()
-              return
-            }
-            attempts += 1
-            window.setTimeout(dispatchWhenReady, QUICK_INGEST_OPEN_RETRY_INTERVAL_MS)
-          }
-          dispatchWhenReady()
+          requestQuickIngestIntro()
         }, QUICK_INGEST_OPEN_DELAY_MS)
       }
     },

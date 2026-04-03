@@ -27,6 +27,7 @@ import {
   initBackground,
   MODEL_WARM_ALARM_NAME
 } from "@/entries/shared/background-init"
+import { startNotificationSubscription } from "@/entries/shared/notification-subscription"
 import {
   buildContextMenuAddPayload,
   buildContextMenuProcessPayload,
@@ -236,6 +237,10 @@ export default defineBackground({
           onContextMenuClickChange: (value) => {
             contextMenuClick = value
           }
+        })
+        // Start notification subscription after init
+        void startNotificationSubscription().catch((err) => {
+          console.debug("[background] Notification subscription deferred:", err)
         })
       } catch (error) {
         console.error("Error in initLogic:", error)

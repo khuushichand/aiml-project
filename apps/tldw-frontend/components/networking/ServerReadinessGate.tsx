@@ -26,7 +26,7 @@ async function checkHealth(): Promise<boolean> {
     })
     if (!res.ok) return false
     const body = await res.json()
-    return body.status === "ok"
+    return body.status === "ok" || body.status === "healthy"
   } catch {
     return false
   }

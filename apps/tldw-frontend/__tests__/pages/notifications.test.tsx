@@ -3,15 +3,23 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const mocks = vi.hoisted(() => ({
+  push: vi.fn(),
   listNotifications: vi.fn(),
   getUnreadCount: vi.fn(),
   getNotificationPreferences: vi.fn(),
   updateNotificationPreferences: vi.fn(),
   markNotificationsRead: vi.fn(),
   dismissNotification: vi.fn(),
+  cancelNotificationSnooze: vi.fn(),
   snoozeNotification: vi.fn(),
   subscribeNotificationsStream: vi.fn(),
   showToast: vi.fn(),
+}));
+
+vi.mock('next/router', () => ({
+  useRouter: () => ({
+    push: mocks.push,
+  }),
 }));
 
 vi.mock('@web/lib/api/notifications', () => ({
@@ -21,18 +29,13 @@ vi.mock('@web/lib/api/notifications', () => ({
   updateNotificationPreferences: (...args: unknown[]) => mocks.updateNotificationPreferences(...args),
   markNotificationsRead: (...args: unknown[]) => mocks.markNotificationsRead(...args),
   dismissNotification: (...args: unknown[]) => mocks.dismissNotification(...args),
+  cancelNotificationSnooze: (...args: unknown[]) => mocks.cancelNotificationSnooze(...args),
   snoozeNotification: (...args: unknown[]) => mocks.snoozeNotification(...args),
   subscribeNotificationsStream: (...args: unknown[]) => mocks.subscribeNotificationsStream(...args),
 }));
 
 vi.mock('@web/components/ui/ToastProvider', () => ({
   useToast: () => ({ show: mocks.showToast }),
-}));
-
-vi.mock('next/router', () => ({
-  useRouter: () => ({
-    push: vi.fn(),
-  }),
 }));
 
 import NotificationsPage from '@web/pages/notifications';
@@ -47,31 +50,36 @@ describe('NotificationsPage', () => {
       job_failed_enabled: true,
       updated_at: '2026-04-02T00:00:00Z',
     });
-    mocks.updateNotificationPreferences.mockResolvedValue({
+    mocks.updateNotificationPreferences.mockImplementation(async (payload: Record<string, boolean>) => ({
       user_id: 'user-1',
-      reminder_enabled: true,
-      job_completed_enabled: false,
-      job_failed_enabled: true,
+      reminder_enabled: payload.reminder_enabled ?? true,
+      job_completed_enabled: payload.job_completed_enabled ?? true,
+      job_failed_enabled: payload.job_failed_enabled ?? true,
       updated_at: '2026-04-02T00:01:00Z',
-    });
-    mocks.listNotifications.mockResolvedValue({
-      items: [
-        {
-          id: 101,
-          kind: 'job_failed',
-          title: 'Job failed',
-          message: 'chatbooks/export failed.',
-          severity: 'error',
-          created_at: '2026-02-26T00:00:00+00:00',
-          read_at: null,
-          dismissed_at: null,
-        },
-      ],
-      total: 1,
-    });
+    }));
+    mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
+      Promise.resolve({
+        items: only_snoozed
+          ? []
+          : [
+              {
+                id: 101,
+                kind: 'job_failed',
+                title: 'Job failed',
+                message: 'chatbooks/export failed.',
+                severity: 'error',
+                created_at: '2026-02-26T00:00:00+00:00',
+                read_at: null,
+                dismissed_at: null,
+              },
+            ],
+        total: 1,
+      })
+    );
     mocks.getUnreadCount.mockResolvedValue({ unread_count: 2 });
     mocks.markNotificationsRead.mockResolvedValue({ updated: 1 });
     mocks.dismissNotification.mockResolvedValue({ dismissed: true });
+    mocks.cancelNotificationSnooze.mockResolvedValue({ cancelled: true, deleted_tasks: 1 });
     mocks.snoozeNotification.mockResolvedValue({
       task_id: 'task-123',
       run_at: '2026-02-26T00:15:00+00:00',
@@ -120,6 +128,115 @@ describe('NotificationsPage', () => {
 
     expect(await screen.findByText('Open the report in Deep Research.')).toBeInTheDocument();
     expect(mocks.showToast).not.toHaveBeenCalled();
+  });
+
+  it('shows snoozed notifications instead of the empty state when only snoozed items remain', async () => {
+    const calls: Array<{ include_archived?: boolean; only_snoozed?: boolean }> = [];
+    mocks.listNotifications.mockImplementation((
+      {
+        include_archived,
+        only_snoozed,
+      }: { include_archived?: boolean; only_snoozed?: boolean } = {}
+    ) => {
+      calls.push({ include_archived, only_snoozed });
+      return Promise.resolve({
+        items: only_snoozed
+          ? [
+              {
+                id: 201,
+                kind: 'reminder_due',
+                title: 'Snoozed item',
+                message: 'Will return later.',
+                severity: 'info',
+                created_at: '2026-02-26T00:00:00+00:00',
+                read_at: null,
+                dismissed_at: '2026-02-26T00:05:00+00:00',
+                snooze_until: '2026-02-26T00:20:00+00:00',
+              },
+            ]
+          : [],
+        total: 1,
+      });
+    });
+    mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
+    const user = userEvent.setup();
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByRole('button', { name: 'Show snoozed (1)' })).toBeInTheDocument();
+    expect(screen.queryByText('No notifications yet.')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show snoozed (1)' }));
+
+    expect(await screen.findByText('Snoozed item')).toBeInTheDocument();
+    expect(calls).toContainEqual(expect.objectContaining({ include_archived: true, only_snoozed: true }));
+  });
+
+  it('does not treat dismissed-only archived notifications as snoozed without an active reminder', async () => {
+    mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
+      Promise.resolve({
+        items: only_snoozed ? [] : [],
+        total: 1,
+      })
+    );
+    mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('No notifications yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show snoozed (1)' })).not.toBeInTheDocument();
+  });
+
+  it('moves a notification into the snoozed section immediately after snoozing', async () => {
+    const user = userEvent.setup();
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('Job failed')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Snooze 15m' }));
+
+    await waitFor(() => {
+      expect(mocks.snoozeNotification).toHaveBeenCalledWith(101, 15);
+    });
+    expect(screen.queryByText('Job failed')).not.toBeInTheDocument();
+    expect(screen.getByText('Unread: 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show snoozed (1)' })).toBeInTheDocument();
+  });
+
+  it('cancels a snoozed reminder from the snoozed view', async () => {
+    mocks.listNotifications.mockImplementation(({ only_snoozed }: { only_snoozed?: boolean } = {}) =>
+      Promise.resolve({
+        items: only_snoozed
+          ? [
+              {
+                id: 401,
+                kind: 'reminder_due',
+                title: 'Cancel me',
+                message: 'This should go away.',
+                severity: 'info',
+                created_at: '2026-02-26T00:00:00+00:00',
+                read_at: null,
+                dismissed_at: '2026-02-26T00:05:00+00:00',
+                snooze_until: '2026-02-26T00:20:00+00:00',
+              },
+            ]
+          : [],
+        total: 1,
+      })
+    );
+    mocks.getUnreadCount.mockResolvedValue({ unread_count: 0 });
+    const user = userEvent.setup();
+
+    render(<NotificationsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Show snoozed (1)' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel snooze' }));
+
+    await waitFor(() => {
+      expect(mocks.cancelNotificationSnooze).toHaveBeenCalledWith(401);
+    });
+    expect(screen.queryByText('Cancel me')).not.toBeInTheDocument();
   });
 
   it('shows an unavailable state when notification preferences fail to load', async () => {

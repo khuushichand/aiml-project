@@ -7,12 +7,14 @@ based on watchlist run statistics.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user_id
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Watchlists.alert_rules import (
     create_alert_rule,
     delete_alert_rule,
@@ -70,13 +72,21 @@ class AlertRuleListResponse(BaseModel):
 
 def _get_db_path(user_id: str) -> str:
     """Resolve the per-user ChaChaNotes DB path for alert rules storage."""
-    import os
-    base = os.environ.get("TLDW_USER_DB_DIR", "Databases/user_databases")
-    user_dir = os.path.join(base, str(user_id))
-    os.makedirs(user_dir, exist_ok=True)
-    db_path = os.path.join(user_dir, "ChaChaNotes.db")
-    ensure_alert_rules_table(db_path)
-    return db_path
+    base_override = os.environ.get("TLDW_USER_DB_DIR") or None
+    user_dir = DatabasePaths.get_user_base_directory(
+        user_id,
+        base_dir_override=base_override,
+    )
+    db_path = user_dir / DatabasePaths.CHACHA_DB_NAME
+    ensure_alert_rules_table(str(db_path))
+    return str(db_path)
+
+
+def _user_id_text(current_user: User) -> str:
+    raw = getattr(current_user, "id", None)
+    if raw is None:
+        raw = getattr(current_user, "id_int", None)
+    return str(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +96,10 @@ def _get_db_path(user_id: str) -> str:
 @router.get("", response_model=AlertRuleListResponse)
 async def list_rules(
     job_id: int | None = None,
-    user_id: str = Depends(get_current_user_id),
+    current_user: User = Depends(get_request_user),
 ):
     """List all alert rules for the current user, optionally filtered by job."""
+    user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
     rules = list_alert_rules(db_path, user_id, job_id=job_id)
     return AlertRuleListResponse(
@@ -99,12 +110,13 @@ async def list_rules(
 @router.post("", response_model=AlertRuleResponse, status_code=201)
 async def create_rule(
     body: AlertRuleCreate,
-    user_id: str = Depends(get_current_user_id),
+    current_user: User = Depends(get_request_user),
 ):
     """Create a new alert rule."""
     valid_types = {"no_items", "error_rate_above", "items_below", "items_above", "run_failed"}
     if body.condition_type not in valid_types:
         raise HTTPException(400, f"Invalid condition_type. Must be one of: {', '.join(sorted(valid_types))}")
+    user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
     rule = create_alert_rule(
         db_path,
@@ -122,9 +134,10 @@ async def create_rule(
 async def update_rule(
     rule_id: int,
     body: AlertRuleUpdate,
-    user_id: str = Depends(get_current_user_id),
+    current_user: User = Depends(get_request_user),
 ):
     """Update an existing alert rule."""
+    user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
     updated = update_alert_rule(db_path, rule_id, user_id, **body.model_dump(exclude_none=True))
     if not updated:
@@ -139,9 +152,10 @@ async def update_rule(
 @router.delete("/{rule_id}")
 async def delete_rule(
     rule_id: int,
-    user_id: str = Depends(get_current_user_id),
+    current_user: User = Depends(get_request_user),
 ):
     """Delete an alert rule."""
+    user_id = _user_id_text(current_user)
     db_path = _get_db_path(user_id)
     deleted = delete_alert_rule(db_path, rule_id, user_id)
     if not deleted:

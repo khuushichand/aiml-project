@@ -58,6 +58,22 @@ def test_present_chat_tools_orders_run_first_when_eligible() -> None:
 
 
 @pytest.mark.unit
+def test_present_chat_tools_orders_run_first_when_default_on_and_in_cohort() -> None:
+    presented = present_chat_tools(
+        tools=[RUN_TOOL, NOTES_TOOL],
+        allow_catalog=["run", "notes.*"],
+        rollout_mode="default_on",
+        provider_key="openai:gpt-4o-mini",
+        provider_allowlist=["openai:gpt-4o-mini"],
+        streaming=False,
+    )
+
+    assert presented.eligible is True
+    assert [tool["function"]["name"] for tool in presented.llm_tools] == ["run", "notes.search"]
+    assert presented.prompt_fragment is not None
+
+
+@pytest.mark.unit
 def test_present_chat_tools_demotes_typed_tools_when_run_is_eligible() -> None:
     presented = present_chat_tools(
         tools=[RUN_TOOL, NOTES_TOOL],
@@ -124,6 +140,39 @@ def test_present_chat_tools_is_eligible_when_provider_matches_rollout_allowlist(
     assert presented.ineligible_reason is None
     assert presented.prompt_fragment is not None
     assert [tool["function"]["name"] for tool in presented.llm_tools] == ["run", "notes.search"]
+
+
+@pytest.mark.unit
+def test_present_chat_tools_is_out_of_cohort_when_default_on_provider_mismatches() -> None:
+    presented = present_chat_tools(
+        tools=[RUN_TOOL, NOTES_TOOL],
+        allow_catalog=["run", "notes.*"],
+        rollout_mode="default_on",
+        provider_key="openai:gpt-4o-mini",
+        provider_allowlist=["anthropic:claude-3-7-sonnet"],
+        streaming=False,
+    )
+
+    assert presented.eligible is False
+    assert presented.ineligible_reason == "provider_not_in_rollout_allowlist"
+    assert presented.prompt_fragment is None
+    assert [tool["function"]["name"] for tool in presented.llm_tools] == ["run", "notes.search"]
+
+
+@pytest.mark.unit
+def test_present_chat_tools_fails_closed_for_default_on_when_allowlist_is_empty() -> None:
+    presented = present_chat_tools(
+        tools=[RUN_TOOL, NOTES_TOOL],
+        allow_catalog=["run", "notes.*"],
+        rollout_mode="default_on",
+        provider_key="openai:gpt-4o-mini",
+        provider_allowlist=[],
+        streaming=False,
+    )
+
+    assert presented.eligible is False
+    assert presented.ineligible_reason == "provider_not_in_rollout_allowlist"
+    assert presented.prompt_fragment is None
 
 
 @pytest.mark.unit
