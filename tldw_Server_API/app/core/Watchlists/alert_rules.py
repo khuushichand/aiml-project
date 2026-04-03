@@ -15,35 +15,20 @@ Supported condition types:
 from __future__ import annotations
 
 import json
-import sqlite3
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.watchlist_alert_rules_db import (
+    AlertRule,
+    create_watchlist_alert_rule,
+    delete_watchlist_alert_rule,
     ensure_watchlist_alert_rules_table,
+    get_watchlist_alert_rule,
+    list_watchlist_alert_rules,
+    update_watchlist_alert_rule,
 )
-
-
-# ---------------------------------------------------------------------------
-# Data model
-# ---------------------------------------------------------------------------
-
-@dataclass
-class AlertRule:
-    id: int
-    user_id: str
-    job_id: int | None  # None = applies to all jobs
-    name: str
-    enabled: bool
-    condition_type: str
-    condition_value: str  # JSON
-    severity: str  # info, warning, error
-    created_at: str
-    updated_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -74,19 +59,7 @@ def ensure_alert_rules_table(db_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def list_alert_rules(db_path: str, user_id: str, job_id: int | None = None) -> list[AlertRule]:
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        if job_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM watchlist_alert_rules WHERE user_id = ? AND (job_id = ? OR job_id IS NULL) ORDER BY created_at DESC",
-                (user_id, job_id),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM watchlist_alert_rules WHERE user_id = ? ORDER BY created_at DESC",
-                (user_id,),
-            ).fetchall()
-        return [_row_to_rule(r) for r in rows]
+    return list_watchlist_alert_rules(db_path, user_id, job_id=job_id)
 
 
 def create_alert_rule(
@@ -99,98 +72,33 @@ def create_alert_rule(
     severity: str = "warning",
 ) -> AlertRule:
     _validate_condition_type(condition_type)
-    now = datetime.now(timezone.utc).isoformat()
-    cv = json.dumps(condition_value or {})
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.execute(
-            """INSERT INTO watchlist_alert_rules
-               (user_id, job_id, name, enabled, condition_type, condition_value, severity, created_at, updated_at)
-               VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)""",
-            (user_id, job_id, name, condition_type, cv, severity, now, now),
-        )
-        return AlertRule(
-            id=cur.lastrowid or 0,
-            user_id=user_id,
-            job_id=job_id,
-            name=name,
-            enabled=True,
-            condition_type=condition_type,
-            condition_value=cv,
-            severity=severity,
-            created_at=now,
-            updated_at=now,
-        )
+    return create_watchlist_alert_rule(
+        db_path,
+        user_id=user_id,
+        name=name,
+        condition_type=condition_type,
+        condition_value=condition_value,
+        job_id=job_id,
+        severity=severity,
+    )
 
 
 def get_alert_rule(db_path: str, rule_id: int, user_id: str) -> AlertRule | None:
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM watchlist_alert_rules WHERE id = ? AND user_id = ?",
-            (rule_id, user_id),
-        ).fetchone()
-    if row is None:
-        return None
-    return _row_to_rule(row)
+    return get_watchlist_alert_rule(db_path, rule_id, user_id)
 
 
 def update_alert_rule(db_path: str, rule_id: int, user_id: str, **fields: Any) -> AlertRule | None:
-    current_rule = get_alert_rule(db_path, rule_id, user_id)
-    if current_rule is None:
-        return None
-
     updates = {key: value for key, value in fields.items() if value is not None}
     if not updates:
         return None
 
     if "condition_type" in updates:
         _validate_condition_type(str(updates["condition_type"]))
-    if "condition_value" in updates and isinstance(updates["condition_value"], dict):
-        updates["condition_value"] = json.dumps(updates["condition_value"])
-    if "enabled" in updates:
-        updates["enabled"] = 1 if updates["enabled"] else 0
-
-    updated_at = datetime.now(timezone.utc).isoformat()
-    merged_values = {
-        "name": updates.get("name", current_rule.name),
-        "enabled": updates.get("enabled", 1 if current_rule.enabled else 0),
-        "condition_type": updates.get("condition_type", current_rule.condition_type),
-        "condition_value": updates.get("condition_value", current_rule.condition_value),
-        "severity": updates.get("severity", current_rule.severity),
-        "job_id": updates.get("job_id", current_rule.job_id),
-    }
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.execute(
-            """
-            UPDATE watchlist_alert_rules
-            SET name = ?, enabled = ?, condition_type = ?, condition_value = ?,
-                severity = ?, job_id = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (
-                merged_values["name"],
-                merged_values["enabled"],
-                merged_values["condition_type"],
-                merged_values["condition_value"],
-                merged_values["severity"],
-                merged_values["job_id"],
-                updated_at,
-                rule_id,
-                user_id,
-            ),
-        )
-        if cur.rowcount <= 0:
-            return None
-    return get_alert_rule(db_path, rule_id, user_id)
+    return update_watchlist_alert_rule(db_path, rule_id, user_id, **updates)
 
 
 def delete_alert_rule(db_path: str, rule_id: int, user_id: str) -> bool:
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.execute(
-            "DELETE FROM watchlist_alert_rules WHERE id = ? AND user_id = ?",
-            (rule_id, user_id),
-        )
-        return cur.rowcount > 0
+    return delete_watchlist_alert_rule(db_path, rule_id, user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -295,22 +203,6 @@ def evaluate_rules_for_run(
             })
 
     return triggered
-
-
-def _row_to_rule(row: sqlite3.Row) -> AlertRule:
-    return AlertRule(
-        id=row["id"],
-        user_id=row["user_id"],
-        job_id=row["job_id"],
-        name=row["name"],
-        enabled=bool(row["enabled"]),
-        condition_type=row["condition_type"],
-        condition_value=row["condition_value"],
-        severity=row["severity"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-
 
 def _validate_condition_type(condition_type: str) -> None:
     if condition_type not in ALERT_CONDITION_TYPE_VALUES:

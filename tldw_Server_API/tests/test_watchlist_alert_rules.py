@@ -8,6 +8,13 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.endpoints.watchlist_alert_rules import router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.watchlist_alert_rules_db import (
+    create_watchlist_alert_rule,
+    delete_watchlist_alert_rule,
+    get_watchlist_alert_rule,
+    list_watchlist_alert_rules,
+    update_watchlist_alert_rule,
+)
 from tldw_Server_API.app.core.Watchlists.alert_rules import (
     create_alert_rule,
     ensure_alert_rules_table,
@@ -64,6 +71,37 @@ def test_update_alert_rule_returns_updated_rule(alert_rules_db_path: str) -> Non
     assert updated.name == "Items below updated"
     assert updated.enabled is False
     assert json.loads(updated.condition_value) == {"threshold": 5}
+
+
+def test_watchlist_alert_rule_db_helpers_round_trip(alert_rules_db_path: str) -> None:
+    created = create_watchlist_alert_rule(
+        alert_rules_db_path,
+        user_id="user-1",
+        name="DB helper rule",
+        condition_type="items_below",
+        condition_value={"threshold": 3},
+        job_id=12,
+        severity="warning",
+    )
+
+    listed = list_watchlist_alert_rules(alert_rules_db_path, "user-1", job_id=12)
+    updated = update_watchlist_alert_rule(
+        alert_rules_db_path,
+        created.id,
+        "user-1",
+        enabled=False,
+        condition_value={"threshold": 7},
+    )
+    fetched = get_watchlist_alert_rule(alert_rules_db_path, created.id, "user-1")
+    deleted = delete_watchlist_alert_rule(alert_rules_db_path, created.id, "user-1")
+
+    assert [rule.id for rule in listed] == [created.id]
+    assert updated is not None
+    assert updated.enabled is False
+    assert json.loads(updated.condition_value) == {"threshold": 7}
+    assert fetched is not None
+    assert fetched.id == created.id
+    assert deleted is True
 
 
 def test_update_alert_rule_rejects_invalid_condition_type(alert_rules_db_path: str) -> None:
