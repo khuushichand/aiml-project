@@ -270,7 +270,7 @@ export const FlashcardDeckReferenceSection: React.FC<
                       Search this deck
                     </Text>
                     <Text className="text-[11px] text-muted-foreground">
-                      Search front and back content
+                      Search across this deck
                     </Text>
                   </div>
                   <Input
