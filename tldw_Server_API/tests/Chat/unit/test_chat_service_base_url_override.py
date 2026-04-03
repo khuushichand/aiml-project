@@ -52,9 +52,11 @@ def test_build_adapter_request_omits_internal_chat_metadata() -> None:
             "_chat_run_first_ineligible_reason": "provider_not_in_rollout_allowlist",
             "_chat_run_first_presentation_variant": "chat_phase2b_v1",
             "_chat_run_first_cohort": "default_on",
+            "_chat_run_first_cohort": "gated",
         }
     )
 
-    _provider, request, _internal = chat_service._build_adapter_request_from_chat_args(args)
+    provider, request, _internal = chat_service._build_adapter_request_from_chat_args(args)
 
+    assert provider == "openai"
     assert not any(key.startswith("_chat_") for key in request)

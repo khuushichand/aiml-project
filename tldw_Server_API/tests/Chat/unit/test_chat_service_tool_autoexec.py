@@ -326,6 +326,11 @@ async def test_run_first_presented_tools_drive_autoexec_allow_catalog(monkeypatc
         "resolve_chat_run_first_presentation_variant",
         lambda raw_variant=None, default="chat_phase2a_v1": "chat_phase2a_v1",
     )
+    monkeypatch.setattr(
+        chat_service,
+        "resolve_chat_run_first_provider_allowlist",
+        lambda raw_allowlist=None: ["openai:gpt-4o-mini"],
+    )
     monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["run", "notes.*"])
 
     run_tool = {

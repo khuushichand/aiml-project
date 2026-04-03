@@ -26,9 +26,9 @@ Phase 1 created the governed `run(command)` runtime and kept typed tools visible
 
 Today, the main agent surfaces still present tool catalogs in a mostly peer-level way:
 
-- chat already supports server-side tool auto-execution, allow-catalog filtering, and tool-turn limits in [chat_service.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Chat/chat_service.py) and [tool_auto_exec.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Chat/tool_auto_exec.py)
-- ACP already formats MCP tools for LLM use in [mcp_llm_caller.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_llm_caller.py) and runs LLM-driven tool loops in [mcp_runners.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py)
-- ACP permission and runtime policy remain enforced in [runner_client.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/runner_client.py)
+- chat already supports server-side tool auto-execution, allow-catalog filtering, and tool-turn limits in [chat_service.py](tldw_Server_API/app/core/Chat/chat_service.py) and [tool_auto_exec.py](tldw_Server_API/app/core/Chat/tool_auto_exec.py)
+- ACP already formats MCP tools for LLM use in [mcp_llm_caller.py](tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_llm_caller.py) and runs LLM-driven tool loops in [mcp_runners.py](tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py)
+- ACP permission and runtime policy remain enforced in [runner_client.py](tldw_Server_API/app/core/Agent_Client_Protocol/runner_client.py)
 
 If `run(command)` is available but taught as just another tool among peers, tool-selection burden does not drop much in practice. Phase 2a exists to turn the phase 1 runtime into a measurable interface shift on the highest-value agent surfaces first.
 
@@ -76,17 +76,17 @@ Chat already exposes:
 - `CHAT_TOOL_TIMEOUT_MS`
 - `CHAT_TOOL_IDEMPOTENCY`
 
-in [chat_service.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Chat/chat_service.py), while normalized execution outcomes already flow through [tool_auto_exec.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Chat/tool_auto_exec.py).
+in [chat_service.py](tldw_Server_API/app/core/Chat/chat_service.py), while normalized execution outcomes already flow through [tool_auto_exec.py](tldw_Server_API/app/core/Chat/tool_auto_exec.py).
 
 That means chat does not need a new execution engine for phase 2a. It needs gated prompt shaping, tool-order shaping, and telemetry tags.
 
 The important boundary is that these chat hooks are execution-time controls and telemetry seams, not the primary model-facing tool-shaping seam.
 
-For chat, run-first ordering and description shaping must happen before the provider call, where `llm_tools` and `llm_tool_choice` are assembled and passed into [chat_orchestrator.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Chat/chat_orchestrator.py). Post-selection paths such as [tool_auto_exec.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Chat/tool_auto_exec.py) should classify and record outcomes, but they cannot change what the model saw when choosing tools.
+For chat, run-first ordering and description shaping must happen before the provider call, where `llm_tools` and `llm_tool_choice` are assembled and passed into [chat_orchestrator.py](tldw_Server_API/app/core/Chat/chat_orchestrator.py). Post-selection paths such as [tool_auto_exec.py](tldw_Server_API/app/core/Chat/tool_auto_exec.py) should classify and record outcomes, but they cannot change what the model saw when choosing tools.
 
 ### ACP already centralizes tool formatting
 
-ACP converts MCP tools into LLM-facing tool definitions in [mcp_llm_caller.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_llm_caller.py). The LLM-driven loop then consumes those formatted tools in [mcp_runners.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py).
+ACP converts MCP tools into LLM-facing tool definitions in [mcp_llm_caller.py](tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_llm_caller.py). The LLM-driven loop then consumes those formatted tools in [mcp_runners.py](tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py).
 
 That is the right seam for:
 
@@ -95,11 +95,11 @@ That is the right seam for:
 - attaching rollout-specific prompt guidance
 - recording first-tool and fallback behavior
 
-The current helper in [mcp_llm_caller.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_llm_caller.py) is intentionally context-free. Phase 2a should therefore add a session-aware ACP tool-presentation layer above that helper, or extend the formatting boundary explicitly, rather than quietly embedding rollout policy into a pure conversion utility.
+The current helper in [mcp_llm_caller.py](tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_llm_caller.py) is intentionally context-free. Phase 2a should therefore add a session-aware ACP tool-presentation layer above that helper, or extend the formatting boundary explicitly, rather than quietly embedding rollout policy into a pure conversion utility.
 
 ### Governance already lives below the surface layer
 
-ACP permission, runtime policy snapshots, and interactive approvals already remain authoritative in [runner_client.py](/Users/macbook-dev/.codex/worktrees/d918/tldw_server2/tldw_Server_API/app/core/Agent_Client_Protocol/runner_client.py). Phase 2a should not duplicate or reinterpret those rules.
+ACP permission, runtime policy snapshots, and interactive approvals already remain authoritative in [runner_client.py](tldw_Server_API/app/core/Agent_Client_Protocol/runner_client.py). Phase 2a should not duplicate or reinterpret those rules.
 
 The surface policy is:
 

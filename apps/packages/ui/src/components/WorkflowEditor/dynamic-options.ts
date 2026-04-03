@@ -42,6 +42,11 @@ const CACHE_TTL_MS = 5 * 60 * 1000
 const optionsCache = new Map<OptionSourceKey, { options: Option[]; ts: number }>()
 const inFlight = new Map<OptionSourceKey, Promise<Option[]>>()
 
+export const __resetWorkflowDynamicOptionsCacheForTests = () => {
+  optionsCache.clear()
+  inFlight.clear()
+}
+
 const normalizeKey = (key: string) =>
   key.toLowerCase().replace(/[^a-z0-9]/g, "")
 
@@ -548,16 +553,6 @@ export const useWorkflowDynamicOptions = (params: {
   config?: Record<string, unknown>
 }): DynamicOptionsState => {
   const { fields, stepType, config } = params
-  const sourceSignature = useMemo(() => {
-    const evaluationId = resolveEvaluationIdFromConfig(config)
-    const provider = resolveProviderFromConfig(config)
-    return JSON.stringify({
-      fieldKeys: fields.map((field) => field.key),
-      stepType: stepType || "",
-      evaluationId,
-      provider
-    })
-  }, [fields, stepType, config])
   const resolvedSources = useMemo(() => {
     const fieldToSource = new Map<string, OptionSourceKey>()
     const sources = new Set<OptionSourceKey>()
@@ -571,7 +566,7 @@ export const useWorkflowDynamicOptions = (params: {
       fieldToSource,
       sources: Array.from(sources)
     }
-  }, [sourceSignature])
+  }, [fields, stepType, config])
 
   const [optionsBySource, setOptionsBySource] = useState<
     Record<string, Option[]>
@@ -579,12 +574,26 @@ export const useWorkflowDynamicOptions = (params: {
   const [loadingBySource, setLoadingBySource] = useState<
     Record<string, boolean>
   >({})
+  const sourceSignature = useMemo(
+    () => resolvedSources.sources.join("|"),
+    [resolvedSources.sources]
+  )
 
   useEffect(() => {
     let isActive = true
+    const pendingSources = resolvedSources.sources.filter(
+      (source) => !optionsBySource[source] && !loadingBySource[source]
+    )
+
+    if (pendingSources.length === 0) {
+      return () => {
+        isActive = false
+      }
+    }
+
     const load = async () => {
       await Promise.all(
-        resolvedSources.sources.map(async (source) => {
+        pendingSources.map(async (source) => {
           if (!isActive) return
           setLoadingBySource((prev) =>
             prev[source] ? prev : { ...prev, [source]: true }
@@ -605,7 +614,7 @@ export const useWorkflowDynamicOptions = (params: {
     return () => {
       isActive = false
     }
-  }, [resolvedSources.sources])
+  }, [sourceSignature])
 
   const optionsByKey = useMemo(() => {
     const output: Record<string, Option[]> = {}

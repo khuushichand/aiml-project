@@ -28,6 +28,7 @@ export const HistoryTab: React.FC = () => {
 
   // Store state
   const historyResults = useEvaluationsStore((s) => s.historyResults)
+  const historyTotalCount = useEvaluationsStore((s) => s.historyTotalCount)
 
   // Mutations
   const fetchHistoryMutation = useFetchHistory()
@@ -129,7 +130,7 @@ export const HistoryTab: React.FC = () => {
             <Text type="secondary" className="text-xs">
               {t("evaluations:historyResultsCount", {
                 defaultValue: "{{count}} results",
-                count: historyResults.length
+                count: historyTotalCount
               })}
             </Text>
             <div className="flex flex-col gap-2">

@@ -59,6 +59,10 @@ const OptionSettingsPromptStudio = createSettingsRoute(
   "PromptStudioSettings"
 )
 const OptionSettingsMcpHub = lazy(() => import("./option-settings-mcp-hub"))
+const OptionProviderKeysSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/ProviderKeysSettings"),
+  "ProviderKeysSettings"
+)
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
@@ -105,6 +109,11 @@ export const optionSettingsRoutes: RouteDefinition[] = [
     kind: "options",
     path: "/settings/tldw",
     element: <OptionTldwSettings />,
+  },
+  {
+    kind: "options",
+    path: "/settings/provider-keys",
+    element: <OptionProviderKeysSettings />,
   },
   {
     kind: "options",

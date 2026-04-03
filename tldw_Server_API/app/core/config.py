@@ -2690,8 +2690,6 @@ def resolve_run_first_cohort_label(
             return "out_of_cohort"
         return "default_on"
     return "override_off"
-
-
 def resolve_chat_run_first_rollout_mode(
     raw_mode: Optional[str] = None,
     *,

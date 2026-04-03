@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/router';
 import { useToast } from '@web/components/ui/ToastProvider';
 import {
   dismissNotification,
   getUnreadCount,
+  getNotificationPreferences,
+  updateNotificationPreferences,
   listNotifications,
   markNotificationsRead,
   NotificationItem,
+  NotificationPreferences,
   NotificationStreamEvent,
   snoozeNotification,
   subscribeNotificationsStream,
@@ -14,6 +18,16 @@ import { formatRelativeTime } from '@web/lib/utils';
 
 const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_SNOOZE_MINUTES = 15;
+type PreferenceKey = 'reminder_enabled' | 'job_completed_enabled' | 'job_failed_enabled';
+
+function resolveRouteForLinkType(linkType: string | null | undefined): string | undefined {
+  if (!linkType) return undefined
+  const lt = linkType.toLowerCase()
+  if (lt.includes("reading")) return "/collections"
+  if (lt.includes("note") || lt.includes("document")) return "/notes"
+  if (lt.includes("watchlist") || lt.includes("job")) return "/watchlists"
+  return undefined
+}
 
 function toNotificationFromStream(payload: unknown): NotificationItem | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -34,11 +48,17 @@ function toNotificationFromStream(payload: unknown): NotificationItem | null {
 
 export default function NotificationsPage() {
   const { show } = useToast();
+  const router = useRouter();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cursorRef = useRef(0);
+  const [showPrefs, setShowPrefs] = useState(false);
+  const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
+  const [prefsLoading, setPrefsLoading] = useState(false);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
+  const [prefsSavingKey, setPrefsSavingKey] = useState<PreferenceKey | null>(null);
 
   const refreshInbox = useCallback(async () => {
     try {
@@ -78,6 +98,44 @@ export default function NotificationsPage() {
       }
     },
     [show]
+  );
+
+  const loadPrefs = useCallback(async () => {
+    if (prefsLoading) return;
+    setPrefsLoading(true);
+    setPrefsError(null);
+    try {
+      const p = await getNotificationPreferences();
+      setPrefs(p);
+    } catch {
+      setPrefs(null);
+      setPrefsError('Notification preferences are currently unavailable.');
+    } finally {
+      setPrefsLoading(false);
+    }
+  }, [prefsLoading]);
+
+  const togglePref = useCallback(
+    async (key: PreferenceKey) => {
+      if (!prefs || prefsSavingKey) return;
+      const nextValue = !prefs[key];
+      const updated =
+        key === 'reminder_enabled'
+          ? { reminder_enabled: nextValue }
+          : key === 'job_completed_enabled'
+            ? { job_completed_enabled: nextValue }
+            : { job_failed_enabled: nextValue };
+      setPrefsSavingKey(key);
+      try {
+        const result = await updateNotificationPreferences(updated);
+        setPrefs(result);
+      } catch {
+        show({ title: 'Failed to update preference', variant: 'danger' });
+      } finally {
+        setPrefsSavingKey(null);
+      }
+    },
+    [prefs, prefsSavingKey, show]
   );
 
   const applyIncomingNotification = useCallback(
@@ -180,14 +238,76 @@ export default function NotificationsPage() {
               <h1 className="text-2xl font-semibold text-foreground">Notifications</h1>
               <p className="mt-1 text-sm text-muted-foreground">{unreadLabel}</p>
             </div>
-            <button
-              type="button"
-              className="rounded border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
-              onClick={() => void refreshInbox()}
-            >
-              Refresh
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="rounded border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                onClick={() => void refreshInbox()}
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                className="rounded border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                onClick={() => {
+                  const nextShowPrefs = !showPrefs;
+                  setShowPrefs(nextShowPrefs);
+                  if (nextShowPrefs && !prefs && !prefsLoading) {
+                    void loadPrefs();
+                  }
+                }}
+                aria-expanded={showPrefs}
+              >
+                {showPrefs ? 'Hide Preferences' : 'Preferences'}
+              </button>
+            </div>
           </header>
+
+          {showPrefs && (
+            <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
+              <h3 className="mb-3 text-sm font-semibold">Notification Preferences</h3>
+              {prefsLoading ? (
+                <p className="text-sm text-muted-foreground">Loading preferences...</p>
+              ) : prefsError ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">{prefsError}</p>
+                  <button
+                    type="button"
+                    className="rounded border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                    onClick={() => void loadPrefs()}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : !prefs ? (
+                <p className="text-sm text-muted-foreground">
+                  Notification preferences are currently unavailable.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {([
+                    { key: 'job_completed_enabled' as const, label: 'Job completed notifications', desc: 'Notify when watchlist jobs finish successfully' },
+                    { key: 'job_failed_enabled' as const, label: 'Job failed notifications', desc: 'Notify when watchlist jobs encounter errors' },
+                    { key: 'reminder_enabled' as const, label: 'Reminder notifications', desc: 'Notify when snoozed items resurface' },
+                  ]).map(({ key, label, desc }) => (
+                    <label key={key} className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={prefs[key]}
+                        disabled={prefsSavingKey !== null}
+                        onChange={() => void togglePref(key)}
+                        className="mt-1 h-4 w-4 rounded border-border disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                      <div>
+                        <span className="text-sm font-medium">{label}</span>
+                        <p className="text-xs text-muted-foreground">{desc}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
@@ -213,6 +333,30 @@ export default function NotificationsPage() {
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {(item.link_url || resolveRouteForLinkType(item.link_type)) && (
+                      <button
+                        type="button"
+                        className="rounded bg-primary/10 border border-primary/30 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+                        onClick={async () => {
+                          if (!item.read_at) {
+                            try { await handleMarkRead(item.id) } catch { /* navigate anyway */ }
+                          }
+                          if (item.link_url) {
+                            try {
+                              const url = new URL(item.link_url, window.location.origin)
+                              if (url.origin === window.location.origin) {
+                                void router.push(url.pathname + url.search + url.hash)
+                              }
+                            } catch { /* malformed URL — ignore */ }
+                          } else {
+                            const route = resolveRouteForLinkType(item.link_type)
+                            if (route) void router.push(route)
+                          }
+                        }}
+                      >
+                        View
+                      </button>
+                    )}
                     {!item.read_at && (
                       <button
                         type="button"

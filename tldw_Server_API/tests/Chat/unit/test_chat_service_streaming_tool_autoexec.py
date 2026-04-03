@@ -366,7 +366,6 @@ class _RunFirstMetrics(_DummyMetrics):
     def track_run_first_completion_proxy(self, **kwargs):
         self.completion_calls.append(kwargs)
 
-
 class _ProviderManagerStub:
     def __init__(self, fallback_provider: str) -> None:
         self.fallback_provider = fallback_provider
@@ -383,8 +382,6 @@ class _ProviderManagerStub:
         if exclude and self.fallback_provider in exclude:
             return None
         return self.fallback_provider
-
-
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_streaming_autoexec_records_run_first_rollout_and_tool_path(

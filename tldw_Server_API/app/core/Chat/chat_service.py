@@ -70,7 +70,10 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
 from tldw_Server_API.app.core.Chat.chat_loop_engine import is_chat_loop_mode_enabled
-from tldw_Server_API.app.core.Chat.run_first_presentation import present_chat_tools
+from tldw_Server_API.app.core.Chat.run_first_presentation import (
+    present_chat_tools,
+    tool_names_from_definitions,
+)
 from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.config import (
@@ -651,38 +654,6 @@ def should_auto_continue_tools_once() -> bool:
     return CHAT_TOOL_AUTO_CONTINUE_ONCE
 
 
-def _tool_names_from_definitions(tools: Any) -> list[str]:
-    """Extract tool names from provider-facing tool definitions."""
-    if not isinstance(tools, list):
-        return []
-
-    names: list[str] = []
-    seen: set[str] = set()
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        if isinstance(tool.get("function"), dict):
-            raw_name = tool["function"].get("name")
-            if isinstance(raw_name, str):
-                name = raw_name.strip() or None
-                if name and name not in seen:
-                    seen.add(name)
-                    names.append(name)
-        elif isinstance(tool.get("function_declarations"), list):
-            decls = tool.get("function_declarations") or []
-            for declaration in decls:
-                if not isinstance(declaration, dict):
-                    continue
-                raw_name = declaration.get("name")
-                if not isinstance(raw_name, str):
-                    continue
-                name = raw_name.strip() or None
-                if name and name not in seen:
-                    seen.add(name)
-                    names.append(name)
-    return names
-
-
 def _resolve_chat_effective_tool_names(cleaned_args: dict[str, Any] | None) -> list[str]:
     """Return the resolved effective tool names for a chat call."""
     if not isinstance(cleaned_args, dict):
@@ -692,7 +663,19 @@ def _resolve_chat_effective_tool_names(cleaned_args: dict[str, Any] | None) -> l
     if isinstance(names, list) and all(isinstance(name, str) and name.strip() for name in names):
         return [name.strip() for name in names]
 
-    return _tool_names_from_definitions(cleaned_args.get("tools"))
+    tools = cleaned_args.get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for tool in tools:
+        for name in tool_names_from_definitions(tool):
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 def _resolve_chat_autoexec_allow_catalog(cleaned_args: dict[str, Any] | None) -> list[str]:
@@ -702,8 +685,7 @@ def _resolve_chat_autoexec_allow_catalog(cleaned_args: dict[str, Any] | None) ->
 
     if "_chat_effective_tool_names" in cleaned_args:
         return _resolve_chat_effective_tool_names(cleaned_args)
-
-    derived_names = _tool_names_from_definitions(cleaned_args.get("tools"))
+    derived_names = _resolve_chat_effective_tool_names(cleaned_args)
     if derived_names:
         return derived_names
 
@@ -770,6 +752,7 @@ def _tool_path_metric_context(context: dict[str, Any] | None) -> dict[str, Any] 
 
     trimmed = dict(context)
     trimmed.pop("ineligible_reason", None)
+    trimmed.pop("_completion_emitted", None)
     return trimmed
 
 
@@ -782,8 +765,6 @@ def _resolve_run_first_completion_outcome(exc: Exception) -> str:
         ):
             return "blocked"
     return "error"
-
-
 def _tool_names_from_tool_calls(tool_calls: Any) -> list[str]:
     """Extract normalized tool names from OpenAI-style tool call payloads."""
     if not isinstance(tool_calls, list):
@@ -828,7 +809,6 @@ def _emit_chat_run_first_rollout_metrics(
     except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
         logger.warning("Chat run-first rollout metric emission failed: {}", exc)
     return context
-
 
 def _emit_chat_run_first_tool_path_metrics(
     metrics: Any,
@@ -877,8 +857,11 @@ def _emit_chat_run_first_completion_metric(
 ) -> None:
     """Emit the completion-proxy metric for one chat execution."""
     metric_context = _tool_path_metric_context(context)
-    if metric_context is None:
+    if context is None or metric_context is None:
         return
+    if context.get("_completion_emitted"):
+        return
+    context["_completion_emitted"] = True
     try:
         metrics.track_run_first_completion_proxy(**metric_context, outcome=outcome)
     except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
@@ -3372,6 +3355,10 @@ async def execute_streaming_call(
                                 try:
                                     result = llm_call_func_fb()
                                     selected_provider = fallback_provider
+                                    # Update run-first metric context to reflect fallback provider/model
+                                    if run_first_metric_context is not None:
+                                        run_first_metric_context["provider"] = str(fallback_provider or "").strip() or "unknown"
+                                        run_first_metric_context["model"] = str(model or "").strip() or "unknown"
                                     llm_call_func = llm_call_func_fb
                                     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                                         metrics.track_provider_fallback_success(
@@ -3550,6 +3537,7 @@ async def execute_streaming_call(
             success=False,
             error_type=type(e).__name__,
         )
+        _fallback_stream_ok = False
         if provider_manager and not queue_enabled:
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
@@ -3608,6 +3596,7 @@ async def execute_streaming_call(
                             streaming=True,
                         )
                         llm_call_func = llm_call_func_fb
+                        _fallback_stream_ok = True
                         # Explicit telemetry for direct (non-queued) streaming fallback success
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
@@ -3619,19 +3608,8 @@ async def execute_streaming_call(
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
                         raise
-                else:
-                    # No fallback available: stream SSE error (200) instead of raising
-                    pass
-            else:
-                # Client/config errors in streaming mode: stream SSE error (200)
-                pass
-        else:
-            # Queue path: stream SSE error as well
-            pass
 
-        if raw_stream_iter is not None:
-            pass
-        else:
+        if not _fallback_stream_ok:
             _emit_chat_run_first_completion_metric(
                 metrics,
                 context=run_first_metric_context,

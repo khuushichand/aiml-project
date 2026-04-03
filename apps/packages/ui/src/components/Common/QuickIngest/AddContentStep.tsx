@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo, useState } from "react"
-import { Button, Input, Tag, Typography } from "antd"
+import { Alert, Button, Input, Tag, Tooltip, Typography } from "antd"
 import { useTranslation } from "react-i18next"
 import {
+  AlertTriangle,
   FileText,
   Film,
   Globe,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react"
 import type { DetectedMediaType, WizardQueueItem, QueueItemValidation } from "./types"
 import { useIngestWizard } from "./IngestWizardContext"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { FileDropZone } from "./QueueTab/FileDropZone"
 import {
   QUICK_INGEST_ACCEPT_STRING,
@@ -153,6 +155,9 @@ const validateQueueItem = (
 // Component
 // ---------------------------------------------------------------------------
 
+// Warning uses >= (show at boundary); validation uses > (allow exactly at limit)
+const LARGE_FILE_WARNING_THRESHOLD = 500 * 1024 * 1024 // 500 MB
+
 type AddContentStepProps = {
   isOnlineForIngest?: boolean
   onQuickProcess?: () => void
@@ -259,6 +264,21 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
   )
   const canProceed = validItemCount > 0
 
+  const hasLargeFiles = useMemo(
+    () => queueItems.some((item) => item.fileSize >= LARGE_FILE_WARNING_THRESHOLD),
+    [queueItems]
+  )
+
+  const { capabilities } = useServerCapabilities()
+  const ffmpegMissing = capabilities?.ffmpegAvailable === false
+  const hasAvMediaItems = useMemo(
+    () =>
+      queueItems.some(
+        (item) => item.detectedType === "audio" || item.detectedType === "video"
+      ),
+    [queueItems]
+  )
+
   return (
     <div className="py-3">
       {/* Drop zone + URL input area */}
@@ -267,6 +287,24 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
           onFilesAdded={handleFilesAdded}
           isOnlineForIngest={isOnlineForIngest}
         />
+        <Typography.Text className="text-[11px] text-text-subtle">
+          {qi(
+            "fileSizeLimits",
+            "Supported: PDF, EPUB, DOCX, TXT, Markdown, audio, video. Max file size: 500 MB."
+          )}
+        </Typography.Text>
+
+        {hasLargeFiles && (
+          <Alert
+            type="warning"
+            showIcon
+            icon={<AlertTriangle className="h-4 w-4" />}
+            message={qi(
+              "largeFileWarning",
+              "Large file -- upload may take several minutes. Consider using a smaller file if possible."
+            )}
+          />
+        )}
 
         {/* Multi-line URL paste area */}
         <div>
@@ -299,6 +337,20 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
           </div>
         </div>
       </div>
+
+      {/* FFmpeg missing warning for audio/video items */}
+      {ffmpegMissing && hasAvMediaItems && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<AlertTriangle className="h-4 w-4" />}
+          className="mt-3"
+          message={qi(
+            "ffmpegMissing",
+            "FFmpeg is not installed on the server. Audio and video files may fail to process. Other file types (PDF, documents, ebooks) are unaffected."
+          )}
+        />
+      )}
 
       {/* Queued items list */}
       {hasItems && (
@@ -351,15 +403,35 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
                     {item.fileSize > 0 && (
                       <span>{formatFileSize(item.fileSize)}</span>
                     )}
-                    <Tag
-                      color="geekblue"
-                      className="!text-[10px] !leading-tight !px-1 !py-0 !m-0"
-                    >
-                      {item.detectedType === "web"
-                        ? "Web page"
-                        : item.detectedType.charAt(0).toUpperCase() +
-                          item.detectedType.slice(1)}
-                    </Tag>
+                    {ffmpegMissing &&
+                    (item.detectedType === "audio" ||
+                      item.detectedType === "video") ? (
+                      <Tooltip
+                        title={qi(
+                          "ffmpegRequiredTooltip",
+                          "FFmpeg is not installed on the server -- this file may fail to process"
+                        )}
+                      >
+                        <Tag
+                          color="warning"
+                          className="!text-[10px] !leading-tight !px-1 !py-0 !m-0"
+                        >
+                          <AlertTriangle className="mr-0.5 inline h-3 w-3" />
+                          {item.detectedType.charAt(0).toUpperCase() +
+                            item.detectedType.slice(1)}
+                        </Tag>
+                      </Tooltip>
+                    ) : (
+                      <Tag
+                        color="geekblue"
+                        className="!text-[10px] !leading-tight !px-1 !py-0 !m-0"
+                      >
+                        {item.detectedType === "web"
+                          ? "Web page"
+                          : item.detectedType.charAt(0).toUpperCase() +
+                            item.detectedType.slice(1)}
+                      </Tag>
+                    )}
                     {item.detectedType !== "unknown" && (
                       <span className="text-text-subtle">(auto)</span>
                     )}

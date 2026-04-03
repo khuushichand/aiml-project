@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState, useContext } from "react"
+import React, { lazy, Suspense, useState, useContext, useEffect, useCallback } from "react"
 
 import { Drawer, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
@@ -22,6 +22,10 @@ import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockHost } from "@/components/Common/NotesDock"
+import {
+  BuddyShellHost,
+  BuddyShellRenderContextProvider
+} from "@/components/Common/PersonaBuddy"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { Sidebar } from "@/components/Option/Sidebar"
 import { Header } from "@/components/Layouts/Header"
@@ -52,6 +56,7 @@ import {
 } from "@/services/request-events"
 import { useBackendRecoveryUi } from "@/components/Common/BackendRecoveryUiContext"
 import { BackendUnavailableModalGate } from "@web/components/layout/BackendUnavailableModalGate"
+import { getUnreadCount } from "@web/lib/api/notifications"
 import { CommandPalette } from "@/components/Common/CommandPalette"
 import {
   useConnectionActions,
@@ -107,6 +112,22 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const [showChatSidebar] = useChatSidebar()
   const isMobileViewport = useMobile()
   useServerOnline()
+
+  // Notification unread count for header bell
+  const [notificationCount, setNotificationCount] = useState(0)
+  useEffect(() => {
+    if (demoEnabled) return
+    let cancelled = false
+    const poll = () => {
+      getUnreadCount()
+        .then((res) => { if (!cancelled) setNotificationCount(res?.unread_count ?? 0) })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, 30_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [demoEnabled])
+  const handleOpenNotifications = useCallback(() => navigate("/notifications"), [navigate])
   const location = useLocation()
   const { historyId, serverChatId } = useStoreMessageOption((state) => ({
     historyId: state.historyId,
@@ -342,13 +363,14 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 
   return (
-    <div
-      className={classNames(
-        "relative flex w-full",
-        isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
-      )}
-      style={chatScreenBackgroundStyle}
-    >
+    <BuddyShellRenderContextProvider>
+      <div
+        className={classNames(
+          "relative flex w-full",
+          isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
+        )}
+        style={chatScreenBackgroundStyle}
+      >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && !hideSidebar && !isMobileViewport && (
         <ChatSidebar
@@ -378,6 +400,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                     ? !sidebarOpen
                     : chatSidebarCollapsed
                 }
+                notificationCount={notificationCount}
+                onOpenNotifications={handleOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -395,6 +419,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                     ? !sidebarOpen
                     : chatSidebarCollapsed
                 }
+                notificationCount={notificationCount}
+                onOpenNotifications={handleOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -543,6 +569,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         {/* Notes Dock Host - floating notes panel */}
         <NotesDockHost />
 
+        <BuddyShellHost root="web" />
+
         {/* Ensure event-driven modals are available even when the header is hidden */}
         {hideHeader && <EventOnlyHosts commandPaletteProps={commandPaletteProps} />}
 
@@ -561,6 +589,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         />
       </main>
     </div>
+    </BuddyShellRenderContextProvider>
   )
 }
 

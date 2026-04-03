@@ -801,6 +801,26 @@ class ChatMetricsCollector:
             # Metrics must never break the flow
             logger.debug("Fallback metrics emission failed", exc_info=metrics_error)
 
+    # --- Cardinality bounding for run-first metric labels ---
+    _KNOWN_PROVIDERS: frozenset[str] = frozenset({
+        "openai", "anthropic", "google", "groq", "mistral",
+        "ollama", "kobold", "tabby", "vllm", "aphrodite",
+        "deepseek", "cohere", "huggingface", "openrouter",
+        "local", "custom_openai", "unknown",
+    })
+    _KNOWN_INELIGIBLE_REASONS: frozenset[str] = frozenset({"none", *RUN_FIRST_INELIGIBLE_REASONS})
+    _KNOWN_TOOLS: frozenset[str] = frozenset({
+        "run", "unknown",
+    })
+    _KNOWN_OUTCOMES: frozenset[str] = frozenset({
+        "success", "error", "timeout", "blocked",
+        "end_turn", "max_iterations", "cancelled",
+    })
+
+    @staticmethod
+    def _bound_label(value: str, known: frozenset[str]) -> str:
+        candidate = str(value or "").strip().lower() or "unknown"
+        return candidate if candidate in known else "other"
     def _run_first_base_labels(
         self,
         *,
@@ -812,20 +832,18 @@ class ChatMetricsCollector:
         eligible: bool,
         ineligible_reason: str | None,
     ) -> dict[str, str]:
-        normalized_ineligible_reason = str(ineligible_reason or "").strip()
-        if not normalized_ineligible_reason:
-            normalized_ineligible_reason = "none"
-        elif normalized_ineligible_reason not in RUN_FIRST_INELIGIBLE_REASONS:
-            normalized_ineligible_reason = "other"
-
+        provider_prefix = str(provider or "").strip().lower().split("/")[0] or "unknown"
         return {
             ChatMetricLabels.PRESENTATION_VARIANT.value: str(presentation_variant or "").strip() or "unknown",
             ChatMetricLabels.COHORT.value: str(cohort or "").strip() or "unknown",
-            ChatMetricLabels.PROVIDER.value: str(provider or "").strip() or "unknown",
-            ChatMetricLabels.MODEL.value: str(model or "").strip() or "unknown",
+            ChatMetricLabels.PROVIDER.value: self._bound_label(provider_prefix, self._KNOWN_PROVIDERS),
+            ChatMetricLabels.MODEL.value: "set" if str(model or "").strip() else "unknown",
             ChatMetricLabels.STREAMING.value: str(bool(streaming)).lower(),
             ChatMetricLabels.ELIGIBLE.value: str(bool(eligible)).lower(),
-            ChatMetricLabels.INELIGIBLE_REASON.value: normalized_ineligible_reason,
+            ChatMetricLabels.INELIGIBLE_REASON.value: self._bound_label(
+                str(ineligible_reason or "").strip() or "none",
+                self._KNOWN_INELIGIBLE_REASONS,
+            ),
         }
 
     def _safe_counter_add(
@@ -840,7 +858,6 @@ class ChatMetricsCollector:
             counter.add(value, labels)
         except Exception as metrics_error:
             logger.debug("{} emission failed", metric_name, exc_info=metrics_error)
-
     def track_run_first_rollout(
         self,
         *,
@@ -877,6 +894,7 @@ class ChatMetricsCollector:
         model: str,
         streaming: bool,
         eligible: bool,
+        ineligible_reason: str | None = None,
         first_tool: str,
     ) -> None:
         labels = self._run_first_base_labels(
@@ -886,9 +904,9 @@ class ChatMetricsCollector:
             model=model,
             streaming=streaming,
             eligible=eligible,
-            ineligible_reason=None,
+            ineligible_reason=ineligible_reason,
         )
-        labels[ChatMetricLabels.FIRST_TOOL.value] = str(first_tool or "").strip() or "unknown"
+        labels[ChatMetricLabels.FIRST_TOOL.value] = self._bound_label(first_tool, self._KNOWN_TOOLS)
         self._safe_counter_add(
             self.metrics.run_first_first_tool,
             1,
@@ -905,6 +923,7 @@ class ChatMetricsCollector:
         model: str,
         streaming: bool,
         eligible: bool,
+        ineligible_reason: str | None = None,
         fallback_tool: str,
     ) -> None:
         labels = self._run_first_base_labels(
@@ -914,9 +933,9 @@ class ChatMetricsCollector:
             model=model,
             streaming=streaming,
             eligible=eligible,
-            ineligible_reason=None,
+            ineligible_reason=ineligible_reason,
         )
-        labels[ChatMetricLabels.FALLBACK_TOOL.value] = str(fallback_tool or "").strip() or "unknown"
+        labels[ChatMetricLabels.FALLBACK_TOOL.value] = self._bound_label(fallback_tool, self._KNOWN_TOOLS)
         self._safe_counter_add(
             self.metrics.run_first_fallback_after_run,
             1,
@@ -933,6 +952,7 @@ class ChatMetricsCollector:
         model: str,
         streaming: bool,
         eligible: bool,
+        ineligible_reason: str | None = None,
         outcome: str,
     ) -> None:
         labels = self._run_first_base_labels(
@@ -942,9 +962,9 @@ class ChatMetricsCollector:
             model=model,
             streaming=streaming,
             eligible=eligible,
-            ineligible_reason=None,
+            ineligible_reason=ineligible_reason,
         )
-        labels[ChatMetricLabels.OUTCOME.value] = str(outcome or "").strip() or "unknown"
+        labels[ChatMetricLabels.OUTCOME.value] = self._bound_label(outcome, self._KNOWN_OUTCOMES)
         self._safe_counter_add(
             self.metrics.run_first_completion_proxy,
             1,

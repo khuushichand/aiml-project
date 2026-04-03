@@ -406,9 +406,6 @@ async def test_mcp_adapter_send_prompt_llm_driven_tracks_default_on_out_of_cohor
             "ineligible_reason": "provider_not_in_rollout_allowlist",
         }
     ]
-
-
-@pytest.mark.asyncio
 async def test_mcp_adapter_send_prompt_llm_driven_requires_llm_caller_and_tool_gate(
     mock_transport,
     event_callback,

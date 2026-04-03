@@ -267,7 +267,7 @@ class TestChatMetricsCollector:
         assert labels["presentation_variant"] == "chat_phase2b_v1"
         assert labels["cohort"] == "default_on"
         assert labels["provider"] == "openai"
-        assert labels["model"] == "gpt-4o-mini"
+        assert labels["model"] == "set"
         assert labels["streaming"] == "false"
         assert labels["eligible"] == "true"
         assert labels["ineligible_reason"] == "none"
@@ -290,6 +290,7 @@ class TestChatMetricsCollector:
         _, labels = collector.metrics.run_first_rollout.add.call_args.args
         assert labels["presentation_variant"] == "chat_phase2b_v1"
         assert labels["cohort"] == "out_of_cohort"
+        assert labels["model"] == "set"
         assert labels["streaming"] == "true"
         assert labels["eligible"] == "false"
         assert labels["ineligible_reason"] == "provider_not_in_rollout_allowlist"
@@ -343,7 +344,6 @@ class TestChatMetricsCollector:
 
         collector.metrics.run_first_rollout.add.assert_called_once()
         mock_logger.debug.assert_called_once()
-
     def test_chat_metrics_records_run_first_tool_path_and_completion_labels(self):
         collector = ChatMetricsCollector()
         collector.metrics.run_first_first_tool = MagicMock()
@@ -351,8 +351,8 @@ class TestChatMetricsCollector:
         collector.metrics.run_first_completion_proxy = MagicMock()
 
         collector.track_run_first_first_tool(
-            presentation_variant="chat_phase2a_v1",
-            cohort="gated",
+            presentation_variant="chat_phase2b_v1",
+            cohort="default_on",
             provider="openai",
             model="gpt-4o-mini",
             streaming=True,
@@ -360,8 +360,8 @@ class TestChatMetricsCollector:
             first_tool="run",
         )
         collector.track_run_first_fallback_after_run(
-            presentation_variant="chat_phase2a_v1",
-            cohort="gated",
+            presentation_variant="chat_phase2b_v1",
+            cohort="default_on",
             provider="openai",
             model="gpt-4o-mini",
             streaming=True,
@@ -369,8 +369,8 @@ class TestChatMetricsCollector:
             fallback_tool="notes.search",
         )
         collector.track_run_first_completion_proxy(
-            presentation_variant="chat_phase2a_v1",
-            cohort="gated",
+            presentation_variant="chat_phase2b_v1",
+            cohort="default_on",
             provider="openai",
             model="gpt-4o-mini",
             streaming=True,
@@ -385,7 +385,7 @@ class TestChatMetricsCollector:
 
         collector.metrics.run_first_fallback_after_run.add.assert_called_once()
         _, fallback_labels = collector.metrics.run_first_fallback_after_run.add.call_args.args
-        assert fallback_labels["fallback_tool"] == "notes.search"
+        assert fallback_labels["fallback_tool"] == "other"
 
         collector.metrics.run_first_completion_proxy.add.assert_called_once()
         _, completion_labels = collector.metrics.run_first_completion_proxy.add.call_args.args

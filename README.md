@@ -81,7 +81,7 @@ Good fit for:
 
 ## Start Here
 
-1. **Check prerequisites:** `make quickstart-prereqs` (or verify Python 3.10+, ffmpeg, and Docker manually)
+1. **Check prerequisites:** `make quickstart-prereqs` (or verify Python 3.10+ and ffmpeg manually; Docker is only required for the Docker-based profiles)
 2. **Pick your setup profile:**
 
 | Profile | Best for | Command |
@@ -91,6 +91,8 @@ Good fit for:
 | [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md) | Development, debugging | `make quickstart-install` |
 
 1. **Follow your profile guide** end-to-end — it covers install, run, verify, and next steps.
+
+Developers working on the WebUI, extension, or shared app packages should also start with [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md).
 
 Optional add-ons (apply AFTER your base profile is healthy):
 - [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)

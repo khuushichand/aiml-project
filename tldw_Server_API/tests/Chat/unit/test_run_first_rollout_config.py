@@ -19,9 +19,10 @@ def test_resolve_chat_run_first_rollout_mode_defaults_off_without_config(
     monkeypatch.delenv("ACP_RUN_FIRST_ROLLOUT_MODE", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
-    monkeypatch.setattr(config, "load_comprehensive_config", lambda: None)
+    monkeypatch.setattr(config, "load_comprehensive_config", lambda: configparser.ConfigParser())
 
     assert config.resolve_chat_run_first_rollout_mode() == "off"
+    assert config.resolve_chat_run_first_provider_allowlist() == []
     assert config.resolve_chat_run_first_presentation_variant() == "chat_phase2b_v1"
 
 

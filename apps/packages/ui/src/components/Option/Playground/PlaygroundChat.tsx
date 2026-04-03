@@ -10,8 +10,10 @@ import {
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
 import { generateID, updateMessageMedia } from "@/db/dexie/helpers"
-import { fetchChatModels } from "@/services/tldw-server"
+import { fetchChatModels, clearChatModelsCache } from "@/services/tldw-server"
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { tldwClient, type ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
+import { NoProviderBanner } from "@/components/Common/NoProviderBanner"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import {
   getChatLinkedResearchActionPolicy,
@@ -184,12 +186,28 @@ export const PlaygroundChat = ({
   } = useMessageOption()
   const [openReasoning] = useStorage("openReasoning", false)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
-  const { data: chatModels = [], refetch: refetchChatModels } = useQuery({
+  const isConnected = useIsConnected()
+  const { data: chatModels = [], isFetched: chatModelsFetched, refetch: refetchChatModels } = useQuery({
     queryKey: ["playground:chatModels"],
-    queryFn: () => fetchChatModels({ returnEmpty: true, forceRefresh: true }),
-    enabled: true,
+    queryFn: () => fetchChatModels({ returnEmpty: true }),
+    enabled: isConnected,
     staleTime: 30_000,
   })
+  const {
+    data: providersStatus,
+    refetch: refetchProvidersStatus,
+  } = useQuery({
+    queryKey: ["playground:providersStatus"],
+    queryFn: async () => {
+      await tldwClient.initialize().catch(() => null)
+      return await tldwClient.getProvidersStatus()
+    },
+    enabled: isConnected,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const noProvidersConfigured =
+    providersStatus != null && providersStatus.any_configured === false
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
     temporaryChat || historyId === "temp" ? null : historyId
@@ -993,17 +1011,27 @@ export const PlaygroundChat = ({
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-4 w-full">
-            {chatModels.length === 0 && (
+            {isConnected && noProvidersConfigured && (
+              <NoProviderBanner
+                className="mb-4"
+                onRefresh={() => {
+                  clearChatModelsCache()
+                  void refetchChatModels()
+                  void refetchProvidersStatus()
+                }}
+              />
+            )}
+            {isConnected && !noProvidersConfigured && chatModelsFetched && chatModels.length === 0 && (
               <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
-                <p className="font-medium">No AI models available</p>
+                <p className="font-medium">{t("playground:noModelsAvailable", "No AI models available")}</p>
                 <p className="mt-1 text-xs text-text-muted">
-                  Add an LLM provider API key to your server&apos;s .env file and restart, then{" "}
+                  {t("playground:addApiKeyInstructions", "Add an LLM provider API key to your server's .env file and restart, then")}{" "}
                   <button
                     type="button"
                     className="underline hover:text-text"
-                    onClick={() => void refetchChatModels()}
+                    onClick={() => { clearChatModelsCache(); void refetchChatModels() }}
                   >
-                    refresh models
+                    {t("playground:refreshModels", "refresh models")}
                   </button>.
                 </p>
               </div>

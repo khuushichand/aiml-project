@@ -23,7 +23,7 @@ export function CompanionHomeShell({
     queryKey: ["companion-home:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
     enabled: isConnected && !demoEnabled,
-    staleTime: 60_000,
+    staleTime: 30_000,
   })
   const needsProvider = isConnected && !demoEnabled && models.length === 0
 
