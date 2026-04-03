@@ -197,6 +197,62 @@ describe("FlashcardDeckReferenceSection", () => {
     ).not.toHaveProperty("limit")
   })
 
+  it("keeps queries disabled for a new deck until it is re-expanded", async () => {
+    recentState = {
+      ...recentState,
+      data: [makeCard({ uuid: "deck-a-1", front: "Deck A front", back: "Deck A back" })]
+    }
+
+    const { rerender } = render(
+      <FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />
+    )
+    fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
+
+    const input = await screen.findByPlaceholderText("Search this deck")
+    fireEvent.change(input, { target: { value: "alpha" } })
+
+    expect(
+      screen.getByPlaceholderText("Search this deck")
+    ).toBeInTheDocument()
+
+    rerender(<FlashcardDeckReferenceSection open deckId={2} deckName="Physics" />)
+
+    expect(
+      vi.mocked(useFlashcardDeckRecentCardsQuery).mock.calls.at(-1)?.[1]
+    ).toEqual(expect.objectContaining({ enabled: false }))
+    expect(
+      vi.mocked(useFlashcardDeckSearchQuery).mock.calls.at(-1)?.[1]
+    ).toEqual(expect.objectContaining({ enabled: false }))
+
+    fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
+  })
+
+  it("treats whitespace-only search as inactive", async () => {
+    vi.useFakeTimers()
+    recentState = {
+      ...recentState,
+      data: [makeCard()]
+    }
+
+    render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
+    fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
+
+    const input = screen.getByPlaceholderText("Search this deck")
+    fireEvent.change(input, { target: { value: "   " } })
+
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+
+    expect(
+      vi.mocked(useFlashcardDeckSearchQuery).mock.calls.at(-1)?.[0]
+    ).toEqual(expect.objectContaining({ query: "" }))
+    expect(
+      vi.mocked(useFlashcardDeckSearchQuery).mock.calls.at(-1)?.[1]
+    ).toEqual(expect.objectContaining({ enabled: false }))
+    expect(screen.queryByText("No matching cards.")).not.toBeInTheDocument()
+  })
+
   it("shows compact inline messages for empty recent, no-results, and error states", async () => {
     recentState = {
       ...recentState,

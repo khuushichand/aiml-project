@@ -21,11 +21,13 @@ export const FlashcardDeckReferenceSection: React.FC<
   FlashcardDeckReferenceSectionProps
 > = ({ open, deckId, deckName }) => {
   const [expanded, setExpanded] = React.useState(false)
+  const [expandedForDeckId, setExpandedForDeckId] = React.useState<number | null>(null)
   const [searchInput, setSearchInput] = React.useState("")
   const [debouncedSearchInput, setDebouncedSearchInput] = React.useState("")
 
   React.useEffect(() => {
     setExpanded(false)
+    setExpandedForDeckId(null)
     setSearchInput("")
     setDebouncedSearchInput("")
   }, [deckId])
@@ -33,6 +35,7 @@ export const FlashcardDeckReferenceSection: React.FC<
   React.useEffect(() => {
     if (open) return
     setExpanded(false)
+    setExpandedForDeckId(null)
     setSearchInput("")
     setDebouncedSearchInput("")
   }, [open])
@@ -47,8 +50,10 @@ export const FlashcardDeckReferenceSection: React.FC<
     }
   }, [searchInput])
 
-  const sectionEnabled = open && expanded && deckId != null
-  const searchEnabled = sectionEnabled && debouncedSearchInput.length > 0
+  const trimmedDebouncedSearchInput = debouncedSearchInput.trim()
+  const sectionExpanded = open && expanded && expandedForDeckId === deckId
+  const sectionEnabled = sectionExpanded && deckId != null
+  const searchEnabled = sectionEnabled && trimmedDebouncedSearchInput.length > 0
 
   const recentQuery = useFlashcardDeckRecentCardsQuery(deckId, {
     enabled: sectionEnabled,
@@ -57,7 +62,7 @@ export const FlashcardDeckReferenceSection: React.FC<
   const searchQuery = useFlashcardDeckSearchQuery(
     {
       deckId,
-      query: debouncedSearchInput
+      query: trimmedDebouncedSearchInput
     },
     {
       enabled: searchEnabled
@@ -84,7 +89,7 @@ export const FlashcardDeckReferenceSection: React.FC<
   const isSearchLoading = Boolean(searchQuery.isLoading)
   const isRecentError = Boolean(recentQuery.isError)
   const isSearchError = Boolean(searchQuery.isError)
-  const hasSearchTerm = debouncedSearchInput.length > 0
+  const hasSearchTerm = trimmedDebouncedSearchInput.length > 0
 
   const renderRecentState = () => {
     if (isRecentLoading) {
@@ -219,7 +224,7 @@ export const FlashcardDeckReferenceSection: React.FC<
   return (
     <div className="rounded-md border border-border bg-muted/10">
       <Collapse
-        activeKey={open && expanded ? [SECTION_KEY] : []}
+        activeKey={sectionExpanded ? [SECTION_KEY] : []}
         destroyOnHidden
         bordered={false}
         className="bg-transparent"
@@ -228,6 +233,7 @@ export const FlashcardDeckReferenceSection: React.FC<
             ? nextKeys.includes(SECTION_KEY)
             : nextKeys === SECTION_KEY
           setExpanded(nextExpanded)
+          setExpandedForDeckId(nextExpanded ? deckId : null)
         }}
         items={[
           {
