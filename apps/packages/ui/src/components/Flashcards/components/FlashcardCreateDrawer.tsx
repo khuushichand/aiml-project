@@ -24,6 +24,7 @@ import {
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { FlashcardDeckReferenceSection } from "./FlashcardDeckReferenceSection"
 import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
 import {
@@ -252,11 +253,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       const values = await form.validateFields()
       await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
       message.success(t("common:created", { defaultValue: "Created" }))
-      // Keep deck selection but clear content
-      const deckId = form.getFieldValue("deck_id")
-      const modelType = form.getFieldValue("model_type")
-      form.resetFields()
-      form.setFieldsValue({ deck_id: deckId, model_type: modelType })
+      form.resetFields(["front", "back", "extra", "notes", "tags"])
       onSuccess?.()
     } catch (e: unknown) {
       if (e && typeof e === "object" && "errorFields" in e) return
@@ -498,6 +495,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             </Text>
           )}
         </div>
+
+        <FlashcardDeckReferenceSection
+          open={open}
+          deckId={selectedDeckId ?? null}
+          deckName={selectedDeck?.name ?? null}
+        />
 
         {/* Hidden fields for API compatibility */}
         <Form.Item name="reverse" hidden>

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FlashcardCreateDrawer } from "../FlashcardCreateDrawer"
 import { useCreateDeckMutation, useCreateFlashcardMutation, useDecksQuery } from "../../hooks"
@@ -52,7 +52,21 @@ vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
   useCreateFlashcardMutation: vi.fn(),
   useCreateDeckMutation: vi.fn(),
-  useDebouncedFormField: vi.fn(() => undefined)
+  useDebouncedFormField: vi.fn(() => undefined),
+  useFlashcardDeckRecentCardsQuery: vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn()
+  })),
+  useFlashcardDeckSearchQuery: vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn()
+  }))
 }))
 
 vi.mock("../MarkdownWithBoundary", () => ({
@@ -89,9 +103,11 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 
 describe("FlashcardCreateDrawer image insertion", () => {
   const createDeckMutateAsync = vi.fn()
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
     vi.clearAllMocks()
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [
         {
@@ -126,6 +142,11 @@ describe("FlashcardCreateDrawer image insertion", () => {
       isPending: false
     } as any)
     createDeckMutateAsync.mockReset()
+  })
+
+  afterEach(() => {
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
   })
 
   it("inserts an uploaded image snippet into the front field at the cursor", async () => {
