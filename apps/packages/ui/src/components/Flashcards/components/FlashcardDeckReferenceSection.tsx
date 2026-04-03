@@ -1,0 +1,268 @@
+import React from "react"
+import { Button, Collapse, Input, Spin, Typography } from "antd"
+import {
+  useFlashcardDeckRecentCardsQuery,
+  useFlashcardDeckSearchQuery
+} from "../hooks"
+import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
+
+type FlashcardDeckReferenceSectionProps = {
+  open: boolean
+  deckId: number | null
+  deckName?: string | null
+}
+
+const { Text } = Typography
+const SECTION_KEY = "deck-reference"
+const SEARCH_DEBOUNCE_MS = 300
+const RECENT_LIMIT = 6
+
+export const FlashcardDeckReferenceSection: React.FC<
+  FlashcardDeckReferenceSectionProps
+> = ({ open, deckId, deckName }) => {
+  const [expanded, setExpanded] = React.useState(false)
+  const [searchInput, setSearchInput] = React.useState("")
+  const [debouncedSearchInput, setDebouncedSearchInput] = React.useState("")
+
+  React.useEffect(() => {
+    setExpanded(false)
+    setSearchInput("")
+    setDebouncedSearchInput("")
+  }, [deckId])
+
+  React.useEffect(() => {
+    if (open) return
+    setExpanded(false)
+    setSearchInput("")
+    setDebouncedSearchInput("")
+  }, [open])
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchInput(searchInput)
+    }, SEARCH_DEBOUNCE_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [searchInput])
+
+  const sectionEnabled = open && expanded && deckId != null
+  const searchEnabled = sectionEnabled && debouncedSearchInput.length > 0
+
+  const recentQuery = useFlashcardDeckRecentCardsQuery(deckId, {
+    enabled: sectionEnabled,
+    limit: RECENT_LIMIT
+  })
+  const searchQuery = useFlashcardDeckSearchQuery(
+    {
+      deckId,
+      query: debouncedSearchInput
+    },
+    {
+      enabled: searchEnabled
+    }
+  )
+
+  if (deckId == null) {
+    return null
+  }
+
+  const recentCards = (recentQuery.data as Array<{
+    uuid: string
+    front: string
+    back: string
+  }> | undefined) ?? []
+  const searchCards = (searchQuery.data as Array<{
+    uuid: string
+    front: string
+    back: string
+  }> | undefined) ?? []
+  const hasRecentCards = recentCards.length > 0
+  const hasSearchResults = searchCards.length > 0
+  const isRecentLoading = Boolean(recentQuery.isLoading)
+  const isSearchLoading = Boolean(searchQuery.isLoading)
+  const isRecentError = Boolean(recentQuery.isError)
+  const isSearchError = Boolean(searchQuery.isError)
+  const hasSearchTerm = debouncedSearchInput.length > 0
+
+  const renderRecentState = () => {
+    if (isRecentLoading) {
+      return (
+        <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+          <Spin size="small" />
+          <span>Loading recent cards...</span>
+        </div>
+      )
+    }
+
+    if (isRecentError) {
+      return (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
+          <Text type="secondary">Unable to load reference cards.</Text>
+          <Button
+            size="small"
+            type="link"
+            className="h-auto p-0"
+            onClick={() => {
+              void recentQuery.refetch?.()
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )
+    }
+
+    if (!hasRecentCards) {
+      return (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          No recent cards in this deck yet.
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-2">
+        {recentCards.map((card) => (
+          <article
+            key={card.uuid}
+            className="rounded-md border border-border bg-surface px-3 py-2"
+          >
+            <div className="grid gap-2">
+              <div>
+                <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
+                  Front
+                </Text>
+                <MarkdownWithBoundary content={card.front} size="xs" />
+              </div>
+              <div className="border-t border-border pt-2">
+                <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
+                  Back
+                </Text>
+                <MarkdownWithBoundary content={card.back} size="xs" />
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    )
+  }
+
+  const renderSearchState = () => {
+    if (!hasSearchTerm) {
+      return null
+    }
+
+    if (isSearchLoading) {
+      return (
+        <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+          <Spin size="small" />
+          <span>Loading search results...</span>
+        </div>
+      )
+    }
+
+    if (isSearchError) {
+      return (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
+          <Text type="secondary">Unable to load search results.</Text>
+          <Button
+            size="small"
+            type="link"
+            className="h-auto p-0"
+            onClick={() => {
+              void searchQuery.refetch?.()
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )
+    }
+
+    if (!hasSearchResults) {
+      return (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          No matching cards.
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-2">
+        {searchCards.map((card) => (
+          <article
+            key={card.uuid}
+            className="rounded-md border border-border bg-surface px-3 py-2"
+          >
+            <div className="grid gap-2">
+              <div>
+                <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
+                  Front
+                </Text>
+                <MarkdownWithBoundary content={card.front} size="xs" />
+              </div>
+              <div className="border-t border-border pt-2">
+                <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
+                  Back
+                </Text>
+                <MarkdownWithBoundary content={card.back} size="xs" />
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-muted/10">
+      <Collapse
+        activeKey={open && expanded ? [SECTION_KEY] : []}
+        destroyOnHidden
+        bordered={false}
+        className="bg-transparent"
+        onChange={(nextKeys) => {
+          const nextExpanded = Array.isArray(nextKeys)
+            ? nextKeys.includes(SECTION_KEY)
+            : nextKeys === SECTION_KEY
+          setExpanded(nextExpanded)
+        }}
+        items={[
+          {
+            key: SECTION_KEY,
+            label: (
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-sm font-medium">
+                  Existing cards in this deck
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  {deckName ? `${deckName} deck` : "Recent cards and search"}
+                </span>
+              </div>
+            ),
+            children: (
+              <div className="space-y-3 px-1 pt-2">
+                <Input
+                  allowClear
+                  value={searchInput}
+                  placeholder="Search this deck"
+                  onChange={(event) => {
+                    setSearchInput(event.target.value)
+                  }}
+                />
+                <div className="space-y-3">
+                  {renderRecentState()}
+                  {renderSearchState()}
+                </div>
+              </div>
+            )
+          }
+        ]}
+      />
+    </div>
+  )
+}
+
+export default FlashcardDeckReferenceSection
