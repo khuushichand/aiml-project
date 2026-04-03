@@ -11,6 +11,7 @@ import {
   Select,
   Space,
   Switch,
+  Tooltip,
   Typography
 } from "antd"
 import { useTranslation } from "react-i18next"
@@ -46,6 +47,7 @@ import {
   type StructuredQaImportPreviewDraft
 } from "@/services/flashcards"
 import type { FlashcardsGenerateIntent } from "@/services/tldw/flashcards-generate-handoff"
+import { getLlmProviders } from "@/services/prompt-studio"
 
 const { Text } = Typography
 
@@ -1984,6 +1986,24 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   const createDeckMutation = useCreateDeckMutation()
   const decks = decksQuery.data || []
 
+  const llmProvidersQuery = useQuery({
+    queryKey: ["flashcards", "llm-providers"],
+    queryFn: () => getLlmProviders(),
+    staleTime: 60_000,
+    retry: 1
+  })
+
+  const hasLlmProviders = React.useMemo(() => {
+    if (llmProvidersQuery.isLoading) return true // optimistic while loading
+    if (llmProvidersQuery.data == null) return false
+    // Unwrap ApiSendResponse envelope: actual payload is in .data
+    const raw = llmProvidersQuery.data as any
+    const data = raw?.data ?? raw
+    if (Array.isArray(data?.providers)) return data.providers.length > 0
+    if (typeof data?.total_configured === "number") return data.total_configured > 0
+    return true // fallback: assume available if shape unknown
+  }, [llmProvidersQuery.data, llmProvidersQuery.isLoading])
+
   const sourceContext = React.useMemo<GenerateSourceContext | null>(() => {
     if (!initialIntent) return null
     if (
@@ -2377,6 +2397,18 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
             {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
           </Text>
         ) : null}
+        {!hasLlmProviders && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-3"
+            data-testid="flashcards-generate-no-llm-banner"
+            message={t("option:flashcards.generateNoLlmBanner", {
+              defaultValue:
+                "Flashcard generation requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+            })}
+          />
+        )}
         <Form.Item
           label={t("option:flashcards.generateProvider", {
             defaultValue: "Provider (optional)"
@@ -2418,15 +2450,25 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
         />
       </Form.Item>
       {generationError && <Alert type="error" showIcon title={generationError} />}
-      <Button
-        type="primary"
-        onClick={handleGenerate}
-        loading={generateMutation.isPending}
-        disabled={!sourceText.trim()}
-        data-testid="flashcards-generate-button"
+      <Tooltip
+        title={
+          !hasLlmProviders
+            ? t("option:flashcards.generateNoLlmTooltip", {
+                defaultValue: "No LLM provider configured"
+              })
+            : undefined
+        }
       >
-        {t("option:flashcards.generateButton", { defaultValue: "Generate cards" })}
-      </Button>
+        <Button
+          type="primary"
+          onClick={handleGenerate}
+          loading={generateMutation.isPending}
+          disabled={!sourceText.trim() || !hasLlmProviders}
+          data-testid="flashcards-generate-button"
+        >
+          {t("option:flashcards.generateButton", { defaultValue: "Generate cards" })}
+        </Button>
+      </Tooltip>
 
       {generatedCards.length > 0 && (
         <div className="space-y-2">
