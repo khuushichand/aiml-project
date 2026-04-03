@@ -1,6 +1,8 @@
 import React from "react"
 import { Button, Collapse, Input, Spin, Typography } from "antd"
+import { useTranslation } from "react-i18next"
 import {
+  type UseFlashcardQueriesOptions,
   useFlashcardDeckRecentCardsQuery,
   useFlashcardDeckSearchQuery
 } from "../hooks"
@@ -10,7 +12,7 @@ type FlashcardDeckReferenceSectionProps = {
   open: boolean
   deckId: number | null
   deckName?: string | null
-}
+} & Pick<UseFlashcardQueriesOptions, "includeWorkspaceItems" | "workspaceId">
 
 const { Text } = Typography
 const SECTION_KEY = "deck-reference"
@@ -19,7 +21,8 @@ const RECENT_LIMIT = 6
 
 export const FlashcardDeckReferenceSection: React.FC<
   FlashcardDeckReferenceSectionProps
-> = ({ open, deckId, deckName }) => {
+> = ({ open, deckId, deckName, includeWorkspaceItems, workspaceId }) => {
+  const { t } = useTranslation(["option", "common"])
   const [expanded, setExpanded] = React.useState(false)
   const [expandedForDeckId, setExpandedForDeckId] = React.useState<number | null>(null)
   const [searchInput, setSearchInput] = React.useState("")
@@ -60,7 +63,9 @@ export const FlashcardDeckReferenceSection: React.FC<
 
   const recentQuery = useFlashcardDeckRecentCardsQuery(deckId, {
     enabled: sectionEnabled,
-    limit: RECENT_LIMIT
+    limit: RECENT_LIMIT,
+    includeWorkspaceItems,
+    workspaceId
   })
   const searchQuery = useFlashcardDeckSearchQuery(
     {
@@ -68,7 +73,9 @@ export const FlashcardDeckReferenceSection: React.FC<
       query: trimmedDebouncedSearchInput
     },
     {
-      enabled: searchEnabled
+      enabled: searchEnabled,
+      includeWorkspaceItems,
+      workspaceId
     }
   )
 
@@ -84,13 +91,20 @@ export const FlashcardDeckReferenceSection: React.FC<
   const isSearchLoading = Boolean(searchQuery.isLoading)
   const isRecentError = Boolean(recentQuery.isError)
   const isSearchError = Boolean(searchQuery.isError)
+  const retryLabel = t("common:retry", { defaultValue: "Retry" })
+  const frontLabel = t("option:flashcards.front", { defaultValue: "Front" })
+  const backLabel = t("option:flashcards.back", { defaultValue: "Back" })
 
   const renderRecentState = () => {
     if (isRecentLoading) {
       return (
         <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
           <Spin size="small" />
-          <span>Loading recent cards...</span>
+          <span>
+            {t("option:flashcards.deckReferenceRecentLoading", {
+              defaultValue: "Loading recent cards..."
+            })}
+          </span>
         </div>
       )
     }
@@ -98,7 +112,11 @@ export const FlashcardDeckReferenceSection: React.FC<
     if (isRecentError) {
       return (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
-          <Text type="secondary">Unable to load reference cards.</Text>
+          <Text type="secondary">
+            {t("option:flashcards.deckReferenceRecentError", {
+              defaultValue: "Unable to load reference cards."
+            })}
+          </Text>
           <Button
             size="small"
             type="link"
@@ -107,7 +125,7 @@ export const FlashcardDeckReferenceSection: React.FC<
               void recentQuery.refetch()
             }}
           >
-            Retry
+            {retryLabel}
           </Button>
         </div>
       )
@@ -116,7 +134,9 @@ export const FlashcardDeckReferenceSection: React.FC<
     if (!hasRecentCards) {
       return (
         <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-          No recent cards in this deck yet.
+          {t("option:flashcards.deckReferenceRecentEmpty", {
+            defaultValue: "No recent cards in this deck yet."
+          })}
         </div>
       )
     }
@@ -131,13 +151,13 @@ export const FlashcardDeckReferenceSection: React.FC<
             <div className="grid gap-2">
               <div>
                 <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
-                  Front
+                  {frontLabel}
                 </Text>
                 <MarkdownWithBoundary content={card.front} size="xs" />
               </div>
               <div className="border-t border-border pt-2">
                 <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
-                  Back
+                  {backLabel}
                 </Text>
                 <MarkdownWithBoundary content={card.back} size="xs" />
               </div>
@@ -157,7 +177,11 @@ export const FlashcardDeckReferenceSection: React.FC<
       return (
         <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
           <Spin size="small" />
-          <span>Loading search results...</span>
+          <span>
+            {t("option:flashcards.deckReferenceSearchLoading", {
+              defaultValue: "Loading search results..."
+            })}
+          </span>
         </div>
       )
     }
@@ -165,7 +189,11 @@ export const FlashcardDeckReferenceSection: React.FC<
     if (isSearchError) {
       return (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
-          <Text type="secondary">Unable to load search results.</Text>
+          <Text type="secondary">
+            {t("option:flashcards.deckReferenceSearchError", {
+              defaultValue: "Unable to load search results."
+            })}
+          </Text>
           <Button
             size="small"
             type="link"
@@ -174,7 +202,7 @@ export const FlashcardDeckReferenceSection: React.FC<
               void searchQuery.refetch()
             }}
           >
-            Retry
+            {retryLabel}
           </Button>
         </div>
       )
@@ -183,7 +211,9 @@ export const FlashcardDeckReferenceSection: React.FC<
     if (!hasSearchResults) {
       return (
         <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-          No matching cards.
+          {t("option:flashcards.deckReferenceSearchEmpty", {
+            defaultValue: "No matching cards."
+          })}
         </div>
       )
     }
@@ -198,13 +228,13 @@ export const FlashcardDeckReferenceSection: React.FC<
             <div className="grid gap-2">
               <div>
                 <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
-                  Front
+                  {frontLabel}
                 </Text>
                 <MarkdownWithBoundary content={card.front} size="xs" />
               </div>
               <div className="border-t border-border pt-2">
                 <Text type="secondary" className="mb-1 block text-[11px] uppercase tracking-wide">
-                  Back
+                  {backLabel}
                 </Text>
                 <MarkdownWithBoundary content={card.back} size="xs" />
               </div>
@@ -235,10 +265,19 @@ export const FlashcardDeckReferenceSection: React.FC<
             label: (
               <div className="flex min-w-0 flex-col">
                 <span className="truncate text-sm font-medium">
-                  Existing cards in this deck
+                  {t("option:flashcards.deckReferenceTitle", {
+                    defaultValue: "Existing cards in this deck"
+                  })}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  {deckName ? `${deckName} deck` : "Recent cards and search"}
+                  {deckName
+                    ? t("option:flashcards.deckReferenceDeckLabel", {
+                        defaultValue: "{{deckName}} deck",
+                        deckName
+                      })
+                    : t("option:flashcards.deckReferenceSummary", {
+                        defaultValue: "Recent cards and search"
+                      })}
                 </span>
               </div>
             ),
@@ -247,10 +286,14 @@ export const FlashcardDeckReferenceSection: React.FC<
                 <section className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <Text className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Recent cards
+                      {t("option:flashcards.deckReferenceRecentTitle", {
+                        defaultValue: "Recent cards"
+                      })}
                     </Text>
                     <Text className="text-[11px] text-muted-foreground">
-                      Latest additions in this deck
+                      {t("option:flashcards.deckReferenceRecentSubtitle", {
+                        defaultValue: "Latest additions in this deck"
+                      })}
                     </Text>
                   </div>
                   {renderRecentState()}
@@ -259,16 +302,22 @@ export const FlashcardDeckReferenceSection: React.FC<
                 <section className="space-y-2 border-t border-border pt-3">
                   <div className="flex items-center justify-between gap-3">
                     <Text className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Search this deck
+                      {t("option:flashcards.deckReferenceSearchTitle", {
+                        defaultValue: "Search this deck"
+                      })}
                     </Text>
                     <Text className="text-[11px] text-muted-foreground">
-                      Search across this deck
+                      {t("option:flashcards.deckReferenceSearchSubtitle", {
+                        defaultValue: "Search across this deck"
+                      })}
                     </Text>
                   </div>
                   <Input
                     allowClear
                     value={searchInput}
-                    placeholder="Search this deck"
+                    placeholder={t("option:flashcards.deckReferenceSearchPlaceholder", {
+                      defaultValue: "Search this deck"
+                    })}
                     onChange={(event) => {
                       setSearchInput(event.target.value)
                     }}

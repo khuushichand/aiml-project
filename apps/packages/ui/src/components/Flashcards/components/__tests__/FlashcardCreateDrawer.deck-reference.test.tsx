@@ -148,6 +148,7 @@ describe("FlashcardCreateDrawer deck reference section", () => {
   const createDeckMutateAsync = vi.fn()
   const recentRefetch = vi.fn()
   const searchRefetch = vi.fn()
+  type DrawerProps = Parameters<typeof FlashcardCreateDrawer>[0]
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>
   let recentState: Record<string, unknown>
   let searchState: Record<string, unknown>
@@ -173,10 +174,10 @@ describe("FlashcardCreateDrawer deck reference section", () => {
       refetch: searchRefetch
     }
 
-    vi.mocked(useDecksQuery).mockReturnValue({
+    vi.mocked(useDecksQuery).mockImplementation(() => ({
       data: currentDecks,
       isLoading: false
-    } as any)
+    } as any))
     vi.mocked(useCreateFlashcardMutation).mockReturnValue({
       mutateAsync: createFlashcardMutateAsync,
       isPending: false
@@ -194,8 +195,8 @@ describe("FlashcardCreateDrawer deck reference section", () => {
     consoleErrorSpy.mockRestore()
   })
 
-  const renderDrawer = () =>
-    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+  const renderDrawer = (props: Partial<DrawerProps> = {}) =>
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} {...props} />)
 
   const selectDeck = async (deckName: string) => {
     fireEvent.mouseDown(screen.getByLabelText("Deck"))
@@ -238,6 +239,37 @@ describe("FlashcardCreateDrawer deck reference section", () => {
     })
     expect(screen.getByText("Existing cards in this deck")).toBeInTheDocument()
     expect(screen.getByText("Biology deck")).toBeInTheDocument()
+  })
+
+  it("forwards workspace visibility options to the drawer deck reference hooks", async () => {
+    renderDrawer({
+      workspaceId: "workspace-123",
+      includeWorkspaceItems: true
+    })
+
+    await selectDeck("Biology")
+    await expandReferenceSection()
+
+    expect(vi.mocked(useFlashcardDeckRecentCardsQuery)).toHaveBeenLastCalledWith(
+      1,
+      expect.objectContaining({
+        enabled: true,
+        limit: 6,
+        workspaceId: "workspace-123",
+        includeWorkspaceItems: true
+      })
+    )
+    expect(vi.mocked(useFlashcardDeckSearchQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deckId: 1,
+        query: ""
+      }),
+      expect.objectContaining({
+        enabled: false,
+        workspaceId: "workspace-123",
+        includeWorkspaceItems: true
+      })
+    )
   })
 
   it("preserves the selected deck, template, section expansion, and search term after Create & Add Another", async () => {

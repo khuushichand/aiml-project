@@ -6,6 +6,29 @@ import {
   useFlashcardDeckSearchQuery
 } from "../../hooks"
 
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+          }
+    ) => {
+      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue) {
+        return defaultValueOrOptions.defaultValue.replace(
+          /\{\{(\w+)\}\}/g,
+          (_match, token: string) =>
+            String((defaultValueOrOptions as Record<string, unknown>)[token] ?? `{{${token}}}`)
+        )
+      }
+      return key
+    }
+  })
+}))
+
 vi.mock("../../hooks", () => ({
   useFlashcardDeckRecentCardsQuery: vi.fn(),
   useFlashcardDeckSearchQuery: vi.fn()
@@ -81,29 +104,45 @@ const makeCard = (overrides: Partial<MockFlashcard> = {}): MockFlashcard => ({
 describe("FlashcardDeckReferenceSection", () => {
   const recentRefetch = vi.fn()
   const searchRefetch = vi.fn()
-  let recentState: Record<string, unknown>
-  let searchState: Record<string, unknown>
+  let defaultRecentState: Record<string, unknown>
+  let defaultSearchState: Record<string, unknown>
+  let recentStatesByDeck: Map<number | null, Record<string, unknown>>
+  let searchStatesByRequest: Map<string, Record<string, unknown>>
+
+  const getSearchStateKey = (
+    deckId: number | null | undefined,
+    query: string
+  ) => `${deckId ?? "null"}::${query.trim()}`
 
   beforeEach(() => {
     vi.clearAllMocks()
     recentRefetch.mockReset()
     searchRefetch.mockReset()
-    recentState = {
+    defaultRecentState = {
       data: [],
       isLoading: false,
       isError: false,
       error: null,
       refetch: recentRefetch
     }
-    searchState = {
+    defaultSearchState = {
       data: [],
       isLoading: false,
       isError: false,
       error: null,
       refetch: searchRefetch
     }
-    vi.mocked(useFlashcardDeckRecentCardsQuery).mockImplementation(() => recentState as any)
-    vi.mocked(useFlashcardDeckSearchQuery).mockImplementation(() => searchState as any)
+    recentStatesByDeck = new Map()
+    searchStatesByRequest = new Map()
+    vi.mocked(useFlashcardDeckRecentCardsQuery).mockImplementation((deckId) => {
+      return (recentStatesByDeck.get(deckId ?? null) ?? defaultRecentState) as any
+    })
+    vi.mocked(useFlashcardDeckSearchQuery).mockImplementation((params) => {
+      return (
+        searchStatesByRequest.get(getSearchStateKey(params.deckId, params.query)) ??
+        defaultSearchState
+      ) as any
+    })
   })
 
   afterEach(() => {
@@ -119,10 +158,10 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("is collapsed by default and keeps the body out of the DOM until expanded", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
 
@@ -139,10 +178,10 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("renders both front and back for each recent reference card", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard({ uuid: "card-1", front: "Alpha", back: "Beta" }), makeCard({ uuid: "card-2", front: "Gamma", back: "Delta" })]
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
     fireEvent.click(screen.getByRole("button", { name: /biology/i }))
@@ -162,10 +201,10 @@ describe("FlashcardDeckReferenceSection", () => {
 
   it("waits 300ms before sending the debounced search term to the search hook", async () => {
     vi.useFakeTimers()
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
     fireEvent.click(screen.getByRole("button", { name: /biology/i }))
@@ -201,16 +240,16 @@ describe("FlashcardDeckReferenceSection", () => {
 
   it("hides stale search results immediately when the input is cleared", async () => {
     vi.useFakeTimers()
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
-    searchState = {
-      ...searchState,
+    })
+    searchStatesByRequest.set(getSearchStateKey(1, "match"), {
+      ...defaultSearchState,
       data: [
         makeCard({ uuid: "match-1", front: "Matched front", back: "Matched back" })
       ]
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
     fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
@@ -233,10 +272,14 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("keeps queries disabled for a new deck until it is re-expanded", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard({ uuid: "deck-a-1", front: "Deck A front", back: "Deck A back" })]
-    }
+    })
+    recentStatesByDeck.set(2, {
+      ...defaultRecentState,
+      data: [makeCard({ uuid: "deck-b-1", deck_id: 2, front: "Deck B front", back: "Deck B back" })]
+    })
 
     const { rerender } = render(
       <FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />
@@ -260,14 +303,18 @@ describe("FlashcardDeckReferenceSection", () => {
     ).toEqual(expect.objectContaining({ enabled: false }))
 
     fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
+
+    expect(await screen.findByText("Deck B front")).toBeInTheDocument()
+    expect(screen.getByText("Deck B back")).toBeInTheDocument()
+    expect(screen.queryByText("Deck A front")).not.toBeInTheDocument()
   })
 
   it("treats whitespace-only search as inactive", async () => {
     vi.useFakeTimers()
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
     fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
@@ -289,21 +336,21 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("shows compact inline messages for empty recent, no-results, and error states", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard({ uuid: "recent-1", front: "Recent front", back: "Recent back" })]
-    }
+    })
     const { rerender } = render(
       <FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />
     )
     fireEvent.click(screen.getByRole("button", { name: /biology/i }))
 
-    searchState = {
-      ...searchState,
+    searchStatesByRequest.set(getSearchStateKey(1, "matching-term"), {
+      ...defaultSearchState,
       data: [
         makeCard({ uuid: "match-1", front: "Matched front", back: "Matched back" })
       ]
-    }
+    })
 
     const input = await screen.findByPlaceholderText("Search this deck")
     fireEvent.change(input, { target: { value: "matching-term" } })
@@ -315,10 +362,10 @@ describe("FlashcardDeckReferenceSection", () => {
       expect(screen.getByText("Matched back")).toBeInTheDocument()
     })
 
-    searchState = {
-      ...searchState,
+    searchStatesByRequest.set(getSearchStateKey(1, "missing-term"), {
+      ...defaultSearchState,
       data: []
-    }
+    })
 
     fireEvent.change(input, { target: { value: "missing-term" } })
 
@@ -328,11 +375,11 @@ describe("FlashcardDeckReferenceSection", () => {
       expect(screen.getByText("Recent back")).toBeInTheDocument()
     })
 
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(2, {
+      ...defaultRecentState,
       isError: true,
       error: new Error("recent failed")
-    }
+    })
 
     rerender(<FlashcardDeckReferenceSection open deckId={2} deckName="Physics" />)
     fireEvent.click(screen.getByRole("button", { name: /physics/i }))
@@ -342,15 +389,15 @@ describe("FlashcardDeckReferenceSection", () => {
 
   it("shows the search error state and retries the search query", async () => {
     vi.useFakeTimers()
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
-    searchState = {
-      ...searchState,
+    })
+    searchStatesByRequest.set(getSearchStateKey(1, "alpha"), {
+      ...defaultSearchState,
       isError: true,
       error: new Error("search failed")
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
     fireEvent.click(screen.getByRole("button", { name: /existing cards in this deck/i }))
@@ -369,11 +416,11 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("wires the retry button to the recent query refetch", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       isError: true,
       error: new Error("recent failed")
-    }
+    })
 
     render(<FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />)
     fireEvent.click(screen.getByRole("button", { name: /biology/i }))
@@ -384,10 +431,14 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("clears the rendered search input when deckId changes", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
+    })
+    recentStatesByDeck.set(2, {
+      ...defaultRecentState,
+      data: [makeCard({ uuid: "deck-b-1", deck_id: 2, front: "Physics front", back: "Physics back" })]
+    })
 
     const { rerender } = render(
       <FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />
@@ -412,10 +463,10 @@ describe("FlashcardDeckReferenceSection", () => {
   })
 
   it("clears the rendered search input when the drawer closes and reopens", async () => {
-    recentState = {
-      ...recentState,
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
       data: [makeCard()]
-    }
+    })
 
     const { rerender } = render(
       <FlashcardDeckReferenceSection open deckId={1} deckName="Biology" />
@@ -435,5 +486,45 @@ describe("FlashcardDeckReferenceSection", () => {
         ""
       )
     })
+  })
+
+  it("forwards workspace visibility options to both deck reference queries", async () => {
+    recentStatesByDeck.set(1, {
+      ...defaultRecentState,
+      data: [makeCard()]
+    })
+
+    render(
+      <FlashcardDeckReferenceSection
+        open
+        deckId={1}
+        deckName="Biology"
+        workspaceId="workspace-123"
+        includeWorkspaceItems
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /biology/i }))
+
+    expect(vi.mocked(useFlashcardDeckRecentCardsQuery)).toHaveBeenLastCalledWith(
+      1,
+      expect.objectContaining({
+        enabled: true,
+        limit: 6,
+        workspaceId: "workspace-123",
+        includeWorkspaceItems: true
+      })
+    )
+    expect(vi.mocked(useFlashcardDeckSearchQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deckId: 1,
+        query: ""
+      }),
+      expect.objectContaining({
+        enabled: false,
+        workspaceId: "workspace-123",
+        includeWorkspaceItems: true
+      })
+    )
   })
 })

@@ -19,7 +19,8 @@ import {
   useDecksQuery,
   useCreateFlashcardMutation,
   useCreateDeckMutation,
-  useDebouncedFormField
+  useDebouncedFormField,
+  type UseFlashcardQueriesOptions
 } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
@@ -73,12 +74,21 @@ interface FlashcardCreateDrawerProps {
   onSuccess?: () => void
 }
 
-export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
+type FlashcardCreateDrawerVisibilityProps = Pick<
+  UseFlashcardQueriesOptions,
+  "includeWorkspaceItems" | "workspaceId"
+>
+
+export const FlashcardCreateDrawer: React.FC<
+  FlashcardCreateDrawerProps & FlashcardCreateDrawerVisibilityProps
+> = ({
   open,
   onClose,
   decks: propDecks,
   decksLoading: propDecksLoading,
-  onSuccess
+  onSuccess,
+  includeWorkspaceItems,
+  workspaceId
 }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
@@ -125,7 +135,11 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const inlineSchedulerDraft = useDeckSchedulerDraft()
 
   // Queries and mutations - use props if provided, otherwise fetch
-  const decksQuery = useDecksQuery({ enabled: !propDecks })
+  const decksQuery = useDecksQuery({
+    enabled: !propDecks,
+    includeWorkspaceItems,
+    workspaceId
+  })
   const decks = propDecks ?? decksQuery.data ?? []
   const decksLoading = propDecksLoading ?? decksQuery.isLoading
   const selectedDeck = React.useMemo(
@@ -500,6 +514,8 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           open={open}
           deckId={selectedDeckId ?? null}
           deckName={selectedDeck?.name ?? null}
+          includeWorkspaceItems={includeWorkspaceItems}
+          workspaceId={workspaceId}
         />
 
         {/* Hidden fields for API compatibility */}

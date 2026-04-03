@@ -2500,6 +2500,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         onClose={() => setCreateOpen(false)}
         decks={decksQuery.data || []}
         decksLoading={decksQuery.isLoading}
+        includeWorkspaceItems={workspaceVisibilityOptions.includeWorkspaceItems}
+        workspaceId={workspaceVisibilityOptions.workspaceId}
       />
 
       {/* Floating Action Button for creating cards */}
