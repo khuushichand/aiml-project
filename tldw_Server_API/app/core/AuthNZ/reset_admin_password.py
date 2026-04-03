@@ -6,7 +6,7 @@ This script works with both SQLite and PostgreSQL backends by using the same
 UsersDB abstraction as the rest of the AuthNZ subsystem.
 
 Usage:
-    python -m tldw_Server_API.app.core.AuthNZ.reset_admin_password \
+    python -m tldw_Server_API.app.core.AuthNZ.reset_admin_password \\
         --username admin --new-password 'N3wS3cure!'
 """
 

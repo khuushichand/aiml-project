@@ -7,7 +7,7 @@ not available. The command is idempotent: if an admin with the requested
 username already exists, it exits successfully without making changes.
 
 Usage:
-    python -m tldw_Server_API.app.core.AuthNZ.create_admin \
+    python -m tldw_Server_API.app.core.AuthNZ.create_admin \\
         --username myadmin --password 'S3cureP@ss!' [--email admin@example.com]
 """
 
