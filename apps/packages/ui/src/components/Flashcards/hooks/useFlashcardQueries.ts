@@ -53,6 +53,10 @@ export interface UseFlashcardQueriesOptions {
   workspaceId?: string | null
 }
 
+export interface UseFlashcardDeckRecentCardsQueryOptions extends UseFlashcardQueriesOptions {
+  limit?: number
+}
+
 const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
   qc.invalidateQueries({
     predicate: (query) =>
@@ -175,6 +179,74 @@ export function useFlashcardAssistantQuery(
     queryKey: ["flashcards:assistant", cardUuid ?? null],
     queryFn: ({ signal }) => getFlashcardAssistant(cardUuid!, { signal }),
     enabled: (options?.enabled ?? flashcardsEnabled) && !!cardUuid
+  })
+}
+
+/**
+ * Hook for fetching recent cards for a deck reference view.
+ */
+export function useFlashcardDeckRecentCardsQuery(
+  deckId: number | null | undefined,
+  options?: UseFlashcardDeckRecentCardsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
+  const limit = options?.limit ?? 6
+
+  return useQuery({
+    queryKey: ["flashcards:deck:recent", deckId ?? null, limit, visibilityParams],
+    queryFn: async (): Promise<Flashcard[]> => {
+      const response = await listFlashcards({
+        deck_id: deckId ?? undefined,
+        due_status: "all",
+        limit,
+        offset: 0,
+        order_by: "created_at",
+        ...visibilityParams
+      })
+      return response.items || []
+    },
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!deckId
+  })
+}
+
+/**
+ * Hook for searching cards in a deck reference view.
+ */
+export function useFlashcardDeckSearchQuery(
+  params: {
+    deckId: number | null | undefined
+    query: string
+    limit?: number
+  },
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
+  const trimmedQuery = params.query.trim()
+  const limit = params.limit ?? 20
+
+  return useQuery({
+    queryKey: [
+      "flashcards:deck:search",
+      params.deckId ?? null,
+      trimmedQuery,
+      limit,
+      visibilityParams
+    ],
+    queryFn: async (): Promise<Flashcard[]> => {
+      const response = await listFlashcards({
+        deck_id: params.deckId ?? undefined,
+        q: trimmedQuery,
+        due_status: "all",
+        limit,
+        offset: 0,
+        order_by: "created_at",
+        ...visibilityParams
+      })
+      return response.items || []
+    },
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!params.deckId && trimmedQuery.length > 0
   })
 }
 
