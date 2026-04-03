@@ -55,6 +55,7 @@ import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
 import { FlashcardQueueStateBadge } from "../utils/queue-state-badges"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
+import { formatDeckDisplayName } from "../utils/deck-display"
 import {
   formatFlashcardsUiErrorMessage,
   mapFlashcardsUiError
@@ -78,6 +79,8 @@ const { Text } = Typography
 const BULK_MUTATION_CHUNK_SIZE = 50
 const DELETE_UNDO_SECONDS = 30
 const DELETE_UNDO_MS = DELETE_UNDO_SECONDS * 1000
+const INLINE_MARKDOWN_SNIPPET_CLASS =
+  "[&_p]:m-0 [&_ul]:m-0 [&_ol]:m-0 [&_pre]:m-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_h1]:m-0 [&_h2]:m-0 [&_h3]:m-0 [&_h4]:m-0 [&_h5]:m-0 [&_h6]:m-0"
 
 type PendingDeletion = {
   card: Flashcard
@@ -314,6 +317,19 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       return null
     },
     [decksQuery.data, mDeckId]
+  )
+  const deckMap = React.useMemo(
+    () => new Map((decksQuery.data || []).map((deck) => [deck.id, deck])),
+    [decksQuery.data]
+  )
+  const resolveDeckLabel = React.useCallback(
+    (deckId: number | null | undefined) => {
+      if (deckId == null) {
+        return t("option:flashcards.noDeck", { defaultValue: "No deck" })
+      }
+      return formatDeckDisplayName(deckMap.get(deckId), `Deck ${deckId}`)
+    },
+    [deckMap, t]
   )
   const workspaceFilterOptions = React.useMemo(() => {
     const workspaceIds = new Set<string>()
@@ -1618,7 +1634,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               className="min-w-44"
               data-testid="flashcards-manage-deck-select"
               options={(decksQuery.data || []).map((d) => ({
-                label: d.name,
+                label: formatDeckDisplayName(d, `Deck ${d.id}`),
                 value: d.id
               }))}
             />
@@ -2053,7 +2069,15 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                           <span className="inline-block w-2 h-2 rounded-full bg-success" />
                         </Tooltip>
                       )}
-                      <Text className="flex-1 truncate">{item.front}</Text>
+                      <div className="min-w-0 flex-1 text-sm text-text">
+                        <div className="line-clamp-1">
+                          <MarkdownWithBoundary
+                            content={item.front}
+                            size="xs"
+                            className={INLINE_MARKDOWN_SNIPPET_CLASS}
+                          />
+                        </div>
+                      </div>
                     </div>
                   }
                   description={
@@ -2061,7 +2085,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       <div className="flex items-center gap-2">
                         {item.deck_id != null && (
                           <span className="text-text-muted">
-                            {(decksQuery.data || []).find((d) => d.id === item.deck_id)?.name || `Deck ${item.deck_id}`}
+                            {resolveDeckLabel(item.deck_id)}
                           </span>
                         )}
                         {item.due_at && (
@@ -2126,19 +2150,33 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                 <>
                   <List.Item.Meta
                     title={
-                      <div className="flex items-center gap-2">
-                        <Text strong>{item.front.slice(0, 80)}</Text>
+                      <div className="flex min-w-0 items-start gap-2">
+                        <div className="min-w-0 flex-1 text-sm font-semibold text-text">
+                          <div className="line-clamp-1">
+                            <MarkdownWithBoundary
+                              content={item.front}
+                              size="xs"
+                              className={INLINE_MARKDOWN_SNIPPET_CLASS}
+                            />
+                          </div>
+                        </div>
                         <span className="text-text-subtle">-</span>
-                        <Text type="secondary">{item.back.slice(0, 80)}</Text>
+                        <div className="min-w-0 flex-1 text-sm text-text-muted">
+                          <div className="line-clamp-1">
+                            <MarkdownWithBoundary
+                              content={item.back}
+                              size="xs"
+                              className={INLINE_MARKDOWN_SNIPPET_CLASS}
+                            />
+                          </div>
+                        </div>
                       </div>
                     }
                     description={
                       <div className="flex items-center gap-2 flex-wrap">
                         {item.deck_id != null && (
                           <Tag color="blue">
-                            {(decksQuery.data || []).find(
-                              (d) => d.id === item.deck_id
-                            )?.name || `Deck ${item.deck_id}`}
+                            {resolveDeckLabel(item.deck_id)}
                           </Tag>
                         )}
                         <Tag>{formatCardType(item, t)}</Tag>
