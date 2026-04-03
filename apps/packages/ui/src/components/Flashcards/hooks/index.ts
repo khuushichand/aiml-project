@@ -1,8 +1,4 @@
 export * from "./useFlashcardQueries"
-export {
-  useFlashcardDeckRecentCardsQuery,
-  useFlashcardDeckSearchQuery
-} from "./useFlashcardQueries"
 export * from "./useFlashcardDocumentQuery"
 export * from "./useFlashcardDocumentRowState"
 export * from "./useDebouncedFormField"

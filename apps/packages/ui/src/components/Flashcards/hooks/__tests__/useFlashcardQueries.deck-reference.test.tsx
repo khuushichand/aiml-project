@@ -36,6 +36,16 @@ const buildWrapper = (queryClient: QueryClient) => {
   )
 }
 
+const waitForIdleQuery = async (
+  queryClient: QueryClient,
+  queryKey: readonly unknown[]
+) => {
+  await new Promise((resolve) => setTimeout(resolve, 25))
+
+  expect(queryClient.isFetching()).toBe(0)
+  expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("idle")
+}
+
 describe("useFlashcardDeckRecentCardsQuery + useFlashcardDeckSearchQuery", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -112,6 +122,15 @@ describe("useFlashcardDeckRecentCardsQuery + useFlashcardDeckSearchQuery", () =>
       .getAll()
       .find((query) => query.queryKey[0] === "flashcards:deck:recent")
 
+    expect(recentQuery?.queryKey).toEqual([
+      "flashcards:deck:recent",
+      42,
+      12,
+      {
+        workspace_id: undefined,
+        include_workspace_items: false
+      }
+    ])
     expect(recentQuery?.queryKey[2]).toBe(12)
   })
 
@@ -150,9 +169,17 @@ describe("useFlashcardDeckRecentCardsQuery + useFlashcardDeckSearchQuery", () =>
       wrapper: buildWrapper(queryClient)
     })
 
-    await waitFor(() => {
-      expect(listFlashcards).not.toHaveBeenCalled()
-    })
+    await waitForIdleQuery(queryClient, [
+      "flashcards:deck:search",
+      42,
+      "",
+      20,
+      {
+        workspace_id: undefined,
+        include_workspace_items: false
+      }
+    ])
+    expect(listFlashcards).not.toHaveBeenCalled()
   })
 
   it("does not call listFlashcards when the search deckId is missing", async () => {
@@ -166,9 +193,17 @@ describe("useFlashcardDeckRecentCardsQuery + useFlashcardDeckSearchQuery", () =>
       wrapper: buildWrapper(queryClient)
     })
 
-    await waitFor(() => {
-      expect(listFlashcards).not.toHaveBeenCalled()
-    })
+    await waitForIdleQuery(queryClient, [
+      "flashcards:deck:search",
+      null,
+      "term",
+      20,
+      {
+        workspace_id: undefined,
+        include_workspace_items: false
+      }
+    ])
+    expect(listFlashcards).not.toHaveBeenCalled()
   })
 
   it("calls listFlashcards with the trimmed deck search parameters", async () => {
@@ -202,9 +237,79 @@ describe("useFlashcardDeckRecentCardsQuery + useFlashcardDeckSearchQuery", () =>
         deck_id: 42,
         due_status: "all",
         order_by: "created_at",
-        q: "spaced term"
+        q: "spaced term",
+        limit: 20,
+        offset: 0
       })
     )
+
+    const searchQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey[0] === "flashcards:deck:search")
+
+    expect(searchQuery?.queryKey).toEqual([
+      "flashcards:deck:search",
+      42,
+      "spaced term",
+      20,
+      {
+        workspace_id: undefined,
+        include_workspace_items: false
+      }
+    ])
+  })
+
+  it("uses the explicit search limit in the request and query key", async () => {
+    vi.mocked(listFlashcards).mockResolvedValue({
+      items: [
+        { uuid: "card-b", created_at: "2026-03-13T08:02:00Z" } as never,
+        { uuid: "card-a", created_at: "2026-03-13T08:01:00Z" } as never
+      ],
+      count: 2,
+      total: 2
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false }
+      }
+    })
+
+    renderHook(
+      () => useFlashcardDeckSearchQuery({ deckId: 42, query: "term", limit: 7 }),
+      {
+        wrapper: buildWrapper(queryClient)
+      }
+    )
+
+    await waitFor(() => {
+      expect(listFlashcards).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deck_id: 42,
+          due_status: "all",
+          order_by: "created_at",
+          q: "term",
+          limit: 7,
+          offset: 0
+        })
+      )
+    })
+
+    const searchQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey[0] === "flashcards:deck:search")
+
+    expect(searchQuery?.queryKey).toEqual([
+      "flashcards:deck:search",
+      42,
+      "term",
+      7,
+      {
+        workspace_id: undefined,
+        include_workspace_items: false
+      }
+    ])
   })
 
   it("preserves backend order for deck search results", async () => {
@@ -245,9 +350,16 @@ describe("useFlashcardDeckRecentCardsQuery + useFlashcardDeckSearchQuery", () =>
       wrapper: buildWrapper(queryClient)
     })
 
-    await waitFor(() => {
-      expect(listFlashcards).not.toHaveBeenCalled()
-    })
+    await waitForIdleQuery(queryClient, [
+      "flashcards:deck:recent",
+      null,
+      8,
+      {
+        workspace_id: undefined,
+        include_workspace_items: false
+      }
+    ])
+    expect(listFlashcards).not.toHaveBeenCalled()
   })
 
   it("keeps both query keys under the flashcards namespace", async () => {
