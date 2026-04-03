@@ -1,5 +1,5 @@
 import React from "react"
-import { Alert, Button, Card, Empty, Input, List, Space, Typography } from "antd"
+import { Alert, Button, Card, Collapse, Empty, Input, List, Space, Typography } from "antd"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -517,6 +517,42 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
               </Card>
 
               <DeckSchedulerSettingsEditor schedulerDraft={schedulerDraft} advancedDefaultOpen />
+
+              <Collapse
+                ghost
+                items={[
+                  {
+                    key: "scheduler-explainer",
+                    label: t("option:flashcards.schedulerExplainerTitle", {
+                      defaultValue: "What's the difference between SM-2+ and FSRS?"
+                    }),
+                    children: (
+                      <div className="space-y-2 text-xs text-text-muted">
+                        <p>
+                          <Text strong>SM-2+</Text>{" "}
+                          {t("option:flashcards.schedulerSm2Description", {
+                            defaultValue:
+                              "is the classic algorithm used by Anki for decades. It adjusts review intervals based on a simple ease factor. Predictable and well-understood."
+                          })}
+                        </p>
+                        <p>
+                          <Text strong>FSRS</Text>{" "}
+                          {t("option:flashcards.schedulerFsrsDescription", {
+                            defaultValue:
+                              "is a newer algorithm that uses a memory model to predict when you'll forget each card. Often more efficient — fewer reviews for the same retention."
+                          })}
+                        </p>
+                        <p>
+                          {t("option:flashcards.schedulerRecommendation", {
+                            defaultValue:
+                              "If you're unsure, start with SM-2+ (the default). You can switch later without losing your review history."
+                          })}
+                        </p>
+                      </div>
+                    )
+                  }
+                ]}
+              />
 
               <div className="flex flex-wrap items-center gap-3">
                 <Button
