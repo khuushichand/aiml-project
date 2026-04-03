@@ -158,7 +158,7 @@ def test_record_run_first_rollout_uses_expected_labels(monkeypatch):
                 "presentation_variant": "acp_phase2b_v1",
                 "cohort": "default_on",
                 "provider": "openai",
-                "model": "gpt-4o-mini",
+                "model": "set",
                 "eligible": "true",
                 "ineligible_reason": "none",
             },
@@ -197,14 +197,12 @@ def test_record_run_first_rollout_preserves_out_of_cohort_labels(monkeypatch):
                 "presentation_variant": "acp_phase2b_v1",
                 "cohort": "out_of_cohort",
                 "provider": "openai",
-                "model": "gpt-4o-mini",
+                "model": "set",
                 "eligible": "false",
                 "ineligible_reason": "provider_not_in_rollout_allowlist",
             },
         )
     ]
-
-
 def test_record_run_first_completion_proxy_end_turn(monkeypatch):
     """Verify completion proxy metrics preserve the ACP rollout labels and outcome."""
     from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
@@ -236,7 +234,7 @@ def test_record_run_first_completion_proxy_end_turn(monkeypatch):
                 "presentation_variant": "acp_phase2b_v1",
                 "cohort": "default_on",
                 "provider": "openai",
-                "model": "gpt-4o-mini",
+                "model": "set",
                 "eligible": "true",
                 "ineligible_reason": "none",
                 "outcome": "end_turn",

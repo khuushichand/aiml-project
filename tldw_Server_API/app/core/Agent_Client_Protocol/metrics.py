@@ -19,6 +19,38 @@ from tldw_Server_API.app.core.Metrics import (
 
 _ACP_METRICS_REGISTERED = False
 
+# --- Cardinality bounding for run-first metric labels ---
+_KNOWN_OUTCOMES: frozenset[str] = frozenset({
+    "success", "error", "timeout", "blocked",
+    "end_turn", "max_iterations", "cancelled",
+})
+_KNOWN_INELIGIBLE_REASONS: frozenset[str] = frozenset({
+    "none", "no_tools", "rollout_off", "run_missing",
+    "provider_not_in_rollout_allowlist",
+})
+_KNOWN_PROVIDERS: frozenset[str] = frozenset({
+    "openai", "anthropic", "google", "groq", "mistral",
+    "ollama", "kobold", "tabby", "vllm", "aphrodite",
+    "deepseek", "cohere", "huggingface", "openrouter",
+    "local", "custom_openai", "unknown",
+})
+_KNOWN_TOOLS: frozenset[str] = frozenset({
+    "run", "unknown",
+})
+_LABEL_MAX_LEN = 64
+
+
+def _clamp_label(
+    value: str,
+    known: frozenset[str] | None = None,
+    max_len: int = _LABEL_MAX_LEN,
+) -> str:
+    """Normalize a metric label to a bounded set or truncate to *max_len*."""
+    normalized = str(value or "").strip().lower() or "unknown"
+    if known is not None:
+        return normalized if normalized in known else "other"
+    return normalized[:max_len]
+
 
 def _ensure_registered() -> None:
     """Lazily register ACP metrics on first use."""
@@ -247,14 +279,18 @@ def _run_first_base_labels(
     eligible: bool = False,
     ineligible_reason: str | None = None,
 ) -> dict[str, str]:
+    provider_prefix = str(provider or "").strip().lower().split(":")[0] or "unknown"
     return {
-        "agent_type": str(agent_type or "").strip() or "unknown",
-        "presentation_variant": str(presentation_variant or "").strip() or "unknown",
-        "cohort": str(cohort or "").strip() or "unknown",
-        "provider": str(provider or "").strip() or "unknown",
-        "model": str(model or "").strip() or "unknown",
+        "agent_type": _clamp_label(agent_type),
+        "presentation_variant": _clamp_label(presentation_variant),
+        "cohort": _clamp_label(cohort),
+        "provider": _clamp_label(provider_prefix, known=_KNOWN_PROVIDERS),
+        "model": "set" if str(model or "").strip() else "unknown",
         "eligible": str(bool(eligible)).lower(),
-        "ineligible_reason": str(ineligible_reason or "").strip() or "none",
+        "ineligible_reason": _clamp_label(
+            str(ineligible_reason or "").strip() or "none",
+            known=_KNOWN_INELIGIBLE_REASONS,
+        ),
     }
 
 
@@ -304,7 +340,7 @@ def record_run_first_first_tool(
         eligible=eligible,
         ineligible_reason=ineligible_reason,
     )
-    labels["first_tool"] = str(first_tool or "").strip() or "unknown"
+    labels["first_tool"] = _clamp_label(first_tool, known=_KNOWN_TOOLS)
     increment_counter("acp_run_first_first_tool_total", labels=labels)
 
 
@@ -329,7 +365,7 @@ def record_run_first_fallback_after_run(
         eligible=eligible,
         ineligible_reason=ineligible_reason,
     )
-    labels["fallback_tool"] = str(fallback_tool or "").strip() or "unknown"
+    labels["fallback_tool"] = _clamp_label(fallback_tool, known=_KNOWN_TOOLS)
     increment_counter("acp_run_first_fallback_after_run_total", labels=labels)
 
 
@@ -354,5 +390,5 @@ def record_run_first_completion_proxy(
         eligible=eligible,
         ineligible_reason=ineligible_reason,
     )
-    labels["outcome"] = str(outcome or "").strip() or "unknown"
+    labels["outcome"] = _clamp_label(outcome, known=_KNOWN_OUTCOMES)
     increment_counter("acp_run_first_completion_proxy_total", labels=labels)

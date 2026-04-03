@@ -318,7 +318,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       <Tooltip title={t("modelSelect.loading", "Loading models...")}>
         <IconButton
           ariaLabel={t("selectAModel") as string}
-          hasPopup="menu"
+          disabled
           dataTestId="chat-model-select"
           className="px-2 text-text-muted animate-pulse"
         >

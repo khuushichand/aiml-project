@@ -43,7 +43,8 @@ export function useFetchHistory() {
         resp?.data?.items ||
         (Array.isArray(resp?.data) ? resp?.data : (resp?.data as any)?.data) ||
         []
-      setHistoryResults(list as EvaluationHistoryItem[])
+      const totalCount = resp?.data?.total_count
+      setHistoryResults(list as EvaluationHistoryItem[], typeof totalCount === "number" ? totalCount : undefined)
     },
     onError: (error: any) => {
       notification.error({

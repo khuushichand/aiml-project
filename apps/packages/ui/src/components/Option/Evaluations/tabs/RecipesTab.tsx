@@ -1605,16 +1605,10 @@ export const RecipesTab: React.FC = () => {
                     description={
                       <span className="text-xs">
                         {t("evaluations:recipeConfidenceDescription", {
-                          defaultValue: "Confidence {{confidence}} across {{count}} samples."
-                        })
-                          .replace(
-                            "{{confidence}}",
-                            String(report.confidence_summary.confidence)
-                          )
-                          .replace(
-                            "{{count}}",
-                            String(report.confidence_summary.sample_count)
-                          )}
+                          defaultValue: "Confidence {{confidence}} across {{count}} samples.",
+                          confidence: report.confidence_summary.confidence,
+                          count: report.confidence_summary.sample_count
+                        })}
                       </span>
                     }
                   />

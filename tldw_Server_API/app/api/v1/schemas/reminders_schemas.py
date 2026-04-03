@@ -118,6 +118,7 @@ class NotificationResponse(BaseModel):
     created_at: str
     read_at: str | None = None
     dismissed_at: str | None = None
+    snooze_until: str | None = None
 
 
 class NotificationsListResponse(BaseModel):
@@ -182,3 +183,10 @@ class NotificationSnoozeResponse(BaseModel):
 
     task_id: str
     run_at: str
+
+
+class NotificationCancelSnoozeResponse(BaseModel):
+    """Response payload for snooze cancellation."""
+
+    cancelled: bool
+    deleted_tasks: int

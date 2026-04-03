@@ -370,12 +370,9 @@ export function getAntdSelectTrigger(
     ariaLabel: string | RegExp;
   }
 ): Locator {
-  const combobox = page.getByRole('combobox', { name: options.ariaLabel }).first();
-  return page
-    .locator('.ant-select')
-    .filter({ has: combobox })
-    .locator('.ant-select-selector')
-    .first();
+  // The ARIA combobox is the stable interactive target across Ant Design
+  // render variants; the wrapper classes can disappear in some E2E builds.
+  return page.getByRole('combobox', { name: options.ariaLabel }).first();
 }
 
 /**

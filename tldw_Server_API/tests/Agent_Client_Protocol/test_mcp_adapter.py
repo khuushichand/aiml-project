@@ -393,7 +393,13 @@ async def test_mcp_adapter_send_prompt_llm_driven_tracks_default_on_out_of_cohor
         await adapter.send_prompt([{"role": "user", "content": "hello"}])
 
     messages_arg, tools_arg = mock_llm_caller.call.await_args.args
-    assert messages_arg[0]["role"] != "system" or "ACP run-first guidance" not in messages_arg[0]["content"]
+    assert all(
+        not (
+            message.get("role") == "system"
+            and "ACP run-first guidance" in str(message.get("content") or "")
+        )
+        for message in messages_arg
+    )
     assert [tool["function"]["name"] for tool in tools_arg] == ["search", "run"]
     assert rollout_calls == [
         {
@@ -406,8 +412,6 @@ async def test_mcp_adapter_send_prompt_llm_driven_tracks_default_on_out_of_cohor
             "ineligible_reason": "provider_not_in_rollout_allowlist",
         }
     ]
-
-
 @pytest.mark.asyncio
 async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation_for_google_gemini(
     mock_transport: AsyncMock,
@@ -488,9 +492,6 @@ async def test_mcp_adapter_send_prompt_llm_driven_applies_run_first_presentation
             "ineligible_reason": None,
         }
     ]
-
-
-@pytest.mark.asyncio
 async def test_mcp_adapter_send_prompt_llm_driven_requires_llm_caller_and_tool_gate(
     mock_transport,
     event_callback,

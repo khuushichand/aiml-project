@@ -76,63 +76,63 @@ def test_chat_endpoint_records_run_first_rollout_labels(
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
-
-    body = {
-        "api_provider": "openai",
-        "messages": [{"role": "user", "content": "hi"}],
-        "model": "gpt-4o-mini",
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "notes_search",
-                    "description": "Search notes for relevant passages.",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+    try:
+        body = {
+            "api_provider": "openai",
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4o-mini",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "notes_search",
+                        "description": "Search notes for relevant passages.",
+                        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    },
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run",
-                    "description": "Execute shell commands.",
-                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "run",
+                        "description": "Execute shell commands.",
+                        "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                    },
                 },
-            },
-        ],
-    }
+            ],
+        }
 
-    csrf_token = client.get("/api/v1/health").cookies.get("csrf_token", "")
-    request_headers = dict(auth_headers)
-    request_headers["X-CSRF-Token"] = csrf_token
-    response = client.post(
-        "/api/v1/chat/completions",
-        json=body,
-        headers=request_headers,
-    )
+        csrf_token = client.get("/api/v1/health").cookies.get("csrf_token", "")
+        request_headers = dict(auth_headers)
+        request_headers["X-CSRF-Token"] = csrf_token
+        response = client.post(
+            "/api/v1/chat/completions",
+            json=body,
+            headers=request_headers,
+        )
 
-    assert response.status_code == 200, response.text
-    called_kwargs = mock_chat_api_call.call_args.kwargs
-    assert [tool["function"]["name"] for tool in called_kwargs["tools"]] == ["run", "notes_search"]
-    assert "run(command)" in called_kwargs["system_message"]
+        assert response.status_code == 200, response.text
+        called_kwargs = mock_chat_api_call.call_args.kwargs
+        assert [tool["function"]["name"] for tool in called_kwargs["tools"]] == ["run", "notes_search"]
+        assert "run(command)" in called_kwargs["system_message"]
 
-    collector.track_run_first_rollout.assert_called_once()
-    collector.track_run_first_first_tool.assert_called_once()
-    collector.track_run_first_fallback_after_run.assert_called_once()
-    collector.track_run_first_completion_proxy.assert_called_once()
+        collector.track_run_first_rollout.assert_called_once()
+        collector.track_run_first_first_tool.assert_called_once()
+        collector.track_run_first_fallback_after_run.assert_called_once()
+        collector.track_run_first_completion_proxy.assert_called_once()
 
-    _, rollout_kwargs = collector.track_run_first_rollout.call_args
-    assert rollout_kwargs["presentation_variant"] == "chat_phase2b_v1"
-    assert rollout_kwargs["cohort"] == "default_on"
-    assert rollout_kwargs["provider"] == "openai"
-    assert rollout_kwargs["model"] == "gpt-4o-mini"
-    assert rollout_kwargs["streaming"] is False
-    assert rollout_kwargs["eligible"] is True
+        _, rollout_kwargs = collector.track_run_first_rollout.call_args
+        assert rollout_kwargs["presentation_variant"] == "chat_phase2b_v1"
+        assert rollout_kwargs["cohort"] == "default_on"
+        assert rollout_kwargs["provider"] == "openai"
+        assert rollout_kwargs["model"] == "gpt-4o-mini"
+        assert rollout_kwargs["streaming"] is False
+        assert rollout_kwargs["eligible"] is True
 
-    _, completion_kwargs = collector.track_run_first_completion_proxy.call_args
-    assert completion_kwargs["outcome"] == "success"
+        _, completion_kwargs = collector.track_run_first_completion_proxy.call_args
+        assert completion_kwargs["outcome"] == "success"
 
-    _, fallback_kwargs = collector.track_run_first_fallback_after_run.call_args
-    assert fallback_kwargs["fallback_tool"] == "notes_search"
-
-    app.dependency_overrides.pop(get_media_db_for_user, None)
-    app.dependency_overrides.pop(get_chacha_db_for_user, None)
+        _, fallback_kwargs = collector.track_run_first_fallback_after_run.call_args
+        assert fallback_kwargs["fallback_tool"] == "notes_search"
+    finally:
+        app.dependency_overrides.pop(get_media_db_for_user, None)
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)

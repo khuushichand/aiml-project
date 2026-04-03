@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -220,6 +220,36 @@ async def test_llm_driven_cancel_stops_remaining_tool_calls_in_same_turn():
         AgentEventKind.TOOL_CALL,
         AgentEventKind.TOOL_RESULT,
     ]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_logs_run_first_metric_failures(monkeypatch):
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters import mcp_runners
+
+    runner, _transport, _llm_caller, _tool_gate, _callback, _cancel_event = _make_runner(
+        llm_responses=[LLMResponse(text="Done")],
+        run_first_metrics_context={
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2a_v1",
+            "cohort": "gated",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+        },
+    )
+    warning = Mock()
+
+    def _boom(**_kwargs):
+        raise RuntimeError("metrics unavailable")
+
+    monkeypatch.setattr(mcp_runners.acp_metrics, "record_run_first_rollout", _boom)
+    monkeypatch.setattr(mcp_runners.logger, "warning", warning)
+
+    await runner.run([{"role": "user", "content": "hi"}])
+
+    assert warning.called
+    assert "ACP run-first metric emission failed for rollout" in warning.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -553,3 +583,76 @@ async def test_llm_driven_records_max_iterations_completion_proxy(monkeypatch):
             "outcome": "max_iterations",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_logs_expected_run_first_metric_failures(monkeypatch):
+    """Expected metric backend failures should be logged without interrupting the runner."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters import mcp_runners
+
+    warning_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        mcp_runners,
+        "logger",
+        type("LoggerStub", (), {"warning": lambda *args, **kwargs: warning_calls.append((args, kwargs))})(),
+    )
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_rollout",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("metrics down")),
+    )
+
+    runner, _transport, _llm_caller, _tool_gate, callback, _cancel_event = _make_runner(
+        llm_responses=[LLMResponse(text="done")],
+        run_first_metrics_context={
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2b_v1",
+            "cohort": "default_on",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+        },
+    )
+
+    await runner.run([{"role": "user", "content": "hello"}])
+
+    assert warning_calls
+    event: AgentEvent = callback.call_args_list[-1][0][0]
+    assert event.kind == AgentEventKind.COMPLETION
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_propagates_unexpected_run_first_metric_failures(monkeypatch):
+    """Unexpected programming errors in metrics emission should not be silently swallowed."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters import mcp_runners
+
+    warning_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        mcp_runners,
+        "logger",
+        type("LoggerStub", (), {"warning": lambda *args, **kwargs: warning_calls.append((args, kwargs))})(),
+    )
+    monkeypatch.setattr(
+        mcp_runners.acp_metrics,
+        "record_run_first_rollout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected")),
+    )
+
+    runner, _transport, _llm_caller, _tool_gate, _callback, _cancel_event = _make_runner(
+        llm_responses=[LLMResponse(text="done")],
+        run_first_metrics_context={
+            "agent_type": "mcp",
+            "presentation_variant": "acp_phase2b_v1",
+            "cohort": "default_on",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "eligible": True,
+            "ineligible_reason": None,
+        },
+    )
+
+    with pytest.raises(AssertionError, match="unexpected"):
+        await runner.run([{"role": "user", "content": "hello"}])
+
+    assert warning_calls == []

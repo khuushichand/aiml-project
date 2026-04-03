@@ -86,8 +86,6 @@ def test_present_acp_tools_orders_run_first_for_google_gemini_default_on_session
     assert presented.prompt_fragment is not None
     assert presented.eligible is True
     assert presented.ineligible_reason is None
-
-
 def test_present_acp_tools_demotes_typed_tool_descriptions_when_eligible() -> None:
     presented = present_acp_tools(
         session_id="s2",
@@ -153,7 +151,6 @@ def test_present_acp_tools_marks_default_on_provider_mismatch_out_of_cohort() ->
     assert presented.prompt_fragment is None
     assert presented.eligible is False
     assert presented.ineligible_reason == "provider_not_in_rollout_allowlist"
-
 
 def test_present_acp_tools_fails_closed_for_default_on_when_allowlist_is_empty() -> None:
     presented = present_acp_tools(

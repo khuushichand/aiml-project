@@ -30,11 +30,11 @@ def test_run_first_rollout_resolvers_default_off_without_config(monkeypatch):
     monkeypatch.delenv("ACP_RUN_FIRST_ROLLOUT_MODE", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PROVIDER_ALLOWLIST", raising=False)
     monkeypatch.delenv("ACP_RUN_FIRST_PRESENTATION_VARIANT", raising=False)
-    monkeypatch.setattr(app_config, "load_comprehensive_config", lambda: None)
+    monkeypatch.setattr(app_config, "load_comprehensive_config", lambda: configparser.ConfigParser())
 
     assert app_config.resolve_acp_run_first_rollout_mode() == "off"
     assert app_config.resolve_acp_run_first_provider_allowlist() == []
-    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2a_v1"
+    assert app_config.resolve_acp_run_first_presentation_variant() == "acp_phase2b_v1"
 
 
 def test_run_first_rollout_resolvers_accept_default_on(monkeypatch):

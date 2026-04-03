@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
     RecipeDefinitionNotFoundError,
     RecipeDefinitionNotLaunchableError,
     RecipeRunNotFoundError,
+    RecipeRunsService,
     get_recipe_runs_service_for_user,
 )
 from tldw_Server_API.app.core.Evaluations.recipes.reporting import RecipeRunReport
@@ -42,12 +43,12 @@ from tldw_Server_API.app.core.exceptions import RecipeEnqueueError
 recipes_router = APIRouter()
 
 
-def _service_for_user(current_user: User):
+def _service_for_user(current_user: User) -> RecipeRunsService:
     stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
     return get_recipe_runs_service_for_user(stable_user_id)
 
 
-def _get_manifest_or_404(service, recipe_id: str) -> RecipeManifest:
+def _get_manifest_or_404(service: RecipeRunsService, recipe_id: str) -> RecipeManifest:
     try:
         return service.get_manifest(recipe_id)
     except RecipeDefinitionNotFoundError as exc:

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setApiKeySessionCookies } from '@/lib/server-auth';
+import { checkRateLimit, extractClientIp } from '@/lib/rate-limiter';
 
 const isAdminApiKeyLoginEnabled = (): boolean =>
   process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN === 'true';
@@ -15,6 +16,17 @@ const shouldAttachTestDiagnostics = (): boolean =>
   process.env.TEST_MODE === 'true';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const rateCheck = checkRateLimit(extractClientIp(request.headers));
+  if (!rateCheck.allowed) {
+    return NextResponse.json(
+      { detail: 'Too many login attempts. Please try again later.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rateCheck.retryAfterSeconds) },
+      }
+    );
+  }
+
   if (isEnterpriseAdminUiMode() || !isAdminApiKeyLoginEnabled() || !isSingleUserAuthMode()) {
     return NextResponse.json(
       { detail: 'Admin UI API key login is disabled. Use multi-user credentials.' },

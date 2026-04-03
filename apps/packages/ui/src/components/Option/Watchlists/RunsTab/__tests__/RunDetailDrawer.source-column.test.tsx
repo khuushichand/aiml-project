@@ -316,9 +316,10 @@ describe("RunDetailDrawer source column", () => {
 
     render(<RunDetailDrawer open runId={10} onClose={onClose} />)
 
-    const openReportsButton = await screen.findByRole("button", {
+    const [openReportsButton] = await screen.findAllByRole("button", {
       name: "Open reports for this run"
     })
+    expect(screen.getAllByRole("button", { name: "Open reports for this run" })).toHaveLength(1)
     openReportsButton.click()
 
     expect(mocks.setOutputsJobFilterMock).toHaveBeenCalledWith(1)
@@ -459,9 +460,9 @@ describe("RunDetailDrawer source column", () => {
     render(<RunDetailDrawer open runId={10} onClose={onClose} />)
 
     await waitFor(() => {
-      expect(screen.getByText("Retry run")).toBeInTheDocument()
+      expect(screen.getAllByRole("button", { name: "Retry run" })).toHaveLength(1)
     })
-    screen.getByText("Retry run").click()
+    screen.getByRole("button", { name: "Retry run" }).click()
 
     await waitFor(() => {
       expect(mocks.triggerWatchlistRunMock).toHaveBeenCalledWith(1)
@@ -494,7 +495,8 @@ describe("RunDetailDrawer source column", () => {
       expect(screen.getByText("Monitor #1 produced 3 reports for this run.")).toBeInTheDocument()
     })
 
-    screen.getByText("Open reports for this run").click()
+    expect(screen.getAllByRole("button", { name: "Open reports for this run" })).toHaveLength(1)
+    screen.getByRole("button", { name: "Open reports for this run" }).click()
     expect(mocks.setOutputsJobFilterMock).toHaveBeenCalledWith(1)
     expect(mocks.setOutputsRunFilterMock).toHaveBeenCalledWith(10)
     expect(mocks.setActiveTabMock).toHaveBeenCalledWith("outputs")

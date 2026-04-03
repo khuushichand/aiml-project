@@ -49,6 +49,13 @@ export const SETTINGS_ROUTE_NAV_ITEMS: SettingsNavRouteMeta[] = [
     order: 1
   },
   {
+    path: "/settings/provider-keys",
+    group: "server",
+    labelToken: "settings:providerKeys.navTitle",
+    icon: ServerIcon,
+    order: 2
+  },
+  {
     path: "/settings/model",
     group: "server",
     labelToken: "settings:manageModels.title",

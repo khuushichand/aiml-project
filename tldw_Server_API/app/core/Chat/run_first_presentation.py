@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 _RUN_TOOL_NAME = "run"
-_WILDCARD_TOKEN = chr(42)
+_WILDCARD_TOKEN = "*"  # nosec B105 - wildcard token, not a secret
 _RUN_FIRST_PROMPT_FRAGMENT = (
     "Run-first guidance: prefer `run(command)` for exploratory or multi-step work. "
     "Use typed tools when `run` is unavailable or when a direct structured tool "
@@ -98,7 +98,7 @@ def _tool_name(tool: dict[str, Any]) -> str | None:
     return None
 
 
-def _tool_names(tool: dict[str, Any]) -> list[str]:
+def tool_names_from_definitions(tool: dict[str, Any]) -> list[str]:
     if not isinstance(tool, dict):
         return []
 
@@ -194,7 +194,7 @@ def present_chat_tools(
     seen_names: set[str] = set()
 
     for tool in raw_tools:
-        tool_names = _tool_names(tool)
+        tool_names = tool_names_from_definitions(tool)
         if not tool_names:
             continue
 
@@ -274,7 +274,7 @@ def present_chat_tools(
     )
     presented_effective_names: list[str] = []
     for tool in presented_tools:
-        for tool_name in _tool_names(tool):
+        for tool_name in tool_names_from_definitions(tool):
             if tool_name not in presented_effective_names:
                 presented_effective_names.append(tool_name)
 
