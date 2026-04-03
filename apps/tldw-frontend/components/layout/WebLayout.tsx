@@ -22,6 +22,10 @@ import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockHost } from "@/components/Common/NotesDock"
+import {
+  BuddyShellHost,
+  BuddyShellRenderContextProvider
+} from "@/components/Common/PersonaBuddy"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { Sidebar } from "@/components/Option/Sidebar"
 import { Header } from "@/components/Layouts/Header"
@@ -359,13 +363,14 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 
   return (
-    <div
-      className={classNames(
-        "relative flex w-full",
-        isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
-      )}
-      style={chatScreenBackgroundStyle}
-    >
+    <BuddyShellRenderContextProvider>
+      <div
+        className={classNames(
+          "relative flex w-full",
+          isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
+        )}
+        style={chatScreenBackgroundStyle}
+      >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && !hideSidebar && !isMobileViewport && (
         <ChatSidebar
@@ -564,6 +569,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         {/* Notes Dock Host - floating notes panel */}
         <NotesDockHost />
 
+        <BuddyShellHost root="web" />
+
         {/* Ensure event-driven modals are available even when the header is hidden */}
         {hideHeader && <EventOnlyHosts commandPaletteProps={commandPaletteProps} />}
 
@@ -582,6 +589,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         />
       </main>
     </div>
+    </BuddyShellRenderContextProvider>
   )
 }
 

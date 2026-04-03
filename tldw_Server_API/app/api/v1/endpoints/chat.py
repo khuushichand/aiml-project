@@ -1634,6 +1634,32 @@ def _config_default_llm_provider() -> str | None:
     return _extract("llm_api_settings") or _extract("API")
 
 
+def _any_cloud_provider_has_key() -> bool:
+    """Return True if at least one cloud LLM provider has an API key configured.
+
+    This is used to distinguish "no providers configured at all" (new install)
+    from "this specific provider's key is missing."
+    """
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        # If we can't import the metadata, assume providers might be configured
+        return True
+
+    try:
+        all_keys = get_api_keys() or {}
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return True  # If key loading fails, don't block with a misleading error
+
+    for provider_name, requires_key in PROVIDER_REQUIRES_KEY.items():
+        if not requires_key:
+            continue
+        key_val = all_keys.get(provider_name)
+        if key_val and str(key_val).strip():
+            return True
+    return False
+
+
 def _get_default_provider() -> str:
     """Resolve default provider preferring config.txt, then env/test fallbacks."""
     cfg_default = _config_default_llm_provider()
@@ -2240,8 +2266,10 @@ async def create_chat_completion(
     enforce_image_size = _resolve_base64_image_limit_enforcement()
     max_image_bytes = get_max_base64_bytes() if enforce_image_size else None
 
-    # Capture raw model input before any normalization for later decisions
+    # Capture raw model/provider input before any normalization for later decisions
     raw_model_input = request_data.model
+    raw_api_provider_input = getattr(request_data, "api_provider", None)
+    explicit_provider_requested = bool(str(raw_api_provider_input or "").strip())
     auto_model_requested = str(raw_model_input or "").strip().lower() == "auto"
     explicit_model_requested = bool(str(raw_model_input or "").strip()) and not auto_model_requested
     strict_model_selection = _should_enforce_strict_model_selection()
@@ -2342,6 +2370,8 @@ async def create_chat_completion(
             )
         if str((routing_debug or {}).get("policy", {}).get("boundary_mode") or "").strip().lower() == "pinned_provider":
             allow_provider_fallback_for_request = False
+
+    request_model_was_explicit = bool(str(getattr(request_data, "model", None) or "").strip())
 
     (
         metrics_provider,
@@ -2986,6 +3016,41 @@ async def create_chat_completion(
         provider = selected_provider
         model = selected_model or model
 
+        def _get_default_model_for_provider_name(target_provider: str) -> str | None:
+            override_default = get_override_default_model(target_provider)
+            if override_default:
+                return override_default
+            override = get_llm_provider_override(target_provider)
+            if override and override.allowed_models:
+                return override.allowed_models[0]
+            normalized = target_provider.replace(".", "_").replace("-", "_")
+            env_key = f"DEFAULT_MODEL_{normalized.upper()}"
+            env_val = os.getenv(env_key)
+            if env_val:
+                return env_val
+            config_key = f"default_model_{normalized.lower()}"
+            if _chat_config:
+                cfg_val = _chat_config.get(config_key)
+                if cfg_val:
+                    return cfg_val
+            return None
+
+        if not request_model_was_explicit:
+            default_model_for_provider = _get_default_model_for_provider_name(provider)
+            if default_model_for_provider:
+                model = default_model_for_provider
+                request_data.model = default_model_for_provider
+        if not model:
+            # Fail fast with a clear client error instead of cascading into a 500
+            # when downstream provider adapters require an explicit model.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Model is required for provider '{provider}'. Please select a model in the WebUI "
+                    f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
+                ),
+            )
+
         override_error = validate_provider_override(provider, model)
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
@@ -3089,8 +3154,31 @@ async def create_chat_completion(
             _force_mock = _shared_is_truthy(os.getenv("CHAT_FORCE_MOCK", ""))
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             if provider_requires_api_key(target_api_provider) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
-                logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 record_byok_missing_credentials(target_api_provider, operation="chat")
+
+                # Distinguish "no LLM providers configured at all" (fresh install) from
+                # "this specific provider's key is missing" (user picked a provider that
+                # lacks credentials).  The former gets a dedicated error code so the
+                # frontend can show onboarding-style guidance.
+                if not explicit_provider_requested and not _any_cloud_provider_has_key():
+                    logger.error(
+                        "No LLM provider API keys are configured on this server. "
+                        "At least one provider key (e.g. OPENAI_API_KEY) must be set."
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "error": "no_provider_configured",
+                            "message": (
+                                "No LLM provider is configured. "
+                                "Contact your administrator or check the provider configuration."
+                            ),
+                            "docs_url": "/docs#section/LLM-Providers",
+                            "admin_url": "/admin/providers",
+                        },
+                    )
+
+                logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
@@ -3384,50 +3472,10 @@ async def create_chat_completion(
                 final_system_message=llm_final_system_message,
                 app_config=app_config_override,
                 grammar_record=llamacpp_grammar_record,
+                resolved_model=model,
             )
             cleaned_args["request"] = request
-
-            def _get_default_model_for_provider_name(target_provider: str) -> str | None:
-                override_default = get_override_default_model(target_provider)
-                if override_default:
-                    return override_default
-                override = get_llm_provider_override(target_provider)
-                if override and override.allowed_models:
-                    return override.allowed_models[0]
-                normalized = target_provider.replace(".", "_").replace("-", "_")
-                env_key = f"DEFAULT_MODEL_{normalized.upper()}"
-                env_val = os.getenv(env_key)
-                if env_val:
-                    return env_val
-                config_key = f"default_model_{normalized.lower()}"
-                if _chat_config:
-                    cfg_val = _chat_config.get(config_key)
-                    if cfg_val:
-                        return cfg_val
-                return None
-
-            if not cleaned_args.get("model"):
-                default_model_for_provider = _get_default_model_for_provider_name(provider)
-                if default_model_for_provider:
-                    cleaned_args["model"] = default_model_for_provider
-                    if not request_data.model:
-                        request_data.model = default_model_for_provider
-                    model = default_model_for_provider
-                else:
-                    # Fail fast with a clear client error instead of cascading into a 500
-                    # when downstream provider adapters require an explicit model.
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=(
-                            f"Model is required for provider '{provider}'. Please select a model in the WebUI "
-                            f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
-                        ),
-                    )
-
-            # Re-validate provider override after applying a default model.
-            override_error = validate_provider_override(provider, cleaned_args.get("model") or request_data.model)
-            if override_error:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
+            cleaned_args["model"] = cleaned_args.get("model") or model
 
             async def rebuild_call_params_for_provider(
                 target_provider: str,

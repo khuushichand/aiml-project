@@ -2,17 +2,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const buildApiUrl = vi.fn((path: string) => `https://example.test${path}`);
+const buildApiUrlForRequest = vi.fn((_req: unknown, path: string) => `https://example.test${path}`);
 const getBackendAuthHeaders = vi.fn(() => new Headers({ Authorization: 'Bearer test-token' }));
 const clearAdminSessionCookies = vi.fn();
+const invalidateAuthCache = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@/lib/api-config', () => ({
-  buildApiUrl,
+  buildApiUrlForRequest,
 }));
 
 vi.mock('@/lib/server-auth', () => ({
   clearAdminSessionCookies,
   getBackendAuthHeaders,
+  ACCESS_TOKEN_COOKIE: 'access_token',
+  API_KEY_COOKIE: 'x_api_key',
+  LEGACY_API_KEY_COOKIE: 'x-api-key',
+}));
+
+vi.mock('@/middleware', () => ({
+  invalidateAuthCache,
 }));
 
 describe('POST /api/auth/logout', () => {
@@ -27,7 +35,10 @@ describe('POST /api/auth/logout', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { POST } = await import('./route');
-    const request = new NextRequest('http://localhost/api/auth/logout', { method: 'POST' });
+    const request = new NextRequest('http://localhost/api/auth/logout', {
+      method: 'POST',
+      headers: { cookie: 'access_token=test-jwt-token' },
+    });
     const response = await POST(request);
 
     expect(response.status).toBe(200);
@@ -38,12 +49,15 @@ describe('POST /api/auth/logout', () => {
       headers: new Headers({ Authorization: 'Bearer test-token' }),
       cache: 'no-store',
     });
-    expect(warnSpy).toHaveBeenCalledWith('Admin UI backend logout failed', {
-      error: 'backend unavailable',
-    });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const warnArg = warnSpy.mock.calls[0][0] as string;
+    expect(warnArg).toContain('Backend logout failed');
+    expect(warnArg).toContain('backend unavailable');
+    expect(warnArg).toContain('auth/logout');
     expect(clearAdminSessionCookies).toHaveBeenCalledTimes(1);
     expect(clearAdminSessionCookies).toHaveBeenCalledWith(expect.objectContaining({
       cookies: expect.anything(),
     }));
+    expect(invalidateAuthCache).toHaveBeenCalled();
   });
 });

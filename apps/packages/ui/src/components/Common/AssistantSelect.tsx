@@ -4,6 +4,7 @@ import { useStorage } from "@plasmohq/storage/hook"
 import React from "react"
 import { Search, Star, UserCircle2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import type { PersonaInfo } from "@/routes/personaTypes"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import {
@@ -27,15 +28,6 @@ type CharacterSummary = Record<string, unknown> & {
   avatar_url?: string
   system_prompt?: string
   greeting?: string
-  extensions?: Record<string, unknown> | null
-}
-
-type PersonaSummary = Record<string, unknown> & {
-  id?: string | number
-  name?: string | null
-  avatar_url?: string | null
-  system_prompt?: string | null
-  greeting?: string | null
   extensions?: Record<string, unknown> | null
 }
 
@@ -69,7 +61,7 @@ const normalizeCharacterSelection = (
 }
 
 const normalizePersonaSelection = (
-  persona: PersonaSummary
+  persona: PersonaInfo
 ): AssistantSelection | null => {
   const normalizedId =
     persona.id != null ? String(persona.id) : null
@@ -116,7 +108,7 @@ export const AssistantSelect: React.FC<Props> = ({
     selectedAssistant?.kind ?? "character"
   )
   const [characters, setCharacters] = React.useState<CharacterSummary[]>([])
-  const [personas, setPersonas] = React.useState<PersonaSummary[]>([])
+  const [personas, setPersonas] = React.useState<PersonaInfo[]>([])
   const [favoriteCharacters, setFavoriteCharacters] = useStorage<
     FavoriteCharacter[]
   >("favoriteCharacters", [])
@@ -172,7 +164,7 @@ export const AssistantSelect: React.FC<Props> = ({
       if (typeof tldwClient.listPersonaProfiles === "function") {
         const result = await tldwClient.listPersonaProfiles().catch(() => [])
         if (!cancelled && Array.isArray(result)) {
-          setPersonas(result as PersonaSummary[])
+          setPersonas(result as PersonaInfo[])
         }
       }
     }

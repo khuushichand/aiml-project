@@ -135,9 +135,9 @@ def _resolve_redirect_base(request: Request | None, conn) -> str:
     headers cannot influence OAuth callback construction. Test mode keeps the
     local request/fixture fallback for isolated integration tests.
     """
-    configured_base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
+    configured_base = _validate_redirect_base(os.getenv("CONNECTOR_REDIRECT_BASE_URL") or "")
     if configured_base:
-        return _validate_redirect_base(configured_base)
+        return configured_base
 
     request_base = _extract_request_base(request)
     if not _is_connector_test_mode():
@@ -154,14 +154,17 @@ def _resolve_redirect_base(request: Request | None, conn) -> str:
     if request_base and _is_local_callback_base(request_base):
         return _validate_redirect_base(request_base)
 
-    resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
+    resolved = _validate_redirect_base(
+        getattr(conn, "redirect_base", "") or "",
+        setting_name="connector redirect base",
+    )
     if request_base and resolved and request_base != resolved:
         logger.warning(
             "Ignoring untrusted request base_url for connector OAuth redirect base: {}",
             request_base,
         )
     if resolved:
-        return _validate_redirect_base(resolved)
+        return resolved
     if request is not None:
         logger.warning(
             "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
@@ -170,9 +173,15 @@ def _resolve_redirect_base(request: Request | None, conn) -> str:
 
 
 def _resolve_webhook_callback_base(request: Request | None, conn) -> str:
-    configured_base = (os.getenv("CONNECTOR_REDIRECT_BASE_URL") or getattr(conn, "redirect_base", "") or "").rstrip("/")
+    configured_base = _validate_redirect_base(os.getenv("CONNECTOR_REDIRECT_BASE_URL") or "")
     if configured_base:
-        return _validate_redirect_base(configured_base)
+        return configured_base
+    connector_base = _validate_redirect_base(
+        getattr(conn, "redirect_base", "") or "",
+        setting_name="connector redirect base",
+    )
+    if connector_base:
+        return connector_base
     request_base = _extract_request_base(request)
     if request_base and (_is_connector_test_mode() or _is_local_callback_base(request_base)):
         return _validate_redirect_base(request_base)

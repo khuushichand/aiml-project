@@ -2468,6 +2468,7 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_task = None
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
+    study_pack_jobs_task = None
     reminder_jobs_task = None
     admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
@@ -2480,6 +2481,7 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_stop_event = None
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
+    study_pack_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reminders_sched_task = None
@@ -2693,6 +2695,24 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         # startup/shutdown guard; log and continue
         logger.warning(f"Failed to start Prompt Studio Jobs worker: {e}")
+
+    # Study-pack Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_PACK_JOBS_WORKER_ENABLED", "flashcards")
+        if _enabled:
+            from tldw_Server_API.app.services.study_pack_jobs_worker import (
+                run_study_pack_jobs_worker as _run_study_pack_jobs,
+            )
+
+            study_pack_jobs_stop_event = _asyncio.Event()
+            study_pack_jobs_task = _asyncio.create_task(_run_study_pack_jobs(study_pack_jobs_stop_event))
+            logger.info("Study-pack Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-pack Jobs worker disabled by flag (STUDY_PACK_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-pack Jobs worker: {e}")
 
     # Privilege snapshot worker
     try:
@@ -4035,6 +4055,16 @@ async def lifespan(app: FastAPI):
                     reading_digest_jobs_task.cancel()
             else:
                 reading_digest_jobs_task.cancel()
+        if "study_pack_jobs_task" in locals() and study_pack_jobs_task:
+            if "study_pack_jobs_stop_event" in locals() and study_pack_jobs_stop_event:
+                try:
+                    study_pack_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_pack_jobs_task, timeout=5.0)
+                    logger.info("Study-pack Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_pack_jobs_task.cancel()
+            else:
+                study_pack_jobs_task.cancel()
         if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
             if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
                 try:
@@ -5523,6 +5553,40 @@ else:
             "Using local browser defaults (localhost/127.0.0.1) so self-hosted setup keeps working. "
             "Set ALLOWED_ORIGINS only if you need a different browser origin."
         )
+
+    # C1: Auto-add common localhost origins in single-user mode when no explicit
+    # ALLOWED_ORIGINS env var is set. In multi-user mode, require explicit origins.
+    _env_allowed_origins_set = os.getenv("ALLOWED_ORIGINS") is not None
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_cors_settings
+        _cors_auth_mode = _get_cors_settings().AUTH_MODE
+    except Exception:
+        _cors_auth_mode = os.getenv("AUTH_MODE", "single_user")
+
+    _SINGLE_USER_LOCALHOST_ORIGINS = [
+        "http://localhost:8080",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:8080",
+    ]
+
+    if str(_cors_auth_mode) == "single_user" and not _env_allowed_origins_set:
+        _auto_added = []
+        for _origin in _SINGLE_USER_LOCALHOST_ORIGINS:
+            if _origin not in origins:
+                origins.append(_origin)
+                _auto_added.append(_origin)
+        if _auto_added:
+            logger.info(
+                f"CORS single-user auto-detect: added localhost origins {_auto_added}"
+            )
+        else:
+            logger.info("CORS single-user auto-detect: all common localhost origins already present.")
+    elif str(_cors_auth_mode) == "multi_user" and not origins:
+        logger.warning(
+            "CORS multi-user mode: ALLOWED_ORIGINS is empty. "
+            "Set ALLOWED_ORIGINS explicitly for multi-user deployments."
+        )
     origins = _resolve_cors_origins_or_raise(origins)
     _cors_allow_credentials = should_allow_cors_credentials()
     _cors_enforce_explicit_origins = is_production_environment()
@@ -6561,15 +6625,15 @@ else:
             # config gating would normally disable them (e.g., workflows/scheduler).
             _test_ctx = bool(_TEST_MODE)
             if _test_ctx and route_key in {"workflows", "scheduler"}:
-                app.include_router(router, prefix=prefix, tags=tags)
+                include_router_idempotent(app, router, prefix=prefix, tags=tags)
                 return
             if route_enabled(route_key, default_stable=default_stable):
-                app.include_router(router, prefix=prefix, tags=tags)
+                include_router_idempotent(app, router, prefix=prefix, tags=tags)
             else:
                 logger.info(f"Route disabled by policy: {route_key}")
         except _STARTUP_GUARD_EXCEPTIONS as _rt_err:
             logger.warning(f"Route gating error for {route_key}; including by default. Error: {_rt_err}")
-            app.include_router(router, prefix=prefix, tags=tags)
+            include_router_idempotent(app, router, prefix=prefix, tags=tags)
 
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
@@ -6622,6 +6686,13 @@ else:
 
     if admin_router is not None:
         _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    # Billing / subscription management endpoints (admin-only)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+
+        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except _IMPORT_EXCEPTIONS as _billing_import_err:
+        logger.warning(f"Billing endpoints unavailable; skipping: {_billing_import_err}")
     _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
     _include_if_enabled("mcp-hub", mcp_hub_management_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-hub"])
     # Self-service organization management endpoints

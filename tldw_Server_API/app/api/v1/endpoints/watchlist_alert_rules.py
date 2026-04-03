@@ -126,12 +126,12 @@ async def create_rule(
     rule = await asyncio.to_thread(
         create_alert_rule,
         db_path,
-        user_id,
-        body.name,
-        body.condition_type,
-        body.condition_value,
-        body.job_id,
-        body.severity,
+        user_id=user_id,
+        name=body.name,
+        condition_type=body.condition_type,
+        condition_value=body.condition_value,
+        job_id=body.job_id,
+        severity=body.severity,
     )
     return AlertRuleResponse(**vars(rule))
 

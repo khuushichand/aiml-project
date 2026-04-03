@@ -31,10 +31,6 @@ from tldw_Server_API.app.core.DB_Management.watchlist_alert_rules_db import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Schema migration
-# ---------------------------------------------------------------------------
-
 class AlertConditionType(str, Enum):
     NO_ITEMS = "no_items"
     ERROR_RATE_ABOVE = "error_rate_above"
@@ -53,10 +49,6 @@ def ensure_alert_rules_table(db_path: str) -> None:
     """Create the alert rules table if it doesn't exist."""
     ensure_watchlist_alert_rules_table(db_path)
 
-
-# ---------------------------------------------------------------------------
-# CRUD
-# ---------------------------------------------------------------------------
 
 def list_alert_rules(db_path: str, user_id: str, job_id: int | None = None) -> list[AlertRule]:
     return list_watchlist_alert_rules(db_path, user_id, job_id=job_id)
@@ -101,10 +93,6 @@ def delete_alert_rule(db_path: str, rule_id: int, user_id: str) -> bool:
     return delete_watchlist_alert_rule(db_path, rule_id, user_id)
 
 
-# ---------------------------------------------------------------------------
-# Evaluation
-# ---------------------------------------------------------------------------
-
 def evaluate_rules_for_run(
     db_path: str,
     user_id: str,
@@ -113,12 +101,7 @@ def evaluate_rules_for_run(
     stats: dict[str, Any],
     status: str,
 ) -> list[dict[str, Any]]:
-    """Evaluate all matching alert rules against a completed run.
-
-    Returns a list of triggered alert dicts with:
-    - rule: the AlertRule that triggered
-    - notification_kwargs: dict ready to pass to create_user_notification()
-    """
+    """Evaluate all matching alert rules against a completed run."""
     rules = list_alert_rules(db_path, user_id, job_id=job_id)
     triggered: list[dict[str, Any]] = []
 
@@ -150,7 +133,6 @@ def evaluate_rules_for_run(
                 rule=rule,
             )
             if threshold is None:
-                detail = "Invalid threshold configured for error_rate_above"
                 continue
             match = error_rate > threshold
             detail = f"Error rate {error_rate:.0%} exceeds {threshold:.0%} threshold"
@@ -163,7 +145,6 @@ def evaluate_rules_for_run(
                 rule=rule,
             )
             if threshold is None:
-                detail = "Invalid threshold configured for items_below"
                 continue
             match = items_ingested < threshold
             detail = f"Only {items_ingested} items ingested (threshold: {threshold})"
@@ -176,7 +157,6 @@ def evaluate_rules_for_run(
                 rule=rule,
             )
             if threshold is None:
-                detail = "Invalid threshold configured for items_above"
                 continue
             match = items_ingested > threshold
             detail = f"{items_ingested} items ingested exceeds {threshold} threshold"
@@ -203,6 +183,7 @@ def evaluate_rules_for_run(
             })
 
     return triggered
+
 
 def _validate_condition_type(condition_type: str) -> None:
     if condition_type not in ALERT_CONDITION_TYPE_VALUES:
