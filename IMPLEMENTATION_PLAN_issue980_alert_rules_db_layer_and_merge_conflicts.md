@@ -21,4 +21,4 @@
 **Success Criteria**: Branch merges cleanly, targeted tests pass, and Bandit reports no new findings in touched files.
 **Tests**: `python -m pytest tldw_Server_API/tests/test_watchlist_alert_rules.py -v`
 **Tests**: `python -m bandit -r tldw_Server_API/app/api/v1/endpoints/watchlist_alert_rules.py tldw_Server_API/app/core/Watchlists/alert_rules.py tldw_Server_API/app/core/DB_Management/watchlist_alert_rules_db.py -f json -o /tmp/bandit_issue980_alert_rules.json`
-**Status**: In Progress
+**Status**: Complete
