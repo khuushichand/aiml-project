@@ -189,6 +189,8 @@ export const useBlocker = (_when: BlockerHookArg): ShimBlocker =>
     []
   )
 
+export const useInRouterContext = () => true
+
 export const Routes: React.FC<{ children?: React.ReactNode }> = ({
   children
 }) => <>{children}</>
