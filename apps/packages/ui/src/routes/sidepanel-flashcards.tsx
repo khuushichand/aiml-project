@@ -2,7 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { Layers } from "lucide-react"
 import { Button, Typography } from "antd"
-import { browser } from "@/utils/browser-polyfill"
+import { browser } from "wxt/browser"
 
 const { Text, Title } = Typography
 

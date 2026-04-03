@@ -163,16 +163,23 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
       const isNetwork =
         err instanceof TypeError ||
         (err instanceof Error && /network|fetch|timeout/i.test(err.message))
+      const httpStatus = (err as { response?: { status?: number } })?.response?.status
+      const isServerError = typeof httpStatus === "number" && httpStatus >= 400
       setAssistantError(
         isNetwork
           ? t("option:flashcards.studyAssistantNetworkError", {
               defaultValue:
                 "Could not reach the server. Check your connection and try again."
             })
-          : t("option:flashcards.studyAssistantNoLlm", {
-              defaultValue:
-                "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
-            })
+          : isServerError
+            ? t("option:flashcards.studyAssistantServerError", {
+                defaultValue:
+                  "The server returned an error. Please try again or check server logs."
+              })
+            : t("option:flashcards.studyAssistantNoLlm", {
+                defaultValue:
+                  "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+              })
       )
       return false
     } finally {
@@ -199,16 +206,23 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
         const isNetwork =
           error instanceof TypeError ||
           (error instanceof Error && /network|fetch|timeout/i.test(error.message))
+        const httpStatus = (error as { response?: { status?: number } })?.response?.status
+        const isServerError = typeof httpStatus === "number" && httpStatus >= 400
         setAssistantError(
           isNetwork
             ? t("option:flashcards.studyAssistantNetworkError", {
                 defaultValue:
                   "Could not reach the server. Check your connection and try again."
               })
-            : t("option:flashcards.studyAssistantNoLlm", {
-                defaultValue:
-                  "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
-              })
+            : isServerError
+              ? t("option:flashcards.studyAssistantServerError", {
+                  defaultValue:
+                    "The server returned an error. Please try again or check server logs."
+                })
+              : t("option:flashcards.studyAssistantNoLlm", {
+                  defaultValue:
+                    "Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+                })
         )
         return "error"
       }

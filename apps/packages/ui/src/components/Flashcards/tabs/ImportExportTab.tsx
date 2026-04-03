@@ -2459,15 +2459,17 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
             : undefined
         }
       >
-        <Button
-          type="primary"
-          onClick={handleGenerate}
-          loading={generateMutation.isPending}
-          disabled={!sourceText.trim() || !hasLlmProviders}
-          data-testid="flashcards-generate-button"
-        >
-          {t("option:flashcards.generateButton", { defaultValue: "Generate cards" })}
-        </Button>
+        <span>
+          <Button
+            type="primary"
+            onClick={handleGenerate}
+            loading={generateMutation.isPending}
+            disabled={!sourceText.trim() || !hasLlmProviders}
+            data-testid="flashcards-generate-button"
+          >
+            {t("option:flashcards.generateButton", { defaultValue: "Generate cards" })}
+          </Button>
+        </span>
       </Tooltip>
 
       {generatedCards.length > 0 && (
