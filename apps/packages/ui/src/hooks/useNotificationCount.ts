@@ -5,35 +5,26 @@
  * Returns 0 when running outside the extension context.
  */
 
-import { useEffect, useState } from "react"
+import { useStorage } from "@plasmohq/storage/hook"
+
+import { safeStorageSerde } from "@/utils/safe-storage"
 
 const UNREAD_COUNT_KEY = "tldw:notifications:unreadCount"
-const POLL_INTERVAL_MS = 5_000
+
+const toUnreadCount = (value: unknown): number => {
+  const next = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(next) ? next : 0
+}
 
 export function useNotificationCount(): number {
-  const [count, setCount] = useState(0)
+  const [count] = useStorage<number>(
+    {
+      key: UNREAD_COUNT_KEY,
+      area: "local",
+      serde: safeStorageSerde
+    },
+    toUnreadCount
+  )
 
-  useEffect(() => {
-    let cancelled = false
-
-    const readCount = () => {
-      try {
-        const raw = localStorage.getItem(UNREAD_COUNT_KEY)
-        if (!cancelled && raw != null) {
-          setCount(Number(raw) || 0)
-        }
-      } catch {
-        // localStorage unavailable
-      }
-    }
-
-    readCount()
-    const id = setInterval(readCount, POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
-
-  return count
+  return toUnreadCount(count)
 }

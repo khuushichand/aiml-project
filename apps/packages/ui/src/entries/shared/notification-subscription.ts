@@ -18,6 +18,11 @@ const SUBSCRIPTION_ACTIVE_KEY = "tldw:notifications:subscriptionActive"
 
 let unsubscribe: (() => void) | null = null
 
+const toUnreadCount = (value: unknown): number => {
+  const next = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(next) ? next : 0
+}
+
 /**
  * Start listening for notifications from the server.
  * Safe to call multiple times — only one subscription is active at a time.
@@ -25,14 +30,16 @@ let unsubscribe: (() => void) | null = null
 export async function startNotificationSubscription(): Promise<void> {
   if (unsubscribe) return // Already subscribed
 
-  const storage = createSafeStorage()
+  const storage = createSafeStorage({ area: "local" })
+  let unreadCountWrite = Promise.resolve()
 
   // Fetch initial unread count
   try {
     const { unread_count } = await getUnreadCount()
     await storage.set(UNREAD_COUNT_KEY, unread_count)
-  } catch {
+  } catch (error) {
     // Server may not be reachable yet
+    console.debug("[background] Failed to fetch initial unread count:", error)
   }
 
   // Subscribe to SSE stream
@@ -50,9 +57,13 @@ export async function startNotificationSubscription(): Promise<void> {
             notify(payload.title, payload.message || "")
           }
 
-          // Increment unread count
-          const current = (await storage.get<number>(UNREAD_COUNT_KEY)) ?? 0
-          await storage.set(UNREAD_COUNT_KEY, current + 1)
+          unreadCountWrite = unreadCountWrite
+            .catch(() => undefined)
+            .then(async () => {
+              const current = toUnreadCount(await storage.get<number>(UNREAD_COUNT_KEY))
+              await storage.set(UNREAD_COUNT_KEY, current + 1)
+            })
+          await unreadCountWrite
         }
 
         if (event.event === "notifications_coalesced") {
@@ -60,8 +71,11 @@ export async function startNotificationSubscription(): Promise<void> {
           try {
             const { unread_count } = await getUnreadCount()
             await storage.set(UNREAD_COUNT_KEY, unread_count)
-          } catch {
-            // Ignore
+          } catch (error) {
+            console.debug(
+              "[background] Failed to refresh unread count after coalesced notifications:",
+              error
+            )
           }
         }
       },
@@ -71,8 +85,9 @@ export async function startNotificationSubscription(): Promise<void> {
     })
 
     await storage.set(SUBSCRIPTION_ACTIVE_KEY, true)
-  } catch {
+  } catch (error) {
     // Server not available — will retry on next init
+    console.debug("[background] Failed to start notification subscription:", error)
   }
 }
 
@@ -90,14 +105,14 @@ export function stopNotificationSubscription(): void {
  * Get the current unread count from storage (for UI components).
  */
 export async function getStoredUnreadCount(): Promise<number> {
-  const storage = createSafeStorage()
-  return (await storage.get<number>(UNREAD_COUNT_KEY)) ?? 0
+  const storage = createSafeStorage({ area: "local" })
+  return toUnreadCount(await storage.get<number>(UNREAD_COUNT_KEY))
 }
 
 /**
  * Reset the unread count (e.g., when user opens notifications page).
  */
 export async function resetStoredUnreadCount(): Promise<void> {
-  const storage = createSafeStorage()
+  const storage = createSafeStorage({ area: "local" })
   await storage.set(UNREAD_COUNT_KEY, 0)
 }
