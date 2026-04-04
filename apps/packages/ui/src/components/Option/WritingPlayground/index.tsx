@@ -24,6 +24,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import {
+  Activity,
   Columns2,
   Copy,
   Download,
@@ -93,6 +94,8 @@ import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
 import { WritingPlaygroundInspectorPanel } from "./WritingPlaygroundInspectorPanel"
 import { CharacterWorldTab } from "./CharacterWorldTab"
 import { ResearchTab } from "./ResearchTab"
+import { AIAgentTab } from "./AIAgentTab"
+import { WritingAnalysisModalHost } from "./WritingAnalysisModalHost"
 import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
 import {
@@ -171,6 +174,7 @@ export const WritingPlayground = () => {
     setEditorMode,
     focusMode,
     setFocusMode,
+    setAnalysisModalOpen,
   } = useWritingPlaygroundStore()
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
@@ -2047,6 +2051,7 @@ export const WritingPlayground = () => {
 
   const charactersTabContent = <CharacterWorldTab isOnline={isOnline} />
   const researchTabContent = <ResearchTab isOnline={isOnline} />
+  const agentTabContent = <AIAgentTab isOnline={isOnline} />
 
   const inspectorDrawerContent = (
     <div className="p-3">
@@ -2059,7 +2064,8 @@ export const WritingPlayground = () => {
           setup: t("option:writingPlayground.sidebarSetup", "Setup"),
           inspect: t("option:writingPlayground.sidebarInspect", "Analysis"),
           characters: t("option:writingPlayground.sidebarCharacters", "Characters"),
-          research: t("option:writingPlayground.sidebarResearch", "Research")
+          research: t("option:writingPlayground.sidebarResearch", "Research"),
+          agent: t("option:writingPlayground.sidebarAgent", "Agent")
         }}
         tabBadges={{
           inspect: responseInspectorRowsAll.length > 0 ? (<Tag color="blue" className="!m-0 !px-1 !text-[10px]">{responseInspectorRowsAll.length}</Tag>) : null
@@ -2100,6 +2106,7 @@ export const WritingPlayground = () => {
         inspect={inspectTabContent}
         characters={charactersTabContent}
         research={researchTabContent}
+        agent={agentTabContent}
       />
     </div>
   )
@@ -2203,6 +2210,16 @@ export const WritingPlayground = () => {
                         trigger={["click"]}
                         disabled={isGenerating}>
                         <Button size="small" icon={<MoreHorizontal className="h-3.5 w-3.5" />}>{t("option:writingPlayground.moreActions", "More")}</Button>
+                      </Dropdown>
+                      <Dropdown menu={{
+                        items: [
+                          { key: "pulse", label: t("option:writingPlayground.analysisStoryPulse", "Story Pulse"), onClick: () => setAnalysisModalOpen("pulse") },
+                          { key: "plot", label: t("option:writingPlayground.analysisPlotTracker", "Plot Tracker"), onClick: () => setAnalysisModalOpen("plot") },
+                          { key: "timeline", label: t("option:writingPlayground.analysisEventLine", "Event Line"), onClick: () => setAnalysisModalOpen("timeline") },
+                          { key: "web", label: t("option:writingPlayground.analysisConnectionWeb", "Connection Web"), onClick: () => setAnalysisModalOpen("web") },
+                        ]
+                      }} trigger={["click"]}>
+                        <Button size="small" icon={<Activity className="h-3.5 w-3.5" />}>{t("option:writingPlayground.analysisButton", "Analysis")}</Button>
                       </Dropdown>
                       <Button size="small" icon={searchOpen ? <X className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />} onClick={() => setSearchOpen((open) => !open)} title={searchOpen ? t("option:writingPlayground.searchClose", "Close search") : t("option:writingPlayground.searchToggle", "Find")} />
                     </div>
@@ -2437,6 +2454,7 @@ export const WritingPlayground = () => {
       ) : null}
       <input ref={sessionFileInputRef} type="file" accept=".json,application/json" onChange={handleSessionImport} data-testid="writing-session-import" className="hidden" />
       <input ref={snapshotFileInputRef} type="file" accept=".json,application/json" onChange={handleSnapshotImport} data-testid="writing-snapshot-import" className="hidden" />
+      <WritingAnalysisModalHost />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-export type InspectorTabKey = "sampling" | "context" | "setup" | "inspect" | "characters" | "research"
+export type InspectorTabKey = "sampling" | "context" | "setup" | "inspect" | "characters" | "research" | "agent"
 
 export interface EssentialsStripProps {
   children: ReactNode

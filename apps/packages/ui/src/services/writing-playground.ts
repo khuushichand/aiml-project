@@ -874,6 +874,72 @@ export async function createManuscriptCitation(
   })
 }
 
+// ── Analysis ────────────────────────────────────────────
+
+export async function analyzeScene(
+  sceneId: string,
+  data?: { analysis_types?: string[]; provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/analyze` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data || { analysis_types: ["pacing"] },
+  })
+}
+
+export async function analyzeChapter(
+  chapterId: string,
+  data?: { analysis_types?: string[]; provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/chapters/${encodeURIComponent(chapterId)}/analyze` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data || { analysis_types: ["pacing"] },
+  })
+}
+
+export async function analyzeProjectPlotHoles(
+  projectId: string,
+  data?: { provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/analyze/plot-holes` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { analysis_types: ["plot_holes"], ...data },
+  })
+}
+
+export async function analyzeProjectConsistency(
+  projectId: string,
+  data?: { provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/analyze/consistency` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { analysis_types: ["consistency"], ...data },
+  })
+}
+
+export async function listManuscriptAnalyses(
+  projectId: string,
+  params?: { scope_type?: string; analysis_type?: string; include_stale?: boolean },
+) {
+  const query = new URLSearchParams()
+  if (params?.scope_type) query.set("scope_type", params.scope_type)
+  if (params?.analysis_type) query.set("analysis_type", params.analysis_type)
+  if (params?.include_stale) query.set("include_stale", "true")
+  const qs = query.toString()
+  const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/analyses${qs ? `?${qs}` : ""}`
+  return await bgRequest({
+    path: path as AllowedPath,
+    method: "GET",
+  })
+}
+
 // ── Research ────────────────────────────────────────────
 
 export async function searchManuscriptResearch(
