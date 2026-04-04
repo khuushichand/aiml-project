@@ -136,6 +136,8 @@ interface ContentViewerProps {
   hasNext?: boolean
   currentIndex?: number
   totalResults?: number
+  /** True only when the server has zero media items (no filters/search active). */
+  isLibraryEmpty?: boolean
   onChatWithMedia?: () => void
   onChatAboutMedia?: () => void
   onGenerateFlashcardsFromContent?: (payload: {
@@ -173,6 +175,7 @@ export function ContentViewer({
   hasNext = false,
   currentIndex = 0,
   totalResults = 0,
+  isLibraryEmpty: isLibraryEmptyProp = false,
   onChatWithMedia,
   onChatAboutMedia,
   onGenerateFlashcardsFromContent,
@@ -407,7 +410,7 @@ export function ContentViewer({
   }
 
   if (!selectedMedia || editState.isAwaitingSelectionUpdate) {
-    const isLibraryEmpty = totalResults === 0 && !editState.isAwaitingSelectionUpdate
+    const isLibraryEmpty = isLibraryEmptyProp && !editState.isAwaitingSelectionUpdate
 
     return (
       <div className="flex-1 flex items-center justify-center bg-bg" data-testid="content-viewer-empty">
