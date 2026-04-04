@@ -199,6 +199,16 @@ const ViewMediaPage: React.FC = () => {
                 'This feature requires connection to the tldw server. Please check your server connection.'
             })}
             examples={[]}
+            primaryActionLabel={t('option:buttonRetry', {
+              defaultValue: 'Retry connection'
+            })}
+            onPrimaryAction={() => {
+              void checkOnce()
+            }}
+            secondaryActionLabel={t('settings:tldw.openSettings', {
+              defaultValue: 'Open Settings'
+            })}
+            onSecondaryAction={() => navigate('/settings/tldw')}
           />
         </div>
       )
@@ -214,6 +224,16 @@ const ViewMediaPage: React.FC = () => {
             defaultValue: 'Please check your server connection.'
           })}
           examples={[]}
+          primaryActionLabel={t('option:buttonRetry', {
+            defaultValue: 'Retry connection'
+          })}
+          onPrimaryAction={() => {
+            void checkOnce()
+          }}
+          secondaryActionLabel={t('settings:tldw.openSettings', {
+            defaultValue: 'Open Settings'
+          })}
+          onSecondaryAction={() => navigate('/settings/tldw')}
         />
       </div>
     )
@@ -253,10 +273,16 @@ const ViewMediaPage: React.FC = () => {
               'Technical details: this tldw server does not advertise the Media endpoints (for example, /api/v1/media and /api/v1/media/search).'
           })
         ]}
-        primaryActionLabel={t('settings:healthSummary.diagnostics', {
+        primaryActionLabel={t('option:buttonRetry', {
+          defaultValue: 'Retry connection'
+        })}
+        onPrimaryAction={() => {
+          void checkOnce()
+        }}
+        secondaryActionLabel={t('settings:healthSummary.diagnostics', {
           defaultValue: 'Open Diagnostics'
         })}
-        onPrimaryAction={() => navigate('/settings/health')}
+        onSecondaryAction={() => navigate('/settings/health')}
       />
     )
   }
@@ -281,15 +307,20 @@ const MediaPageContent: React.FC = () => {
   const viewPrefs = useMediaViewPreferences()
 
   // Auto-refresh media results when Quick Ingest completes
+  const { refetch: searchRefetch } = search
   useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout>
     const handleIngestComplete = () => {
-      setTimeout(() => {
-        search.refetch()
+      timeoutId = setTimeout(() => {
+        searchRefetch()
       }, 1500)
     }
     window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
-    return () => window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
-  }, [search])
+    return () => {
+      clearTimeout(timeoutId)
+      window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+    }
+  }, [searchRefetch])
 
   // Compute display results (filtered by favorites/collections)
   // Need selection hook first for favorites/collections, but selection needs displayResults.
@@ -1050,6 +1081,52 @@ const MediaPageContent: React.FC = () => {
       void refetchNavigation()
     })
   }, [nav, showNavigationPanel, refetchNavigation])
+
+  // When the library is truly empty (no results, no search/filters active, not loading),
+  // render a single-column centered onboarding view instead of the two-column split.
+  const isEmptyLibrary =
+    search.activeTotalCount === 0 &&
+    !hasActiveFilters &&
+    !search.query?.trim() &&
+    !search.isLoading &&
+    !search.isFetching
+
+  if (isEmptyLibrary) {
+    return (
+      <div
+        className="relative flex min-h-full bg-bg"
+        style={{ minHeight: `${sidebarDimensions.mediaPageMinHeightPx}px` }}
+      >
+        <div className="flex flex-1 items-center justify-center p-8">
+          <div className="max-w-lg w-full">
+            <ResultsList
+              results={displayResults}
+              selectedId={null}
+              onSelect={() => {}}
+              totalCount={search.activeTotalCount}
+              loadedCount={displayResults.length}
+              isLoading={false}
+              hasActiveFilters={false}
+              searchQuery=""
+              onClearSearch={() => {}}
+              onClearFilters={() => {}}
+              onOpenQuickIngest={(detail) => {
+                requestQuickIngestOpen(detail)
+              }}
+              favorites={selection.favoritesSet}
+              onToggleFavorite={selection.toggleFavorite}
+              selectionMode={false}
+              selectedIds={new Set()}
+              onToggleSelected={() => {}}
+              readingProgress={selection.readingProgressMap}
+              viewMode="standard"
+              onViewModeChange={() => {}}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

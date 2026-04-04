@@ -5,11 +5,27 @@ type WritingPlaygroundState = {
   activeSessionName: string | null
   setActiveSessionId: (activeSessionId: string | null) => void
   setActiveSessionName: (activeSessionName: string | null) => void
+  activeProjectId: string | null
+  setActiveProjectId: (id: string | null) => void
+  activeNodeId: string | null
+  setActiveNodeId: (id: string | null) => void
+  editorMode: "plain" | "tiptap"
+  setEditorMode: (mode: "plain" | "tiptap") => void
+  focusMode: boolean
+  setFocusMode: (enabled: boolean) => void
 }
 
 export const useWritingPlaygroundStore = createWithEqualityFn<WritingPlaygroundState>((set) => ({
   activeSessionId: null,
   activeSessionName: null,
   setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
-  setActiveSessionName: (activeSessionName) => set({ activeSessionName })
+  setActiveSessionName: (activeSessionName) => set({ activeSessionName }),
+  activeProjectId: null,
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
+  activeNodeId: null,
+  setActiveNodeId: (id) => set({ activeNodeId: id }),
+  editorMode: "plain" as const,
+  setEditorMode: (mode) => set({ editorMode: mode }),
+  focusMode: false,
+  setFocusMode: (enabled) => set({ focusMode: enabled }),
 }))

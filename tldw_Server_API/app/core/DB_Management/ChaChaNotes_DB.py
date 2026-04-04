@@ -531,7 +531,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 40  # Schema v40 adds persona buddy storage contract table
+    _CURRENT_SCHEMA_VERSION = 41  # Schema v41 adds manuscript management tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3332,6 +3332,500 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 40;
 """
+    _MIGRATION_SQL_V40_TO_V41 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 41 - Manuscript management tables (2026-04-03)
+───────────────────────────────────────────────────────────────*/
+
+/* ── manuscript_projects ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_projects (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL,
+  subtitle         TEXT,
+  author           TEXT,
+  genre            TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK(status IN ('draft','outlining','writing','revising','complete','archived')),
+  synopsis         TEXT,
+  target_word_count INTEGER,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  settings_json    TEXT NOT NULL DEFAULT '{}',
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_projects_deleted
+  ON manuscript_projects(deleted);
+
+/* ── manuscript_parts ──────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_parts (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_deleted
+  ON manuscript_parts(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_project
+  ON manuscript_parts(project_id, sort_order);
+
+/* ── manuscript_chapters ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_chapters (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  part_id          TEXT REFERENCES manuscript_parts(id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  pov_character_id TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_deleted
+  ON manuscript_chapters(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_project
+  ON manuscript_chapters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_part
+  ON manuscript_chapters(part_id, sort_order);
+
+/* ── manuscript_scenes ─────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_scenes (
+  id               TEXT PRIMARY KEY,
+  chapter_id       TEXT NOT NULL REFERENCES manuscript_chapters(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  content_json     TEXT,
+  content_plain    TEXT,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  pov_character_id TEXT,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_deleted
+  ON manuscript_scenes(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_chapter
+  ON manuscript_scenes(chapter_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
+  ON manuscript_scenes(project_id);
+
+/* ── manuscript_scenes FTS5 ────────────────────────────────── */
+CREATE VIRTUAL TABLE IF NOT EXISTS manuscript_scenes_fts
+USING fts5(
+  title, content_plain, synopsis,
+  content='manuscript_scenes',
+  content_rowid='rowid'
+);
+
+DROP TRIGGER IF EXISTS manuscript_scenes_ai;
+DROP TRIGGER IF EXISTS manuscript_scenes_au;
+DROP TRIGGER IF EXISTS manuscript_scenes_ad;
+
+CREATE TRIGGER manuscript_scenes_ai
+AFTER INSERT ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(rowid, title, content_plain, synopsis)
+  SELECT new.rowid, new.title, new.content_plain, new.synopsis
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER manuscript_scenes_au
+AFTER UPDATE ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(manuscript_scenes_fts, rowid, title, content_plain, synopsis)
+  SELECT 'delete', old.rowid, old.title, old.content_plain, old.synopsis
+  WHERE old.deleted = 0;
+
+  INSERT INTO manuscript_scenes_fts(rowid, title, content_plain, synopsis)
+  SELECT new.rowid, new.title, new.content_plain, new.synopsis
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER manuscript_scenes_ad
+AFTER DELETE ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(manuscript_scenes_fts, rowid, title, content_plain, synopsis)
+  VALUES('delete', old.rowid, old.title, old.content_plain, old.synopsis);
+END;
+
+/* ── sync triggers: manuscript_projects ────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_projects_sync_create;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_update;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_undelete;
+
+CREATE TRIGGER manuscript_projects_sync_create
+AFTER INSERT ON manuscript_projects BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_update
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.subtitle IS NOT NEW.subtitle OR
+     OLD.author IS NOT NEW.author OR
+     OLD.genre IS NOT NEW.genre OR
+     OLD.status IS NOT NEW.status OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.target_word_count IS NOT NEW.target_word_count OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.settings_json IS NOT NEW.settings_json OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_delete
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_undelete
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_parts ───────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_parts_sync_create;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_update;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_undelete;
+
+CREATE TRIGGER manuscript_parts_sync_create
+AFTER INSERT ON manuscript_parts BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_update
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_delete
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_undelete
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_chapters ────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_create;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_update;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_undelete;
+
+CREATE TRIGGER manuscript_chapters_sync_create
+AFTER INSERT ON manuscript_chapters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_update
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.part_id IS NOT NEW.part_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.pov_character_id IS NOT NEW.pov_character_id OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.status IS NOT NEW.status OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_delete
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_undelete
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_scenes ──────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_create;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_update;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_undelete;
+
+CREATE TRIGGER manuscript_scenes_sync_create
+AFTER INSERT ON manuscript_scenes BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_update
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.content_json IS NOT NEW.content_json OR
+     OLD.content_plain IS NOT NEW.content_plain OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.pov_character_id IS NOT NEW.pov_character_id OR
+     OLD.status IS NOT NEW.status OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_delete
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_undelete
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 41
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 41;
+"""
+
+    _MIGRATION_SQL_V40_TO_V41_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 41 - Manuscript management tables (2026-04-03) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+/* ── manuscript_projects ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_projects (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL,
+  subtitle         TEXT,
+  author           TEXT,
+  genre            TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK(status IN ('draft','outlining','writing','revising','complete','archived')),
+  synopsis         TEXT,
+  target_word_count INTEGER,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  settings_json    TEXT NOT NULL DEFAULT '{}',
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_projects_deleted
+  ON manuscript_projects(deleted);
+
+/* ── manuscript_parts ──────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_parts (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_deleted
+  ON manuscript_parts(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_project
+  ON manuscript_parts(project_id, sort_order);
+
+/* ── manuscript_chapters ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_chapters (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  part_id          TEXT REFERENCES manuscript_parts(id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  pov_character_id TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_deleted
+  ON manuscript_chapters(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_project
+  ON manuscript_chapters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_part
+  ON manuscript_chapters(part_id, sort_order);
+
+/* ── manuscript_scenes ─────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_scenes (
+  id               TEXT PRIMARY KEY,
+  chapter_id       TEXT NOT NULL REFERENCES manuscript_chapters(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  content_json     TEXT,
+  content_plain    TEXT,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  pov_character_id TEXT,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_deleted
+  ON manuscript_scenes(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_chapter
+  ON manuscript_scenes(chapter_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
+  ON manuscript_scenes(project_id);
+
+/* Note: FTS5 is SQLite-only; Postgres would use tsvector/GIN instead.
+   Sync triggers also use SQLite-specific json_object(); Postgres equivalent
+   would use jsonb_build_object(). Skipped for now — only tables + indexes. */
+
+UPDATE db_schema_version
+   SET version = 41
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 41;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5155,6 +5649,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V39->V40: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V40 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v40_to_v41(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V40 to V41 (manuscript management tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V40 to V41 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V40_TO_V41)
+            final_version = self._get_db_version(conn)
+            if final_version != 41:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V40->V41 failed version check. Expected 41, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V41 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V40->V41 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V40->V41 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V40->V41: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V41 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -6109,6 +6623,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 40 and current_db_version == 39:
                         self._migrate_from_v39_to_v40(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 41 and current_db_version == 40:
+                        self._migrate_from_v40_to_v41(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -6539,6 +7056,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 40 and current_db_version == 39:
                     self._migrate_from_v39_to_v40(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 41 and current_db_version == 40:
+                    self._migrate_from_v40_to_v41(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -8502,6 +9022,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 40:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40_POSTGRES, conn, expected_version=40)
                 current_version = 40
+            if current_version < 41:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V40_TO_V41_POSTGRES, conn, expected_version=41)
+                current_version = 41
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
