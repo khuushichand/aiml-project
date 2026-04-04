@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import { useIsConnected } from "@/hooks/useConnectionState"
 import { useSafeDemoMode } from "@/context/demo-mode"
 import { fetchChatModels } from "@/services/tldw-server"
+import { StorageQuotaBanner } from "@/components/Common/StorageQuotaBanner"
 import { CompanionHomePage } from "./CompanionHomePage"
 
 type CompanionHomeShellProps = {
@@ -106,6 +107,8 @@ export function CompanionHomeShell({
           </div>
         </div>
       )}
+
+      <StorageQuotaBanner />
 
       <CompanionHomePage
         onPersonalizationEnabled={onPersonalizationEnabled}
