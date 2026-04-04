@@ -20,7 +20,7 @@ const PROMPT_DELAY_MS = 2000
 /** Minimum time between prompt appearances to avoid rapid-route spam */
 const PROMPT_COOLDOWN_MS = 10000
 
-/** Duration the notification stays open (seconds; 0 = manual close only) */
+/** Duration the notification stays open (seconds); auto-dismiss after 15s */
 const NOTIFICATION_DURATION = 15
 const NOTIFICATION_KEY = "tutorial-prompt-global"
 
