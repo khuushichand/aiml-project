@@ -1461,6 +1461,13 @@ else:
         logger.warning(f"Writing endpoints unavailable at import time; deferring: {_writing_import_err}")
         writing_router = None  # type: ignore[assignment]
 
+    # Manuscript Management Endpoints (ChaChaNotes)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing_manuscripts import router as manuscripts_router
+    except _IMPORT_EXCEPTIONS as _manuscripts_import_err:
+        logger.warning(f"Manuscript endpoints unavailable at import time; deferring: {_manuscripts_import_err}")
+        manuscripts_router = None  # type: ignore[assignment]
+
     # Sandbox Endpoint (scaffold)
     try:
         from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
@@ -6441,6 +6448,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"])
     except _IMPORT_EXCEPTIONS as _writing_min_err:
         logger.debug(f"Skipping writing router in minimal test app: {_writing_min_err}")
+    # Manuscript Management endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing_manuscripts import router as manuscripts_router
+
+        app.include_router(manuscripts_router, prefix=f"{API_V1_PREFIX}/writing/manuscripts", tags=["manuscripts"])
+    except _IMPORT_EXCEPTIONS as _manuscripts_min_err:
+        logger.debug(f"Skipping manuscripts router in minimal test app: {_manuscripts_min_err}")
     # Metrics endpoints (/api/v1/metrics/text)
     try:
         from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -7129,6 +7143,11 @@ else:
     if "writing_router" in locals() and writing_router is not None:
         _include_if_enabled(
             "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
+        )
+    if "manuscripts_router" in locals() and manuscripts_router is not None:
+        _include_if_enabled(
+            "manuscripts", manuscripts_router, prefix=f"{API_V1_PREFIX}/writing/manuscripts",
+            tags=["manuscripts"], default_stable=True
         )
     from tldw_Server_API.app.api.v1.endpoints.persona import (
         router as persona_router,
