@@ -1361,7 +1361,16 @@
   "moderationPlayground": {
     "nav": "Moderation Playground",
     "title": "Moderation Playground",
-    "subtitle": "Family safety controls and server guardrails in one place."
+    "subtitle": "Family safety controls and server guardrails in one place.",
+    "desc": "Content safety rules, blocklists, and testing",
+    "onboarding": {
+      "title": "Welcome to Content Controls",
+      "description": "Set up content safety rules to protect your family or enforce server guardrails.",
+      "guardrailsCta": "Set up Family Guardrails",
+      "dismiss": "Skip \u2014 I\u2019ll explore on my own",
+      "tabHint": "Start here: Policy & Settings tab sets your base rules. Then test them in the Test Sandbox.",
+      "startHereBadge": "Start here"
+    }
   },
   "repo2txt": {
     "nav": "Repo2Txt",
