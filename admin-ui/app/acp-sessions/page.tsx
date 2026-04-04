@@ -19,7 +19,7 @@ import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
-import { formatDateTime } from '@/lib/format';
+import { formatDateTime, formatTokens } from '@/lib/format';
 
 interface ACPSession {
   session_id: string;
@@ -136,12 +136,6 @@ export default function ACPSessionsPage() {
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
-  };
-
-  const formatTokens = (count: number) => {
-    if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-    if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
-    return String(count);
   };
 
   return (

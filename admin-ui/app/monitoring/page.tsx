@@ -1,6 +1,5 @@
 'use client';
 
-import { Suspense } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import MonitoringFeedbackBanners from './components/MonitoringFeedbackBanners';
@@ -32,9 +31,5 @@ function MonitoringPageContent() {
 }
 
 export default function MonitoringPage() {
-  return (
-    <Suspense fallback={<div className="p-4 lg:p-8 text-muted-foreground">Loading monitoring...</div>}>
-      <MonitoringPageContent />
-    </Suspense>
-  );
+  return <MonitoringPageContent />;
 }
