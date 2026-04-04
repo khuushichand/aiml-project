@@ -195,18 +195,7 @@ describe("WorldBooksManager cross-feature integration stage-1", () => {
       const user = userEvent.setup()
       render(<WorldBooksManager />)
 
-      await user.click(
-        await screen.findByRole("button", {
-          name: "View attached characters for Arcana (1)"
-        })
-      )
-      const popoverCharacterLink = await screen.findByRole("link", {
-        name: "Open character Alice"
-      })
-      expect(popoverCharacterLink).toHaveAttribute(
-        "href",
-        "/characters?from=world-books&focusCharacterId=1&focusWorldBookId=1"
-      )
+      expect(screen.getByText("Open to load")).toBeInTheDocument()
 
       await user.click(screen.getByRole("button", { name: "Quick attach characters" }))
       const quickAttachTitle = await screen.findByText("Quick attach: Arcana")
@@ -216,6 +205,22 @@ describe("WorldBooksManager cross-feature integration stage-1", () => {
         name: "Open character Alice"
       })
       expect(quickAttachCharacterLink).toHaveAttribute(
+        "href",
+        "/characters?from=world-books&focusCharacterId=1&focusWorldBookId=1"
+      )
+
+      await user.click(
+        await screen.findByRole("button", {
+          name: "View attached characters for Arcana (1)"
+        })
+      )
+      const attachedCharactersTitle = await screen.findByText("Attached Characters")
+      const attachedCharactersPopover = attachedCharactersTitle.closest(".ant-popover") as HTMLElement | null
+      expect(attachedCharactersPopover).not.toBeNull()
+      const popoverCharacterLink = within(attachedCharactersPopover as HTMLElement).getByRole("link", {
+        name: "Open character Alice"
+      })
+      expect(popoverCharacterLink).toHaveAttribute(
         "href",
         "/characters?from=world-books&focusCharacterId=1&focusWorldBookId=1"
       )

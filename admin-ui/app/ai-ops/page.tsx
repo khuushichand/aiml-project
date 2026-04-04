@@ -22,7 +22,7 @@ interface AgentMetrics {
   total_tokens: number;
   total_messages: number;
   last_used_at: string | null;
-  total_estimated_cost_usd?: number | null;
+  total_estimated_cost_usd: number | null;
 }
 
 interface RealtimeStats {
@@ -110,18 +110,21 @@ export default function AIOpsPage() {
         api.getRealtimeStats(),
         api.getACPSessions({ limit: '10', sort: 'created_at:desc' }),
       ]);
+      const partialFailures: string[] = [];
 
       if (metricsRes.status === 'fulfilled') {
         const data = metricsRes.value as { items: AgentMetrics[] };
         setAgentMetrics(Array.isArray(data.items) ? data.items : []);
       } else {
         setAgentMetrics([]);
+        partialFailures.push('agent metrics');
       }
 
       if (statsRes.status === 'fulfilled') {
         setRealtimeStats(statsRes.value as RealtimeStats);
       } else {
         setRealtimeStats(null);
+        partialFailures.push('realtime stats');
       }
 
       if (sessionsRes.status === 'fulfilled') {
@@ -129,6 +132,11 @@ export default function AIOpsPage() {
         setRecentSessions(Array.isArray(data.sessions) ? data.sessions.slice(0, 10) : []);
       } else {
         setRecentSessions([]);
+        partialFailures.push('recent sessions');
+      }
+
+      if (partialFailures.length > 0) {
+        setError(`Some AI Ops data could not be loaded: ${partialFailures.join(', ')}.`);
       }
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to load AI operations data';

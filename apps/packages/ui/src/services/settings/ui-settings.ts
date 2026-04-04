@@ -338,7 +338,7 @@ export const PERSONA_BUDDY_SHELL_ENABLED_SETTING = defineSetting(
   }
 )
 
-export const SIDEBAR_SHORTCUT_MAX_COUNT = 12
+export const SIDEBAR_SHORTCUT_MAX_COUNT = 14
 
 export const HEADER_SHORTCUT_IDS = [
   "chat",
@@ -463,7 +463,9 @@ export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
   "watchlists",
   "document-workspace",
   "flashcards",
-  "moderation-playground"
+  "moderation-playground",
+  "tts-playground",
+  "stt-playground"
 ]
 
 const areShortcutSelectionsEqual = (

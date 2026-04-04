@@ -153,7 +153,6 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "╠══════════════════════════════════════════════════════════════╣"
 	@echo "║  API:         http://localhost:8000                          ║"
 	@echo "║  WebUI:       http://localhost:8080                          ║"
-	@echo "║  Admin Panel: http://localhost:3001                          ║"
 	@echo "║  API Docs:    http://localhost:8000/docs                     ║"
 	@echo "║  Setup:       http://localhost:8000/setup                    ║"
 	@echo "╠══════════════════════════════════════════════════════════════╣"

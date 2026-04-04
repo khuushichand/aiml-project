@@ -21,15 +21,18 @@ const sanitizePayload = (payload: LoginResponsePayload): Omit<LoginResponsePaylo
 };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const rateCheck = checkRateLimit(extractClientIp(request.headers));
-  if (!rateCheck.allowed) {
-    return NextResponse.json(
-      { detail: 'Too many login attempts. Please try again later.' },
-      {
-        status: 429,
-        headers: { 'Retry-After': String(rateCheck.retryAfterSeconds) },
-      }
-    );
+  const clientIp = extractClientIp(request.headers);
+  if (clientIp !== 'unknown') {
+    const rateCheck = checkRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { detail: 'Too many login attempts. Please try again later.' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(rateCheck.retryAfterSeconds) },
+        }
+      );
+    }
   }
 
   const body = await request.text();
