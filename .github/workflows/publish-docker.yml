@@ -87,7 +87,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Generate artifact attestation (GHCR)
-        uses: actions/attest-build-provenance@v4.1.0
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.ghcr_suffix }}
           subject-digest: ${{ steps.push.outputs.digest }}
