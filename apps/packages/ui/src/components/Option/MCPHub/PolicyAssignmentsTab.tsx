@@ -1005,7 +1005,25 @@ export const PolicyAssignmentsTab = ({
         bordered
         loading={loading}
         dataSource={assignments}
-        locale={{ emptyText: <Empty description="No assignments yet" /> }}
+        locale={{
+          emptyText: (
+            <Empty
+              description={
+                <Space orientation="vertical" size={4}>
+                  <Typography.Text type="secondary">No policy assignments yet</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    Assignments bind permission profiles to users, groups, or personas.
+                    Create a permission profile first, then assign it here.
+                  </Typography.Text>
+                </Space>
+              }
+            >
+              <Button type="primary" onClick={() => setCreateOpen(true)}>
+                Create Assignment
+              </Button>
+            </Empty>
+          )
+        }}
         renderItem={(assignment) => (
           <List.Item>
             <Space orientation="vertical" size={4} style={{ width: "100%" }}>

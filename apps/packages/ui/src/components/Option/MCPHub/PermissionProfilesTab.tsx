@@ -447,7 +447,21 @@ export const PermissionProfilesTab = () => {
       {loading ? (
         <Card loading size="small" />
       ) : profiles.length === 0 ? (
-        <Empty description="No permission profiles yet" />
+        <Empty
+          description={
+            <Space orientation="vertical" size={4}>
+              <Typography.Text type="secondary">No permission profiles yet</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                Profiles control which tools users and personas can access.
+                Before creating a profile, review the <Typography.Text strong>Tool Catalog</Typography.Text> to see available tools.
+              </Typography.Text>
+            </Space>
+          }
+        >
+          <Button type="primary" onClick={() => setCreateOpen(true)}>
+            Create Profile
+          </Button>
+        </Empty>
       ) : (
         <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           {profiles.map((profile) => (
