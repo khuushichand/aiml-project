@@ -8,7 +8,7 @@ Owner: Codex brainstorming session
 
 Add a dedicated GitHub Actions workflow that publishes rolling GHCR snapshot images when commits land on `main`. This snapshot flow covers the primary API image, the WebUI image, and the Admin UI image. Release publishing remains a separate concern: semver and `latest` tags continue to come only from the release-driven publish workflow.
 
-The design intentionally separates stable release tags from rolling `main` tags. That avoids turning a release workflow into a mixed policy engine and makes it clear which images are safe for production pinning versus which images represent the newest post-merge state.
+The design intentionally separates stable release tags from rolling `main` tags. That avoids turning a release workflow into a mixed policy engine and makes it clear which images are safe for production pinning versus which images represent the newest post-merge state. It also treats `main` as a convenience tag, not as the authoritative cross-image release identifier. Exact multi-image consistency comes from the shared `sha-<shortsha>` tags.
 
 ## Problem
 
@@ -37,6 +37,8 @@ This leaves a gap between merged code and distributable container artifacts.
 - Keep release publishing responsible for semver tags and `latest`
 - Keep GHCR authentication and provenance attestation aligned with current repository practice
 - Add pre-merge validation so the same images are built on PRs before changes can land on `main`
+- Make the PR container build check a standalone required status for protected branches
+- Document the runtime contract for published UI snapshots so operators understand the difference between compose-first defaults and direct `docker run` expectations
 
 ## Non-Goals
 
@@ -157,8 +159,15 @@ Rules:
 - no `latest` from `push` to `main`
 - no semver tags from `push` to `main`
 - no branch-name explosion beyond `main` in this first version
+- snapshot publication is per-image, not atomic across the full matrix
 
-This keeps snapshot tags easy to understand and easy to consume in staging or internal environments.
+Operational meaning:
+
+- `main` is a floating convenience tag for each image independently
+- `sha-<shortsha>` is the authoritative identifier for a coherent code revision across API, WebUI, and Admin UI
+- deployments that need strict cross-image consistency should pin all images to the same `sha-<shortsha>` tag, not to `main`
+
+This keeps snapshot tags easy to understand and easy to consume in staging or internal environments without pretending that a matrix push is transactionally atomic.
 
 ### 5. Preserve current build metadata and provenance patterns
 
@@ -184,6 +193,13 @@ Expected defaults:
 
 This matters because both Next.js images bake public environment values into the client bundle at build time. Snapshot images should reflect the intended default runtime story instead of relying on unspecified CI defaults.
 
+Runtime contract for v1:
+
+- API snapshots should remain straightforward to run directly with `docker run`
+- WebUI and Admin UI snapshots are compose-first artifacts in v1 because their baked defaults assume the project’s standard container topology
+- direct `docker run` usage of the UI images is only expected to work with minimal wiring when the operator deliberately provides a compatible backend origin/network arrangement
+- truly portable UI snapshots with minimal direct-run wiring are a follow-up concern and likely require a more runtime-configurable image strategy
+
 ### 7. Add PR build validation for the same three images
 
 Snapshot publishing should not be the first time these images are built.
@@ -202,11 +218,30 @@ Behavior:
 - build, but do not push, the same three images
 - use the same Dockerfiles and build args as the `main` snapshot workflow
 - fail the PR if one of those images no longer builds
+- expose this workflow as its own named status check, `container-build-check`
+- configure repository branch protection so `container-build-check` is a required status on protected target branches
 
 This provides a clean guardrail:
 
 - PRs prove the images build
 - merges to `main` publish the validated snapshot images
+
+Important operational note:
+
+- the required-check policy itself lives in repository settings, not in workflow YAML
+- implementation must therefore include both the workflow and the corresponding branch-protection update/runbook note
+
+### 8. Update documentation and release checklists to reflect the split contract
+
+The repository should explicitly document the difference between release-published images and `main` snapshot images.
+
+Expected documentation updates:
+
+- [`Docs/Release_Checklist.md`](../../../Docs/Release_Checklist.md) should keep release verification focused on release-published artifacts
+- Docker or deployment docs should explain that `main` snapshots exist for API, WebUI, and Admin UI
+- docs should state clearly that semver and `latest` remain release-only unless a later change expands that contract
+
+Without this, operators are likely to assume that every image published on `main` is also release-tagged or vice versa.
 
 ## Architecture
 
@@ -226,12 +261,19 @@ This provides a clean guardrail:
 6. Buildx builds and pushes each image.
 7. Provenance attestation is generated for each pushed GHCR image.
 
+Note:
+
+- these matrix entries publish independently
+- one image may advance its `main` tag even if another image fails later in the workflow
+- consumers that need all three artifacts from the exact same revision should deploy the shared `sha-<shortsha>` tags instead of relying on the floating `main` tags
+
 ### PR validation path
 
 1. A PR targets `main` or `dev`.
 2. Container build-check workflow runs.
 3. Workflow builds API, WebUI, and Admin UI images without pushing.
-4. Failures block merge before the `main` publish path is reached.
+4. The workflow reports the standalone `container-build-check` status.
+5. Because that status is required in branch protection, failures block merge before the `main` publish path is reached.
 
 ## Components
 
@@ -283,7 +325,9 @@ If any of the three images fails to build in PR validation:
 If snapshot publishing fails after merge:
 
 - the workflow fails visibly in Actions
-- the previous `main` tag remains the last successfully published snapshot
+- any image that already pushed may have advanced its own floating `main` tag
+- images that did not reach push remain on their previous floating `main` tag
+- the shared `sha-<shortsha>` tags make it obvious which images published successfully for that revision
 - release publishing remains unaffected because it is isolated in a separate workflow
 
 ### Registry/auth failures
@@ -305,6 +349,7 @@ If GHCR login or push fails:
 
 - add PR build-only workflow for API, WebUI, and Admin UI
 - confirm all three build from repo root using current Dockerfiles
+- verify the workflow name and reported status match the branch-protection requirement exactly
 
 ### Policy validation
 
@@ -317,6 +362,8 @@ Manual checks after implementation:
   - `ghcr.io/<owner>/<repo>-admin-ui:main`
 - release publication still publishes semver and `latest`
 - no `latest` tag is emitted by the `main` snapshot workflow
+- repository settings show `container-build-check` as a required status for the intended protected branches
+- docs and checklists describe the release-vs-snapshot split accurately
 
 ## Trade-Offs
 
@@ -354,6 +401,7 @@ This is acceptable because the initial requirement was API + WebUI + Admin UI, n
 - Decide later whether release publishing should also expand to WebUI and Admin UI semver tags
 - Decide later whether worker and audio-worker Dockerfiles should be repaired and brought into snapshot publishing
 - Consider refactoring release and snapshot workflows into a reusable workflow only after the first version is stable
+- Decide later whether the UI images should move from compose-first baked defaults to a stronger runtime-configurable model for better direct `docker run` ergonomics
 
 ## Recommendation
 
