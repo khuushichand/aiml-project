@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Tooltip, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, List, Modal, Space, Tag, Tooltip, Typography } from "antd"
 import { QuestionCircleOutlined } from "@ant-design/icons"
 
 import {
@@ -144,10 +144,11 @@ export const ExternalServersTab = ({
         return
       }
       setActiveServerId(managedRows[0]?.id || "")
-    } catch {
+    } catch (err) {
       setServers([])
       setActiveServerId("")
-      setErrorMessage("Failed to load external servers.")
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to load external servers: ${msg}`)
     } finally {
       setLoading(false)
       setServersLoaded(true)
@@ -256,8 +257,9 @@ export const ExternalServersTab = ({
       setSecretValue("")
       setSuccessMessage("Secret configured")
       await loadServers()
-    } catch {
-      setErrorMessage("Failed to save external server secret.")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to save external server secret: ${msg}`)
     } finally {
       setSaving(false)
     }
@@ -382,26 +384,34 @@ export const ExternalServersTab = ({
       resetServerForm()
       await loadServers()
       setSuccessMessage(editingServerId ? "Server updated" : "Server created")
-    } catch {
-      setErrorMessage(editingServerId ? "Failed to update external server." : "Failed to create external server.")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(editingServerId ? `Failed to update external server: ${msg}` : `Failed to create external server: ${msg}`)
     } finally {
       setServerSaving(false)
     }
   }
 
-  const handleDeleteServer = async (serverId: string) => {
-    if (typeof window !== "undefined" && !window.confirm("Delete this external server?")) {
-      return
-    }
-    setErrorMessage(null)
-    setSuccessMessage(null)
-    try {
-      await deleteExternalServer(serverId)
-      await loadServers()
-      setSuccessMessage("Server deleted")
-    } catch {
-      setErrorMessage("Failed to delete external server.")
-    }
+  const handleDeleteServer = (server: McpHubExternalServer) => {
+    Modal.confirm({
+      title: "Delete External Server",
+      content: `Are you sure you want to delete the server "${server.name}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setErrorMessage(null)
+        setSuccessMessage(null)
+        try {
+          await deleteExternalServer(server.id)
+          await loadServers()
+          setSuccessMessage("Server deleted")
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete external server: ${msg}`)
+        }
+      }
+    })
   }
 
   const openCreateSlotForm = () => {
@@ -461,24 +471,31 @@ export const ExternalServersTab = ({
     }
   }
 
-  const handleDeleteSlot = async (slot: McpHubExternalServerCredentialSlot) => {
+  const handleDeleteSlot = (slot: McpHubExternalServerCredentialSlot) => {
     if (!activeManagedServer) return
-    if (typeof window !== "undefined" && !window.confirm("Delete this credential slot?")) {
-      return
-    }
-    const slotKey = `${activeManagedServer.id}:${slot.slot_name}`
-    setSlotDeletingKey(slotKey)
-    setErrorMessage(null)
-    setSuccessMessage(null)
-    try {
-      await deleteExternalServerCredentialSlot(activeManagedServer.id, slot.slot_name)
-      await loadServers()
-      setSuccessMessage("Credential slot deleted")
-    } catch {
-      setErrorMessage("Failed to delete credential slot.")
-    } finally {
-      setSlotDeletingKey(null)
-    }
+    Modal.confirm({
+      title: "Delete Credential Slot",
+      content: `Are you sure you want to delete the credential slot "${slot.display_name}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        const slotKey = `${activeManagedServer.id}:${slot.slot_name}`
+        setSlotDeletingKey(slotKey)
+        setErrorMessage(null)
+        setSuccessMessage(null)
+        try {
+          await deleteExternalServerCredentialSlot(activeManagedServer.id, slot.slot_name)
+          await loadServers()
+          setSuccessMessage("Credential slot deleted")
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete credential slot: ${msg}`)
+        } finally {
+          setSlotDeletingKey(null)
+        }
+      }
+    })
   }
 
   const handleAddAuthTemplateMapping = () => {
@@ -1066,7 +1083,7 @@ export const ExternalServersTab = ({
                     size="small"
                     danger
                     aria-label={`Delete ${server.name}`}
-                    onClick={() => void handleDeleteServer(server.id)}
+                    onClick={() => handleDeleteServer(server)}
                   >
                     Delete
                   </Button>

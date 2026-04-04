@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, List, Modal, Space, Tag, Typography } from "antd"
 
 import {
   createPolicyAssignment,
@@ -225,12 +225,13 @@ export const PolicyAssignmentsTab = ({
         group_id: firstGroupAssignment?.target_id ?? null
       })
       setEffectivePolicy(preview)
-    } catch {
+    } catch (err) {
       setAssignments([])
       setProfiles([])
       setApprovalPolicies([])
       setEffectivePolicy(null)
-      setErrorMessage("Failed to load policy assignments.")
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to load policy assignments: ${msg}`)
     } finally {
       setLoading(false)
       setAssignmentsLoaded(true)
@@ -354,10 +355,11 @@ export const PolicyAssignmentsTab = ({
       setAssignmentBindings(Array.isArray(bindingRows) ? bindingRows : [])
       setExternalAccess(summary)
       setExternalServers(Array.isArray(serverRows) ? serverRows : [])
-    } catch {
+    } catch (err) {
       setAssignmentBindings([])
       setExternalAccess(null)
-      setErrorMessage("Failed to load external service bindings.")
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to load external service bindings: ${msg}`)
     } finally {
       setBindingsLoading(false)
     }
@@ -465,17 +467,27 @@ export const PolicyAssignmentsTab = ({
     }
   }
 
-  const handleDelete = async (assignmentId: number) => {
-    if (typeof window !== "undefined" && !window.confirm("Delete this policy assignment?")) {
-      return
-    }
-    setErrorMessage(null)
-    try {
-      await deletePolicyAssignment(assignmentId)
-      await loadAll()
-    } catch {
-      setErrorMessage("Failed to delete policy assignment.")
-    }
+  const handleDelete = (assignment: McpHubPolicyAssignment) => {
+    const targetLabel = assignment.target_type === "default"
+      ? "the default assignment"
+      : `the ${assignment.target_type} assignment for "${assignment.target_id}"`
+    Modal.confirm({
+      title: "Delete Policy Assignment",
+      content: `Are you sure you want to delete ${targetLabel}? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setErrorMessage(null)
+        try {
+          await deletePolicyAssignment(assignment.id)
+          await loadAll()
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete policy assignment: ${msg}`)
+        }
+      }
+    })
   }
 
   const handleSaveOverride = async () => {
@@ -489,28 +501,36 @@ export const PolicyAssignmentsTab = ({
       })
       setOverrideExists(true)
       await loadAll()
-    } catch {
-      setErrorMessage("Failed to save assignment override.")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to save assignment override: ${msg}`)
     } finally {
       setOverrideSaving(false)
     }
   }
 
-  const handleDeleteOverride = async () => {
+  const handleDeleteOverride = () => {
     if (!editingId) return
-    if (typeof window !== "undefined" && !window.confirm("Delete this assignment override?")) {
-      return
-    }
-    setErrorMessage(null)
-    try {
-      await deletePolicyAssignmentOverride(editingId)
-      setOverridePolicyDocument({})
-      setOverrideIsActive(true)
-      setOverrideExists(false)
-      await loadAll()
-    } catch {
-      setErrorMessage("Failed to delete assignment override.")
-    }
+    Modal.confirm({
+      title: "Delete Assignment Override",
+      content: "Are you sure you want to delete this assignment override? This cannot be undone.",
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setErrorMessage(null)
+        try {
+          await deletePolicyAssignmentOverride(editingId)
+          setOverridePolicyDocument({})
+          setOverrideIsActive(true)
+          setOverrideExists(false)
+          await loadAll()
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete assignment override: ${msg}`)
+        }
+      }
+    })
   }
 
   const handleAssignmentBindingModeChange = async (
@@ -905,7 +925,7 @@ export const PolicyAssignmentsTab = ({
                     </Button>
                     <Button
                       danger
-                      onClick={() => void handleDeleteOverride()}
+                      onClick={() => handleDeleteOverride()}
                       disabled={!overrideExists || overrideLoading}
                     >
                       Delete Override
@@ -1060,7 +1080,7 @@ export const PolicyAssignmentsTab = ({
                 <Button size="small" onClick={() => openForEdit(assignment)}>
                   Edit
                 </Button>
-                <Button size="small" danger onClick={() => void handleDelete(assignment.id)}>
+                <Button size="small" danger onClick={() => handleDelete(assignment)}>
                   Delete
                 </Button>
               </Space>
