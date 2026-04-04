@@ -79,11 +79,10 @@ def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
     if isinstance(exc, ConflictError):
         message = str(exc)
         lowered = message.lower()
-        # "version conflict or not found" is an optimistic-locking violation, not a pure 404
-        if "version conflict" in lowered:
-            logger.warning("Conflict error for {}: {}", entity_label, exc)
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message) from exc
-        if "not found" in lowered or "soft-deleted" in lowered or "soft deleted" in lowered:
+        # Check "not found" / "soft-deleted" first — the message may also contain
+        # "version conflict" (e.g. "version conflict or not found"), and a pure 404
+        # should not be reported as 409.
+        if ("not found" in lowered or "soft-deleted" in lowered or "soft deleted" in lowered) and "version conflict" not in lowered:
             logger.debug("Entity not found for {}: {}", entity_label, exc)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"{entity_label} not found"
@@ -341,7 +340,7 @@ async def reorder_entities(
 
     try:
         helper = _get_helper(db)
-        helper.reorder_items(entity_type, items)
+        helper.reorder_items(entity_type, items, project_id=project_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "manuscript reorder")
@@ -687,7 +686,7 @@ async def create_scene(
             )
         project_id = chapter["project_id"]
 
-        content_json = "{}"
+        content_json = None
         if payload.content is not None:
             content_json = json.dumps(payload.content)
 
@@ -777,6 +776,9 @@ async def update_scene(
         update_data["title"] = update_data["title"].strip()
     if "content" in update_data:
         update_data["content_json"] = json.dumps(update_data.pop("content"))
+    elif "content_plain" in update_data:
+        # Plain-text-only edit: clear stale rich content so they don't diverge
+        update_data["content_json"] = None
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"

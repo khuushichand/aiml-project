@@ -175,6 +175,17 @@ class ManuscriptSceneResponse(BaseModel):
     client_id: str
     version: int
 
+    @property
+    def content(self) -> dict[str, Any] | None:
+        """Parsed TipTap JSON content (mirrors the ``content`` field on create/update)."""
+        if self.content_json is None:
+            return None
+        import json
+        try:
+            return json.loads(self.content_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Structure tree

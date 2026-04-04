@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, Tree, Typography, Empty, Spin } from "antd"
 import type { DataNode } from "antd/es/tree"
 import { BookOpen, FileText, FolderOpen, Layers, Plus } from "lucide-react"
@@ -17,6 +17,7 @@ export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
     activeNodeId,
     setActiveNodeId,
   } = useWritingPlaygroundStore()
+  const queryClient = useQueryClient()
 
   // Fetch project list
   const { data: projectsData } = useQuery({
@@ -53,8 +54,16 @@ export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
               size="small"
               icon={<Plus className="h-3 w-3" />}
               onClick={async () => {
-                const result = await createManuscriptProject({ title: "Untitled Project" }) as any
-                if (result?.id) setActiveProjectId(result.id)
+                try {
+                  const result = await createManuscriptProject({ title: "Untitled Project" }) as any
+                  if (result?.id) {
+                    setActiveNodeId(null)
+                    setActiveProjectId(result.id)
+                  }
+                  queryClient.invalidateQueries({ queryKey: ["manuscript-projects"] })
+                } catch (err) {
+                  console.error("Failed to create project:", err)
+                }
               }}
             >
               New Project
@@ -66,7 +75,10 @@ export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
               <div
                 key={p.id}
                 className="cursor-pointer rounded-md px-2 py-2 hover:bg-gray-100 dark:hover:bg-gray-800"
-                onClick={() => setActiveProjectId(p.id)}
+                onClick={() => {
+                  setActiveNodeId(null)
+                  setActiveProjectId(p.id)
+                }}
               >
                 <Typography.Text className="text-sm">{p.title}</Typography.Text>
                 <Typography.Text type="secondary" className="ml-2 text-xs">
@@ -94,7 +106,10 @@ export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
         <Typography.Text
           type="secondary"
           className="cursor-pointer text-xs hover:underline"
-          onClick={() => setActiveProjectId(null)}
+          onClick={() => {
+            setActiveNodeId(null)
+            setActiveProjectId(null)
+          }}
         >
           &larr; All Projects
         </Typography.Text>
