@@ -1,5 +1,6 @@
 import { useStorage } from "@plasmohq/storage/hook";
 import {
+  Alert,
   Collapse,
   Input,
   InputNumber,
@@ -204,6 +205,14 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             />
           </div>
 
+          {!serverModelsLoading && serverModels.length === 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message="No STT models available on your server. Configure a transcription engine to enable speech-to-text."
+              className="mb-3"
+            />
+          )}
           <div className="flex flex-row justify-between">
             <span className="text-text">
               {t("generalSettings.stt.model.label")}

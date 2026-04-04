@@ -3,6 +3,7 @@ import {
   Button,
   Input,
   Alert,
+  Progress,
   Typography,
   Space,
   Card,
@@ -10,6 +11,7 @@ import {
   Select
 } from "antd"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   DEFAULT_TLDW_TTS_MODEL,
@@ -34,6 +36,7 @@ import {
   OPENAI_TTS_VOICES,
   useTtsProviderData
 } from "@/hooks/useTtsProviderData"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { PageShell } from "@/components/Common/PageShell"
 import { TtsProviderPanel } from "@/components/Option/TTS/TtsProviderPanel"
 import { isTimeoutLikeError } from "@/utils/request-timeout"
@@ -44,6 +47,7 @@ const SAMPLE_TEXT =
   "Sample: Hi there, this is the TTS playground reading a short passage so you can preview voice and speed."
 const TtsPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["playground", "settings", "common"])
+  const navigate = useNavigate()
   const [text, setText] = React.useState("")
   const { data: ttsSettings } = useQuery({
     queryKey: ["fetchTTSSettings"],
@@ -88,10 +92,12 @@ const TtsPlaygroundPage: React.FC = () => {
     elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
     inferredProviderKey
   })
+  const { capabilities } = useServerCapabilities()
 
   const {
     segments,
     isGenerating,
+    generationProgress,
     generateSegments,
     clearSegments
   } = useTtsPlayground()
@@ -497,6 +503,29 @@ const TtsPlaygroundPage: React.FC = () => {
           "Try out text-to-speech and tweak providers, models, and voices."
         )}
       </Text>
+      <p className="text-[11px] text-text-subtle mt-1">
+        For combined TTS + STT workflows, try the <a href="/speech" className="underline">Speech Playground</a>.
+      </p>
+      <div className="mt-1">
+        <a
+          href="https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_CPU.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-text-muted underline hover:text-text"
+        >
+          Audio Setup Guide
+        </a>
+      </div>
+
+      {capabilities?.ffmpegAvailable === false && (
+        <Alert
+          type="warning"
+          showIcon
+          className="mt-3 mb-0"
+          message="ffmpeg not detected"
+          description="Some audio processing features require ffmpeg. Install it for full functionality."
+        />
+      )}
 
       <div className="mt-4 space-y-4">
         <TtsProviderPanel
@@ -509,6 +538,24 @@ const TtsPlaygroundPage: React.FC = () => {
           activeVoices={activeVoices}
           providersInfo={providersInfo}
         />
+
+        {isTldw && !hasAudio && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message="No TTS provider detected on your server"
+            description={
+              <>
+                Your tldw server doesn&apos;t have a TTS engine configured yet.{" "}
+                <a href="#" onClick={(e) => { e.preventDefault(); navigate("/settings/speech") }}>
+                  Open Speech Settings
+                </a>{" "}
+                to configure one, or switch to <strong>Browser</strong> TTS which works without any setup.
+              </>
+            }
+          />
+        )}
 
         <Card>
           <Space orientation="vertical" className="w-full" size="middle">
@@ -788,6 +835,21 @@ const TtsPlaygroundPage: React.FC = () => {
                 )}
               {!canStop && stopDisabledReason ? ` ${stopDisabledReason}` : ""}
             </Text>
+
+            {isGenerating && generationProgress && generationProgress.total > 1 && (
+              <div className="w-full">
+                <Progress
+                  percent={Math.round(
+                    (generationProgress.completed / generationProgress.total) * 100
+                  )}
+                  size="small"
+                  status="active"
+                  format={() =>
+                    `${generationProgress.completed}/${generationProgress.total} segments`
+                  }
+                />
+              </div>
+            )}
 
             {provider === "browser" && segments.length > 0 && (
               <div className="mt-4 space-y-2 w-full">
