@@ -52,14 +52,18 @@ vi.mock("@/hooks/useSetting", () => ({
   useSetting: mockUseSetting
 }))
 
-vi.mock("@/services/settings/ui-settings", () => ({
-  HEADER_SHORTCUTS_EXPANDED_SETTING: { key: "header_shortcuts_expanded", defaultValue: false },
-  HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING: {
-    key: "header_shortcuts_launcher_view",
-    defaultValue: "current"
-  },
-  HEADER_SHORTCUT_SELECTION_SETTING: { key: "header_shortcut_selection", defaultValue: [] }
-}))
+vi.mock("@/services/settings/ui-settings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/settings/ui-settings")>()
+  return {
+    ...actual,
+    HEADER_SHORTCUTS_EXPANDED_SETTING: { key: "header_shortcuts_expanded", defaultValue: false },
+    HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING: {
+      key: "header_shortcuts_launcher_view",
+      defaultValue: "current"
+    },
+    HEADER_SHORTCUT_SELECTION_SETTING: { key: "header_shortcut_selection", defaultValue: [] }
+  }
+})
 
 const renderWithRouter = (ui: React.ReactElement, initialRoute = "/") =>
   render(<MemoryRouter initialEntries={[initialRoute]}>{ui}</MemoryRouter>)
