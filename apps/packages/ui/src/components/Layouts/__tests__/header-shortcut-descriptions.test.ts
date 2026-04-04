@@ -18,6 +18,7 @@ describe("header shortcut descriptions", () => {
     "workspace-playground",
     "prompt-studio",
     "model-playground",
+    "mcp-hub",
     "chat-dictionaries",
     "evaluations",
     "repo2txt"

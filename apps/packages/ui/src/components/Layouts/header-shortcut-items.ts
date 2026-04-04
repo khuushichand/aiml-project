@@ -26,6 +26,7 @@ import {
   NotebookPen,
   Rss,
   Scissors,
+  Server,
   ShieldCheck,
   SquarePen,
   StickyNote,
@@ -368,6 +369,15 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Bot,
         labelKey: "option:header.integrations",
         labelDefault: "Integrations"
+      },
+      {
+        id: "mcp-hub",
+        to: "/mcp-hub",
+        icon: Server,
+        labelKey: "settings:mcpHubNav",
+        labelDefault: "MCP Hub",
+        descriptionDefault:
+          "Manage MCP servers, tool catalogs, approvals, and ACP profiles"
       },
       {
         id: "scheduled-tasks",
