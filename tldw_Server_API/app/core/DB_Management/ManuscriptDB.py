@@ -70,6 +70,38 @@ class ManuscriptDBHelper:
         includes the V41 manuscript tables.
     """
 
+    # Column allowlists for update methods (defense-in-depth against injection)
+    _UPDATABLE_PROJECT_COLS = frozenset({
+        "title", "subtitle", "author", "genre", "status", "synopsis",
+        "target_word_count", "settings_json",
+    })
+    _UPDATABLE_PART_COLS = frozenset({"title", "sort_order", "synopsis"})
+    _UPDATABLE_CHAPTER_COLS = frozenset({
+        "title", "part_id", "sort_order", "synopsis", "pov_character_id", "status",
+    })
+    _UPDATABLE_SCENE_COLS = frozenset({
+        "title", "chapter_id", "sort_order", "content_json", "content_plain",
+        "synopsis", "pov_character_id", "status", "word_count",
+    })
+    _UPDATABLE_CHARACTER_COLS = frozenset({
+        "name", "role", "cast_group", "full_name", "age", "gender",
+        "appearance", "personality", "backstory", "motivation", "arc_summary",
+        "notes", "custom_fields_json", "sort_order",
+    })
+    _UPDATABLE_WORLD_INFO_COLS = frozenset({
+        "name", "description", "parent_id", "properties_json", "tags_json", "sort_order",
+    })
+    _UPDATABLE_PLOT_LINE_COLS = frozenset({
+        "title", "description", "status", "color", "sort_order",
+    })
+    _UPDATABLE_PLOT_EVENT_COLS = frozenset({
+        "title", "description", "scene_id", "chapter_id", "event_type", "sort_order",
+    })
+    _UPDATABLE_PLOT_HOLE_COLS = frozenset({
+        "title", "description", "severity", "status", "scene_id",
+        "chapter_id", "plot_line_id", "resolution", "detected_by",
+    })
+
     def __init__(self, db: CharactersRAGDB) -> None:
         self.db = db
 
@@ -86,6 +118,21 @@ class ManuscriptDBHelper:
     @property
     def _client_id(self) -> str:
         return self.db.client_id
+
+    @staticmethod
+    def _scene_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+        """Convert a raw scene DB row into API-friendly dict.
+
+        Deserializes ``content_json`` (string) into ``content`` (dict)
+        so the response schema can serve it as structured JSON.
+        """
+        d = dict(row)
+        raw = d.pop("content_json", None) or "{}"
+        try:
+            d["content"] = json.loads(raw)
+        except (ValueError, TypeError):
+            d["content"] = {}
+        return d
 
     # ------------------------------------------------------------------
     # Projects
@@ -184,6 +231,12 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
+            if key == "settings":
+                col = "settings_json"
+            else:
+                col = key
+            if col not in self._UPDATABLE_PROJECT_COLS:
+                raise ValueError(f"Invalid update column for project: {key!r}")  # noqa: TRY003
             if key == "settings":
                 set_parts.append("settings_json = ?")
                 params.append(json.dumps(value))
@@ -285,6 +338,10 @@ class ManuscriptDBHelper:
         """Update a part with optimistic locking."""
         if not updates:
             return
+
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_PART_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for part: {invalid_keys}")  # noqa: TRY003
 
         now = self._now()
         next_version = expected_version + 1
@@ -414,6 +471,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_CHAPTER_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for chapter: {invalid_keys}")  # noqa: TRY003
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -510,13 +571,16 @@ class ManuscriptDBHelper:
         return sid
 
     def get_scene(self, scene_id: str) -> dict[str, Any] | None:
-        """Fetch a scene by ID; returns *None* if missing or deleted."""
+        """Fetch a scene by ID; returns *None* if missing or deleted.
+
+        The returned dict has ``content_json`` deserialized into ``content``.
+        """
         with self.db.transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM manuscript_scenes WHERE id = ? AND deleted = 0",
                 (scene_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._scene_row_to_dict(dict(row)) if row else None
 
     def list_scenes(self, chapter_id: str) -> list[dict[str, Any]]:
         """List non-deleted scenes for a chapter ordered by sort_order."""
@@ -526,7 +590,7 @@ class ManuscriptDBHelper:
                 "WHERE chapter_id = ? AND deleted = 0 ORDER BY sort_order",
                 (chapter_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._scene_row_to_dict(dict(r)) for r in rows]
 
     def update_scene(
         self,
@@ -549,6 +613,10 @@ class ManuscriptDBHelper:
         # If content_plain changed, recompute word count
         if "content_plain" in updates:
             updates["word_count"] = _word_count(updates["content_plain"])
+
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_SCENE_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for scene: {invalid_keys}")  # noqa: TRY003
 
         set_parts: list[str] = []
         params: list[Any] = []
@@ -611,6 +679,16 @@ class ManuscriptDBHelper:
 
             if row:
                 self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
+
+    def get_all_scene_texts(self, project_id: str) -> list[str]:
+        """Get all scene plain texts for a project in one query."""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "SELECT content_plain FROM manuscript_scenes "
+                "WHERE project_id = ? AND deleted = 0 ORDER BY sort_order",
+                (project_id,),
+            )
+            return [row["content_plain"] for row in cur.fetchall() if row["content_plain"]]
 
     # ------------------------------------------------------------------
     # Word-count propagation
@@ -924,6 +1002,10 @@ class ManuscriptDBHelper:
         if "custom_fields" in updates:
             updates["custom_fields_json"] = json.dumps(updates.pop("custom_fields"))
 
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_CHARACTER_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for character: {invalid_keys}")  # noqa: TRY003
+
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
@@ -1173,6 +1255,10 @@ class ManuscriptDBHelper:
         if "tags" in updates:
             updates["tags_json"] = json.dumps(updates.pop("tags"))
 
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_WORLD_INFO_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for world info: {invalid_keys}")  # noqa: TRY003
+
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
@@ -1314,6 +1400,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_PLOT_LINE_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for plot line: {invalid_keys}")  # noqa: TRY003
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1417,6 +1507,10 @@ class ManuscriptDBHelper:
         """Update a plot event with optimistic locking."""
         if not updates:
             return
+
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_PLOT_EVENT_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for plot event: {invalid_keys}")  # noqa: TRY003
 
         now = self._now()
         next_version = expected_version + 1
@@ -1540,6 +1634,10 @@ class ManuscriptDBHelper:
         """Update a plot hole with optimistic locking."""
         if not updates:
             return
+
+        invalid_keys = set(updates.keys()) - self._UPDATABLE_PLOT_HOLE_COLS
+        if invalid_keys:
+            raise ValueError(f"Invalid update columns for plot hole: {invalid_keys}")  # noqa: TRY003
 
         now = self._now()
         next_version = expected_version + 1

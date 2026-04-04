@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
+import { bgRequest } from "@/services/background-proxy"
+import type { AllowedPath } from "@/services/tldw/openapi-guard"
 
 export type Mood = "tense" | "romantic" | "melancholic" | "action" | "calm" | "mysterious" | "humorous" | null
 
@@ -46,10 +48,11 @@ export type UseWritingFeedbackReturn = {
 
 async function callChat(systemPrompt: string, userText: string, model?: string): Promise<string> {
   try {
-    const resp = await fetch("/api/v1/chat/completions", {
+    const data = await bgRequest({
+      path: "/api/v1/chat/completions" as AllowedPath,
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: {
         model: model || "default",
         messages: [
           { role: "system", content: systemPrompt },
@@ -57,11 +60,9 @@ async function callChat(systemPrompt: string, userText: string, model?: string):
         ],
         temperature: 0.7,
         max_tokens: 100,
-      }),
+      },
     })
-    if (!resp.ok) return ""
-    const data = await resp.json()
-    return data?.choices?.[0]?.message?.content?.trim() || ""
+    return (data as any)?.choices?.[0]?.message?.content?.trim() || ""
   } catch {
     return ""
   }
