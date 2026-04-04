@@ -280,6 +280,7 @@ async def get_project_structure(
                 sort_order=s["sort_order"],
                 word_count=s.get("word_count", 0),
                 status=s.get("status", "draft"),
+                version=s.get("version", 1),
             )
 
         def _chapter_summary(c: dict[str, Any]) -> ChapterSummary:
@@ -290,6 +291,7 @@ async def get_project_structure(
                 part_id=c.get("part_id"),
                 word_count=c.get("word_count", 0),
                 status=c.get("status", "draft"),
+                version=c.get("version", 1),
                 scenes=[_scene_summary(s) for s in c.get("scenes", [])],
             )
 
@@ -299,6 +301,7 @@ async def get_project_structure(
                 title=p["title"],
                 sort_order=p["sort_order"],
                 word_count=p.get("word_count", 0),
+                version=p.get("version", 1),
                 chapters=[_chapter_summary(c) for c in p.get("chapters", [])],
             )
 

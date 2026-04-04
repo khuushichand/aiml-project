@@ -200,6 +200,7 @@ class SceneSummary(BaseModel):
     sort_order: float
     word_count: int = 0
     status: str = "draft"
+    version: int = 1
 
 
 class ChapterSummary(BaseModel):
@@ -209,6 +210,7 @@ class ChapterSummary(BaseModel):
     part_id: str | None = None
     word_count: int = 0
     status: str = "draft"
+    version: int = 1
     scenes: list[SceneSummary] = Field(default_factory=list)
 
 
@@ -217,6 +219,7 @@ class PartSummary(BaseModel):
     title: str
     sort_order: float
     word_count: int = 0
+    version: int = 1
     chapters: list[ChapterSummary] = Field(default_factory=list)
 
 
