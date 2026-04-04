@@ -209,9 +209,18 @@ const formatInvoiceAmount = (invoice: BillingInvoice) => {
   if (invoice.amount_display) {
     return invoice.amount_display
   }
-  const currency = (invoice.currency || "usd").toUpperCase()
-  const amount = typeof invoice.amount_cents === "number" ? invoice.amount_cents / 100 : 0
-  return `$${amount.toFixed(2)} ${currency}`
+  const currency = (invoice.currency || "USD").toUpperCase()
+  const amount =
+    typeof invoice.amount_cents === "number" ? invoice.amount_cents / 100 : 0
+
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency
+    }).format(amount)
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`
+  }
 }
 
 const USAGE_ORDER = [
@@ -250,29 +259,40 @@ export const TldwBillingSettings = ({
   onCancelSubscription,
   onResumeSubscription
 }: TldwBillingSettingsProps) => {
-  const selectedPlanDetails = billingPlans.find((plan) => plan.name === selectedPlan) || null
-  const planOptions = billingPlans.map((plan) => ({
-    value: plan.name,
-    label: (
-      <div className="flex items-center justify-between gap-2">
-        <span>{plan.display_name}</span>
-        <span className="text-xs text-text-muted">
-          {formatPlanPrice(t, plan, billingCycle)}
-        </span>
-      </div>
-    )
-  }))
+  const selectedPlanDetails = React.useMemo(
+    () => billingPlans.find((plan) => plan.name === selectedPlan) || null,
+    [billingPlans, selectedPlan]
+  )
 
-  const usageEntries = Object.entries(billingUsage?.usage ?? {})
+  const planOptions = React.useMemo(
+    () =>
+      billingPlans.map((plan) => ({
+        value: plan.name,
+        label: (
+          <div className="flex items-center justify-between gap-2">
+            <span>{plan.display_name}</span>
+            <span className="text-xs text-text-muted">
+              {formatPlanPrice(t, plan, billingCycle)}
+            </span>
+          </div>
+        )
+      })),
+    [billingCycle, billingPlans, t]
+  )
+
   const usageChecks = billingUsage?.limit_checks ?? {}
-  const sortedUsageEntries = usageEntries.sort((a, b) => {
-    const aIndex = USAGE_ORDER.indexOf(a[0])
-    const bIndex = USAGE_ORDER.indexOf(b[0])
-    const aRank = aIndex === -1 ? USAGE_ORDER.length + 1 : aIndex
-    const bRank = bIndex === -1 ? USAGE_ORDER.length + 1 : bIndex
-    if (aRank !== bRank) return aRank - bRank
-    return a[0].localeCompare(b[0])
-  })
+  const sortedUsageEntries = React.useMemo(() => {
+    const usageEntries = Object.entries(billingUsage?.usage ?? {})
+
+    return usageEntries.sort((a, b) => {
+      const aIndex = USAGE_ORDER.indexOf(a[0])
+      const bIndex = USAGE_ORDER.indexOf(b[0])
+      const aRank = aIndex === -1 ? USAGE_ORDER.length + 1 : aIndex
+      const bRank = bIndex === -1 ? USAGE_ORDER.length + 1 : bIndex
+      if (aRank !== bRank) return aRank - bRank
+      return a[0].localeCompare(b[0])
+    })
+  }, [billingUsage?.usage])
 
   const isSamePlan = !!billingStatus?.plan_name && selectedPlan === billingStatus?.plan_name
   const isSameCycle = !!billingStatus?.billing_cycle && billingStatus?.billing_cycle === billingCycle

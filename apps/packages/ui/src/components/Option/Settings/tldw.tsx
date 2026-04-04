@@ -843,6 +843,7 @@ export const TldwSettings = () => {
             magicToken={magicToken}
             setMagicToken={setMagicToken}
             magicSent={magicSent}
+            setMagicSent={setMagicSent}
             magicSending={magicSending}
             testingConnection={testingConnection}
             connectionStatus={connectionStatus}

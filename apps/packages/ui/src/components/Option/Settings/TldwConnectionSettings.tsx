@@ -36,6 +36,7 @@ export type TldwConnectionSettingsProps = {
   magicToken: string
   setMagicToken: (token: string) => void
   magicSent: boolean
+  setMagicSent: (sent: boolean) => void
   magicSending: boolean
   testingConnection: boolean
   connectionStatus: "success" | "error" | null
@@ -87,6 +88,7 @@ export const TldwConnectionSettings = ({
   magicToken,
   setMagicToken,
   magicSent,
+  setMagicSent,
   magicSending,
   testingConnection,
   connectionStatus,
@@ -143,14 +145,15 @@ export const TldwConnectionSettings = ({
                 centered: true,
                 onOk: () => {
                   setAuthMode(value as 'single-user' | 'multi-user')
-                  // Reset form fields for the new auth mode
-                  if (value === 'multi-user') {
-                    form.setFieldValue('apiKey', '')
-                  } else {
-                    form.setFieldValue('username', '')
-                    form.setFieldValue('password', '')
-                    setIsLoggedIn(false)
-                  }
+                  form.setFieldValue('apiKey', '')
+                  form.setFieldValue('username', '')
+                  form.setFieldValue('password', '')
+                  form.setFieldValue('magicEmail', '')
+                  form.setFieldValue('magicToken', '')
+                  setMagicEmail('')
+                  setMagicToken('')
+                  setMagicSent(false)
+                  setIsLoggedIn(false)
                 },
                 onCancel: () => {
                   // Reset the Segmented back to current value
@@ -226,8 +229,6 @@ export const TldwConnectionSettings = ({
             <>
               <Form.Item
                 label={t('settings:tldw.magicLink.email.label', 'Email')}
-                name="magicEmail"
-                rules={[{ required: true, message: t('settings:tldw.magicLink.email.required', 'Please enter your email') }]}
               >
                 <Input
                   placeholder={t('settings:tldw.magicLink.email.placeholder', 'you@company.com')}
@@ -238,8 +239,6 @@ export const TldwConnectionSettings = ({
 
               <Form.Item
                 label={t('settings:tldw.magicLink.token.label', 'Magic link token')}
-                name="magicToken"
-                rules={[{ required: true, message: t('settings:tldw.magicLink.token.required', 'Please paste your magic link token') }]}
               >
                 <Input
                   placeholder={t('settings:tldw.magicLink.token.placeholder', 'Paste the token from your email')}
