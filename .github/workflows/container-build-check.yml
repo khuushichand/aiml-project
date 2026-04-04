@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  container-build-check:
-    name: container-build-check
+  build:
+    name: build (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -57,3 +57,16 @@ jobs:
           file: ${{ matrix.dockerfile }}
           build-args: ${{ matrix.build_args }}
           push: false
+
+  container-build-check:
+    name: container-build-check
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix results
+        run: |
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::One or more container builds failed"
+            exit 1
+          fi

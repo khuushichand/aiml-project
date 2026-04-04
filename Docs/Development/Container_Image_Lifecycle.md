@@ -49,7 +49,7 @@ Three GitHub Actions workflows manage the lifecycle:
 - Passes `build-args` for webui and admin-ui (Next.js environment variables like `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE`). The `app` entry has no build args.
 - Concurrency: grouped per PR number with `cancel-in-progress: true` (a new push to the same PR cancels the previous run).
 
-**Branch protection:** Reports three separate status checks: `container-build-check (app)`, `container-build-check (webui)`, `container-build-check (admin-ui)`. Branch protection must list all three, or a summary job should be added to provide a single roll-up name. See [CI_REQUIRED_GATES.md](CI_REQUIRED_GATES.md) for rollout status.
+**Branch protection:** A summary job rolls up the matrix results into a single `container-build-check` status. Branch protection only needs to require this one check name. See [CI_REQUIRED_GATES.md](CI_REQUIRED_GATES.md) for rollout status.
 
 ---
 
@@ -156,7 +156,4 @@ The coverage matrix is intentionally asymmetric. This section explains why.
 
 `container-build-check` is pending addition to the branch protection required status checks. See [CI_REQUIRED_GATES.md](CI_REQUIRED_GATES.md) rollout phase 5.
 
-Because the workflow uses a matrix strategy, GitHub does not automatically create a single roll-up status. Options:
-
-1. **Require all three matrix checks** in branch protection: `container-build-check (app)`, `container-build-check (webui)`, `container-build-check (admin-ui)`. Simple but must be updated if the matrix changes.
-2. **Add a summary job** to the workflow that depends on the matrix and provides a single `container-build-check` status. More maintainable but requires a workflow change.
+The workflow includes a summary job that rolls up the matrix results into a single `container-build-check` status. Branch protection only needs to require this one check name, and it remains stable if the matrix changes.
