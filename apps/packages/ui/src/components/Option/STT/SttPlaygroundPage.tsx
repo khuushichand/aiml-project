@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
-import { useTranslation } from "react-i18next"
+import { Trans, useTranslation } from "react-i18next"
 import { Alert, Button, Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
@@ -323,7 +323,7 @@ export const SttPlaygroundPage: React.FC = () => {
         {t("playground:stt.subtitle", "Record audio and compare transcription results across multiple models.")}
       </Text>
       <p className="text-[11px] text-text-subtle mt-1">
-        Transcription requires a configured STT engine on your tldw server.
+        {t("playground:stt.serverRequirement", "Transcription requires a configured STT engine on your tldw server.")}
       </p>
       <div className="mt-1">
         <a
@@ -332,14 +332,14 @@ export const SttPlaygroundPage: React.FC = () => {
           rel="noopener noreferrer"
           className="text-xs text-text-muted underline hover:text-text"
         >
-          Audio Setup Guide
+          {t("playground:stt.audioSetupGuide", "Audio Setup Guide")}
         </a>
       </div>
 
       <div className="mt-4 space-y-4">
         {!currentBlob && (
           <p className="text-center text-sm text-text-muted mb-4">
-            Press the record button or upload an audio file to get started with transcription.
+            {t("playground:stt.firstUseHint", "Press the record button or upload an audio file to get started with transcription.")}
           </p>
         )}
         {serverModelsError && (
@@ -366,8 +366,8 @@ export const SttPlaygroundPage: React.FC = () => {
             type="warning"
             showIcon
             className="mb-4"
-            message="No transcription models available"
-            description="Configure STT models in your server settings. Check the Audio Setup Guide for instructions."
+            message={t("playground:stt.noModelsTitle", "No transcription models available")}
+            description={t("playground:stt.noModelsBody", "Configure STT models in your server settings. Check the Audio Setup Guide for instructions.")}
           />
         )}
         <RecordingStrip
@@ -375,7 +375,11 @@ export const SttPlaygroundPage: React.FC = () => {
           onSettingsToggle={toggleSettings}
         />
         <p className="text-[11px] text-text-subtle text-center mt-1">
-          Press <kbd className="rounded border border-border px-1 py-0.5 text-[10px]">Space</kbd> to toggle recording
+          <Trans
+            i18nKey="playground:stt.spaceKeyHint"
+            defaults="Press <kbd>Space</kbd> to toggle recording"
+            components={{ kbd: <kbd className="rounded border border-border px-1 py-0.5 text-[10px]" /> }}
+          />
         </p>
         {showSettings && <InlineSettingsPanel onChange={setSttSettings} />}
         <ComparisonPanel

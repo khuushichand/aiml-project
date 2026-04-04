@@ -113,7 +113,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
   );
 
   const [serverModels, setServerModels] = React.useState<string[]>([]);
-  const [serverModelsLoading, setServerModelsLoading] = React.useState(false);
+  const [serverModelsLoading, setServerModelsLoading] = React.useState(true);
+  const [serverModelsFetchFailed, setServerModelsFetchFailed] = React.useState(false);
   const [modelHealth, setModelHealth] = React.useState<
     "idle" | "checking" | "ok" | "error"
   >("idle");
@@ -123,6 +124,7 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     let cancelled = false;
     const fetchModels = async () => {
       setServerModelsLoading(true);
+      setServerModelsFetchFailed(false);
       try {
         const res = await tldwClient.getTranscriptionModels();
         const all = Array.isArray(res?.all_models)
@@ -133,6 +135,9 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
           setServerModels(unique);
         }
       } catch (e) {
+        if (!cancelled) {
+          setServerModelsFetchFailed(true);
+        }
         if ((import.meta as any)?.env?.DEV) {
           // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models from server", e);
@@ -205,11 +210,11 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             />
           </div>
 
-          {!serverModelsLoading && serverModels.length === 0 && (
+          {!serverModelsLoading && !serverModelsFetchFailed && serverModels.length === 0 && (
             <Alert
               type="info"
               showIcon
-              message="No STT models available on your server. Configure a transcription engine to enable speech-to-text."
+              message={t("generalSettings.stt.noModelsAlert", "No STT models available on your server. Configure a transcription engine to enable speech-to-text.")}
               className="mb-3"
             />
           )}
