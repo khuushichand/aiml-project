@@ -249,21 +249,5 @@
       "auditTitle": "Governance Audit",
       "auditContent": "Review policy findings and configuration issues across all your MCP Hub settings."
     }
-  },
-  "quiz": {
-    "basics": {
-      "label": "Quiz Basics",
-      "description": "Learn how to generate, take, and review quizzes from your media content.",
-      "tabsTitle": "Quiz Playground",
-      "tabsContent": "The Quiz Playground has five tabs. Generate quizzes from your media, create them manually, take quizzes, manage your library, and review results.",
-      "generateTitle": "Generate from Media",
-      "generateContent": "Start here. Select a video, article, or document from your media library, and the AI will generate quiz questions for you.",
-      "createTitle": "Create Manually",
-      "createContent": "Prefer to write your own? Create quizzes with multiple choice, true/false, fill-in-the-blank, and matching questions.",
-      "takeTitle": "Take a Quiz",
-      "takeContent": "Once you have quizzes, come here to take them. Your answers are saved and scored automatically.",
-      "resultsTitle": "Review Results",
-      "resultsContent": "See your scores, review incorrect answers, and track your progress over time."
-    }
   }
 }
