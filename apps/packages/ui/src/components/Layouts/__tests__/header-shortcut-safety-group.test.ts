@@ -28,10 +28,7 @@ describe("header shortcut safety group", () => {
 
   it("each safety item has a distinct icon", () => {
     const safety = groups.find((g) => g.id === "safety")!
-    const iconNames = safety.items.map(
-      (i) => i.icon.displayName || i.icon.name || String(i.icon)
-    )
-    const uniqueIcons = new Set(iconNames)
+    const uniqueIcons = new Set(safety.items.map((i) => i.icon))
     expect(uniqueIcons.size).toBe(safety.items.length)
   })
 })

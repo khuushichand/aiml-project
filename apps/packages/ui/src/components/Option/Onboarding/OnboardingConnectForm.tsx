@@ -40,6 +40,7 @@ import {
   useConnectionState,
   useConnectionActions,
 } from "@/hooks/useConnectionState"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useConnectionStore } from "@/store/connection"
 import { useDemoMode } from "@/context/demo-mode"
 import { requestQuickIngestIntro } from "@/utils/quick-ingest-open"
@@ -187,6 +188,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   const { t } = useTranslation(["settings", "common"])
   const navigate = useNavigate()
   const { setDemoEnabled } = useDemoMode()
+  const { capabilities } = useServerCapabilities()
+  const familyGuardrailsAvailable = Boolean(capabilities?.hasGuardian)
   const connectionState = useConnectionState()
   const actions = useConnectionActions()
   const hostPermissionPromptKeyRef = useRef<string | null>(null)
@@ -961,14 +964,22 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             <button
               type="button"
               onClick={handleOpenFamilyFlow}
-              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+              disabled={!familyGuardrailsAvailable}
+              className={cn(
+                "flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors",
+                familyGuardrailsAvailable
+                  ? "hover:border-primary/50 hover:bg-surface2"
+                  : "opacity-50 cursor-not-allowed"
+              )}
             >
-              <Shield className="h-5 w-5 text-primary" />
+              <Shield className={cn("h-5 w-5", familyGuardrailsAvailable ? "text-primary" : "text-text-subtle")} />
               <span className="text-sm font-medium text-text">
                 {t("settings:onboarding.success.intentFamily", "Set up family safety")}
               </span>
               <span className="text-xs text-text-muted">
-                {t("settings:onboarding.success.intentFamilyDesc", "Create family profiles and content safety rules.")}
+                {familyGuardrailsAvailable
+                  ? t("settings:onboarding.success.intentFamilyDesc", "Create family profiles and content safety rules.")
+                  : t("settings:onboarding.success.intentFamilyUnavailable", "Not available on this server.")}
               </span>
             </button>
 
