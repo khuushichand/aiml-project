@@ -26,6 +26,7 @@
 <summary>Expand table of contents</summary>
 
 - [Overview](#overview)
+- [Start Here](#start-here)
 - [Current Status](#current-status)
 - [What's New (in the last few releases)](#whats-new-in-the-last-few-releases)
 - [Privacy & Security](#privacy--security)

@@ -17,7 +17,9 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
 
   const headers = getBackendAuthHeaders(request);
   appendProxyHeaders(request, headers);
-  const requestId = headers.get('x-request-id')!;
+  const requestId = headers.get('x-request-id')
+    ?? `proxy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  headers.set('x-request-id', requestId);
   const body = await getRequestBody(request);
   const isGet = request.method === 'GET';
 
@@ -43,6 +45,8 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
     proxyResponse.headers.set('x-request-id', requestId);
     return proxyResponse;
   } catch (error) {
+    let finalError: unknown = error;
+
     // Retry once for GET requests on network errors (not timeouts)
     if (isGet && error instanceof Error && error.name !== 'AbortError') {
       try {
@@ -51,18 +55,18 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
         const proxyResponse = await buildProxyResponse(response);
         proxyResponse.headers.set('x-request-id', requestId);
         return proxyResponse;
-      } catch {
-        // Fall through to error handling
+      } catch (retryError) {
+        finalError = retryError;
       }
     }
 
-    const isTimeout = error instanceof Error && error.name === 'AbortError';
+    const isTimeout = finalError instanceof Error && finalError.name === 'AbortError';
     logger.error('Proxy request failed', {
       component: 'proxy',
       path: backendPath,
       method: request.method,
       requestId,
-      error: error instanceof Error ? error.message : String(error),
+      error: finalError instanceof Error ? finalError.message : String(finalError),
       timeout: isTimeout,
     });
 

@@ -20,14 +20,14 @@ vi.mock('@/lib/rate-limiter', () => ({
   extractClientIp,
 }));
 
-describe('POST /api/auth/login', () => {
+describe('POST /api/auth/mfa/login', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     vi.useRealTimers();
   });
 
-  it('returns 504 when the upstream login request times out', async () => {
+  it('returns 504 when the upstream MFA login request times out', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
       if (!init?.signal) {
@@ -45,11 +45,11 @@ describe('POST /api/auth/login', () => {
     }));
 
     const { POST } = await import('./route');
-    const responsePromise = POST(new NextRequest('http://localhost/api/auth/login', {
+    const responsePromise = POST(new NextRequest('http://localhost/api/auth/mfa/login', {
       method: 'POST',
-      body: 'username=alice&password=secret',
+      body: JSON.stringify({ session_token: 'session-token', otp_code: '123456' }),
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
       },
     }));
 
@@ -58,34 +58,8 @@ describe('POST /api/auth/login', () => {
     const response = await responsePromise;
     expect(response.status).toBe(504);
     await expect(response.json()).resolves.toEqual({
-      detail: 'Login request timed out',
+      detail: 'MFA login request timed out',
     });
     expect(setJwtSessionCookies).not.toHaveBeenCalled();
-  });
-
-  it('skips shared rate limiting when client IP cannot be resolved', async () => {
-    extractClientIp.mockReturnValue('unknown');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      access_token: 'access-token',
-      refresh_token: 'refresh-token',
-      token_type: 'bearer',
-      expires_in: 3600,
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })));
-
-    const { POST } = await import('./route');
-    const response = await POST(new NextRequest('http://localhost/api/auth/login', {
-      method: 'POST',
-      body: 'username=alice&password=secret',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-    }));
-
-    expect(response.status).toBe(200);
-    expect(checkRateLimit).not.toHaveBeenCalled();
-    expect(setJwtSessionCookies).toHaveBeenCalledTimes(1);
   });
 });

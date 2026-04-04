@@ -77,7 +77,6 @@ export default function ACPSessionsPage() {
   const loadingRef = useRef(false);
   const latestRequestIdRef = useRef(0);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
-  const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [userMap, setUserMap] = useState<Record<number, UserInfo>>({});
   const confirm = useConfirm();
@@ -88,9 +87,21 @@ export default function ACPSessionsPage() {
     let cancelled = false;
     const loadUsers = async () => {
       try {
-        const response = await api.getUsersPage({ page: '1', limit: '200' });
+        const items: UserInfo[] = [];
+        let page = 1;
+        let pages = 1;
+
+        while (!cancelled && page <= pages) {
+          const response = await api.getUsersPage({ page: String(page), limit: '200' });
+          items.push(...(Array.isArray(response?.items) ? response.items : []));
+          pages = Math.max(1, response?.pages ?? 1);
+          if (!response?.items?.length) {
+            break;
+          }
+          page += 1;
+        }
+
         if (cancelled) return;
-        const items: UserInfo[] = Array.isArray(response?.items) ? response.items : [];
         const map: Record<number, UserInfo> = {};
         items.forEach((u) => { map[u.id] = u; });
         setUserMap(map);
@@ -311,7 +322,7 @@ export default function ACPSessionsPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold">ACP Sessions</h1>
-                {autoRefresh && (
+                {autoRefreshEnabled && (
                   <Badge variant="default" className="bg-green-600 animate-pulse text-xs">Live</Badge>
                 )}
               </div>
@@ -471,13 +482,6 @@ export default function ACPSessionsPage() {
                                 {formatTokens(session.usage.total_tokens)}
                               </span>
                             )}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-sm">
-                            {(() => {
-                              // Rough estimate: $0.003/1K tokens (blended input/output average)
-                              const cost = session.usage.total_tokens * 0.000003;
-                              return cost > 0 ? `$${cost.toFixed(4)}` : '—';
-                            })()}
                           </TableCell>
                           <TableCell>
                             <span className="text-xs font-mono" title={session.model || undefined}>
