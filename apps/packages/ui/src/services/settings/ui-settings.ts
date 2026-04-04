@@ -384,6 +384,7 @@ export const HEADER_SHORTCUT_IDS = [
   "guardian",
   "admin-llamacpp",
   "admin-mlx",
+  "admin-monitoring",
   "settings",
   "account",
   "billing"

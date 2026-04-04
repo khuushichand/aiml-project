@@ -466,8 +466,9 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
 
       {/* Action buttons */}
       <div className="mt-4 flex items-center justify-end gap-2">
-        {hasItems && queueItems.length <= 1 && onQuickProcess && (
+        {hasItems && onQuickProcess && (
           <Button
+            type="primary"
             onClick={onQuickProcess}
             disabled={!canProceed}
           >
@@ -475,7 +476,6 @@ export const AddContentStep: React.FC<AddContentStepProps> = ({
           </Button>
         )}
         <Button
-          type="primary"
           onClick={goNext}
           disabled={!canProceed}
           aria-label={qi("wizard.configureItems", "Configure {{count}} items", {

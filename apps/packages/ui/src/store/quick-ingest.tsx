@@ -127,6 +127,13 @@ type QuickIngestStore = {
     errorMessage?: string | null
   }) => void
   resetLastRunSummary: () => void
+  /**
+   * Media IDs of recently ingested documents (most recent first, max 20).
+   * Used by DocumentPickerModal to surface a "Recently ingested" section.
+   */
+  recentlyIngestedDocIds: number[]
+  addRecentlyIngestedDocId: (id: number) => void
+  clearRecentlyIngestedDocIds: () => void
 }
 
 export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) => ({
@@ -317,7 +324,13 @@ export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) 
   resetLastRunSummary: () =>
     set({
       lastRunSummary: createInitialQuickIngestLastRunSummary()
-    })
+    }),
+  recentlyIngestedDocIds: [],
+  addRecentlyIngestedDocId: (id) =>
+    set((s) => ({
+      recentlyIngestedDocIds: [id, ...s.recentlyIngestedDocIds.filter((x) => x !== id)].slice(0, 20),
+    })),
+  clearRecentlyIngestedDocIds: () => set({ recentlyIngestedDocIds: [] }),
 }))
 
 if (typeof window !== "undefined") {
