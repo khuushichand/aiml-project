@@ -432,6 +432,7 @@ const initialState: ConnectionState = {
   configStep: "none",
   errorKind: "none",
   hasCompletedFirstRun: false,
+  userPersona: null,
   lastConfigUpdatedAt: null,
   checksSinceConfigChange: 0
 }
