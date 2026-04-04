@@ -39,6 +39,19 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
     }
   }, [])
 
+  const handleRequestQuickIngestOpen = React.useCallback(() => {
+    requestQuickIngestOpen()
+  }, [])
+
+  const handleShowTutorialAgain = React.useCallback(() => {
+    setTutorialDismissed(false)
+    try {
+      localStorage.removeItem(FIRST_INGEST_DISMISSED_KEY)
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+
   // Show first-ingest tutorial when library is empty (no query, no results, not fetching)
   const showFirstIngestTutorial =
     !hasResults && !isFetching && !query.trim() && !tutorialDismissed
@@ -196,14 +209,14 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
             <Input
               placeholder="https://www.youtube.com/watch?v=..."
               className="text-center"
-              onPressEnter={() => requestQuickIngestOpen()}
+              onPressEnter={handleRequestQuickIngestOpen}
               aria-label={t("mediaPage.firstIngest.urlInputLabel", "Paste a URL to ingest") as string}
             />
           </div>
           <Button
             type="primary"
             className="mt-3"
-            onClick={() => requestQuickIngestOpen()}
+            onClick={handleRequestQuickIngestOpen}
           >
             {t("mediaPage.firstIngest.ingestButton", "Ingest")}
           </Button>
@@ -228,7 +241,7 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
             <Button
               type="primary"
               icon={<Upload className="inline h-4 w-4 mr-1" />}
-              onClick={() => requestQuickIngestOpen()}
+              onClick={handleRequestQuickIngestOpen}
             >
               {t("mediaPage.openQuickIngest", "Open Quick Ingest")}
             </Button>
@@ -236,14 +249,7 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
               <Button
                 type="link"
                 size="small"
-                onClick={() => {
-                  setTutorialDismissed(false)
-                  try {
-                    localStorage.removeItem(FIRST_INGEST_DISMISSED_KEY)
-                  } catch {
-                    // ignore storage errors
-                  }
-                }}
+                onClick={handleShowTutorialAgain}
               >
                 {t("mediaPage.showTutorialAgain", "Show tutorial again")}
               </Button>
