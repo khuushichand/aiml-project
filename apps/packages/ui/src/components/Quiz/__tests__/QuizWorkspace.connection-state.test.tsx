@@ -87,6 +87,11 @@ vi.mock("../QuizPlayground", () => ({
   QuizPlayground: () => <div data-testid="quiz-playground" />
 }))
 
+vi.mock("../hooks", () => ({
+  useQuizzesQuery: () => ({ data: { count: 0 } }),
+  useAttemptsQuery: () => ({ data: { count: 0 } })
+}))
+
 describe("QuizWorkspace connection and availability states", () => {
   beforeEach(() => {
     mocks.isOnline = true
