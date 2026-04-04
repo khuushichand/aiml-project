@@ -52,6 +52,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage()
   const [activeTab, setActiveTab] = React.useState<TabKey>("policy")
   const startTutorial = useTutorialStore((s) => s.startTutorial)
+  const isTutorialCompleted = useTutorialStore((s) => s.isCompleted)
   const tutorialInitializedRef = React.useRef(false)
 
   const ctx = useModerationContext()
@@ -104,15 +105,16 @@ export const ModerationPlaygroundShell: React.FC = () => {
     if (hasPermissionError) return
     tutorialInitializedRef.current = true
     if (typeof window === "undefined") return
+    if (isTutorialCompleted("moderation-basics")) return
     try {
       const dismissed = window.localStorage.getItem(ONBOARDING_KEY)
       if (!dismissed) {
         startTutorial("moderation-basics")
       }
-    } catch {
-      // On storage error, skip tutorial
+    } catch (err) {
+      console.debug("[ModerationPlayground] localStorage unavailable, skipping tutorial auto-start", err)
     }
-  }, [hasPermissionError, startTutorial])
+  }, [hasPermissionError, startTutorial, isTutorialCompleted])
 
   // beforeunload warning
   React.useEffect(() => {

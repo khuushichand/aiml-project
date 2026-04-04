@@ -163,13 +163,14 @@ export function HeaderShortcuts({
   /* ---------- match counts per category ---------- */
   const matchCounts = useMemo(() => {
     const queryFiltered = query
-      ? allItems.filter((ri) => {
+      ? (() => {
           const q = query.toLowerCase()
-          return (
-            ri.label.toLowerCase().includes(q) ||
-            (ri.description && ri.description.toLowerCase().includes(q))
+          return allItems.filter(
+            (ri) =>
+              ri.label.toLowerCase().includes(q) ||
+              (ri.description && ri.description.toLowerCase().includes(q))
           )
-        })
+        })()
       : allItems
     const counts: Record<string, number> = { [ALL_CATEGORY]: queryFiltered.length }
     for (const g of resolvedGroups) {

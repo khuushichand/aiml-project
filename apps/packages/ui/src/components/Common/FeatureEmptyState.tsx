@@ -56,9 +56,9 @@ const FeatureEmptyState: React.FC<FeatureEmptyStateProps> = ({
           {title}
         </h2>
         {description && (
-          <p className="text-sm text-text-muted">
+          <div className="text-sm text-text-muted">
             {description}
-          </p>
+          </div>
         )}
         {examples && examples.length > 0 && (
           <div className="text-xs text-text-muted">

@@ -19,6 +19,11 @@ describe("ModerationPlaygroundShell tutorial integration", () => {
     expect(source).toContain("useTutorialStore")
   })
 
+  it("checks tutorial completion before auto-starting", () => {
+    const source = readShellSource()
+    expect(source).toContain('isTutorialCompleted("moderation-basics")')
+  })
+
   it("has data-testid on hero section", () => {
     const source = readShellSource()
     expect(source).toContain('data-testid="moderation-hero"')
