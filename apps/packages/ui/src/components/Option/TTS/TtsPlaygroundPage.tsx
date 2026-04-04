@@ -563,6 +563,25 @@ const TtsPlaygroundPage: React.FC = () => {
           />
         )}
 
+        {isTldw && !hasAudio && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={t("playground:tts.noProviderTitle", "No TTS provider detected on your server")}
+            description={
+              <Trans
+                i18nKey="playground:tts.noProviderDescription"
+                defaults="Your tldw server doesn't have a TTS engine configured yet. <settingsLink>Open Speech Settings</settingsLink> to configure one, or switch to <strong>Browser</strong> TTS which works without any setup."
+                components={{
+                  settingsLink: <Link to="/settings/speech" />,
+                  strong: <strong />
+                }}
+              />
+            }
+          />
+        )}
+
         <Card>
           <Space orientation="vertical" className="w-full" size="middle">
             <div>
