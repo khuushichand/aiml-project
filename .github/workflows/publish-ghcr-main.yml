@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: publish-ghcr-main-${{ github.event.pull_request.number || github.ref }}
+  group: publish-ghcr-main-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
