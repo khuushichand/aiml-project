@@ -280,6 +280,17 @@ const MediaPageContent: React.FC = () => {
 
   const viewPrefs = useMediaViewPreferences()
 
+  // Auto-refresh media results when Quick Ingest completes
+  useEffect(() => {
+    const handleIngestComplete = () => {
+      setTimeout(() => {
+        search.refetch()
+      }, 1500)
+    }
+    window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+    return () => window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+  }, [search])
+
   // Compute display results (filtered by favorites/collections)
   // Need selection hook first for favorites/collections, but selection needs displayResults.
   // We break the cycle by computing displayResults here using search results + selection state.
@@ -1414,8 +1425,8 @@ const MediaPageContent: React.FC = () => {
                   search.setQuery('')
                 }}
                 onClearFilters={resetAllFilters}
-                onOpenQuickIngest={() => {
-                  requestQuickIngestOpen()
+                onOpenQuickIngest={(detail) => {
+                  requestQuickIngestOpen(detail)
                 }}
                 favorites={selection.favoritesSet}
                 onToggleFavorite={selection.toggleFavorite}

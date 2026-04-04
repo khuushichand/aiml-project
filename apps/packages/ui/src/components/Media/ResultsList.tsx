@@ -1,5 +1,6 @@
-import { CheckCircle2, Circle, Clock, FileText, List, LayoutGrid, Loader2, Star, User, AlertCircle } from 'lucide-react'
-import { Tooltip, Button } from 'antd'
+import { useState, useCallback } from 'react'
+import { CheckCircle2, Circle, Clock, FileText, List, LayoutGrid, Loader2, Star, User, AlertCircle, Upload } from 'lucide-react'
+import { Tooltip, Button, Input } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '@/utils/dateFormatters'
 import { highlightMatches } from '@/components/Media/highlightMatches'
@@ -67,7 +68,7 @@ interface ResultsListProps {
   searchQuery?: string
   onClearSearch?: () => void
   onClearFilters?: () => void
-  onOpenQuickIngest?: () => void
+  onOpenQuickIngest?: (detail?: unknown) => void
   favorites?: Set<string>
   onToggleFavorite?: (id: string) => void
   selectionMode?: boolean
@@ -104,6 +105,26 @@ export function ResultsList({
   const { t } = useTranslation(['review'])
   const hasSearchQuery = searchQuery.trim().length > 0
   const isCompact = viewMode === 'compact'
+
+  const DISMISS_KEY = 'tldw_first_ingest_tutorial_dismissed'
+  const [tutorialDismissed, setTutorialDismissed] = useState(() => {
+    try { return localStorage.getItem(DISMISS_KEY) === 'true' } catch { return false }
+  })
+  const [ingestUrl, setIngestUrl] = useState('')
+
+  const handleDismissTutorial = useCallback(() => {
+    setTutorialDismissed(true)
+    try { localStorage.setItem(DISMISS_KEY, 'true') } catch { /* noop */ }
+  }, [])
+
+  const handleIngestClick = useCallback(() => {
+    const trimmed = ingestUrl.trim()
+    if (trimmed && onOpenQuickIngest) {
+      onOpenQuickIngest({ source: trimmed })
+    } else if (onOpenQuickIngest) {
+      onOpenQuickIngest()
+    }
+  }, [ingestUrl, onOpenQuickIngest])
 
   const buildInspectorTooltip = (result: Result) => {
     const title = result.title || `${result.kind} ${result.id}`
@@ -303,12 +324,41 @@ export function ResultsList({
                     </Button>
                   )}
                   {onOpenQuickIngest && (
-                    <Button size="small" onClick={onOpenQuickIngest}>
+                    <Button size="small" onClick={() => onOpenQuickIngest()}>
                       {t('mediaPage.openQuickIngest', 'Open Quick Ingest')}
                     </Button>
                   )}
                 </div>
               </>
+            ) : !hasSearchQuery && !tutorialDismissed && onOpenQuickIngest ? (
+              <div data-testid="first-ingest-tutorial" className="px-4 py-8 flex flex-col items-center gap-3">
+                <Upload className="w-8 h-8 text-primary" />
+                <h3 className="text-base font-semibold text-text">
+                  {t('mediaPage.ftuxTitle', 'Get started — ingest your first content')}
+                </h3>
+                <p className="text-xs text-text-subtle max-w-sm">
+                  {t('mediaPage.ftuxHint', 'Paste a YouTube URL, or use Quick Ingest to upload PDFs, audio, EPUB, and more.')}
+                </p>
+                <div className="flex items-center gap-2 w-full max-w-sm">
+                  <Input
+                    placeholder={t('mediaPage.ftuxUrlPlaceholder', 'Paste a YouTube URL...')}
+                    value={ingestUrl}
+                    onChange={(e) => setIngestUrl(e.target.value)}
+                    onPressEnter={handleIngestClick}
+                    size="middle"
+                  />
+                  <Button type="primary" onClick={handleIngestClick} aria-label={t('mediaPage.ftuxIngestButton', 'Ingest')}>
+                    {t('mediaPage.ftuxIngestButton', 'Ingest')}
+                  </Button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDismissTutorial}
+                  className="text-xs text-text-muted hover:text-text underline mt-1"
+                >
+                  {t('mediaPage.ftuxSkip', 'Skip for now')}
+                </button>
+              </div>
             ) : (
               <>
                 <p className="text-text-muted text-sm mb-2">
@@ -324,7 +374,7 @@ export function ResultsList({
                     </Button>
                   )}
                   {onOpenQuickIngest && (
-                    <Button size="small" onClick={onOpenQuickIngest}>
+                    <Button size="small" onClick={() => onOpenQuickIngest()}>
                       {t('mediaPage.openQuickIngest', 'Open Quick Ingest')}
                     </Button>
                   )}

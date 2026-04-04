@@ -357,6 +357,7 @@ export const HEADER_SHORTCUT_IDS = [
   "notes",
   "watchlists",
   "integrations",
+  "mcp-hub",
   "scheduled-tasks",
   "collections",
   "skills",

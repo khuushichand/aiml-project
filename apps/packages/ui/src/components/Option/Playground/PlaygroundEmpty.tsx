@@ -146,10 +146,23 @@ export const PlaygroundEmpty = () => {
                   "You're in demo mode — try asking a question to see how the assistant responds. You can connect your own tldw server later."
               })
             : !isConnected
-              ? t("playground:empty.disconnectedDescription", {
-                  defaultValue:
-                    "Connect to a tldw server to start chatting. Go to Settings to configure your connection."
-                })
+              ? (
+                  <>
+                    {t("playground:empty.disconnectedDescription", {
+                      defaultValue:
+                        "Connect to a tldw server to start chatting."
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => navigate("/settings/tldw")}
+                      className="mt-2 block text-sm font-medium text-primary hover:underline"
+                    >
+                      {t("playground:empty.openSettings", {
+                        defaultValue: "Open Settings"
+                      })}
+                    </button>
+                  </>
+                )
               : t("playground:empty.description", {
                   defaultValue:
                     "Experiment with different models, prompts, and knowledge sources here."
