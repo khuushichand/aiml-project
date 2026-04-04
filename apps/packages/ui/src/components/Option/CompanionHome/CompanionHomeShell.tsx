@@ -85,11 +85,11 @@ export function CompanionHomeShell({
     const url = browser.runtime.getURL(`/options.html#${hash}`)
     if (browser.tabs?.create) {
       browser.tabs.create({ url }).catch(() => {
-        window.open(url, "_blank")
+        window.open(url, "_blank", "noopener,noreferrer")
       })
       return
     }
-    window.open(url, "_blank")
+    window.open(url, "_blank", "noopener,noreferrer")
   }, [])
 
   return (
