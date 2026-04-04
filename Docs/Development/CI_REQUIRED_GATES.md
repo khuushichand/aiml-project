@@ -11,8 +11,11 @@ Configure branch protection to require these checks:
 3. `coverage-required`
 4. `frontend-required`
 5. `e2e-required`
+6. `container-build-check`
 
 These check names are stable and should remain unchanged once branch protection is configured.
+
+Branch protection is configured in GitHub repository settings, not in workflow YAML. Add `container-build-check` to the protected-branch required checks after it has reported successfully at least once.
 
 ## Conditional Execution and No-op Behavior
 
@@ -49,4 +52,4 @@ Expired allowlist entries are ignored by the gate.
 ## Legacy CI Workflow
 
 The large legacy `.github/workflows/ci.yml` workflow remains available during rollout for broad visibility and historical comparison.
-Required merge protection is provided by the five lanes listed above.
+Required merge protection is provided by the six lanes listed above.
