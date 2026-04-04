@@ -89,13 +89,28 @@ export const McpHubPage = () => {
         }
         items={[
           {
+            key: "tool-catalogs",
+            label: <span data-testid="mcp-hub-tab-tool-catalogs">Tool Catalog</span>,
+            children: <ToolCatalogsTab />
+          },
+          {
+            key: "credentials",
+            label: <span data-testid="mcp-hub-tab-credentials">Servers & Credentials</span>,
+            children: (
+              <ExternalServersTab
+                drillTarget={drillTarget}
+                onDrillHandled={handleDrillHandled}
+              />
+            )
+          },
+          {
             key: "profiles",
-            label: "Profiles",
+            label: <span data-testid="mcp-hub-tab-profiles">Profiles</span>,
             children: <PermissionProfilesTab />
           },
           {
             key: "assignments",
-            label: "Assignments",
+            label: <span data-testid="mcp-hub-tab-assignments">Assignments</span>,
             children: (
               <PolicyAssignmentsTab
                 drillTarget={drillTarget}
@@ -104,18 +119,23 @@ export const McpHubPage = () => {
             )
           },
           {
+            key: "approvals",
+            label: <span data-testid="mcp-hub-tab-approvals">Approvals</span>,
+            children: <ApprovalPoliciesTab />
+          },
+          {
             key: "path-scopes",
-            label: "Path Scopes",
+            label: <span data-testid="mcp-hub-tab-path-scopes">Path Scopes</span>,
             children: <PathScopesTab />
           },
           {
             key: "capability-mappings",
-            label: "Capability Mappings",
+            label: <span data-testid="mcp-hub-tab-capability-mappings">Capability Mappings</span>,
             children: <CapabilityMappingsTab />
           },
           {
             key: "workspace-sets",
-            label: "Workspace Sets",
+            label: <span data-testid="mcp-hub-tab-workspace-sets">Workspace Sets</span>,
             children: (
               <WorkspaceSetsTab
                 drillTarget={drillTarget}
@@ -125,7 +145,7 @@ export const McpHubPage = () => {
           },
           {
             key: "shared-workspaces",
-            label: "Shared Workspaces",
+            label: <span data-testid="mcp-hub-tab-shared-workspaces">Shared Workspaces</span>,
             children: (
               <SharedWorkspacesTab
                 drillTarget={drillTarget}
@@ -134,34 +154,14 @@ export const McpHubPage = () => {
             )
           },
           {
-            key: "audit",
-            label: "Audit",
-            children: <GovernanceAuditTab onOpen={handleOpen} />
-          },
-          {
             key: "governance-packs",
-            label: "Governance Packs",
+            label: <span data-testid="mcp-hub-tab-governance-packs">Governance Packs</span>,
             children: <GovernancePacksTab />
           },
           {
-            key: "approvals",
-            label: "Approvals",
-            children: <ApprovalPoliciesTab />
-          },
-          {
-            key: "tool-catalogs",
-            label: "Catalog",
-            children: <ToolCatalogsTab />
-          },
-          {
-            key: "credentials",
-            label: "Credentials",
-            children: (
-              <ExternalServersTab
-                drillTarget={drillTarget}
-                onDrillHandled={handleDrillHandled}
-              />
-            )
+            key: "audit",
+            label: <span data-testid="mcp-hub-tab-audit">Audit</span>,
+            children: <GovernanceAuditTab onOpen={handleOpen} />
           }
         ]}
       />

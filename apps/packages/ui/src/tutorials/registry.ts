@@ -79,6 +79,7 @@ import { flashcardsTutorials } from "./definitions/flashcards"
 import { worldBooksTutorials } from "./definitions/world-books"
 import { gettingStartedTutorials } from "./definitions/getting-started"
 import { moderationTutorials } from "./definitions/moderation"
+import { mcpHubTutorials } from "./definitions/mcp-hub"
 
 /**
  * Central registry of all available tutorials
@@ -95,7 +96,8 @@ export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
   ...notesTutorials,
   ...flashcardsTutorials,
   ...worldBooksTutorials,
-  ...moderationTutorials
+  ...moderationTutorials,
+  ...mcpHubTutorials
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
