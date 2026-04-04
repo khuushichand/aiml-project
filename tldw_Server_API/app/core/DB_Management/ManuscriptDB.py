@@ -137,7 +137,11 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["settings"] = json.loads(d.pop("settings_json", "{}"))
+        return d
 
     def list_projects(
         self,
@@ -166,7 +170,12 @@ class ManuscriptDBHelper:
                 [*params, limit, offset],
             ).fetchall()
 
-        return [dict(r) for r in rows], int(total)
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["settings"] = json.loads(d.pop("settings_json", "{}"))
+            results.append(d)
+        return results, int(total)
 
     def update_project(
         self,
