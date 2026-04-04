@@ -333,7 +333,7 @@ async def reorder_entities(
 
     items = []
     for item in payload.items:
-        entry: dict[str, Any] = {"id": item.id, "sort_order": item.sort_order}
+        entry: dict[str, Any] = {"id": item.id, "sort_order": item.sort_order, "version": item.version}
         if item.new_parent_id is not None and entity_type == "chapter":
             entry["part_id"] = item.new_parent_id
         items.append(entry)

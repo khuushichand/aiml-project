@@ -863,9 +863,10 @@ class ManuscriptDBHelper:
         entity_type:
             One of ``"part"``, ``"chapter"``, ``"scene"``.
         items:
-            A list of dicts, each containing at minimum ``"id"`` and
-            ``"sort_order"``.  For chapters, an optional ``"part_id"`` can
-            be included to reparent.
+            A list of dicts, each containing at minimum ``"id"``,
+            ``"sort_order"``, and ``"version"``.  For chapters, an optional
+            ``"part_id"`` can be included to reparent.  The ``"version"``
+            field enables optimistic locking per item.
         project_id:
             When provided, every item is validated to belong to this project
             before updating.
@@ -897,18 +898,31 @@ class ManuscriptDBHelper:
             for item in items:
                 item_id = item["id"]
                 sort_order = item["sort_order"]
+                expected_version = item.get("version")
+
+                # Build version clause when expected_version is provided
+                version_clause = " AND version = ?" if expected_version is not None else ""
+                version_params = (expected_version,) if expected_version is not None else ()
 
                 if entity_type == "chapter" and "part_id" in item:
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE {table} SET sort_order = ?, part_id = ?, "  # nosec B608
                         "last_modified = ?, version = version + 1 "
-                        "WHERE id = ? AND deleted = 0",
-                        (sort_order, item["part_id"], now, item_id),
+                        f"WHERE id = ? AND deleted = 0{version_clause}",
+                        (sort_order, item["part_id"], now, item_id) + version_params,
                     )
                 else:
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE {table} SET sort_order = ?, "  # nosec B608
                         "last_modified = ?, version = version + 1 "
-                        "WHERE id = ? AND deleted = 0",
-                        (sort_order, now, item_id),
+                        f"WHERE id = ? AND deleted = 0{version_clause}",
+                        (sort_order, now, item_id) + version_params,
+                    )
+
+                if expected_version is not None and cur.rowcount == 0:
+                    raise ConflictError(
+                        f"{entity_type.title()} {item_id!r} reorder failed "
+                        f"(version conflict or not found).",
+                        entity=table,
+                        entity_id=item_id,
                     )

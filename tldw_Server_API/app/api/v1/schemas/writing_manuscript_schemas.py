@@ -234,6 +234,7 @@ class ManuscriptStructureResponse(BaseModel):
 class ReorderItem(BaseModel):
     id: str = Field(..., description="Entity ID")
     sort_order: float = Field(..., description="New sort order")
+    version: int = Field(..., description="Expected version for optimistic locking")
     new_parent_id: str | None = Field(None, description="Optional new parent ID (for reparenting chapters)")
 
 
