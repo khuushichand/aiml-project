@@ -223,7 +223,33 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
           </Button>
         </div>
       ) : (
-        <Empty description={t("mediaPage.noResults", "No results")} />
+        <Empty description={t("mediaPage.noResults", "No results")}>
+          <div className="flex flex-col items-center gap-2">
+            <Button
+              type="primary"
+              icon={<Upload className="inline h-4 w-4 mr-1" />}
+              onClick={() => requestQuickIngestOpen()}
+            >
+              {t("mediaPage.openQuickIngest", "Open Quick Ingest")}
+            </Button>
+            {tutorialDismissed && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  setTutorialDismissed(false)
+                  try {
+                    localStorage.removeItem(FIRST_INGEST_DISMISSED_KEY)
+                  } catch {
+                    // ignore storage errors
+                  }
+                }}
+              >
+                {t("mediaPage.showTutorialAgain", "Show tutorial again")}
+              </Button>
+            )}
+          </div>
+        </Empty>
       )}
     </>
   )
