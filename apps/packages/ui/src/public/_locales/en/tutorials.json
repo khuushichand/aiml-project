@@ -432,10 +432,10 @@
     "message": "Flashcards Basics"
   },
   "flashcards_basics_description": {
-    "message": "Use study, manage, and transfer flows to maintain spaced-repetition decks"
+    "message": "Use study, manage, and import / export flows to maintain spaced-repetition decks"
   },
   "flashcards_basics_tabsTitle": {
-    "message": "Study, Manage, Transfer"
+    "message": "Study, Manage, Import / Export"
   },
   "flashcards_basics_tabsContent": {
     "message": "Switch tabs to study cards, manage deck contents, and import or export card data."
@@ -452,11 +452,11 @@
   "flashcards_basics_manageContent": {
     "message": "Open the Manage tab to search cards, filter by deck/tags, and perform bulk updates."
   },
-  "flashcards_basics_transferTitle": {
-    "message": "Transfer Tab"
+  "flashcards_basics_importExportTitle": {
+    "message": "Import / Export Tab"
   },
-  "flashcards_basics_transferContent": {
-    "message": "Use Transfer for CSV/JSON/APKG import and export workflows."
+  "flashcards_basics_importExportContent": {
+    "message": "Use Import / Export for CSV/JSON/APKG import and export workflows."
   },
   "flashcards_basics_quizTitle": {
     "message": "Bridge to Quiz"

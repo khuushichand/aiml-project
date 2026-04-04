@@ -103,6 +103,42 @@ vi.mock("../FlashcardImageInsertButton", () => ({
   )
 }))
 
+vi.mock("../FlashcardTagPicker", () => ({
+  FlashcardTagPicker: ({
+    value = [],
+    onChange,
+    dataTestId,
+    placeholder
+  }: {
+    value?: string[]
+    onChange?: (value: string[]) => void
+    dataTestId?: string
+    placeholder?: string
+  }) => {
+    const testId = dataTestId ?? "flashcard-tag-picker"
+
+    return (
+      <div data-testid={testId}>
+        {value.map((tag) => (
+          <span key={tag}>{tag}</span>
+        ))}
+        <input
+          data-testid={`${testId}-search-input`}
+          placeholder={placeholder}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return
+            event.preventDefault()
+            const nextTag = event.currentTarget.value.trim()
+            if (!nextTag) return
+            onChange?.([...value, nextTag])
+            event.currentTarget.value = ""
+          }}
+        />
+      </div>
+    )
+  }
+}))
+
 vi.mock("../utils/text-selection", () => ({
   getSelectionFromElement: () => ({ start: 0, end: 0 }),
   insertTextAtSelection: (value: string, _selection: { start: number; end: number }, inserted: string) => ({
@@ -295,8 +331,7 @@ describe("FlashcardCreateDrawer deck reference section", () => {
 
     await openAdvancedOptions()
 
-    const tagsField = screen.getByLabelText("Tags")
-    fireEvent.mouseDown(tagsField)
+    const tagsField = screen.getByTestId("flashcards-create-tag-picker-search-input")
     fireEvent.change(tagsField, {
       target: { value: "science" }
     })

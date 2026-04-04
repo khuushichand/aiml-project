@@ -67,7 +67,10 @@ export const FlashcardsManager: React.FC = () => {
   const [activeTab, setActiveTab] = React.useState<string>(() =>
     currentTab ?? (currentGenerateIntent || currentStudyPackIntent ? "importExport" : "review")
   )
-  const { data: initialDecks } = useDecksQuery()
+  const { data: initialDecks } = useDecksQuery({
+    includeWorkspaceItems: currentStudyIntent?.forceShowWorkspaceItems ?? false
+  })
+  const showSchedulerTab = !(initialDecks !== undefined && initialDecks.length === 0)
   const hasCheckedInitialTab = React.useRef(false)
   React.useEffect(() => {
     if (!hasCheckedInitialTab.current && initialDecks !== undefined && !currentTab) {
@@ -119,6 +122,12 @@ export const FlashcardsManager: React.FC = () => {
       setReviewDeckId(currentStudyIntent.deckId ?? undefined)
     }
   }, [currentGenerateIntent, currentStudyIntent?.deckId, currentStudyPackIntent, currentTab])
+
+  React.useEffect(() => {
+    if (!showSchedulerTab && activeTab === "scheduler") {
+      setActiveTab("importExport")
+    }
+  }, [activeTab, showSchedulerTab])
 
   const handleReviewCard = React.useCallback(
     (card: Flashcard) => {
@@ -234,7 +243,7 @@ export const FlashcardsManager: React.FC = () => {
             key: "importExport",
             label: (
               <span className="inline-flex items-center gap-1.5">
-                {t("option:flashcards.tabTransfer", { defaultValue: "Import / Export" })}
+                {t("option:flashcards.importExport", { defaultValue: "Import / Export" })}
                 <Tooltip title={t("option:flashcards.llmBadgeTooltip", {
                   defaultValue: "Some features in this tab require an LLM provider"
                 })}>
@@ -252,9 +261,8 @@ export const FlashcardsManager: React.FC = () => {
             )
           },
           // Hide Scheduler tab when there are zero decks
-          ...(initialDecks !== undefined && initialDecks.length === 0
-            ? []
-            : [
+          ...(showSchedulerTab
+            ? [
                 {
                   key: "scheduler",
                   label: t("option:flashcards.tabScheduler", {
@@ -268,7 +276,8 @@ export const FlashcardsManager: React.FC = () => {
                     />
                   )
                 }
-              ])
+              ]
+            : [])
         ]}
       />
 
