@@ -28,6 +28,8 @@ import { useCreateQuizMutation, useCreateQuestionMutation } from "../hooks"
 import type { QuestionType, QuestionCreate } from "@/services/quizzes"
 import type { TakeTabNavigationIntent } from "../navigation"
 import { normalizeMatchingAnswerMap } from "../utils/matchingAnswer"
+import { checkStorageBeforeWrite, notifyStorageWrite } from "@/utils/storage-guard"
+import { estimateUtf8ByteLength } from "@/utils/storage-budget"
 
 interface CreateTabProps {
   onNavigateToTake: (intent?: TakeTabNavigationIntent) => void
@@ -105,10 +107,17 @@ const readCreateDraft = (): QuizCreateDraft | null => {
   }
 }
 
-const writeCreateDraft = (draft: QuizCreateDraft): boolean => {
+const writeCreateDraft = (draft: QuizCreateDraft): boolean | { saved: boolean; recommendation: string | null } => {
   if (typeof window === "undefined") return false
   try {
-    window.localStorage.setItem(CREATE_TAB_DRAFT_KEY, JSON.stringify(draft))
+    const serialized = JSON.stringify(draft)
+    const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized))
+    // Advisory only — always attempt the write
+    window.localStorage.setItem(CREATE_TAB_DRAFT_KEY, serialized)
+    notifyStorageWrite()
+    if (guard.recommendation) {
+      return { saved: true, recommendation: guard.recommendation }
+    }
     return true
   } catch {
     return false
@@ -209,9 +218,11 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
     }
 
     const timeoutId = window.setTimeout(() => {
-      const saved = writeCreateDraft(currentDraft)
-      if (!saved) {
+      const result = writeCreateDraft(currentDraft)
+      if (!result) {
         setDraftStorageUnavailable(true)
+      } else if (typeof result === "object" && result.recommendation) {
+        messageApi.warning(result.recommendation)
       }
     }, 300)
 
