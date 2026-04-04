@@ -531,16 +531,37 @@ const TtsPlaygroundPage: React.FC = () => {
       )}
 
       <div className="mt-4 space-y-4">
-        <TtsProviderPanel
-          providerLabel={providerLabel}
-          provider={provider}
-          ttsSettings={ttsSettings}
-          isTldw={isTldw}
-          hasAudio={hasAudio}
-          activeProviderCaps={activeProviderCaps}
-          activeVoices={activeVoices}
-          providersInfo={providersInfo}
-        />
+        <div data-testid="tts-provider-selector">
+          <TtsProviderPanel
+            providerLabel={providerLabel}
+            provider={provider}
+            ttsSettings={ttsSettings}
+            isTldw={isTldw}
+            hasAudio={hasAudio}
+            activeProviderCaps={activeProviderCaps}
+            activeVoices={activeVoices}
+            providersInfo={providersInfo}
+          />
+        </div>
+
+        {isTldw && !hasAudio && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={t("playground:tts.noProviderTitle", "No TTS provider detected on your server")}
+            description={
+              <Trans
+                i18nKey="playground:tts.noProviderDescription"
+                defaults="Your tldw server doesn't have a TTS engine configured yet. <settingsLink>Open Speech Settings</settingsLink> to configure one, or switch to <strong>Browser</strong> TTS which works without any setup."
+                components={{
+                  settingsLink: <Link to="/settings/speech" />,
+                  strong: <strong />
+                }}
+              />
+            }
+          />
+        )}
 
         {isTldw && !hasAudio && (
           <Alert
@@ -584,6 +605,7 @@ const TtsPlaygroundPage: React.FC = () => {
               </div>
               <Input.TextArea
                 id={controlIds.textInput}
+                data-testid="tts-text-input"
                 aria-label={t(
                   "playground:tts.inputLabel",
                   "Enter some text to hear it spoken."
@@ -637,7 +659,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {ttsSettings?.ttsProvider === "elevenlabs" && elevenLabsData && (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2" data-testid="tts-voice-picker-elevenlabs">
                 <Text type="secondary">
                   {t(
                     "playground:tts.voiceSelector.elevenLabs",
@@ -690,7 +712,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {isTldw && providerVoices.length > 0 && (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2" data-testid="tts-voice-picker-tldw">
                 <Text type="secondary">
                   {t(
                     "playground:tts.voiceSelector.tldw",
@@ -757,7 +779,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {ttsSettings?.ttsProvider === "openai" && (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2" data-testid="tts-voice-picker-openai">
                 <Text type="secondary">
                   {t(
                     "playground:tts.voiceSelector.openai",
@@ -816,6 +838,7 @@ const TtsPlaygroundPage: React.FC = () => {
             <Space>
               <Button
                 type="primary"
+                data-testid="tts-play-button"
                 onClick={handlePlay}
                 disabled={isPlayDisabled}
                 loading={isGenerating}
@@ -859,7 +882,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {provider === "browser" && segments.length > 0 && (
-              <div className="mt-4 space-y-2 w-full">
+              <div className="mt-4 space-y-2 w-full" data-testid="tts-audio-output">
                 <div>
                   <Text strong>
                     {t(
@@ -989,7 +1012,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {provider !== "browser" && segments.length > 0 && (
-              <div className="mt-4 space-y-2 w-full">
+              <div className="mt-4 space-y-2 w-full" data-testid="tts-audio-output">
                 <div>
                   <Text strong>
                     {t(

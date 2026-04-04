@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Trans, useTranslation } from "react-i18next"
+import { Link } from "react-router-dom"
 import { Alert, Button, Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
@@ -325,6 +326,13 @@ export const SttPlaygroundPage: React.FC = () => {
       <p className="text-[11px] text-text-subtle mt-1">
         {t("playground:stt.serverRequirement", "Transcription requires a configured STT engine on your tldw server.")}
       </p>
+      <p className="text-[11px] text-text-subtle">
+        <Trans
+          i18nKey="playground:stt.combinedWorkflowHint"
+          defaults="For combined TTS + STT workflows, try the <speechLink>Speech Playground</speechLink>."
+          components={{ speechLink: <Link to="/speech" className="underline" /> }}
+        />
+      </p>
       <div className="mt-1">
         <a
           href="https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_CPU.md"
@@ -370,10 +378,12 @@ export const SttPlaygroundPage: React.FC = () => {
             description={t("playground:stt.noModelsBody", "Configure STT models in your server settings. Check the Audio Setup Guide for instructions.")}
           />
         )}
-        <RecordingStrip
-          onBlobReady={handleBlobReady}
-          onSettingsToggle={toggleSettings}
-        />
+        <div data-testid="stt-record-strip">
+          <RecordingStrip
+            onBlobReady={handleBlobReady}
+            onSettingsToggle={toggleSettings}
+          />
+        </div>
         <p className="text-[11px] text-text-subtle text-center mt-1">
           <Trans
             i18nKey="playground:stt.spaceKeyHint"
@@ -381,14 +391,16 @@ export const SttPlaygroundPage: React.FC = () => {
             components={{ kbd: <kbd className="rounded border border-border px-1 py-0.5 text-[10px]" /> }}
           />
         </p>
-        {showSettings && <InlineSettingsPanel onChange={setSttSettings} />}
-        <ComparisonPanel
-          blob={currentBlob}
-          availableModels={serverModels}
-          sttOptions={sttOptions}
-          onSaveToNotes={handleSaveToNotes}
-          onComparisonComplete={handleComparisonComplete}
-        />
+        {showSettings && <div data-testid="stt-settings-panel"><InlineSettingsPanel onChange={setSttSettings} /></div>}
+        <div data-testid="stt-transcription-output">
+          <ComparisonPanel
+            blob={currentBlob}
+            availableModels={serverModels}
+            sttOptions={sttOptions}
+            onSaveToNotes={handleSaveToNotes}
+            onComparisonComplete={handleComparisonComplete}
+          />
+        </div>
         <HistoryPanel
           entries={history ?? []}
           onRecompare={handleRecompare}
