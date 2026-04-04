@@ -407,8 +407,10 @@ export function ContentViewer({
   }
 
   if (!selectedMedia || editState.isAwaitingSelectionUpdate) {
+    const isLibraryEmpty = totalResults === 0 && !editState.isAwaitingSelectionUpdate
+
     return (
-      <div className="flex-1 flex items-center justify-center bg-bg">
+      <div className="flex-1 flex items-center justify-center bg-bg" data-testid="content-viewer-empty">
         <div className="text-center max-w-md px-6">
           <div className="mb-6 flex justify-center">
             <div className="w-32 h-32 rounded-full bg-gradient-to-br from-primary/10 to-primary/20 flex items-center justify-center">
@@ -418,39 +420,76 @@ export function ContentViewer({
           <h2 className="mb-2 text-xl font-semibold text-text">
             {editState.isAwaitingSelectionUpdate
               ? t('common:deleted', { defaultValue: 'Deleted' })
-              : t('review:mediaPage.noSelectionTitle', {
-                  defaultValue: 'No media item selected'
-                })}
+              : isLibraryEmpty
+                ? t('review:mediaPage.emptyLibraryTitle', {
+                    defaultValue: 'Your library is empty'
+                  })
+                : t('review:mediaPage.noSelectionTitle', {
+                    defaultValue: 'No media item selected'
+                  })}
           </h2>
           <p className="text-text-muted">
             {editState.isAwaitingSelectionUpdate
               ? t('review:mediaPage.loadingContent', {
                   defaultValue: 'Loading content...'
                 })
-              : t('review:mediaPage.noSelectionDescription', {
-                  defaultValue:
-                    'Select a media item from the left sidebar to view its content and analyses here.'
-                })}
+              : isLibraryEmpty
+                ? t('review:mediaPage.emptyLibraryDescription', {
+                    defaultValue:
+                      'Ingest your first content to get started.'
+                  })
+                : t('review:mediaPage.noSelectionDescription', {
+                    defaultValue:
+                      'Select a media item from the left sidebar to view its content and analyses here.'
+                  })}
           </p>
           {!editState.isAwaitingSelectionUpdate && (
             <>
-              <p className="mt-4 text-xs text-text-subtle">
-                {t('review:mediaPage.keyboardHint', {
-                  defaultValue: 'Tip: Use j/k to navigate items, arrow keys to change pages'
-                })}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  requestQuickIngestOpen()
-                }}
-                className="mt-4 inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
-              >
-                <UploadCloud className="h-4 w-4" />
-                {t('review:mediaPage.openQuickIngest', {
-                  defaultValue: 'Open Quick Ingest'
-                })}
-              </button>
+              {isLibraryEmpty ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    requestQuickIngestOpen()
+                  }}
+                  className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary/90"
+                >
+                  <UploadCloud className="h-4 w-4" />
+                  {t('review:mediaPage.openQuickIngest', {
+                    defaultValue: 'Open Quick Ingest'
+                  })}
+                </button>
+              ) : (
+                <>
+                  <Tooltip
+                    title={t('review:mediaPage.keyboardHint', {
+                      defaultValue: 'Tip: Use j/k to navigate items, arrow keys to change pages'
+                    })}
+                  >
+                    <button
+                      type="button"
+                      className="mt-4 inline-flex items-center gap-1 text-xs text-text-subtle hover:text-text-muted"
+                    >
+                      {t('review:mediaPage.keyboardShortcuts', {
+                        defaultValue: 'Keyboard shortcuts'
+                      })}
+                    </button>
+                  </Tooltip>
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        requestQuickIngestOpen()
+                      }}
+                      className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+                    >
+                      <UploadCloud className="h-4 w-4" />
+                      {t('review:mediaPage.openQuickIngest', {
+                        defaultValue: 'Open Quick Ingest'
+                      })}
+                    </button>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
