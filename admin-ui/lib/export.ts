@@ -186,6 +186,48 @@ export function exportApiKeys<T extends object>(keys: T[], format: ExportFormat 
   });
 }
 
+type UnifiedApiKeyExportRow = {
+  keyId: string;
+  keyPrefix: string;
+  ownerUserId: number;
+  ownerUsername: string;
+  ownerEmail: string;
+  createdAt: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  status: string;
+  totalTokens: number | null;
+  estimatedCostUsd: number | null;
+};
+
+/**
+ * Pre-configured export for unified admin API key rows.
+ */
+export function exportUnifiedApiKeys<T extends UnifiedApiKeyExportRow>(rows: T[], format: ExportFormat = 'csv'): void {
+  exportData({
+    data: rows as unknown as Record<string, unknown>[],
+    filename: 'api-keys',
+    format,
+    columns: [
+      { key: 'keyId', header: 'Key ID' },
+      { key: 'keyPrefix', header: 'Key Prefix' },
+      { key: 'ownerUserId', header: 'User ID' },
+      { key: 'ownerUsername', header: 'Owner Username' },
+      { key: 'ownerEmail', header: 'Owner Email' },
+      { key: 'status', header: 'Status' },
+      { key: 'createdAt', header: 'Created At', transform: (v) => toIsoDateString(v) },
+      { key: 'expiresAt', header: 'Expires At', transform: (v) => toIsoDateString(v, 'Never') },
+      { key: 'lastUsedAt', header: 'Last Used', transform: (v) => toIsoDateString(v, 'Never') },
+      { key: 'totalTokens', header: 'Total Tokens' },
+      {
+        key: 'estimatedCostUsd',
+        header: 'Estimated Cost (USD)',
+        transform: (v) => typeof v === 'number' ? v.toFixed(v < 0.01 ? 4 : 2) : '',
+      },
+    ],
+  });
+}
+
 /**
  * Pre-configured export for organizations
  */

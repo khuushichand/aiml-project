@@ -20,12 +20,6 @@ import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { TagInput } from '@/components/ui/tag-input';
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
-  return String(n);
-}
-
 interface AgentConfig {
   id: number;
   type: string;
@@ -534,12 +528,22 @@ export default function ACPAgentsPage() {
                             {agentUsage[agent.type]?.invocation_count ?? '—'}
                           </TableCell>
                           <TableCell className="text-right font-mono text-sm">
-                            {agentUsage[agent.type] ? formatTokens(agentUsage[agent.type].total_tokens) : '—'}
+                            {agentUsage[agent.type]
+                              ? formatTokens(agentUsage[agent.type].total_tokens)
+                              : (() => {
+                                  const metrics = agentMetrics.get(agent.type);
+                                  return metrics ? formatTokens(metrics.total_tokens) : '—';
+                                })()}
                           </TableCell>
                           <TableCell className="text-right font-mono text-sm">
                             {agentUsage[agent.type]?.estimated_cost_usd != null
                               ? `$${agentUsage[agent.type].estimated_cost_usd.toFixed(2)}`
-                              : '—'}
+                              : (() => {
+                                  const metrics = agentMetrics.get(agent.type);
+                                  return metrics?.total_estimated_cost_usd != null
+                                    ? formatCost(metrics.total_estimated_cost_usd)
+                                    : '—';
+                                })()}
                           </TableCell>
                           {(() => {
                             const metrics = agentMetrics.get(agent.type);
@@ -708,7 +712,7 @@ export default function ACPAgentsPage() {
                     <Label htmlFor="agent-allowed">Allowed Tools</Label>
                     <TagInput id="agent-allowed" value={agentForm.allowed_tools} onChange={(v) => setAgentForm(f => ({ ...f, allowed_tools: v }))} placeholder="Type tool name, press Enter" />
                     {availableTools.length > 0 && (
-                      <p className="text-xs text-muted-foreground">{availableTools.length} tools available — type to autocomplete</p>
+                      <p className="text-xs text-muted-foreground">{availableTools.length} backend tools available. Enter exact tool names to allow.</p>
                     )}
                   </div>
                   <div className="space-y-2">
@@ -716,9 +720,6 @@ export default function ACPAgentsPage() {
                     <TagInput id="agent-denied" value={agentForm.denied_tools} onChange={(v) => setAgentForm(f => ({ ...f, denied_tools: v }))} placeholder="Type tool name, press Enter" />
                   </div>
                 </div>
-                <datalist id="available-tools-list">
-                  {availableTools.map(t => <option key={t} value={t} />)}
-                </datalist>
                 <div className="space-y-2">
                   <Label htmlFor="agent-key">Required API Key (env var name)</Label>
                   <Input id="agent-key" value={agentForm.requires_api_key} onChange={(e) => setAgentForm(f => ({ ...f, requires_api_key: e.target.value }))} placeholder="ANTHROPIC_API_KEY" />

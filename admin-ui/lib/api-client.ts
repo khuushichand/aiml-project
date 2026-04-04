@@ -1358,6 +1358,7 @@ export const api = {
       total_tokens: number;
       total_messages: number;
       last_used_at: string | null;
+      total_estimated_cost_usd: number | null;
     }> }>('/admin/acp/agents/metrics'),
   getACPAgentUsage: (rangeDays = 7) =>
     requestJson<{

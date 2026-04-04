@@ -33,9 +33,8 @@ import { api } from '@/lib/api-client';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 import type { UserWithKeyCount } from '@/types';
 import { AlertTriangle, Copy, FileText, Key, Plus, RotateCw, Search, ShieldOff } from 'lucide-react';
-import Link from 'next/link';
 import { ExportMenu } from '@/components/ui/export-menu';
-import { exportApiKeys, ExportFormat } from '@/lib/export';
+import { exportUnifiedApiKeys, ExportFormat } from '@/lib/export';
 import { logger } from '@/lib/logger';
 
 const USER_PAGE_LIMIT = 100;
@@ -410,7 +409,7 @@ function ApiKeysPageContent() {
                 Create Key
               </Button>
               <ExportMenu
-                onExport={(format: ExportFormat) => exportApiKeys(filteredRows, format)}
+                onExport={(format: ExportFormat) => exportUnifiedApiKeys(filteredRows, format)}
                 disabled={filteredRows.length === 0}
               />
             </div>

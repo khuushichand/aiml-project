@@ -6,6 +6,7 @@ const buildApiUrlForRequest = vi.fn((_req: unknown, path: string) => `https://ex
 const getBackendAuthHeaders = vi.fn(() => new Headers({ Authorization: 'Bearer test-token' }));
 const clearAdminSessionCookies = vi.fn();
 const invalidateAuthCache = vi.fn().mockResolvedValue(undefined);
+const loggerWarn = vi.fn();
 
 vi.mock('@/lib/api-config', () => ({
   buildApiUrlForRequest,
@@ -23,6 +24,12 @@ vi.mock('@/middleware', () => ({
   invalidateAuthCache,
 }));
 
+vi.mock('@/lib/logger', () => ({
+  logger: {
+    warn: loggerWarn,
+  },
+}));
+
 describe('POST /api/auth/logout', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -31,7 +38,6 @@ describe('POST /api/auth/logout', () => {
 
   it('logs backend logout failures and still clears local session cookies', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('backend unavailable'));
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('fetch', fetchMock);
 
     const { POST } = await import('./route');
@@ -49,11 +55,14 @@ describe('POST /api/auth/logout', () => {
       headers: new Headers({ Authorization: 'Bearer test-token' }),
       cache: 'no-store',
     });
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const warnArg = warnSpy.mock.calls[0][0] as string;
-    expect(warnArg).toContain('Backend logout failed');
-    expect(warnArg).toContain('backend unavailable');
-    expect(warnArg).toContain('auth/logout');
+    expect(loggerWarn).toHaveBeenCalledTimes(1);
+    expect(loggerWarn).toHaveBeenCalledWith(
+      'Backend logout failed',
+      expect.objectContaining({
+        component: 'auth/logout',
+        error: 'backend unavailable',
+      }),
+    );
     expect(clearAdminSessionCookies).toHaveBeenCalledTimes(1);
     expect(clearAdminSessionCookies).toHaveBeenCalledWith(expect.objectContaining({
       cookies: expect.anything(),
