@@ -12,7 +12,7 @@ import {
   BookOpen,
 } from "lucide-react"
 import type { WizardResultItem } from "./types"
-import { shouldKeepOriginalFile } from "@/services/tldw/quick-ingest-batch"
+import { shouldKeepOriginalFile } from "@/services/tldw/media-routing"
 import { useIngestWizard } from "./IngestWizardContext"
 import { classifyError } from "./ErrorClassification"
 import type { ErrorCategory } from "./ErrorClassification"
