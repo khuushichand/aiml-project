@@ -311,7 +311,9 @@ const MediaPageContent: React.FC = () => {
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>
     const handleIngestComplete = () => {
-      timeoutId = setTimeout(() => { searchRefetch() }, 1500)
+      timeoutId = setTimeout(() => {
+        searchRefetch()
+      }, 1500)
     }
     window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     return () => {

@@ -1693,14 +1693,14 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
 }
 
 /**
- * Export panel for CSV/APKG export.
+ * Export panel for CSV/JSON/APKG export.
  */
 const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
   const decksQuery = useDecksQuery()
   const [exportDeckId, setExportDeckId] = React.useState<number | null>(null)
-  const [exportFormat, setExportFormat] = React.useState<"csv" | "apkg">("csv")
+  const [exportFormat, setExportFormat] = React.useState<"csv" | "apkg" | "json">("csv")
   const [exportTag, setExportTag] = React.useState("")
   const [exportQueryText, setExportQueryText] = React.useState("")
   const [exportIncludeReverse, setExportIncludeReverse] = React.useState(false)
@@ -1760,6 +1760,14 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
           ...exportParams,
           format: "apkg"
         })
+      } else if (exportFormat === "json") {
+        const text = await exportFlashcards({
+          ...exportParams,
+          format: "json"
+        })
+        blob = new Blob([text], {
+          type: "application/json;charset=utf-8"
+        })
       } else {
         const text = await exportFlashcards({
           ...exportParams,
@@ -1780,6 +1788,8 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
       a.href = url
       if (exportFormat === "apkg") {
         a.download = "flashcards.apkg"
+      } else if (exportFormat === "json") {
+        a.download = "flashcards.json"
       } else {
         a.download = exportDelimiter === "\t" ? "flashcards.tsv" : "flashcards.csv"
       }
@@ -1792,9 +1802,11 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
         fileName:
           exportFormat === "apkg"
             ? "flashcards.apkg"
-            : exportDelimiter === "\t"
-              ? "flashcards.tsv"
-              : "flashcards.csv"
+            : exportFormat === "json"
+              ? "flashcards.json"
+              : exportDelimiter === "\t"
+                ? "flashcards.tsv"
+                : "flashcards.csv"
       })
       message.success(successCopy)
       onTransferAction?.({
@@ -1821,7 +1833,7 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
         <Text type="secondary">
           {t("option:flashcards.exportHelp", {
             defaultValue:
-              "Export filtered flashcards to delimited text (CSV/TSV) or Anki-compatible APKG format."
+              "Export filtered flashcards to delimited text (CSV/TSV), JSON, or Anki-compatible APKG format."
           })}
         </Text>
       </div>
@@ -1858,6 +1870,12 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 defaultValue: "Delimited (CSV/TSV)"
               }),
               value: "csv"
+            },
+            {
+              label: t("option:flashcards.exportFormatJson", {
+                defaultValue: "JSON"
+              }),
+              value: "json"
             },
             { label: "APKG (Anki)", value: "apkg" }
           ]}
@@ -2689,7 +2707,7 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({
             <Text type="secondary">
               {t("option:flashcards.transferSummaryFormatsValue", {
                 defaultValue:
-                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Author: Generate, Image Occlusion · Export: TSV, CSV, APKG"
+                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Author: Generate, Image Occlusion · Export: TSV, CSV, JSON, APKG"
               })}
             </Text>
           </div>

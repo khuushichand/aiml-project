@@ -12,13 +12,15 @@ export function tipTapJsonToPlainText(json: JSONContent | null | undefined): str
   if (json.type === "listItem") return childText
   if (json.type === "blockquote") return childText
   if (json.type === "hardBreak") return "\n"
+  if (json.type === "doc") return childText.replace(/\n+$/, '')
   return childText
 }
 
 /** Convert plain text to a minimal TipTap JSON document */
 export function plainTextToTipTapJson(text: string): JSONContent {
   if (!text) return { type: "doc", content: [{ type: "paragraph" }] }
-  const lines = text.split("\n")
+  const trimmed = text.replace(/\n+$/, '')
+  const lines = trimmed ? trimmed.split('\n') : ['']
   const content: JSONContent[] = lines.map((line) => {
     if (line.trim() === "***") {
       return { type: "sceneBreak" }

@@ -2039,7 +2039,7 @@ def export_flashcards(
     include_workspace_items: bool = False,
     tag: Optional[str] = None,
     q: Optional[str] = None,
-    format: Optional[str] = Query("csv", pattern="^(csv|apkg)$"),
+    export_format: Optional[str] = Query("csv", alias="format", pattern="^(csv|apkg|json)$"),
     include_reverse: Optional[bool] = False,
     delimiter: Optional[str] = Query('\t', description="CSV/TSV delimiter; default tab"),
     include_header: Optional[bool] = Query(False, description="Include header row for CSV/TSV"),
@@ -2058,7 +2058,48 @@ def export_flashcards(
             limit=100000,
             offset=0,
         )
-        if format == 'apkg':
+        if export_format == 'json':
+            def _parse_tags(raw) -> list:
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, list):
+                            return [str(t).strip() for t in parsed if str(t).strip()]
+                        return []
+                    except (json.JSONDecodeError, TypeError):
+                        return []
+                if isinstance(raw, list):
+                    return [str(t).strip() for t in raw if str(t).strip()]
+                return []
+
+            def _stream_json():
+                yield "[\n"
+                first = True
+                for item in items:
+                    row = {
+                        "front": item.get("front", ""),
+                        "back": item.get("back", ""),
+                        "notes": item.get("notes", ""),
+                        "tags": _parse_tags(item.get("tags_json")),
+                        "deck": item.get("deck_name", ""),
+                        "model_type": item.get("model_type", "basic"),
+                        "extra": item.get("extra", ""),
+                        "reverse": bool(item.get("reverse")),
+                        "is_cloze": bool(item.get("is_cloze")),
+                    }
+                    chunk = json.dumps(row, ensure_ascii=False)
+                    if not first:
+                        yield ",\n"
+                    first = False
+                    yield "  " + chunk
+                yield "\n]\n"
+
+            return StreamingResponse(
+                _stream_json(),
+                media_type="application/json; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=flashcards.json"},
+            )
+        if export_format == 'apkg':
             apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
 
             def asset_loader(asset_uuid: str) -> dict[str, Any]:

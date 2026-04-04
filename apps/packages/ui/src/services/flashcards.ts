@@ -436,7 +436,7 @@ export type FlashcardsExportParams = {
   deck_id?: number | null
   tag?: string | null
   q?: string | null
-  format?: "csv" | "apkg" | null
+  format?: "csv" | "apkg" | "json" | null
   include_reverse?: boolean | null
   delimiter?: string | null
   include_header?: boolean | null
