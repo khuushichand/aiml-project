@@ -13,12 +13,14 @@ import {
 
 import { createEmptySnapshot, useCompanionHomeData, useCompanionHomeLayout } from "./hooks"
 import { CustomizeHomeDrawer } from "./CustomizeHomeDrawer"
+import { GettingStartedSection } from "./GettingStartedSection"
 import { GoalsFocusCard } from "./cards/GoalsFocusCard"
 import { InboxPreviewCard } from "./cards/InboxPreviewCard"
 import { NeedsAttentionCard } from "./cards/NeedsAttentionCard"
 import { ReadingQueueCard } from "./cards/ReadingQueueCard"
 import { RecentActivityCard } from "./cards/RecentActivityCard"
 import { ResumeWorkCard } from "./cards/ResumeWorkCard"
+import { WhatsNextCard } from "./cards/WhatsNextCard"
 import type { CompanionHomeCardState } from "./cards/CardShell"
 
 type CompanionHomePageProps = {
@@ -353,7 +355,10 @@ export function CompanionHomePage({
         ) : null}
       </header>
 
+      <GettingStartedSection />
+
       <div className="grid gap-4 xl:grid-cols-2">
+        <WhatsNextCard />
         <InboxPreviewCard items={resolvedSnapshot.inbox} state={inboxState} />
         <NeedsAttentionCard
           items={resolvedSnapshot.needsAttention}
