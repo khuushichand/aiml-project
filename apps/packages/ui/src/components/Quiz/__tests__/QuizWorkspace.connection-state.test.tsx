@@ -83,13 +83,13 @@ vi.mock("@/hooks/useConnectionState", () => ({
   })
 }))
 
-vi.mock("../QuizPlayground", () => ({
-  QuizPlayground: () => <div data-testid="quiz-playground" />
+vi.mock("../hooks", () => ({
+  useQuizzesQuery: () => ({ data: undefined, isLoading: false }),
+  useAttemptsQuery: () => ({ data: { count: 0 } })
 }))
 
-vi.mock("../hooks", () => ({
-  useQuizzesQuery: () => ({ data: { count: 0 } }),
-  useAttemptsQuery: () => ({ data: { count: 0 } })
+vi.mock("../QuizPlayground", () => ({
+  QuizPlayground: () => <div data-testid="quiz-playground" />
 }))
 
 describe("QuizWorkspace connection and availability states", () => {

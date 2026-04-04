@@ -27,6 +27,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined
 } from "@ant-design/icons"
+import { Link } from "react-router-dom"
 import {
   useAttemptsQuery,
   useQuizzesQuery,
@@ -2300,11 +2301,11 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                 {t("option:quiz.empty.createFirstPrefix", {
                   defaultValue: "Generate one from your "
                 })}
-                <a href="/media" className="text-primary hover:text-primary/80 underline">
+                <Link to="/media" className="text-primary hover:text-primary/80 underline">
                   {t("option:quiz.empty.mediaLibrary", {
                     defaultValue: "media library"
                   })}
-                </a>
+                </Link>
                 {t("option:quiz.empty.createFirstSuffix", {
                   defaultValue: " or create one manually, then come back to take it."
                 })}
