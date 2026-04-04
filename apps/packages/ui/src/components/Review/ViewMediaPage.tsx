@@ -1773,6 +1773,7 @@ const MediaPageContent: React.FC = () => {
               hasNext={nav.hasNext}
               currentIndex={nav.selectedIndex >= 0 ? nav.selectedIndex : 0}
               totalResults={displayResults.length}
+              isLibraryEmpty={isEmptyLibrary}
               onChatWithMedia={handleChatWithMedia}
               onChatAboutMedia={handleChatAboutMedia}
               onGenerateFlashcardsFromContent={handleGenerateFlashcardsFromMedia}
