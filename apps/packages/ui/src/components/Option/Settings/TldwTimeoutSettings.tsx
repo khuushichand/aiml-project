@@ -65,7 +65,10 @@ export const determinePreset = (values: TimeoutValues): TimeoutPresetKey | "cust
 
 export const parseSeconds = (value: string, fallback: number) => {
   const parsed = parseInt(value, 10)
-  return Number.isNaN(parsed) ? fallback : parsed
+  if (Number.isNaN(parsed)) {
+    return fallback
+  }
+  return Math.max(1, parsed)
 }
 
 export type TldwTimeoutSettingsProps = {
