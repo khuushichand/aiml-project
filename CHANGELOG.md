@@ -10,9 +10,22 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- **FTUE / FTUX Expansion** — First-time user improvements broadened across onboarding, LLM connection, chat and watchlist journeys, realtime and BYOK setup, extension notification flows, media and review surfaces, MCP Hub, moderation, quiz, and a larger flashcards-first experience with new tutorials, empty states, and UX polish. (PRs #948, #950, #951, #953, #954, #963, #965, #969, #973, #977, #981, #982)
+- **Study Packs Phase 1** — Added a new study-pack pipeline spanning backend generation, provenance, source resolution, jobs-worker execution, API schemas/endpoints, and shared UI creation, remediation, and handoff flows with broad automated coverage. (PR #978)
+- **Flashcards Workflow Expansion** — Added workspace deck preview support, global tag suggestions, deck references in the create drawer, richer create/review/import flows, and related study-assistant follow-through across backend and shared UI surfaces. (PRs #974, #975, #979)
+- **Watchlist Alert Rules** — Added a watchlist alert-rules engine, database layer, and API support for user-defined run and feed notifications. (PR #970)
+- **Coordinated App Shutdown** — Added coordinated application shutdown flow support to improve lifecycle cleanup and service teardown behavior. (PR #945)
+- **MCP Virtual CLI Phase 2** — Extended the governed MCP virtual CLI beyond the initial runtime with deeper policy/runtime integration, safer command execution flows, and additional UX and test hardening for workspace-bounded command handling. (PRs #946, #962)
+
 ### Changed
 
+- Settings and notifications management moved further toward task-oriented configuration with tabbed Settings navigation, stronger extension notification subscription wiring, cleaner notification count/preference handling, and improved route parity across shared UI entry points. (PRs #968, #969)
+- AuthNZ admin CLI maintenance was tightened with clearer module-level documentation expectations and dedicated regression coverage for create/reset-admin command docs. (PR #976)
+- Admin, operator, and production-readiness surfaces continued to harden through follow-up infrastructure work in the admin UI stack. (PR #934)
+
 ### Fixed
+
+- Addressed post-review regressions across notifications, snoozed-state handling, persona buddy follow-ups, flashcard onboarding, and FTUE onboarding/realtime/watchlist flows so the new user journey and notification surfaces behave consistently across the web app and extension. (PRs #965, #966, #972, #973, #982)
 
 ### Removed
 
