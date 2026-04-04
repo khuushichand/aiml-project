@@ -8,6 +8,8 @@ import {
   ExternalLink,
   MessageSquare,
   Trash2,
+  Search,
+  BookOpen,
 } from "lucide-react"
 import type { WizardResultItem } from "./types"
 import { useIngestWizard } from "./IngestWizardContext"
@@ -23,6 +25,8 @@ type WizardResultsStepProps = {
   onRetryItems?: (itemIds: string[]) => void
   onOpenMedia?: (item: WizardResultItem) => void
   onDiscussInChat?: (item: WizardResultItem) => void
+  onSearchKnowledge?: () => void
+  onOpenWorkspace?: (item: WizardResultItem) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +195,8 @@ export const WizardResultsStep: React.FC<WizardResultsStepProps> = ({
   onRetryItems,
   onOpenMedia,
   onDiscussInChat,
+  onSearchKnowledge,
+  onOpenWorkspace,
 }) => {
   const { t } = useTranslation(["option"])
   const { state, reset } = useIngestWizard()
@@ -297,6 +303,42 @@ export const WizardResultsStep: React.FC<WizardResultsStepProps> = ({
               ))}
             </div>
           </section>
+        )}
+
+        {/* Next steps CTAs */}
+        {successes.length > 0 && (onSearchKnowledge || onOpenWorkspace) && (
+          <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+            <p className="mb-2 text-xs font-medium text-text-muted">
+              {qi("wizard.results.nextSteps", "What's next?")}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {onSearchKnowledge && (
+                <button
+                  type="button"
+                  onClick={onSearchKnowledge}
+                  className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text hover:bg-surface2 transition-colors"
+                  aria-label={qi("wizard.results.searchKnowledgeAria", "Search your ingested content in Knowledge QA")}
+                >
+                  <Search className="h-3.5 w-3.5" aria-hidden="true" />
+                  {qi("wizard.results.searchKnowledge", "Search in Knowledge")}
+                </button>
+              )}
+              {onOpenWorkspace && successes.some(s => ["pdf", "ebook"].includes(s.type)) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const docItem = successes.find(s => ["pdf", "ebook"].includes(s.type))
+                    if (docItem) onOpenWorkspace(docItem)
+                  }}
+                  className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text hover:bg-surface2 transition-colors"
+                  aria-label={qi("wizard.results.openWorkspaceAria", "Open document in Document Workspace")}
+                >
+                  <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                  {qi("wizard.results.openWorkspace", "Open in Workspace")}
+                </button>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Errors */}
