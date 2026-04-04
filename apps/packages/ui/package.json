@@ -89,6 +89,11 @@
     "xterm": "^5.3.0",
     "jszip": "^3.10.1",
     "gpt-tokenizer": "^3.4.0",
-    "@monaco-editor/react": "^4.6.0"
+    "@monaco-editor/react": "^4.6.0",
+    "@tiptap/react": "^2.0.0",
+    "@tiptap/starter-kit": "^2.0.0",
+    "@tiptap/extension-placeholder": "^2.0.0",
+    "@tiptap/extension-character-count": "^2.0.0",
+    "@tiptap/pm": "^2.0.0"
   }
 }
