@@ -470,7 +470,9 @@ export const PolicyAssignmentsTab = ({
   const handleDelete = (assignment: McpHubPolicyAssignment) => {
     const targetLabel = assignment.target_type === "default"
       ? "the default assignment"
-      : `the ${assignment.target_type} assignment for "${assignment.target_id}"`
+      : assignment.target_id
+        ? `the ${assignment.target_type} assignment for "${assignment.target_id}"`
+        : `the ${assignment.target_type} assignment`
     Modal.confirm({
       title: "Delete Policy Assignment",
       content: `Are you sure you want to delete ${targetLabel}? This cannot be undone.`,

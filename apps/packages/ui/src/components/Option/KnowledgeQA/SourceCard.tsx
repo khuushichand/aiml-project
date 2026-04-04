@@ -155,6 +155,34 @@ export function SourceCard({
       )
     : []
 
+  // Determine whether this source is a document that can be opened in the
+  // Document Workspace (PDF, EPUB, or generic "document"/"ebook" media types).
+  const contentFacet = detectSourceContentFacet(result)
+  const rawMediaType = String(
+    (result.metadata as Record<string, unknown> | undefined)?.media_type ?? ""
+  ).toLowerCase()
+  const isDocumentType =
+    contentFacet === "pdf" ||
+    rawMediaType.includes("pdf") ||
+    rawMediaType.includes("epub") ||
+    rawMediaType.includes("ebook") ||
+    rawMediaType === "document"
+
+  // Resolve the numeric media_id from metadata for workspace navigation.
+  const resolvedMediaId = (() => {
+    const raw =
+      (result.metadata as Record<string, unknown> | undefined)?.media_id ??
+      result.metadata?.id ??
+      result.id
+    if (typeof raw === "number" && Number.isFinite(raw)) return Math.round(raw)
+    if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+      return Number.parseInt(raw.trim(), 10)
+    }
+    return null
+  })()
+
+  const canOpenInWorkspace = isDocumentType && resolvedMediaId != null
+
   const Icon = getSourceIcon(sourceType)
 
   React.useEffect(
@@ -618,6 +646,27 @@ export function SourceCard({
                     <ExternalLink className="w-3.5 h-3.5" />
                     Open original
                   </button>
+                )}
+                {canOpenInWorkspace && (
+                  <>
+                    <div className="my-1 border-t border-border/50" role="separator" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        window.open(
+                          `/document-workspace?open=${resolvedMediaId}`,
+                          "_blank",
+                          "noopener,noreferrer"
+                        )
+                        setOverflowOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      Open in Document Workspace
+                    </button>
+                  </>
                 )}
               </div>
             )}

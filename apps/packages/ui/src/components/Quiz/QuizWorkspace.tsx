@@ -473,7 +473,7 @@ export const QuizWorkspace: React.FC = () => {
   const demoQuizzes = React.useMemo(() => getDemoQuizzes(t), [t])
 
   // Fetch quiz count for FTUX decisions (deduped by react-query when QuizPlayground also queries)
-  const { data: quizCountData } = useQuizzesQuery(
+  const { data: quizCountData, isLoading: isQuizCountLoading } = useQuizzesQuery(
     { limit: 1, offset: 0 },
     { enabled: isOnline && !quizzesUnsupported }
   )
@@ -776,7 +776,7 @@ export const QuizWorkspace: React.FC = () => {
         />
       </div>
       <QuizPlayground />
-      {totalQuizzes === 0 && (
+      {!isQuizCountLoading && totalQuizzes === 0 && (
         <div className="mt-4 text-center" data-testid="quiz-connected-demo-toggle">
           {showDemo ? (
             <>

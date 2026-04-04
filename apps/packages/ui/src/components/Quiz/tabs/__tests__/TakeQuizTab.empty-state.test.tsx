@@ -9,6 +9,10 @@ import {
   useSubmitAttemptMutation
 } from "../../hooks"
 
+vi.mock("react-router-dom", () => ({
+  Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -122,10 +126,6 @@ describe("TakeQuizTab empty-state guidance", () => {
     expect(
       screen.getByText("No quizzes available to take yet")
     ).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        "Generate one from media or create one manually, then come back to take it"
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText("media library")).toBeInTheDocument()
   })
 })

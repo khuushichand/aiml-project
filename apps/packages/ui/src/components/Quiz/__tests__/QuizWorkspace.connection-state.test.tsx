@@ -83,6 +83,10 @@ vi.mock("@/hooks/useConnectionState", () => ({
   })
 }))
 
+vi.mock("../hooks", () => ({
+  useQuizzesQuery: () => ({ data: undefined, isLoading: false })
+}))
+
 vi.mock("../QuizPlayground", () => ({
   QuizPlayground: () => <div data-testid="quiz-playground" />
 }))
