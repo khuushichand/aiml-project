@@ -67,7 +67,10 @@ export const FlashcardsManager: React.FC = () => {
   const [activeTab, setActiveTab] = React.useState<string>(() =>
     currentTab ?? (currentGenerateIntent || currentStudyPackIntent ? "importExport" : "review")
   )
-  const { data: initialDecks } = useDecksQuery()
+  const { data: initialDecks } = useDecksQuery({
+    includeWorkspaceItems: currentStudyIntent?.forceShowWorkspaceItems ?? false
+  })
+  const showSchedulerTab = !(initialDecks !== undefined && initialDecks.length === 0)
   const hasCheckedInitialTab = React.useRef(false)
   React.useEffect(() => {
     if (!hasCheckedInitialTab.current && initialDecks !== undefined && !currentTab) {
@@ -125,6 +128,12 @@ export const FlashcardsManager: React.FC = () => {
       setReviewDeckId(currentStudyIntent.deckId ?? undefined)
     }
   }, [currentGenerateIntent, currentStudyIntent?.deckId, currentStudyPackIntent, currentTab])
+
+  React.useEffect(() => {
+    if (!showSchedulerTab && activeTab === "scheduler") {
+      setActiveTab("importExport")
+    }
+  }, [activeTab, showSchedulerTab])
 
   const handleReviewCard = React.useCallback(
     (card: Flashcard) => {
@@ -258,9 +267,8 @@ export const FlashcardsManager: React.FC = () => {
             )
           },
           // Hide Scheduler tab when there are zero decks
-          ...(initialDecks !== undefined && initialDecks.length === 0
-            ? []
-            : [
+          ...(showSchedulerTab
+            ? [
                 {
                   key: "scheduler",
                   label: t("option:flashcards.tabScheduler", {
@@ -274,7 +282,8 @@ export const FlashcardsManager: React.FC = () => {
                     />
                   )
                 }
-              ])
+              ]
+            : [])
         ]}
       />
 

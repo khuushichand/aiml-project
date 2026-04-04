@@ -1457,7 +1457,7 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 {t("option:flashcards.largeImportUndoHint", {
                   seconds: IMPORT_UNDO_SECONDS,
                   defaultValue:
-                    `Large imports may take a moment to process. You'll have {{seconds}} seconds to undo after import completes.`
+                    "Large imports may take a moment to process. You'll have {{seconds}} seconds to undo after import completes."
                 })}
               </Text>
               {importMode === "delimited" ? (
