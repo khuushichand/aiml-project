@@ -85,6 +85,8 @@ jobs:
       DISABLE_HEAVY_STARTUP: "1"
       MINIMAL_TEST_APP: "1"
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
+      # Match the main CI workaround for protobuf/opentelemetry import-time conflicts.
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
