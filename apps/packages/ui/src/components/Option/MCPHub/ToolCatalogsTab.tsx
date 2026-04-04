@@ -131,7 +131,17 @@ export const ToolCatalogsTab = () => {
         ))
       ) : (
         <Card loading={loading}>
-          <Empty description="No registry metadata available yet" />
+          <Empty
+            description={
+              <Space orientation="vertical" size={4}>
+                <Typography.Text type="secondary">No tools registered yet</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                  Tools are discovered automatically when you connect external MCP servers.
+                  Add a server in the <Typography.Text strong>Servers &amp; Credentials</Typography.Text> tab to get started.
+                </Typography.Text>
+              </Space>
+            }
+          />
         </Card>
       )}
     </Space>
