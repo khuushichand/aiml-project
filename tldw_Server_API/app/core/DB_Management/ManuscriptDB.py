@@ -369,10 +369,11 @@ class ManuscriptDBHelper:
                 "WHERE part_id = ? AND deleted = 0",
                 (now, self._client_id, part_id),
             )
-            # Cascade to scenes of those chapters
+            # Cascade to scenes of those chapters (only non-deleted chapters)
             conn.execute(
                 "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
-                "WHERE chapter_id IN (SELECT id FROM manuscript_chapters WHERE part_id = ?) AND deleted = 0",
+                "WHERE chapter_id IN (SELECT id FROM manuscript_chapters WHERE part_id = ? AND deleted = 0) "
+                "AND deleted = 0",
                 (now, self._client_id, part_id),
             )
 
@@ -526,7 +527,7 @@ class ManuscriptDBHelper:
         project_id: str,
         *,
         title: str = "Untitled Scene",
-        content_json: str = "{}",
+        content_json: str | None = None,
         content_plain: str = "",
         synopsis: str | None = None,
         sort_order: float = 0,
@@ -814,7 +815,9 @@ class ManuscriptDBHelper:
             the underlying database does not have the expected FTS table.
         """
         # Escape FTS5 special characters by wrapping each term in double quotes
-        escaped_query = " ".join(f'"{term}"' for term in query.split() if term)
+        escaped_query = " ".join(
+            f'"{term.replace(chr(34), chr(34)*2)}"' for term in query.split() if term
+        )
         if not escaped_query:
             return []
 

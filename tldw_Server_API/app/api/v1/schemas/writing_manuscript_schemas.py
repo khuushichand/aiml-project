@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, computed_field
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +177,12 @@ class ManuscriptSceneResponse(BaseModel):
     client_id: str
     version: int
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def content(self) -> dict[str, Any] | None:
         """Parsed TipTap JSON content (mirrors the ``content`` field on create/update)."""
         if self.content_json is None:
             return None
-        import json
         try:
             return json.loads(self.content_json)
         except (json.JSONDecodeError, TypeError):

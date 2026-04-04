@@ -3729,6 +3729,7 @@ DROP TRIGGER IF EXISTS manuscript_scenes_check_project_update;
 
 CREATE TRIGGER manuscript_chapters_check_project
 BEFORE INSERT ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
 BEGIN
   SELECT CASE
     WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
@@ -3738,6 +3739,7 @@ END;
 
 CREATE TRIGGER manuscript_chapters_check_project_update
 BEFORE UPDATE ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
 BEGIN
   SELECT CASE
     WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
