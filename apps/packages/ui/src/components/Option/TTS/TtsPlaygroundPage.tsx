@@ -10,8 +10,8 @@ import {
   Tag,
   Select
 } from "antd"
-import { useTranslation } from "react-i18next"
-import { Link, useNavigate } from "react-router-dom"
+import { Trans, useTranslation } from "react-i18next"
+import { Link } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   DEFAULT_TLDW_TTS_MODEL,
@@ -47,7 +47,6 @@ const SAMPLE_TEXT =
   "Sample: Hi there, this is the TTS playground reading a short passage so you can preview voice and speed."
 const TtsPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["playground", "settings", "common"])
-  const navigate = useNavigate()
   const [text, setText] = React.useState("")
   const { data: ttsSettings } = useQuery({
     queryKey: ["fetchTTSSettings"],
@@ -504,7 +503,11 @@ const TtsPlaygroundPage: React.FC = () => {
         )}
       </Text>
       <p className="text-[11px] text-text-subtle mt-1">
-        For combined TTS + STT workflows, try the <Link to="/speech" className="underline">Speech Playground</Link>.
+        <Trans
+          i18nKey="playground:tts.combinedWorkflowHint"
+          defaults="For combined TTS + STT workflows, try the <speechLink>Speech Playground</speechLink>."
+          components={{ speechLink: <Link to="/speech" className="underline" /> }}
+        />
       </p>
       <div className="mt-1">
         <a
@@ -513,7 +516,7 @@ const TtsPlaygroundPage: React.FC = () => {
           rel="noopener noreferrer"
           className="text-xs text-text-muted underline hover:text-text"
         >
-          Audio Setup Guide
+          {t("playground:tts.audioSetupGuide", "Audio Setup Guide")}
         </a>
       </div>
 
@@ -522,8 +525,8 @@ const TtsPlaygroundPage: React.FC = () => {
           type="warning"
           showIcon
           className="mt-3 mb-0"
-          message="ffmpeg not detected"
-          description="Some audio processing features require ffmpeg. Install it for full functionality."
+          message={t("playground:tts.ffmpegWarningTitle", "ffmpeg not detected")}
+          description={t("playground:tts.ffmpegWarningBody", "Some audio processing features require ffmpeg. Install it for full functionality.")}
         />
       )}
 
@@ -546,15 +549,16 @@ const TtsPlaygroundPage: React.FC = () => {
             type="info"
             showIcon
             className="mb-4"
-            message="No TTS provider detected on your server"
+            message={t("playground:tts.noProviderTitle", "No TTS provider detected on your server")}
             description={
-              <>
-                Your tldw server doesn&apos;t have a TTS engine configured yet.{" "}
-                <a href="#" onClick={(e) => { e.preventDefault(); navigate("/settings/speech") }}>
-                  Open Speech Settings
-                </a>{" "}
-                to configure one, or switch to <strong>Browser</strong> TTS which works without any setup.
-              </>
+              <Trans
+                i18nKey="playground:tts.noProviderDescription"
+                defaults="Your tldw server doesn't have a TTS engine configured yet. <settingsLink>Open Speech Settings</settingsLink> to configure one, or switch to <strong>Browser</strong> TTS which works without any setup."
+                components={{
+                  settingsLink: <Link to="/settings/speech" />,
+                  strong: <strong />
+                }}
+              />
             }
           />
         )}
@@ -849,7 +853,10 @@ const TtsPlaygroundPage: React.FC = () => {
                   size="small"
                   status="active"
                   format={() =>
-                    `${generationProgress.completed}/${generationProgress.total} segments`
+                    t("playground:tts.progressSegments", "{{completed}}/{{total}} segments", {
+                      completed: generationProgress.completed,
+                      total: generationProgress.total
+                    })
                   }
                 />
               </div>
@@ -1055,20 +1062,6 @@ const TtsPlaygroundPage: React.FC = () => {
           </Space>
         </Card>
 
-        {isTldw && !hasAudio && (
-          <Alert
-            type="warning"
-            showIcon
-            title={t(
-              "playground:tts.tldwWarningTitle",
-              "tldw audio/speech API not detected"
-            )}
-            description={t(
-              "playground:tts.tldwWarningBody",
-              "Ensure your tldw_server version includes /api/v1/audio/speech and that your extension is connected with a valid API key."
-            )}
-          />
-        )}
       </div>
     </PageShell>
   )
