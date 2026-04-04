@@ -322,8 +322,29 @@ export const SttPlaygroundPage: React.FC = () => {
       <Text type="secondary">
         {t("playground:stt.subtitle", "Record audio and compare transcription results across multiple models.")}
       </Text>
+      <p className="text-[11px] text-text-subtle mt-1">
+        Transcription requires a configured STT engine on your tldw server.
+      </p>
+      <p className="text-[11px] text-text-subtle">
+        For combined TTS + STT workflows, try the <a href="/speech" className="underline">Speech Playground</a>.
+      </p>
+      <div className="mt-1">
+        <a
+          href="https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_CPU.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-text-muted underline hover:text-text"
+        >
+          Audio Setup Guide
+        </a>
+      </div>
 
       <div className="mt-4 space-y-4">
+        {!currentBlob && (
+          <p className="text-center text-sm text-text-muted mb-4">
+            Press the record button or upload an audio file to get started with transcription.
+          </p>
+        )}
         {serverModelsError && (
           <Alert
             type="warning"
@@ -343,18 +364,34 @@ export const SttPlaygroundPage: React.FC = () => {
             }
           />
         )}
-        <RecordingStrip
-          onBlobReady={handleBlobReady}
-          onSettingsToggle={toggleSettings}
-        />
-        {showSettings && <InlineSettingsPanel onChange={setSttSettings} />}
-        <ComparisonPanel
-          blob={currentBlob}
-          availableModels={serverModels}
-          sttOptions={sttOptions}
-          onSaveToNotes={handleSaveToNotes}
-          onComparisonComplete={handleComparisonComplete}
-        />
+        {!serverModelsLoading && !serverModelsError && serverModels.length === 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            className="mb-4"
+            message="No transcription models available"
+            description="Configure STT models in your server settings. Check the Audio Setup Guide for instructions."
+          />
+        )}
+        <div data-testid="stt-record-strip">
+          <RecordingStrip
+            onBlobReady={handleBlobReady}
+            onSettingsToggle={toggleSettings}
+          />
+        </div>
+        <p className="text-[11px] text-text-subtle text-center mt-1">
+          Press <kbd className="rounded border border-border px-1 py-0.5 text-[10px]">Space</kbd> to toggle recording
+        </p>
+        {showSettings && <div data-testid="stt-settings-panel"><InlineSettingsPanel onChange={setSttSettings} /></div>}
+        <div data-testid="stt-transcription-output">
+          <ComparisonPanel
+            blob={currentBlob}
+            availableModels={serverModels}
+            sttOptions={sttOptions}
+            onSaveToNotes={handleSaveToNotes}
+            onComparisonComplete={handleComparisonComplete}
+          />
+        </div>
         <HistoryPanel
           entries={history ?? []}
           onRecompare={handleRecompare}

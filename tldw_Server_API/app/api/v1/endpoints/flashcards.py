@@ -2039,7 +2039,7 @@ def export_flashcards(
     include_workspace_items: bool = False,
     tag: Optional[str] = None,
     q: Optional[str] = None,
-    format: Optional[str] = Query("csv", pattern="^(csv|apkg)$"),
+    format: Optional[str] = Query("csv", pattern="^(csv|apkg|json)$"),
     include_reverse: Optional[bool] = False,
     delimiter: Optional[str] = Query('\t', description="CSV/TSV delimiter; default tab"),
     include_header: Optional[bool] = Query(False, description="Include header row for CSV/TSV"),
@@ -2058,6 +2058,32 @@ def export_flashcards(
             limit=100000,
             offset=0,
         )
+        if format == 'json':
+            json_rows = []
+            for item in items:
+                tags_raw = item.get("tags_json")
+                if isinstance(tags_raw, str):
+                    try:
+                        tags = json.loads(tags_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        tags = []
+                elif isinstance(tags_raw, list):
+                    tags = tags_raw
+                else:
+                    tags = []
+                json_rows.append({
+                    "front": item.get("front", ""),
+                    "back": item.get("back", ""),
+                    "notes": item.get("notes", ""),
+                    "tags": tags,
+                    "deck": item.get("deck_name", ""),
+                })
+            payload = json.dumps(json_rows, ensure_ascii=False, indent=2)
+            return StreamingResponse(
+                iter([payload]),
+                media_type="application/json; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=flashcards.json"},
+            )
         if format == 'apkg':
             apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
 
