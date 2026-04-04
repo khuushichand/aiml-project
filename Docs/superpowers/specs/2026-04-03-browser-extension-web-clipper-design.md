@@ -4,9 +4,9 @@
 
 This design adds an Evernote-style web clipper to the browser extension.
 
-The clipper is capture-first and save-first. Users should be able to launch it from the toolbar, context menu, or keyboard shortcut, choose a clip type, review the result, add filing metadata, and save it to `Note`, `Workspace/Collection`, or `Both`.
+The clipper is capture-first and save-first. Users should be able to launch it from the toolbar, context menu, or keyboard shortcut, choose a clip type, review the result, add filing metadata, and save it to `Note`, `Workspace`, or `Both`.
 
-The user-facing destination choices are equal, but the internal storage model is intentionally asymmetric: rich clips are canonically note-backed so the system can reuse the existing notes attachment, keyword, folder, and metadata capabilities. Workspace and collection saves are modeled as placements or linked summaries on top of that richer note-backed record.
+The user-facing destination choices are equal, but the internal storage model is intentionally asymmetric: rich clips are canonically note-backed so the system can reuse the existing notes attachment, keyword, folder, and metadata capabilities. Workspace saves are modeled as placements or linked summaries on top of that richer note-backed record.
 
 OCR and VLM are optional enrichments, not the primary flow. When enabled, they should add a concise inline summary to the saved item and preserve the full structured analysis alongside the clip metadata.
 
@@ -27,7 +27,7 @@ OCR and VLM are optional enrichments, not the primary flow. When enabled, they s
   - title/comment/tags
   - choose destination
   - save
-- Let the user save to `Note`, `Workspace/Collection`, or `Both`.
+- Let the user save to `Note`, `Workspace`, or `Both`.
 - Reuse existing note and workspace systems where possible instead of creating a new backend storage domain in V1.
 - Support optional OCR and VLM analysis with server-first execution.
 - Use progressive enhancement so baseline clipper behavior works broadly and richer capture modes appear where the browser supports them.
@@ -47,8 +47,8 @@ OCR and VLM are optional enrichments, not the primary flow. When enabled, they s
 - The product reference is the Evernote web extension, not a generic capture platform.
 - The primary saved object should be note-first rather than media-first.
 - Phase 1 should support the core clipper set plus selection clip types.
-- `Note` and `Workspace/Collection` should be equal user-facing destination choices.
-- The user should be able to save to `Note`, `Workspace/Collection`, or `Both` at save time.
+- `Note` and `Workspace` should be equal user-facing destination choices.
+- The user should be able to save to `Note`, `Workspace`, or `Both` at save time.
 - OCR and VLM output should be stored both as a concise inline result and as full structured metadata.
 - The design should prefer server-first OCR and VLM execution.
 - The launch model should be capture-first from toolbar, context menu, and keyboard shortcut.
@@ -62,7 +62,7 @@ OCR and VLM are optional enrichments, not the primary flow. When enabled, they s
 - The backend already supports standalone notes with:
   - content
   - keywords
-  - folders / collections
+  - folders / keyword collections
   - optimistic locking
   - file attachments
 - The backend already supports workspace notes, but they are lighter-weight than standalone notes.
@@ -72,9 +72,21 @@ OCR and VLM are optional enrichments, not the primary flow. When enabled, they s
 
 ### Destination Symmetry Constraint
 
-The user wants `Note`, `Workspace/Collection`, and `Both` to feel like equal save choices. The current backend, however, does not provide equal storage capabilities for those destinations.
+The user wants `Note`, `Workspace`, and `Both` to feel like equal save choices. The current backend, however, does not provide equal storage capabilities for those destinations.
 
 Standalone notes already support richer attachment and organization behavior than workspace notes. V1 therefore should not pretend those systems are identical internally.
+
+### Destination Mapping Constraint
+
+The repo already uses the word `collection` for multiple unrelated domains, including notes keyword collections and reading collections. Neither is the right destination abstraction for rich clipped notes in V1.
+
+To avoid routing ambiguity, V1 must lock the review-sheet destinations to:
+
+- `Note`
+- `Workspace`
+- `Both`
+
+`Collection` can be added later only after a single concrete clip-placement backend target is chosen.
 
 ### Attachment Richness Constraint
 
@@ -89,9 +101,9 @@ Saving a clip is not a single atomic mutation. A successful save may involve:
 - creating the canonical note
 - attaching keywords and folders
 - uploading one or more attachments
-- adding a workspace or collection placement
+- adding a workspace placement
 - optionally running OCR and VLM
-- updating the saved body with enrichment summaries
+- adding enrichment summaries without overwriting user-authored content
 
 The design must explicitly support partial success and recovery instead of assuming one all-or-nothing request.
 
@@ -119,7 +131,7 @@ Server-first OCR and VLM mean captured content may be uploaded to the configured
 
 ### Approach 1: Note-Backed Clipper With Destination Placements
 
-Create one normalized clip draft in the extension and one canonical rich saved record backed by the notes system. Let the user save to `Note`, `Workspace/Collection`, or `Both`, but treat workspace and collection saves as placements or linked summaries over the richer note-backed clip.
+Create one normalized clip draft in the extension and one canonical rich saved record backed by the notes system. Let the user save to `Note`, `Workspace`, or `Both`, but treat workspace saves as placements or linked summaries over the richer note-backed clip.
 
 Pros:
 
@@ -136,7 +148,7 @@ Cons:
 
 ### Approach 2: Destination-Specific Storage
 
-Treat `Note`, `Workspace/Collection`, and `Both` as fully separate persistence paths with no canonical clip record.
+Treat `Note`, `Workspace`, and `Both` as fully separate persistence paths with no canonical clip record.
 
 Pros:
 
@@ -168,7 +180,7 @@ Cons:
 
 Use **Approach 1**.
 
-Build the clipper as a note-backed rich capture system with optional workspace or collection placements. Preserve equal user-facing save choices, but let the implementation lean on the existing richer note model for attachments, metadata, keywords, and filing behavior.
+Build the clipper as a note-backed rich capture system with optional workspace placements. Preserve equal user-facing save choices, but let the implementation lean on the existing richer note model for attachments, metadata, keywords, and filing behavior.
 
 ## Proposed Architecture
 
@@ -265,14 +277,14 @@ The design should explicitly distinguish between **visible destination semantics
 Visible semantics:
 
 - `Note`
-- `Workspace/Collection`
+- `Workspace`
 - `Both`
 
 Internal semantics:
 
 - create a canonical note-backed rich clip record for every rich clip
 - attach clip assets and analysis to that canonical note-backed record
-- if the user selected workspace or collection placement, create a linked placement or summary record
+- if the user selected workspace placement, create a linked placement or summary record
 
 This should not be surfaced as “we secretly created a note.” It is an implementation detail required by the current backend capability shape.
 
@@ -282,7 +294,10 @@ The design must define how deletes and edits behave:
 
 - removing a workspace placement does not delete the canonical clip note
 - deleting the canonical clip note removes or invalidates downstream placements
-- editing the canonical note-backed clip should update linked summaries where practical
+- editing the canonical note-backed clip is the only supported way to change clip content in V1
+- workspace placements are read-only derived summaries in V1, not an independent editable source of truth
+- placement updates flow one-way from canonical note to workspace placement after a successful note save
+- workspace-only saves still keep the canonical note visible in the regular notes surface as the clip's source of truth, with a placement badge or backlink to the workspace
 - if `Both` was chosen, the UI should make it clear whether the user is removing one placement or deleting the clip entirely
 
 These rules must be part of the implementation plan, not left implicit.
@@ -411,13 +426,13 @@ Main fields:
 Destination options:
 
 - `Note`
-- `Workspace/Collection`
+- `Workspace`
 - `Both`
 
 Conditional destination controls:
 
-- notebook or folder selector when `Note` is involved
-- workspace or collection selector when `Workspace/Collection` is involved
+- folder selector when `Note` is involved
+- workspace selector when `Workspace` is involved
 
 Enhancement section:
 
@@ -451,9 +466,10 @@ Recommended staged order:
 1. create canonical note-backed clip record
 2. apply keywords and folder placement
 3. upload attachments
-4. create workspace or collection placement if requested
-5. run OCR and VLM if requested
-6. update final user-visible content with concise enrichment summaries
+4. create workspace placement if requested
+5. queue OCR and VLM if requested
+6. persist structured enrichment results
+7. update the dedicated machine-managed enrichment section only when the optimistic-lock rules below allow it
 
 ### Save Outcome States
 
@@ -482,6 +498,35 @@ That means:
 - if placement creation fails, surface retry actions
 - if OCR/VLM fails, keep the saved clip and mark enhancement failure
 
+### Idempotency And Retry Rules
+
+Retries must be safe after network failures, browser restarts, and partial-success saves.
+
+Required rules:
+
+- `clip_id` is the idempotency key for the full clip save workflow
+- canonical note creation reuses `clip_id` as the client-provided note `id`
+- keyword and folder sync is idempotent by canonical `note_id` plus target membership
+- attachment uploads use deterministic slot names and content-hash-aware deduplication so a retried upload does not create duplicate files
+- workspace placement creation is idempotent by `(clip_id, workspace_id)`
+- OCR and VLM jobs are idempotent by `(clip_id, enhancement_type, source_note_version)`
+- a stage retry must update or reuse the existing saved artifact for that stage instead of creating a second note, placement, or enrichment record
+
+If the client loses the final response, re-running `Save clip` for the same `clip_id` should converge on one canonical note, zero or one workspace placement, and zero or one active OCR result plus zero or one active VLM result for the same source note version.
+
+### Enrichment Writeback Safety
+
+`Save and open` means the user may begin editing the note before OCR or VLM finishes.
+
+V1 must therefore treat post-save enrichment as append-only and machine-managed:
+
+- OCR and VLM may write into a dedicated enrichment section only
+- they must never rewrite the user comment, source citation block, or primary clipped content block
+- if the canonical note version changed after save, structured enrichment metadata may still be stored, but the visible note body must not be rewritten automatically
+- when a version mismatch happens, the UI should surface that enrichment completed but inline refresh requires a non-destructive follow-up action
+
+This keeps asynchronous enrichment from clobbering user edits.
+
 ## Content Model For Saved Notes
 
 ### Visible Body Structure
@@ -505,12 +550,22 @@ Recommended body shape:
 
 Do not put full raw OCR output or full VLM output inline by default.
 
-Recommended rule:
+Deterministic V1 thresholds:
 
-- inline body contains concise summaries and the primary clipped content
-- raw OCR output is stored in structured metadata or a text attachment
-- full VLM response is stored in structured analysis metadata
-- very large extracted page content should be truncated for the visible body and preserved separately
+- the visible main clipped content block is capped at 12,000 characters
+- inline OCR summary is capped at 1,500 characters
+- inline VLM summary is capped at 1,000 characters
+- combined machine-generated inline enrichment is capped at 2,500 characters total
+- if extracted page text exceeds 20,000 characters, preserve the full extract outside the visible body and inline only the first 12,000 characters
+- full raw OCR output is always stored outside the visible body in structured metadata or a text attachment
+- full VLM output is always stored outside the visible body in structured analysis metadata
+
+Truncation policy:
+
+- preserve the full user comment and source citation block
+- truncate on a paragraph boundary when possible
+- if no paragraph boundary exists near the limit, truncate at the hard character boundary
+- append a short marker such as `Truncated. Full extract attached.` when spillover occurs
 
 This keeps the saved note readable while preserving the full machine-readable result.
 
@@ -528,6 +583,7 @@ Because the user requested both inline and structured output:
 
 - include a concise inline `Captured text` or `Visual summary` section in the visible note
 - store the full OCR and VLM output alongside the clip metadata
+- keep enrichment writeback within the dedicated machine-managed section described above
 
 ### Failure Behavior
 
@@ -610,7 +666,7 @@ When the user saves to `Both`, the system must avoid creating indistinguishable 
 Recommended rule:
 
 - index the canonical note-backed clip fully
-- index workspace or collection placements as references or summaries
+- index workspace placements as references or summaries
 - search results should expose placement badges instead of duplicating full-body content where possible
 
 ## Error Handling
@@ -642,7 +698,7 @@ Recommended rule:
 - review sheet
 - core confirmed clip types
 - note-backed rich save
-- optional workspace or collection placement
+- optional workspace placement
 - OCR and VLM enhancement hooks
 - progressive enhancement for screenshot modes
 - visible-region-only selected-area screenshot
@@ -670,10 +726,12 @@ Recommended rule:
 ### Integration Tests
 
 - create note-backed clip from each core clip type
-- save to workspace or collection placement
+- save to workspace placement
 - save to both with partial failure handling
 - OCR and VLM merge behavior
 - attachment upload and warning states
+- idempotent retry after partial success
+- post-save enrichment with optimistic-lock conflict
 
 ### Extension Integration Tests
 
@@ -692,19 +750,22 @@ Recommended rule:
 - screenshot clip
 - selected-area screenshot on supported browser
 - save to note
-- save to workspace or collection
+- save to workspace
 - save to both with one destination failing
 - OCR enabled save
 - VLM enabled save
 
-## Open Implementation Notes
+## Locked Implementation Notes
 
-- The implementation plan should define the exact mapping between the clipper’s user-facing destination vocabulary and the repo’s existing notes folders, keyword collections, workspaces, and collections concepts.
-- The implementation plan should define whether `Workspace/Collection` is one picker with mixed entity types or a two-step destination selector.
-- The implementation plan should define how canonical note deletion propagates to placements and how placement removal behaves when the canonical note remains.
+- V1 review-sheet destinations are exactly `Note`, `Workspace`, and `Both`
+- `Note` uses the existing notes system plus folder filing
+- `Workspace` uses the existing workspace note surface at `/api/v1/workspaces/{workspace_id}/notes`
+- notes keyword collections and reading collections are explicitly out of scope as clip destinations in V1
+- canonical note deletion invalidates or removes workspace placements
+- placement removal does not delete the canonical note
 
 ## Recommendation Recap
 
-The clipper should ship as a compact Evernote-style filing workflow with a note-backed internal storage model, optional workspace or collection placements, and OCR/VLM as enrichments rather than the main action.
+The clipper should ship as a compact Evernote-style filing workflow with a note-backed internal storage model, optional workspace placements, and OCR/VLM as enrichments rather than the main action.
 
 That preserves the user experience the user asked for while keeping V1 aligned with the current extension and backend capabilities.
