@@ -11,8 +11,23 @@ Configure branch protection to require these checks:
 3. `coverage-required`
 4. `frontend-required`
 5. `e2e-required`
+6. `container-build-check` *(pending branch protection configuration)*
 
 These check names are stable and should remain unchanged once branch protection is configured.
+
+### Container Build Check Details
+
+`container-build-check` validates that the `app`, `webui`, and `admin-ui` Dockerfiles build successfully on PRs to `main` and `dev`. The workflow uses a matrix strategy with `fail-fast: false`, so all three images are tested even if one fails.
+
+Because the workflow uses a matrix, GitHub reports three separate status checks:
+
+- `container-build-check (app)`
+- `container-build-check (webui)`
+- `container-build-check (admin-ui)`
+
+Branch protection must require all three matrix check names. Alternatively, a summary job can be added to the workflow to provide a single roll-up check name.
+
+See [Container Image Lifecycle](Container_Image_Lifecycle.md) for the full build and publish pipeline.
 
 ## Conditional Execution and No-op Behavior
 
@@ -45,8 +60,9 @@ Expired allowlist entries are ignored by the gate.
 2. Tighten blocking behavior across required lanes.
 3. Refine path coupling and flake handling in `e2e-required`.
 4. Finalize branch protection to required lane names above.
+5. Add `container-build-check` matrix checks to branch protection required statuses.
 
 ## Legacy CI Workflow
 
 The large legacy `.github/workflows/ci.yml` workflow remains available during rollout for broad visibility and historical comparison.
-Required merge protection is provided by the five lanes listed above.
+Required merge protection is provided by the six lanes listed above.

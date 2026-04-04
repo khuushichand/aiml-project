@@ -83,6 +83,8 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 
 ## Published Images
 
+For the full CI/CD pipeline details (workflow triggers, tagging conventions, attestation, and how to add new images), see [Docs/Development/Container_Image_Lifecycle.md](../Docs/Development/Container_Image_Lifecycle.md).
+
 - The release workflow publishes release artifacts separately from the rolling `main` snapshot workflow.
 - `publish-ghcr-main` publishes `main` and `sha-<shortsha>` snapshots for the API, WebUI, and Admin UI images:
   - API: `ghcr.io/<owner>/<repo>:main`
