@@ -115,6 +115,19 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
       }
     })
   }, [enrichmentCache, visibleResults])
+  // Dispatch a custom event when ingest completes so other panels can react
+  React.useEffect(() => {
+    if (resultSummary && !running) {
+      window.dispatchEvent(new CustomEvent("tldw:quick-ingest-complete", {
+        detail: {
+          batchId: reviewBatchId ?? null,
+          successCount: resultSummary.successCount,
+          failCount: resultSummary.failCount
+        }
+      }))
+    }
+  }, [resultSummary, running, reviewBatchId])
+
   const hasErrors = React.useMemo(
     () =>
       results.some((item) => {
