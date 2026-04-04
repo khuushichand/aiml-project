@@ -118,6 +118,17 @@ export const QuizPlayground: React.FC = () => {
   const totalQuizzes = quizCounts?.count ?? 0
   const totalAttempts = attemptCounts?.count ?? 0
 
+  // FTUX: default to "generate" tab when no quizzes exist yet
+  const defaultTabResolved = React.useRef(false)
+  React.useEffect(() => {
+    if (defaultTabResolved.current) return
+    if (quizCounts === undefined) return // still loading
+    defaultTabResolved.current = true
+    if (totalQuizzes === 0 && !initialAssessmentIntent) {
+      setActiveTab("generate")
+    }
+  }, [quizCounts, totalQuizzes, initialAssessmentIntent])
+
   const renderTabLabel = React.useCallback((
     label: string,
     shortLabel: string,

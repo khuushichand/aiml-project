@@ -80,6 +80,12 @@ export const FlashcardsManager: React.FC = () => {
       }
     }
   }, [initialDecks, currentTab])
+  // Reset activeTab if Scheduler tab is hidden (e.g., arrived via ?tab=scheduler with zero decks)
+  React.useEffect(() => {
+    if (activeTab === "scheduler" && initialDecks !== undefined && initialDecks.length === 0) {
+      setActiveTab("review")
+    }
+  }, [activeTab, initialDecks])
   const [reviewDeckId, setReviewDeckId] = React.useState<number | null | undefined>(
     currentStudyIntent?.deckId ?? undefined
   )
@@ -243,7 +249,7 @@ export const FlashcardsManager: React.FC = () => {
             key: "importExport",
             label: (
               <span className="inline-flex items-center gap-1.5">
-                {t("option:flashcards.importExport", { defaultValue: "Import / Export" })}
+                {t("option:flashcards.tabImportExport", { defaultValue: "Import / Export" })}
                 <Tooltip title={t("option:flashcards.llmBadgeTooltip", {
                   defaultValue: "Some features in this tab require an LLM provider"
                 })}>
