@@ -1414,8 +1414,8 @@ const MediaPageContent: React.FC = () => {
                   search.setQuery('')
                 }}
                 onClearFilters={resetAllFilters}
-                onOpenQuickIngest={() => {
-                  requestQuickIngestOpen()
+                onOpenQuickIngest={(detail) => {
+                  requestQuickIngestOpen(detail)
                 }}
                 favorites={selection.favoritesSet}
                 onToggleFavorite={selection.toggleFavorite}
