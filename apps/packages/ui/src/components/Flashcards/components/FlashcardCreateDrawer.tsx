@@ -419,6 +419,16 @@ export const FlashcardCreateDrawer: React.FC<
                 )}
               />
             </Form.Item>
+            <button
+              type="button"
+              className="text-xs text-primary hover:text-primaryStrong -mt-2 mb-2 block"
+              onClick={() => setShowInlineCreate(true)}
+              data-testid="flashcards-create-new-deck-link"
+            >
+              {t("option:flashcards.orCreateNewDeck", {
+                defaultValue: "or create a new deck"
+              })}
+            </button>
           ) : (
             <>
               <div className="flex items-center gap-2">
@@ -544,6 +554,18 @@ export const FlashcardCreateDrawer: React.FC<
           <h3 className="text-sm font-medium text-text-muted mb-3">
             {t("option:flashcards.content", { defaultValue: "Content" })}
           </h3>
+
+          <Collapse ghost size="small" className="mb-3" defaultActiveKey={isClozeTemplate ? ["tips"] : undefined} key={isClozeTemplate ? "cloze-tips" : "default-tips"}>
+            <Collapse.Panel header={t("option:flashcards.writingTipsHeader", { defaultValue: "Tips for effective flashcards" })} key="tips">
+              <ul className="list-disc pl-4 text-xs text-text-muted space-y-1">
+                <li>{t("option:flashcards.writingTip1", { defaultValue: "Keep each card focused on one concept" })}</li>
+                <li>{t("option:flashcards.writingTip2", { defaultValue: "Use simple, clear language on the front" })}</li>
+                <li>{t("option:flashcards.writingTip3", { defaultValue: "Include context clues but avoid giving away the answer" })}</li>
+                <li>{t("option:flashcards.writingTip4", { defaultValue: "Use images or diagrams when they help understanding" })}</li>
+                <li>{t("option:flashcards.writingTip5", { defaultValue: "For cloze deletions, use {{syntax}} syntax", syntax: "{{c1::answer}}" })}</li>
+              </ul>
+            </Collapse.Panel>
+          </Collapse>
 
           {/* Front - required */}
           <Form.Item
