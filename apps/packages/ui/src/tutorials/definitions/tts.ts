@@ -29,7 +29,7 @@ const ttsBasics: TutorialDefinition = {
       placement: "bottom"
     },
     {
-      target: '[data-testid="tts-voice-picker"]',
+      target: '[data-testid^="tts-voice-picker-"]',
       titleKey: "tutorials:tts.basics.voiceTitle",
       titleFallback: "Pick a Voice",
       contentKey: "tutorials:tts.basics.voiceContent",

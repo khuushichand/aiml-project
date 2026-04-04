@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
+import { Link } from "react-router-dom"
 import { Alert, Button, Typography } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
@@ -326,7 +327,7 @@ export const SttPlaygroundPage: React.FC = () => {
         Transcription requires a configured STT engine on your tldw server.
       </p>
       <p className="text-[11px] text-text-subtle">
-        For combined TTS + STT workflows, try the <a href="/speech" className="underline">Speech Playground</a>.
+        For combined TTS + STT workflows, try the <Link to="/speech" className="underline">Speech Playground</Link>.
       </p>
       <div className="mt-1">
         <a

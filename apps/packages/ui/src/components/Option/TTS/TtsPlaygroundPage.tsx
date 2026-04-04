@@ -11,7 +11,7 @@ import {
   Select
 } from "antd"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   DEFAULT_TLDW_TTS_MODEL,
@@ -504,7 +504,7 @@ const TtsPlaygroundPage: React.FC = () => {
         )}
       </Text>
       <p className="text-[11px] text-text-subtle mt-1">
-        For combined TTS + STT workflows, try the <a href="/speech" className="underline">Speech Playground</a>.
+        For combined TTS + STT workflows, try the <Link to="/speech" className="underline">Speech Playground</Link>.
       </p>
       <div className="mt-1">
         <a
@@ -636,7 +636,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {ttsSettings?.ttsProvider === "elevenlabs" && elevenLabsData && (
-              <div className="flex flex-col gap-2" data-testid="tts-voice-picker">
+              <div className="flex flex-col gap-2" data-testid="tts-voice-picker-elevenlabs">
                 <Text type="secondary">
                   {t(
                     "playground:tts.voiceSelector.elevenLabs",
@@ -689,7 +689,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {isTldw && providerVoices.length > 0 && (
-              <div className="flex flex-col gap-2" data-testid="tts-voice-picker">
+              <div className="flex flex-col gap-2" data-testid="tts-voice-picker-tldw">
                 <Text type="secondary">
                   {t(
                     "playground:tts.voiceSelector.tldw",
@@ -756,7 +756,7 @@ const TtsPlaygroundPage: React.FC = () => {
             )}
 
             {ttsSettings?.ttsProvider === "openai" && (
-              <div className="flex flex-col gap-2" data-testid="tts-voice-picker">
+              <div className="flex flex-col gap-2" data-testid="tts-voice-picker-openai">
                 <Text type="secondary">
                   {t(
                     "playground:tts.voiceSelector.openai",

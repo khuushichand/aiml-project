@@ -749,7 +749,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 <span className="text-text">
                   TTS Voice
                 </span>
-                <a href="https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/" target="_blank" rel="noopener noreferrer" className="text-xs text-text-muted underline">Voice cloning setup guide</a>
+                <a href="https://github.com/rmusser01/tldw_server/tree/main/Docs/STT-TTS/" target="_blank" rel="noopener noreferrer" className="text-xs text-text-muted underline">Voice cloning setup guide</a>
               </div>
               <Select
                 id={ids.tldwVoice}
