@@ -18,12 +18,7 @@ import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Bot, Plus, Pencil, Trash2, Shield } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
-  return String(n);
-}
+import { formatTokens } from '@/lib/format';
 
 interface AgentConfig {
   id: number;
