@@ -15,12 +15,10 @@ type ManuscriptTreePanelProps = {
 type VersionedDataNode = DataNode & { version?: number; entityType?: "part" | "chapter" | "scene" }
 
 export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
-  const {
-    activeProjectId,
-    setActiveProjectId,
-    activeNodeId,
-    setActiveNodeId,
-  } = useWritingPlaygroundStore()
+  const activeProjectId = useWritingPlaygroundStore((s) => s.activeProjectId)
+  const setActiveProjectId = useWritingPlaygroundStore((s) => s.setActiveProjectId)
+  const activeNodeId = useWritingPlaygroundStore((s) => s.activeNodeId)
+  const setActiveNodeId = useWritingPlaygroundStore((s) => s.setActiveNodeId)
   const queryClient = useQueryClient()
 
   // Fetch project list
