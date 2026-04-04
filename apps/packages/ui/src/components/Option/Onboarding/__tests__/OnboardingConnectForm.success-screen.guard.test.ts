@@ -20,6 +20,7 @@ describe("OnboardingConnectForm success screen guards", () => {
     expect(source).toContain("handleOpenMediaFlow")
     expect(source).toContain("handleOpenChatFlow")
     expect(source).toContain("handleOpenSettingsFlow")
+    expect(source).toContain("handleOpenFamilyFlow")
   })
 
   it("includes provider and model selector on success screen", () => {

@@ -836,6 +836,10 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     await finishAndNavigate("/settings/tldw")
   }, [finishAndNavigate])
 
+  const handleOpenFamilyFlow = useCallback(async () => {
+    await finishAndNavigate("/settings/family-guardrails")
+  }, [finishAndNavigate])
+
   // Copy server command
   const handleCopyCommand = useCallback(
     (cmd: string) => {
@@ -956,7 +960,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
             <button
               type="button"
-              onClick={() => finishAndNavigate("/settings/family-guardrails")}
+              onClick={handleOpenFamilyFlow}
               className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
             >
               <Shield className="h-5 w-5 text-primary" />

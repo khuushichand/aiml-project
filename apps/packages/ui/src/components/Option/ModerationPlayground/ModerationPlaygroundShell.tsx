@@ -379,7 +379,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
               {tab.label}
               {tab.key === "policy" && showOnboarding && (
                 <span className="ml-1.5 rounded bg-blue-100 dark:bg-blue-900/40 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
-                  Start here
+                  {t("option:moderationPlayground.onboarding.startHereBadge", "Start here")}
                 </span>
               )}
             </button>
