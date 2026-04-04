@@ -30,6 +30,7 @@ import {
   type QuickIngestSessionRecord,
   useQuickIngestSessionStore,
 } from "@/store/quick-ingest-session"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 import type {
   DetectedMediaType,
   ItemProgress,
@@ -763,6 +764,22 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       runStartedAtRef.current = startedAt
     }
   }, [session.tracking])
+
+  // Track recently ingested document IDs for the DocumentPickerModal
+  const addRecentlyIngestedDocId = useQuickIngestStore(s => s.addRecentlyIngestedDocId)
+
+  useEffect(() => {
+    if (state.currentStep !== 5) return
+    for (const item of state.results) {
+      if (
+        item.status === "ok" &&
+        item.mediaId != null &&
+        ["pdf", "ebook", "document"].includes(item.type)
+      ) {
+        addRecentlyIngestedDocId(Number(item.mediaId))
+      }
+    }
+  }, [state.currentStep, state.results, addRecentlyIngestedDocId])
 
   useEffect(() => {
     if (!open || !state.isMinimized) return
