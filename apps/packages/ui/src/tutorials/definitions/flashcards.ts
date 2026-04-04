@@ -46,9 +46,9 @@ const flashcardsBasics: TutorialDefinition = {
     },
     {
       target: '[data-testid="flashcards-import-format"], [data-testid="flashcards-import-help-accordion"]',
-      titleKey: "tutorials:flashcards.basics.transferTitle",
+      titleKey: "tutorials:flashcards.basics.importExportTitle",
       titleFallback: "Import / Export Tab",
-      contentKey: "tutorials:flashcards.basics.transferContent",
+      contentKey: "tutorials:flashcards.basics.importExportContent",
       contentFallback:
         "Use Import / Export for CSV/JSON/APKG import and export workflows.",
       placement: "left"

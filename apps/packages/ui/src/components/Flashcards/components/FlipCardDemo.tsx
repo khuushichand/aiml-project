@@ -92,11 +92,13 @@ export const FlipCardDemo: React.FC = () => {
             size="small"
             icon={<ChevronLeft className="h-3.5 w-3.5" />}
             onClick={handlePrev}
+            aria-label="Previous card"
           />
           <Button
             size="small"
             icon={<RotateCcw className="h-3.5 w-3.5" />}
             onClick={handleFlip}
+            aria-label="Flip card"
           >
             Flip
           </Button>
@@ -104,6 +106,7 @@ export const FlipCardDemo: React.FC = () => {
             size="small"
             icon={<ChevronRight className="h-3.5 w-3.5" />}
             onClick={handleNext}
+            aria-label="Next card"
           />
         </Space>
       </div>
