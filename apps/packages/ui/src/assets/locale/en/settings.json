@@ -944,7 +944,8 @@
         "dictation": "Dictation",
         "liveVoice": "Live voice",
         "speechPlayground": "Speech Playground"
-      }
+      },
+      "noModelsAlert": "No STT models available on your server. Configure a transcription engine to enable speech-to-text."
     },
     "empty": {
       "connectTitle": "Connect tldw Assistant to your server",
