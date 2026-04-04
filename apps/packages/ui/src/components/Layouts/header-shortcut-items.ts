@@ -550,13 +550,7 @@ export const PERSONA_SHORTCUT_DEFAULTS: Record<
     "family-guardrails",
     "moderation-playground",
     "guardian",
-    "settings",
-    // required items (always force-included by coercion, listed here for clarity)
-    "workflows",
-    "acp-playground",
-    "integrations",
-    "scheduled-tasks",
-    "admin-integrations"
+    "settings"
   ],
   researcher: [
     "chat",

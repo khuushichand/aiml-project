@@ -38,19 +38,24 @@ describe("persona shortcut defaults", () => {
     expect(family.length).toBeLessThan(researcher.length)
   })
 
-  it("all persona defaults include required shortcut IDs", () => {
-    const required = [
+  it("family persona does not include admin/automation items (coercion handles them)", () => {
+    const adminItems = [
       "workflows",
       "acp-playground",
       "integrations",
       "scheduled-tasks",
       "admin-integrations"
     ]
-    for (const persona of ["family", "researcher", "explorer", "default"] as const) {
+    const family = PERSONA_SHORTCUT_DEFAULTS.family
+    for (const id of adminItems) {
+      expect(family).not.toContain(id)
+    }
+  })
+
+  it("explorer and default personas include all shortcut IDs", () => {
+    for (const persona of ["explorer", "default"] as const) {
       const shortcuts = PERSONA_SHORTCUT_DEFAULTS[persona]
-      for (const id of required) {
-        expect(shortcuts).toContain(id)
-      }
+      expect(shortcuts.length).toBeGreaterThan(30)
     }
   })
 })

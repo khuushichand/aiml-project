@@ -837,15 +837,14 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   }, [finishAndNavigate])
 
   const handleOpenChatFlow = useCallback(async () => {
-    await actions.setUserPersona("explorer")
-    // Explorer persona sees all features — no shortcut filtering needed
+    // Don't set persona — chat users stay in default mode (persona = null)
     try {
       await openSidepanelForActiveTab()
     } catch (err) {
       console.debug("[OnboardingConnectForm] Failed to open sidepanel", err)
     }
     await finishAndNavigate("/chat")
-  }, [actions, finishAndNavigate])
+  }, [finishAndNavigate])
 
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
