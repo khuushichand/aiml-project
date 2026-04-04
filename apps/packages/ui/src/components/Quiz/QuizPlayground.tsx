@@ -271,13 +271,15 @@ export const QuizPlayground: React.FC = () => {
             {t("common:search", { defaultValue: "Search" })}
           </Button>
         </div>
-        <Button
-          onClick={handleResetActiveTab}
-          size="small"
-          data-testid="quiz-reset-current-tab"
-        >
-          {t("option:quiz.resetCurrentTab", { defaultValue: "Reset Current Tab" })}
-        </Button>
+        {(totalQuizzes > 0 || totalAttempts > 0) && (
+          <Button
+            onClick={handleResetActiveTab}
+            size="small"
+            data-testid="quiz-reset-current-tab"
+          >
+            {t("option:quiz.resetCurrentTab", { defaultValue: "Reset Current Tab" })}
+          </Button>
+        )}
       </div>
       <div ref={tabsRef}>
         <Tabs
@@ -341,7 +343,7 @@ export const QuizPlayground: React.FC = () => {
             key: "generate",
             label: <span data-testid="quiz-tab-generate">{renderTabLabel(
               t("option:quiz.generate", { defaultValue: "Generate" }),
-              t("option:quiz.generateShort", { defaultValue: "Gen" }),
+              t("option:quiz.generateShort", { defaultValue: "Generate" }),
               <ThunderboltOutlined />
             )}</span>,
             children: (
@@ -359,7 +361,7 @@ export const QuizPlayground: React.FC = () => {
             key: "create",
             label: <span data-testid="quiz-tab-create">{renderTabLabel(
               t("option:quiz.create", { defaultValue: "Create" }),
-              t("option:quiz.createShort", { defaultValue: "Build" }),
+              t("option:quiz.createShort", { defaultValue: "Create" }),
               <EditOutlined />
             )}</span>,
             children: (
@@ -408,7 +410,7 @@ export const QuizPlayground: React.FC = () => {
             key: "results",
             label: <span data-testid="quiz-tab-results">{renderTabLabel(
               t("option:quiz.results", { defaultValue: "Results" }),
-              t("option:quiz.resultsShort", { defaultValue: "Stats" }),
+              t("option:quiz.resultsShort", { defaultValue: "Results" }),
               <BarChartOutlined />,
               totalAttempts
             )}</span>,
