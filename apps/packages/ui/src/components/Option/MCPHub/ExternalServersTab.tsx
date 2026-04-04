@@ -619,7 +619,13 @@ export const ExternalServersTab = ({
                 <label htmlFor="mcp-external-server-transport">
                   Transport{" "}
                   <Tooltip title="How to communicate with the server. Use 'stdio' for local processes, 'websocket' for remote servers.">
-                    <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)", cursor: "help" }} />
+                    <button
+                      type="button"
+                      aria-label="Transport help"
+                      style={{ border: 0, background: "transparent", padding: 0, cursor: "help", lineHeight: 1 }}
+                    >
+                      <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)" }} />
+                    </button>
                   </Tooltip>
                 </label>
                 <select
@@ -734,7 +740,13 @@ export const ExternalServersTab = ({
                         <label htmlFor="mcp-external-slot-secret-kind">
                           Secret Kind{" "}
                           <Tooltip title="The type of credential needed. 'bearer_token' for API keys, 'api_key' for simple keys, 'client_secret' for OAuth.">
-                            <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)", cursor: "help" }} />
+                            <button
+                              type="button"
+                              aria-label="Secret kind help"
+                              style={{ border: 0, background: "transparent", padding: 0, cursor: "help", lineHeight: 1 }}
+                            >
+                              <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)" }} />
+                            </button>
                           </Tooltip>
                         </label>
                         <select
