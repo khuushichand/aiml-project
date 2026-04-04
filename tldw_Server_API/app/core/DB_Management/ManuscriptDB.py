@@ -241,7 +241,7 @@ class ManuscriptDBHelper:
                 set_parts.append("settings_json = ?")
                 params.append(json.dumps(value))
             else:
-                set_parts.append(f"{key} = ?")
+                set_parts.append(f"{col} = ?")
                 params.append(value)
 
         set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
@@ -681,11 +681,15 @@ class ManuscriptDBHelper:
                 self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
 
     def get_all_scene_texts(self, project_id: str) -> list[str]:
-        """Get all scene plain texts for a project in one query."""
+        """Get all scene plain texts for a project in narrative order (single query)."""
         with self.db.transaction() as conn:
             cur = conn.execute(
-                "SELECT content_plain FROM manuscript_scenes "
-                "WHERE project_id = ? AND deleted = 0 ORDER BY sort_order",
+                "SELECT s.content_plain "
+                "FROM manuscript_scenes s "
+                "JOIN manuscript_chapters c ON c.id = s.chapter_id AND c.deleted = 0 "
+                "LEFT JOIN manuscript_parts p ON p.id = c.part_id AND p.deleted = 0 "
+                "WHERE s.project_id = ? AND s.deleted = 0 "
+                "ORDER BY COALESCE(p.sort_order, -1), c.sort_order, s.sort_order",
                 (project_id,),
             )
             return [row["content_plain"] for row in cur.fetchall() if row["content_plain"]]
