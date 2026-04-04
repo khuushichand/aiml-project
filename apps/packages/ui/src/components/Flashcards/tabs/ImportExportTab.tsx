@@ -1,4 +1,5 @@
 import React from "react"
+import { Link } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Alert,
@@ -1452,6 +1453,12 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                         : "This APKG may expand into many cards. Review selected file details before confirming."
                 })}
               </Text>
+              <Text type="secondary" className="block">
+                {t("option:flashcards.largeImportUndoHint", {
+                  defaultValue:
+                    "Large imports may take a moment to process. You'll have 30 seconds to undo after import completes."
+                })}
+              </Text>
               {importMode === "delimited" ? (
                 <Text type="secondary" className="block">
                   {t("option:flashcards.largeImportConfirmSummary", {
@@ -2316,6 +2323,12 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
         })}
         data-testid="flashcards-generate-text"
       />
+      <Typography.Text type="secondary" className="text-xs -mt-1">
+        {t("option:flashcards.generateQualityTip", {
+          defaultValue:
+            "Tip: Longer, more detailed source text produces higher quality flashcards. Aim for at least a paragraph."
+        })}
+      </Typography.Text>
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <Form.Item
           label={t("option:flashcards.generateNumCards", {
@@ -2451,7 +2464,26 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
           data-testid="flashcards-generate-focus-topics"
         />
       </Form.Item>
-      {generationError && <Alert type="error" showIcon title={generationError} />}
+      {generationError && (
+        <Alert
+          type="error"
+          showIcon
+          title={generationError}
+          description={
+            <span className="text-xs">
+              {t("option:flashcards.generateProviderKeyHint", {
+                defaultValue: "If this is a provider or API key issue, "
+              })}
+              <Link to="/settings/provider-keys" className="text-primary hover:text-primaryStrong underline">
+                {t("option:flashcards.generateProviderKeyLink", {
+                  defaultValue: "configure provider keys in Settings"
+                })}
+              </Link>
+              .
+            </span>
+          }
+        />
+      )}
       <Tooltip
         title={
           !hasLlmProviders

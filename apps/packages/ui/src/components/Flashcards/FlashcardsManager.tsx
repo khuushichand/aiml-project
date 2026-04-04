@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 import { useLocation, useNavigate } from "react-router-dom"
 import { ReviewTab, ManageTab, ImportExportTab, SchedulerTab } from "./tabs"
 import { KeyboardShortcutsModal } from "./components"
+import { useDecksQuery } from "./hooks"
 import type { Flashcard } from "@/services/flashcards"
 import { parseFlashcardsGenerateIntentFromLocation } from "@/services/tldw/flashcards-generate-handoff"
 import { parseStudyPackIntentFromLocation } from "@/services/tldw/study-pack-handoff"
@@ -40,10 +41,10 @@ const parseInitialFlashcardsTab = (locationLike: { search?: string; hash?: strin
  * FlashcardsManager contains all the tabs and core flashcard logic.
  * Connection state is handled by FlashcardsWorkspace.
  *
- * Structure: Study | Manage | Transfer
+ * Structure: Study | Manage | Import / Export
  * - Study: Spaced repetition review and cram loops
  * - Manage: Browse, filter, create, edit, bulk operations
- * - Transfer: CSV/APKG import and export workflows
+ * - Import / Export: CSV/APKG import and export workflows
  * - Scheduler: Deck-level scheduler policy editing and queue visibility
  */
 export const FlashcardsManager: React.FC = () => {
@@ -66,6 +67,16 @@ export const FlashcardsManager: React.FC = () => {
   const [activeTab, setActiveTab] = React.useState<string>(() =>
     currentTab ?? (currentGenerateIntent || currentStudyPackIntent ? "importExport" : "review")
   )
+  const { data: initialDecks } = useDecksQuery()
+  const hasCheckedInitialTab = React.useRef(false)
+  React.useEffect(() => {
+    if (!hasCheckedInitialTab.current && initialDecks !== undefined && !currentTab) {
+      hasCheckedInitialTab.current = true
+      if (initialDecks.length === 0) {
+        setActiveTab("importExport")
+      }
+    }
+  }, [initialDecks, currentTab])
   const [reviewDeckId, setReviewDeckId] = React.useState<number | null | undefined>(
     currentStudyIntent?.deckId ?? undefined
   )
@@ -223,7 +234,7 @@ export const FlashcardsManager: React.FC = () => {
             key: "importExport",
             label: (
               <span className="inline-flex items-center gap-1.5">
-                {t("option:flashcards.tabTransfer", { defaultValue: "Transfer" })}
+                {t("option:flashcards.tabTransfer", { defaultValue: "Import / Export" })}
                 <Tooltip title={t("option:flashcards.llmBadgeTooltip", {
                   defaultValue: "Some features in this tab require an LLM provider"
                 })}>
@@ -240,19 +251,24 @@ export const FlashcardsManager: React.FC = () => {
               />
             )
           },
-          {
-            key: "scheduler",
-            label: t("option:flashcards.tabScheduler", {
-              defaultValue: "Scheduler"
-            }),
-            children: (
-              <SchedulerTab
-                isActive={activeTab === "scheduler"}
-                onDirtyChange={setSchedulerDirty}
-                discardSignal={schedulerDiscardSignal}
-              />
-            )
-          }
+          // Hide Scheduler tab when there are zero decks
+          ...(initialDecks !== undefined && initialDecks.length === 0
+            ? []
+            : [
+                {
+                  key: "scheduler",
+                  label: t("option:flashcards.tabScheduler", {
+                    defaultValue: "Scheduler"
+                  }),
+                  children: (
+                    <SchedulerTab
+                      isActive={activeTab === "scheduler"}
+                      onDirtyChange={setSchedulerDirty}
+                      discardSignal={schedulerDiscardSignal}
+                    />
+                  )
+                }
+              ])
         ]}
       />
 

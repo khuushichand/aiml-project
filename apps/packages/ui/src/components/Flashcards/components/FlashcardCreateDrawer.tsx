@@ -382,43 +382,55 @@ export const FlashcardCreateDrawer: React.FC<
             {t("option:flashcards.organization", { defaultValue: "Organization" })}
           </h3>
           {!showInlineCreate ? (
-            <Form.Item
-              name="deck_id"
-              label={t("option:flashcards.deck", { defaultValue: "Deck" })}
-              className="!mb-0"
-            >
-              <Select
-                placeholder={t("option:flashcards.selectDeck", {
-                  defaultValue: "Select deck"
+            <>
+              <Form.Item
+                name="deck_id"
+                label={t("option:flashcards.deck", { defaultValue: "Deck" })}
+                className="!mb-0"
+              >
+                <Select
+                  placeholder={t("option:flashcards.selectDeck", {
+                    defaultValue: "Select deck"
+                  })}
+                  allowClear
+                  loading={decksLoading}
+                  className="w-full"
+                  options={decks.map((d) => ({
+                    label: formatDeckDisplayName(d, `Deck ${d.id}`),
+                    value: d.id
+                  }))}
+                  popupRender={(menu) => (
+                    <>
+                      {menu}
+                      <Divider className="!my-2" />
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-primary hover:bg-primary/5 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          setShowInlineCreate(true)
+                        }}
+                      >
+                        <Plus className="size-4" />
+                        {t("option:flashcards.createNewDeck", {
+                          defaultValue: "Create new deck"
+                        })}
+                      </button>
+                    </>
+                  )}
+                />
+              </Form.Item>
+              <button
+                type="button"
+                className="text-xs text-primary hover:text-primaryStrong -mt-2 mb-2 block"
+                onClick={() => setShowInlineCreate(true)}
+                data-testid="flashcards-create-new-deck-link"
+              >
+                {t("option:flashcards.orCreateNewDeck", {
+                  defaultValue: "or create a new deck"
                 })}
-                allowClear
-                loading={decksLoading}
-                className="w-full"
-                options={decks.map((d) => ({
-                  label: formatDeckDisplayName(d, `Deck ${d.id}`),
-                  value: d.id
-                }))}
-                popupRender={(menu) => (
-                  <>
-                    {menu}
-                    <Divider className="!my-2" />
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-primary hover:bg-primary/5 flex items-center gap-2"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        setShowInlineCreate(true)
-                      }}
-                    >
-                      <Plus className="size-4" />
-                      {t("option:flashcards.createNewDeck", {
-                        defaultValue: "Create new deck"
-                      })}
-                    </button>
-                  </>
-                )}
-              />
-            </Form.Item>
+              </button>
+            </>
           ) : (
             <>
               <div className="flex items-center gap-2">
@@ -544,6 +556,31 @@ export const FlashcardCreateDrawer: React.FC<
           <h3 className="text-sm font-medium text-text-muted mb-3">
             {t("option:flashcards.content", { defaultValue: "Content" })}
           </h3>
+
+          <Collapse
+            ghost
+            size="small"
+            className="mb-3"
+            defaultActiveKey={isClozeTemplate ? ["tips"] : undefined}
+            key={isClozeTemplate ? "cloze-tips" : "default-tips"}
+            items={[
+              {
+                key: "tips",
+                label: t("option:flashcards.writingTipsHeader", {
+                  defaultValue: "Tips for effective flashcards"
+                }),
+                children: (
+                  <ul className="list-disc pl-4 text-xs text-text-muted space-y-1">
+                    <li>{t("option:flashcards.writingTip1", { defaultValue: "Keep each card focused on one concept" })}</li>
+                    <li>{t("option:flashcards.writingTip2", { defaultValue: "Use simple, clear language on the front" })}</li>
+                    <li>{t("option:flashcards.writingTip3", { defaultValue: "Include context clues but avoid giving away the answer" })}</li>
+                    <li>{t("option:flashcards.writingTip4", { defaultValue: "Use images or diagrams when they help understanding" })}</li>
+                    <li>{t("option:flashcards.writingTip5", { defaultValue: "For cloze deletions, use {{syntax}} syntax", syntax: "{{c1::answer}}" })}</li>
+                  </ul>
+                )
+              }
+            ]}
+          />
 
           {/* Front - required */}
           <Form.Item

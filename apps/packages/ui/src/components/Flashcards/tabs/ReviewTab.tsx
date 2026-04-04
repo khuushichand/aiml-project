@@ -59,6 +59,7 @@ import {
 } from "../utils/error-taxonomy"
 import type { StudyAssistantRespondRequest } from "@/services/flashcards"
 import { trackFlashcardsErrorRecoveryTelemetry } from "@/utils/flashcards-error-recovery-telemetry"
+import { FeatureHint } from "@/components/Common/FeatureHint"
 import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
 
 dayjs.extend(relativeTime)
@@ -1014,19 +1015,32 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
               </div>
             )}
 
-            <FlashcardStudyAssistantPanel
-              cardUuid={activeCard.uuid}
-              threadVersion={assistantQuery.data?.thread.version ?? null}
-              messages={assistantQuery.data?.messages ?? []}
-              availableActions={assistantQuery.data?.available_actions ?? null}
-              assistantContext={assistantQuery.data}
-              isLoading={assistantQuery.isLoading}
-              isError={assistantQuery.isError}
-              queryError={assistantQuery.error}
-              isResponding={assistantRespondMutation.isPending}
-              onReloadContext={() => assistantQuery.refetch()}
-              onRespond={handleAssistantRespond}
-            />
+            <div className="relative">
+              <FlashcardStudyAssistantPanel
+                cardUuid={activeCard.uuid}
+                threadVersion={assistantQuery.data?.thread.version ?? null}
+                messages={assistantQuery.data?.messages ?? []}
+                availableActions={assistantQuery.data?.available_actions ?? null}
+                assistantContext={assistantQuery.data}
+                isLoading={assistantQuery.isLoading}
+                isError={assistantQuery.isError}
+                queryError={assistantQuery.error}
+                isResponding={assistantRespondMutation.isPending}
+                onReloadContext={() => assistantQuery.refetch()}
+                onRespond={handleAssistantRespond}
+              />
+              <FeatureHint
+                featureKey="flashcards_study_assistant_discovery"
+                title={t("option:flashcards.studyAssistantHintTitle", {
+                  defaultValue: "Study assistant"
+                })}
+                description={t("option:flashcards.studyAssistantHintDescription", {
+                  defaultValue:
+                    "Need help understanding a card? Ask the study assistant."
+                })}
+                position="top"
+              />
+            </div>
 
             <div className="mt-2 flex flex-col gap-3">
               {!showAnswer ? (
@@ -1399,7 +1413,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                   <Text type="secondary">
                     {t("option:flashcards.noCardsDescription", {
                       defaultValue:
-                        "Create your first flashcard to start studying."
+                        "Get started by creating cards, importing a deck, or generating flashcards from your content."
                     })}
                   </Text>
                   <Space>
