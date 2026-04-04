@@ -1025,7 +1025,7 @@ export const PlaygroundChat = ({
               <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
                 <p className="font-medium">{t("playground:noModelsAvailable", "No AI models available")}</p>
                 <p className="mt-1 text-xs text-text-muted">
-                  {t("playground:addApiKeyInstructions", "Add an LLM provider API key to your server's .env file and restart, then")}{" "}
+                  {t("playground:addApiKeyInstructions", "Add an LLM provider API key in your server settings and restart, then")}{" "}
                   <button
                     type="button"
                     className="underline hover:text-text"

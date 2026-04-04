@@ -342,8 +342,12 @@ export const QuizPlayground: React.FC = () => {
           {
             key: "generate",
             label: <span data-testid="quiz-tab-generate">{renderTabLabel(
-              t("option:quiz.generate", { defaultValue: "Generate" }),
-              t("option:quiz.generateShort", { defaultValue: "Generate" }),
+              quizCounts !== undefined && totalQuizzes === 0
+                ? t("option:quiz.generateStartHere", { defaultValue: "Generate \u2190 Start here" })
+                : t("option:quiz.generate", { defaultValue: "Generate" }),
+              quizCounts !== undefined && totalQuizzes === 0
+                ? t("option:quiz.generateStartHereShort", { defaultValue: "Gen \u2190" })
+                : t("option:quiz.generateShort", { defaultValue: "Gen" }),
               <ThunderboltOutlined />
             )}</span>,
             children: (

@@ -9,6 +9,10 @@ import {
   useSubmitAttemptMutation
 } from "../../hooks"
 
+vi.mock("react-router-dom", () => ({
+  Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>
+}))
+
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
     const value = values?.[key]
