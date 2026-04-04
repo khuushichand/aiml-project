@@ -1,5 +1,5 @@
 import { useRef, useState } from "react"
-import { Tabs, Typography } from "antd"
+import { Alert, Tabs, Typography } from "antd"
 
 import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
 import { CapabilityMappingsTab } from "./CapabilityMappingsTab"
@@ -19,8 +19,13 @@ import type {
   McpHubGovernanceAuditTabKey
 } from "@/services/tldw/mcp-hub"
 
+const EXPLAINER_DISMISSED_KEY = "tldw_mcp_hub_explainer_dismissed"
+
 export const McpHubPage = () => {
-  const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("profiles")
+  const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("tool-catalogs")
+  const [explainerDismissed, setExplainerDismissed] = useState(
+    () => localStorage.getItem(EXPLAINER_DISMISSED_KEY) === "true"
+  )
   const [drillTarget, setDrillTarget] = useState<McpHubDrillTarget | null>(null)
   const requestIdRef = useRef(0)
 
@@ -52,12 +57,32 @@ export const McpHubPage = () => {
     setDrillTarget((current) => (current?.request_id === requestId ? null : current))
   }
 
+  const handleExplainerClose = () => {
+    setExplainerDismissed(true)
+    localStorage.setItem(EXPLAINER_DISMISSED_KEY, "true")
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 p-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 p-4" data-testid="mcp-hub-shell">
       <Typography.Title level={3} style={{ margin: 0 }}>
         MCP Hub
       </Typography.Title>
+      <Typography.Text type="secondary">
+        Manage external tool servers and governance policies for the Model Context Protocol (MCP).
+      </Typography.Text>
+      {!explainerDismissed && (
+        <Alert
+          data-testid="mcp-hub-explainer"
+          type="info"
+          showIcon
+          closable
+          onClose={handleExplainerClose}
+          title="Getting Started with MCP Hub"
+          description="MCP Hub lets you connect external tool servers, manage permissions, and govern how AI models interact with outside services. Start by browsing the Tool Catalog to discover available tools, then set up Profiles and Credentials to configure access."
+        />
+      )}
       <Tabs
+        data-testid="mcp-hub-tabs"
         activeKey={activeTab}
         onChange={(activeKey) =>
           setActiveTab(activeKey as McpHubGovernanceAuditTabKey)
