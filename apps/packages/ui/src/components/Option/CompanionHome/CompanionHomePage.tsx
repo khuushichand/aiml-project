@@ -1,7 +1,8 @@
-import React from "react"
+import React, { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useMilestoneStore } from "@/store/milestones"
 import {
   type CompanionHomeSnapshot,
   type CompanionHomeSurface
@@ -43,6 +44,16 @@ export function CompanionHomePage({
 }: CompanionHomePageProps) {
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const [customizeOpen, setCustomizeOpen] = React.useState(false)
+
+  // Bootstrap milestones from existing usage evidence for returning users
+  const bootstrapMilestones = useMilestoneStore((s) => s.bootstrapFromExistingUsage)
+  const milestoneBootstrapped = useRef(false)
+  useEffect(() => {
+    if (!milestoneBootstrapped.current) {
+      milestoneBootstrapped.current = true
+      bootstrapMilestones()
+    }
+  }, [bootstrapMilestones])
 
   const hasPersonalization = Boolean(capabilities?.hasPersonalization)
   const { layout, updateLayout } = useCompanionHomeLayout(surface)

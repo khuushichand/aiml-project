@@ -18,9 +18,11 @@ export type UseMissionCardsResult = {
 export function useMissionCards(): UseMissionCardsResult {
   const userPersona = useConnectionStore((s) => s.state.userPersona)
   const completedMilestones = useMilestoneStore((s) => s.completedMilestones)
-  const isMilestoneCompleted = useMilestoneStore((s) => s.isMilestoneCompleted)
 
   return useMemo(() => {
+    // Use completedMilestones directly instead of isMilestoneCompleted
+    const isCompleted = (id: MilestoneId) => completedMilestones[id] != null
+
     // 1. Filter by persona
     const personaCards = MISSION_CARDS.filter((card) => {
       if (card.persona === "all") return true
@@ -29,13 +31,13 @@ export function useMissionCards(): UseMissionCardsResult {
 
     // 2. Filter by prerequisite milestones (all must be completed)
     const availableCards = personaCards.filter((card) =>
-      card.prerequisiteMilestones.every((m) => isMilestoneCompleted(m))
+      card.prerequisiteMilestones.every((m) => isCompleted(m))
     )
 
     // 3. Resolve completion status
     const resolved: ResolvedMissionCard[] = availableCards.map((card) => ({
       ...card,
-      isCompleted: card.linkedMilestone ? isMilestoneCompleted(card.linkedMilestone) : false
+      isCompleted: card.linkedMilestone ? isCompleted(card.linkedMilestone) : false
     }))
 
     // 4. Sort by priority
@@ -58,5 +60,5 @@ export function useMissionCards(): UseMissionCardsResult {
       totalCount,
       allComplete: completedCount === totalCount && totalCount > 0
     }
-  }, [userPersona, completedMilestones, isMilestoneCompleted])
+  }, [userPersona, completedMilestones])
 }

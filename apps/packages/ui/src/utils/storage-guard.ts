@@ -1,7 +1,6 @@
 import { estimateLocalStorageUsageBytes, estimateUtf8ByteLength, resolveStorageBudgetBytes } from "./storage-budget"
 import { STORAGE_QUOTA_REFRESH_EVENT } from "@/store/storage-quota-events"
 
-const WORKSPACE_KEY_PREFIX = "tldw-workspace"
 const EXCEEDED_THRESHOLD = 0.95
 
 export type StorageGuardResult = {
@@ -17,10 +16,10 @@ export type StorageGuardResult = {
  */
 export function checkStorageBeforeWrite(estimatedBytes: number): StorageGuardResult {
   try {
-    const usedBytes = estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_KEY_PREFIX)
-    const budgetBytes = resolveStorageBudgetBytes()
-    const currentRatio = budgetBytes > 0 ? usedBytes / budgetBytes : 0
-    const wouldExceed = (usedBytes + estimatedBytes) >= budgetBytes * EXCEEDED_THRESHOLD
+    const totalUsedBytes = estimateLocalStorageUsageBytes(window.localStorage) // no prefix = all keys
+    const browserLimit = 5 * 1024 * 1024 // ~5MB browser localStorage limit
+    const currentRatio = browserLimit > 0 ? totalUsedBytes / browserLimit : 0
+    const wouldExceed = (totalUsedBytes + estimatedBytes) >= browserLimit * EXCEEDED_THRESHOLD
 
     let recommendation: string | null = null
     if (wouldExceed) {

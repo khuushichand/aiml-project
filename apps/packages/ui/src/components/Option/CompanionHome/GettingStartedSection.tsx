@@ -1,9 +1,11 @@
 import { Card } from "antd"
 import { CheckCircle2 } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { Link } from "react-router-dom"
 import { useMissionCards } from "./hooks/useMissionCards"
 
 export function GettingStartedSection() {
+  const { t } = useTranslation()
   const { gettingStartedCards, completedCount, totalCount, allComplete } = useMissionCards()
 
   // Auto-hide when all milestones complete
@@ -12,9 +14,9 @@ export function GettingStartedSection() {
   return (
     <div data-testid="getting-started-section" className="mb-6">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-medium text-text m-0">Getting Started</h3>
+        <h3 className="text-lg font-medium text-text m-0">{t("companionHome.gettingStarted.title", "Getting Started")}</h3>
         <span className="text-sm text-text-subtle">
-          {completedCount} of {totalCount} complete
+          {t("companionHome.gettingStarted.progress", "{{completed}} of {{total}} complete", { completed: completedCount, total: totalCount })}
         </span>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">

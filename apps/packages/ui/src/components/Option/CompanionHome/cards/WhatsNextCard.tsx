@@ -1,9 +1,11 @@
 import { Card, Button } from "antd"
 import { ArrowRight } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { Link } from "react-router-dom"
 import { useMissionCards } from "../hooks/useMissionCards"
 
 export function WhatsNextCard() {
+  const { t } = useTranslation()
   const { whatsNextCard, allComplete } = useMissionCards()
 
   if (allComplete || !whatsNextCard) return null
@@ -20,7 +22,7 @@ export function WhatsNextCard() {
         <Icon size={24} className="text-primary flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm text-text">
-            What's next: {whatsNextCard.title}
+            {t("companionHome.whatsNext.prefix", "What's next:")} {whatsNextCard.title}
           </div>
           <div className="text-xs text-text-subtle mt-0.5">
             {whatsNextCard.description}
@@ -28,7 +30,7 @@ export function WhatsNextCard() {
         </div>
         <Link to={whatsNextCard.href}>
           <Button type="primary" size="small" icon={<ArrowRight size={14} />}>
-            Go
+            {t("common:go", "Go")}
           </Button>
         </Link>
       </div>

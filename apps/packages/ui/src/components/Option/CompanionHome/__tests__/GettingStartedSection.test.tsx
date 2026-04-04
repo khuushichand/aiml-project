@@ -3,6 +3,16 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string, fallbackOrOpts?: string | Record<string, unknown>, opts?: Record<string, unknown>) => {
+      const template = typeof fallbackOrOpts === "string" ? fallbackOrOpts : key
+      const vars = opts ?? (typeof fallbackOrOpts === "object" ? fallbackOrOpts : {})
+      return template.replace(/\{\{(\w+)\}\}/g, (_, k) => String((vars as Record<string, unknown>)[k] ?? k))
+    }
+  })
+}))
+
 const mockMissionCards = {
   gettingStartedCards: [] as any[],
   whatsNextCard: null as any,

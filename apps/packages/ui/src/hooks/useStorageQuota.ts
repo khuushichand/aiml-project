@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { estimateLocalStorageUsageBytes, resolveStorageBudgetBytes } from "@/utils/storage-budget"
 import { STORAGE_QUOTA_REFRESH_EVENT } from "@/store/storage-quota-events"
-import { WORKSPACE_STORAGE_QUOTA_EVENT } from "@/store/workspace-events"
+import { WORKSPACE_STORAGE_QUOTA_EVENT, WORKSPACE_STORAGE_KEY } from "@/store/workspace-events"
 
 export type StorageQuotaLevel = "ok" | "warning" | "exceeded"
 
@@ -16,8 +16,6 @@ export type StorageQuotaState = {
 }
 
 /** Workspace localStorage key prefix — the 5MB budget applies to these keys only. */
-const WORKSPACE_KEY_PREFIX = "tldw-workspace"
-
 const THRESHOLDS = {
   warning: 0.80,
   exceeded: 0.95
@@ -33,7 +31,7 @@ export function useStorageQuota(): StorageQuotaState {
   const budgetBytes = useMemo(() => resolveStorageBudgetBytes(), [])
   const [usedBytes, setUsedBytes] = useState(() => {
     try {
-      return estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_KEY_PREFIX)
+      return estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_STORAGE_KEY)
     } catch {
       return 0
     }
@@ -41,7 +39,7 @@ export function useStorageQuota(): StorageQuotaState {
 
   const refresh = useCallback(() => {
     try {
-      setUsedBytes(estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_KEY_PREFIX))
+      setUsedBytes(estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_STORAGE_KEY))
     } catch { /* ignore */ }
   }, [])
 
