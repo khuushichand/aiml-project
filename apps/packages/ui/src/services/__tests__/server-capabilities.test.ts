@@ -178,6 +178,50 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasIngestionSources).toBe(true)
   })
 
+  it("detects web clipper capability from the advertised web clipper routes", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "web-clipper-version" },
+      paths: {
+        "/api/v1/web-clipper/save": {},
+        "/api/v1/web-clipper/{clip_id}": {},
+        "/api/v1/web-clipper/{clip_id}/enrichments": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasWebClipper).toBe(true)
+  })
+
+  it("requires the clipper save route before enabling web clipper capability", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "web-clipper-read-only-version" },
+      paths: {
+        "/api/v1/web-clipper/{clip_id}": {},
+        "/api/v1/web-clipper/{clip_id}/enrichments": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasWebClipper).toBe(false)
+  })
+
+  it("does not infer web clipper capability from fallback discovery alone", async () => {
+    mocks.getOpenAPISpec.mockRejectedValue(new Error("openapi unavailable"))
+    mocks.bgRequest.mockRejectedValue(new Error("docs-info unavailable"))
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasWebClipper).toBe(false)
+    expect(capabilities.specSource).toBe("fallback")
+  })
+
   it("keeps ingestion source capability available through the bundled fallback spec", async () => {
     mocks.getOpenAPISpec.mockRejectedValue(new Error("openapi unavailable"))
     mocks.bgRequest.mockRejectedValue(new Error("docs-info unavailable"))
@@ -382,6 +426,31 @@ describe("server capabilities docs-info merge", () => {
 
     expect(mocks.getOpenAPISpec).toHaveBeenCalledTimes(1)
     expect(capabilities.hasVoiceConversationTransport).toBe(true)
+    expect(capabilities.specSource).toBe("authoritative")
+  })
+
+  it("does not reuse persisted V2 capability payloads after the cache contract changes", async () => {
+    cacheState.values.set("__tldwServerCapabilitiesCacheV2", {
+      key: "http://127.0.0.1:8000::single-user",
+      fetchedAt: Date.now(),
+      capabilities: {
+        hasChat: true
+      }
+    })
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "web-clipper-cache-v3" },
+      paths: {
+        "/api/v1/web-clipper/save": {},
+        "/api/v1/web-clipper/{clip_id}": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(mocks.getOpenAPISpec).toHaveBeenCalledTimes(1)
+    expect(capabilities.hasWebClipper).toBe(true)
     expect(capabilities.specSource).toBe("authoritative")
   })
 

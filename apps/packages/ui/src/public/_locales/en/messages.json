@@ -68,6 +68,21 @@
   "contextSaveToNotes": {
     "message": "Save to Notes"
   },
+  "contextSaveToClipper": {
+    "message": "Save to Clipper"
+  },
+  "contextSaveToClipperNoSelection": {
+    "message": "Select text first to save to Clipper."
+  },
+  "contextSaveToClipperOpeningSidebar": {
+    "message": "Opening sidebar to save clip..."
+  },
+  "contextSaveToClipperDeliveryFailed": {
+    "message": "Could not open the sidebar to save this clip. Check that the tldw Assistant sidebar is allowed on this site and try again."
+  },
+  "contextSaveToClipperRestrictedPage": {
+    "message": "This page is restricted, so the clipper cannot capture it."
+  },
   "contextSaveToCompanion": {
     "message": "Save to Companion"
   },
