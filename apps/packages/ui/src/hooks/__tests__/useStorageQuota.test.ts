@@ -53,24 +53,16 @@ describe("StorageQuotaLevel resolution", () => {
     expect(resolveLevel(0)).toBe("ok")
   })
 
-  it("returns ok below 70%", () => {
-    expect(resolveLevel(0.69)).toBe("ok")
+  it("returns ok below 80%", () => {
+    expect(resolveLevel(0.79)).toBe("ok")
   })
 
-  it("returns warning at 70%", () => {
-    expect(resolveLevel(0.70)).toBe("warning")
+  it("returns warning at 80%", () => {
+    expect(resolveLevel(0.80)).toBe("warning")
   })
 
-  it("returns warning between 70% and 85%", () => {
-    expect(resolveLevel(0.75)).toBe("warning")
-  })
-
-  it("returns critical at 85%", () => {
-    expect(resolveLevel(0.85)).toBe("critical")
-  })
-
-  it("returns critical between 85% and 95%", () => {
-    expect(resolveLevel(0.90)).toBe("critical")
+  it("returns warning between 80% and 95%", () => {
+    expect(resolveLevel(0.90)).toBe("warning")
   })
 
   it("returns exceeded at 95%", () => {

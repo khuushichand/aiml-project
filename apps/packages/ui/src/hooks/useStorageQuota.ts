@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { estimateLocalStorageUsageBytes, resolveStorageBudgetBytes } from "@/utils/storage-budget"
 import { STORAGE_QUOTA_REFRESH_EVENT } from "@/store/storage-quota-events"
+import { WORKSPACE_STORAGE_QUOTA_EVENT } from "@/store/workspace-events"
 
-export type StorageQuotaLevel = "ok" | "warning" | "critical" | "exceeded"
+export type StorageQuotaLevel = "ok" | "warning" | "exceeded"
 
 export type StorageQuotaState = {
   usedBytes: number
@@ -14,15 +15,16 @@ export type StorageQuotaState = {
   refresh: () => void
 }
 
+/** Workspace localStorage key prefix — the 5MB budget applies to these keys only. */
+const WORKSPACE_KEY_PREFIX = "tldw-workspace"
+
 const THRESHOLDS = {
-  warning: 0.70,
-  critical: 0.85,
+  warning: 0.80,
   exceeded: 0.95
 }
 
 export const resolveLevel = (ratio: number): StorageQuotaLevel => {
   if (ratio >= THRESHOLDS.exceeded) return "exceeded"
-  if (ratio >= THRESHOLDS.critical) return "critical"
   if (ratio >= THRESHOLDS.warning) return "warning"
   return "ok"
 }
@@ -31,7 +33,7 @@ export function useStorageQuota(): StorageQuotaState {
   const budgetBytes = useMemo(() => resolveStorageBudgetBytes(), [])
   const [usedBytes, setUsedBytes] = useState(() => {
     try {
-      return estimateLocalStorageUsageBytes(window.localStorage)
+      return estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_KEY_PREFIX)
     } catch {
       return 0
     }
@@ -39,7 +41,7 @@ export function useStorageQuota(): StorageQuotaState {
 
   const refresh = useCallback(() => {
     try {
-      setUsedBytes(estimateLocalStorageUsageBytes(window.localStorage))
+      setUsedBytes(estimateLocalStorageUsageBytes(window.localStorage, WORKSPACE_KEY_PREFIX))
     } catch { /* ignore */ }
   }, [])
 
@@ -50,12 +52,12 @@ export function useStorageQuota(): StorageQuotaState {
 
     window.addEventListener("storage", handleStorage)
     window.addEventListener(STORAGE_QUOTA_REFRESH_EVENT, handleRefresh)
-    window.addEventListener("tldw:workspace:storage-quota", handleRefresh) // existing workspace event
+    window.addEventListener(WORKSPACE_STORAGE_QUOTA_EVENT, handleRefresh)
 
     return () => {
       window.removeEventListener("storage", handleStorage)
       window.removeEventListener(STORAGE_QUOTA_REFRESH_EVENT, handleRefresh)
-      window.removeEventListener("tldw:workspace:storage-quota", handleRefresh)
+      window.removeEventListener(WORKSPACE_STORAGE_QUOTA_EVENT, handleRefresh)
     }
   }, [refresh])
 
