@@ -48,6 +48,9 @@ import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { cn } from "@/libs/utils"
+import { setSetting } from "@/services/settings/registry"
+import { HEADER_SHORTCUT_SELECTION_SETTING } from "@/services/settings/ui-settings"
+import { getDefaultShortcutsForPersona } from "@/components/Layouts/header-shortcut-items"
 import { isExtensionRuntime } from "@/utils/browser-runtime"
 import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-registry"
 import {
@@ -819,29 +822,37 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   )
 
   const handleOpenIngestFlow = useCallback(async () => {
+    await actions.setUserPersona("researcher")
+    const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
+    await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
     await finishAndNavigate("/media", { openQuickIngestIntro: true })
-  }, [finishAndNavigate])
+  }, [actions, finishAndNavigate])
 
   const handleOpenMediaFlow = useCallback(async () => {
     await finishAndNavigate("/media")
   }, [finishAndNavigate])
 
   const handleOpenChatFlow = useCallback(async () => {
+    await actions.setUserPersona("explorer")
+    // Explorer persona sees all features — no shortcut filtering needed
     try {
       await openSidepanelForActiveTab()
     } catch (err) {
       console.debug("[OnboardingConnectForm] Failed to open sidepanel", err)
     }
     await finishAndNavigate("/chat")
-  }, [finishAndNavigate])
+  }, [actions, finishAndNavigate])
 
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
   }, [finishAndNavigate])
 
   const handleOpenFamilyFlow = useCallback(async () => {
+    await actions.setUserPersona("family")
+    const familyShortcuts = getDefaultShortcutsForPersona("family")
+    await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, familyShortcuts)
     await finishAndNavigate("/settings/family-guardrails")
-  }, [finishAndNavigate])
+  }, [actions, finishAndNavigate])
 
   // Copy server command
   const handleCopyCommand = useCallback(
