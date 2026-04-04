@@ -8,6 +8,7 @@ import {
   BrainCircuitIcon,
   ClipboardList,
   CombineIcon,
+  Eye,
   FlaskConical,
   ImageIcon,
   InfoIcon,
@@ -20,6 +21,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Users,
 } from "lucide-react"
 
 export type NavGroupKey = "server" | "knowledge" | "workspace" | "about"
@@ -208,16 +210,14 @@ export const SETTINGS_ROUTE_NAV_ITEMS: SettingsNavRouteMeta[] = [
     path: "/settings/family-guardrails",
     group: "server",
     labelToken: "settings:familyGuardrailsWizardNav",
-    icon: ShieldCheck,
-    order: 8,
-    beta: true
+    icon: Users,
+    order: 8
   },
   {
     path: "/settings/guardian",
     group: "server",
     labelToken: "settings:guardianNav",
-    icon: ShieldCheck,
-    order: 9,
-    beta: true
+    icon: Eye,
+    order: 9
   }
 ]

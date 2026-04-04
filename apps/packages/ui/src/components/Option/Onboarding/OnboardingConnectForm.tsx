@@ -18,6 +18,9 @@ import {
   Sparkles,
   ArrowRight,
   RefreshCw,
+  MessageSquare,
+  Shield,
+  BookOpen,
 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
@@ -929,6 +932,56 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                   "Follow this sequence to complete your first-value loop: ingest -> verify -> ask."
                 )}
           </p>
+        </div>
+
+        {/* Intent selector — route to persona-appropriate next step */}
+        <div data-testid="intent-selector" className="mb-6">
+          <p className="mb-3 text-sm font-medium text-text-muted">
+            {t("settings:onboarding.success.intentTitle", "What would you like to do first?")}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={handleOpenChatFlow}
+              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+            >
+              <MessageSquare className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium text-text">
+                {t("settings:onboarding.success.intentChat", "Chat with AI")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {t("settings:onboarding.success.intentChatDesc", "Start a conversation with your configured models.")}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => finishAndNavigate("/settings/family-guardrails")}
+              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+            >
+              <Shield className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium text-text">
+                {t("settings:onboarding.success.intentFamily", "Set up family safety")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {t("settings:onboarding.success.intentFamilyDesc", "Create family profiles and content safety rules.")}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenIngestFlow}
+              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+            >
+              <BookOpen className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium text-text">
+                {t("settings:onboarding.success.intentResearch", "Research my documents")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {t("settings:onboarding.success.intentResearchDesc", "Import documents and ask questions about them.")}
+              </span>
+            </button>
+          </div>
         </div>
 
         <div className="mb-6 rounded-2xl border border-border/70 bg-surface p-4">

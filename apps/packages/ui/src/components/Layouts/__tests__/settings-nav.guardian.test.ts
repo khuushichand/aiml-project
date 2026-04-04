@@ -31,7 +31,6 @@ vi.mock("@/routes/route-registry", () => {
           group: "server",
           labelToken: "settings:familyGuardrailsWizardNav",
           icon: MockIcon,
-          beta: true,
           order: 2
         }
       },
@@ -42,7 +41,6 @@ vi.mock("@/routes/route-registry", () => {
           group: "server",
           labelToken: "settings:guardianNav",
           icon: MockIcon,
-          beta: true,
           order: 3
         }
       },
@@ -152,7 +150,7 @@ describe("settings nav guardian gating", () => {
       groups.flatMap((group) => group.items.map((item) => [item.to, item]))
     )
 
-    expect(byPath["/settings/guardian"]?.beta).toBe(true)
+    expect(byPath["/settings/guardian"]?.beta).toBeUndefined()
     expect(byPath["/settings/evaluations"]?.beta).toBeUndefined()
   })
 })
@@ -161,7 +159,7 @@ describe("settings announcement windows", () => {
   it("treats announcements as active before their window expires", () => {
     expect(
       isSettingsAnnouncementBadgeActive(
-        "/settings/guardian",
+        "/settings/prompt-studio",
         new Date("2026-06-01T00:00:00Z")
       )
     ).toBe(true)
@@ -170,8 +168,23 @@ describe("settings announcement windows", () => {
   it("expires announcements after their window closes", () => {
     expect(
       isSettingsAnnouncementBadgeActive(
-        "/settings/guardian",
+        "/settings/prompt-studio",
         new Date("2027-01-01T00:00:00Z")
+      )
+    ).toBe(false)
+  })
+
+  it("guardian and family-guardrails no longer have announcement windows", () => {
+    expect(
+      isSettingsAnnouncementBadgeActive(
+        "/settings/guardian",
+        new Date("2026-06-01T00:00:00Z")
+      )
+    ).toBe(false)
+    expect(
+      isSettingsAnnouncementBadgeActive(
+        "/settings/family-guardrails",
+        new Date("2026-06-01T00:00:00Z")
       )
     ).toBe(false)
   })

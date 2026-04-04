@@ -379,6 +379,8 @@ export const HEADER_SHORTCUT_IDS = [
   "documentation",
   "chatbooks-playground",
   "moderation-playground",
+  "family-guardrails",
+  "guardian",
   "admin-llamacpp",
   "admin-mlx",
   "settings",

@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { message } from "antd"
+import { message, Skeleton } from "antd"
 import { useNavigate } from "react-router-dom"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useConnectionUxState } from "@/hooks/useConnectionState"
@@ -12,6 +12,7 @@ import { useBlocklist } from "./hooks/useBlocklist"
 import { useUserOverrides } from "./hooks/useUserOverrides"
 import { useModerationTest } from "./hooks/useModerationTest"
 import { ONBOARDING_KEY, getErrorStatus } from "./moderation-utils"
+import { useTutorialStore } from "@/store/tutorials"
 
 // Lazy panel imports — replace with real components in Tasks 5-9
 const PolicySettingsPanel = React.lazy(() => import("./PolicySettingsPanel"))
@@ -50,6 +51,8 @@ export const ModerationPlaygroundShell: React.FC = () => {
   const { uxState } = useConnectionUxState()
   const [messageApi, contextHolder] = message.useMessage()
   const [activeTab, setActiveTab] = React.useState<TabKey>("policy")
+  const startTutorial = useTutorialStore((s) => s.startTutorial)
+  const tutorialInitializedRef = React.useRef(false)
 
   const ctx = useModerationContext()
   const settings = useModerationSettings(ctx.activeUserId)
@@ -95,6 +98,22 @@ export const ModerationPlaygroundShell: React.FC = () => {
     return () => window.removeEventListener("keydown", handleKey)
   }, [settings, overrides, messageApi])
 
+  // Auto-start tutorial on first visit
+  React.useEffect(() => {
+    if (tutorialInitializedRef.current) return
+    if (hasPermissionError) return
+    tutorialInitializedRef.current = true
+    if (typeof window === "undefined") return
+    try {
+      const dismissed = window.localStorage.getItem(ONBOARDING_KEY)
+      if (!dismissed) {
+        startTutorial("moderation-basics")
+      }
+    } catch {
+      // On storage error, skip tutorial
+    }
+  }, [hasPermissionError, startTutorial])
+
   // beforeunload warning
   React.useEffect(() => {
     if (!hasUnsavedChanges) return
@@ -137,31 +156,31 @@ export const ModerationPlaygroundShell: React.FC = () => {
     switch (activeTab) {
       case "policy":
         return (
-          <React.Suspense fallback={<div className="py-8 text-center text-text-muted">Loading...</div>}>
+          <React.Suspense fallback={<div className="px-4 py-8"><Skeleton active paragraph={{ rows: 4 }} /></div>}>
             <PolicySettingsPanel settings={settings} messageApi={messageApi} />
           </React.Suspense>
         )
       case "blocklist":
         return (
-          <React.Suspense fallback={<div className="py-8 text-center text-text-muted">Loading...</div>}>
+          <React.Suspense fallback={<div className="px-4 py-8"><Skeleton active paragraph={{ rows: 4 }} /></div>}>
             <BlocklistStudioPanel blocklist={blocklist} messageApi={messageApi} />
           </React.Suspense>
         )
       case "overrides":
         return (
-          <React.Suspense fallback={<div className="py-8 text-center text-text-muted">Loading...</div>}>
+          <React.Suspense fallback={<div className="px-4 py-8"><Skeleton active paragraph={{ rows: 4 }} /></div>}>
             <UserOverridesPanel ctx={ctx} overrides={overrides} messageApi={messageApi} />
           </React.Suspense>
         )
       case "test":
         return (
-          <React.Suspense fallback={<div className="py-8 text-center text-text-muted">Loading...</div>}>
+          <React.Suspense fallback={<div className="px-4 py-8"><Skeleton active paragraph={{ rows: 4 }} /></div>}>
             <TestSandboxPanel tester={tester} messageApi={messageApi} />
           </React.Suspense>
         )
       case "advanced":
         return (
-          <React.Suspense fallback={<div className="py-8 text-center text-text-muted">Loading...</div>}>
+          <React.Suspense fallback={<div className="px-4 py-8"><Skeleton active paragraph={{ rows: 4 }} /></div>}>
             <AdvancedPanel
               settings={settings}
               blocklist={blocklist}
@@ -247,23 +266,47 @@ export const ModerationPlaygroundShell: React.FC = () => {
       {!hasPermissionError && <>
       {/* Onboarding */}
       {showOnboarding && (
-        <div className="mx-4 sm:mx-6 lg:mx-8 mb-4 p-4 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-          <p className="text-sm font-medium">Welcome to Moderation Playground</p>
-          <p className="text-sm text-text-muted mt-1">
-            Configure content safety rules, test them live, and manage per-user overrides.
+        <div className="mx-4 sm:mx-6 lg:mx-8 mb-4 p-5 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
+          <p className="text-base font-semibold">
+            {t("option:moderationPlayground.onboarding.title", "Welcome to Content Controls")}
           </p>
-          <button
-            type="button"
-            onClick={dismissOnboarding}
-            className="text-sm text-blue-600 hover:underline mt-2"
-          >
-            Got it, let&apos;s start
-          </button>
+          <p className="text-sm text-text-muted mt-1">
+            {t(
+              "option:moderationPlayground.onboarding.description",
+              "Set up content safety rules to protect your family or enforce server guardrails."
+            )}
+          </p>
+
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+            <button
+              type="button"
+              data-testid="moderation-family-guardrails-link"
+              onClick={() => navigate("/settings/family-guardrails")}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              {t("option:moderationPlayground.onboarding.guardrailsCta", "Set up Family Guardrails")}
+            </button>
+            <button
+              type="button"
+              onClick={dismissOnboarding}
+              className="text-sm text-text-muted hover:text-text transition"
+            >
+              {t("option:moderationPlayground.onboarding.dismiss", "Skip \u2014 I\u2019ll explore on my own")}
+            </button>
+          </div>
+
+          <p className="mt-3 text-xs text-text-muted">
+            {t(
+              "option:moderationPlayground.onboarding.tabHint",
+              "Start here: Policy & Settings tab sets your base rules. Then test them in the Test Sandbox."
+            )}
+          </p>
         </div>
       )}
 
       {/* Hero */}
       <div
+        data-testid="moderation-hero"
         className="relative overflow-hidden rounded-[28px] mx-4 sm:mx-6 lg:mx-8 p-6 sm:p-8 text-text"
         style={HERO_STYLE}
       >
@@ -320,6 +363,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
           {TABS.map((tab) => (
             <button
               key={tab.key}
+              data-testid={`moderation-tab-${tab.key}`}
               role="tab"
               aria-selected={activeTab === tab.key}
               onClick={() => setActiveTab(tab.key)}
@@ -333,6 +377,11 @@ export const ModerationPlaygroundShell: React.FC = () => {
               `}
             >
               {tab.label}
+              {tab.key === "policy" && showOnboarding && (
+                <span className="ml-1.5 rounded bg-blue-100 dark:bg-blue-900/40 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
+                  Start here
+                </span>
+              )}
             </button>
           ))}
         </div>
