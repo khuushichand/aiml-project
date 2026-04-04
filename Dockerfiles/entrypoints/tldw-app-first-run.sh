@@ -3,7 +3,9 @@ set -eu
 
 ENV_FILE="${TLDW_ENV_FILE:-/app/tldw_Server_API/Config_Files/.env}"
 AUTH_MARKER_DIR="${TLDW_AUTH_MARKER_DIR:-/app/Databases}"
-AUTH_MARKER_FILE="${AUTH_MARKER_DIR}/.authnz_initialized_single_user"
+# NOTE: AUTH_MARKER_FILE is derived below *after* AUTH_MODE is resolved,
+# so that the marker is mode-specific (e.g. .authnz_initialized_single_user
+# vs .authnz_initialized_multi_user). Changing AUTH_MODE will re-trigger init.
 RUN_AUTH_INIT_ON_START="${TLDW_RUN_AUTH_INIT_ON_START:-1}"
 
 incoming_auth_mode="${AUTH_MODE:-}"
@@ -14,7 +16,7 @@ generate_key() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr -d '\n'
   else
-    python -c "import secrets; print(secrets.token_urlsafe(32))"
+    python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
   fi
 }
 
@@ -90,6 +92,9 @@ fi
 AUTH_MODE="${AUTH_MODE:-single_user}"
 DATABASE_URL="${DATABASE_URL:-sqlite:///./Databases/users.db}"
 
+# Derive mode-specific marker so switching AUTH_MODE re-triggers init.
+AUTH_MARKER_FILE="${AUTH_MARKER_DIR}/.authnz_initialized_${AUTH_MODE}"
+
 upsert_env "AUTH_MODE" "$AUTH_MODE"
 upsert_env "DATABASE_URL" "$DATABASE_URL"
 
@@ -103,6 +108,19 @@ if [ "$AUTH_MODE" = "single_user" ]; then
   upsert_env "SINGLE_USER_API_KEY" "$current_key"
 fi
 
+# Auto-generate MCP secrets if missing or placeholder (min 32 chars each)
+for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT BYOK_ENCRYPTION_KEY; do
+  eval current_val="\${$mcp_var:-}"
+  case "$current_val" in
+    ""|CHANGE_ME*)
+      new_val="$(generate_key)"
+      eval export "$mcp_var=$new_val"
+      upsert_env "$mcp_var" "$new_val"
+      echo "[entrypoint] Generated $mcp_var."
+      ;;
+  esac
+done
+
 should_run_auth_init=0
 case "$*" in
   *uvicorn*|*tldw_Server_API.app.main:app*)
@@ -110,13 +128,73 @@ case "$*" in
     ;;
 esac
 
-if [ "$AUTH_MODE" = "single_user" ] && [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [ "$should_run_auth_init" = "1" ]; then
+if [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [ "$should_run_auth_init" = "1" ]; then
   mkdir -p "$AUTH_MARKER_DIR"
+
+  # --- Standard AuthNZ initialization (single_user and multi_user) ---
   if [ ! -f "$AUTH_MARKER_FILE" ]; then
     echo "[entrypoint] Running first-use auth initialization..."
-    python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
-    touch "$AUTH_MARKER_FILE"
-    echo "[entrypoint] Auth initialization complete."
+    if python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive 2>&1; then
+      touch "$AUTH_MARKER_FILE"
+      echo "[entrypoint] Auth initialization complete."
+    else
+      echo "" >&2
+      echo "╔══════════════════════════════════════════════════════════════╗" >&2
+      echo "║  AUTH INITIALIZATION FAILED                                  ║" >&2
+      echo "║                                                              ║" >&2
+      echo "║  Check the error above and verify:                           ║" >&2
+      echo "║  - MCP_JWT_SECRET is set in .env (min 32 chars)             ║" >&2
+      echo "║  - MCP_API_KEY_SALT is set in .env (min 32 chars)           ║" >&2
+      echo "║  - BYOK_ENCRYPTION_KEY is set (base64 encoded)              ║" >&2
+      echo "║  - DATABASE_URL is correct (if multi-user)                   ║" >&2
+      echo "╚══════════════════════════════════════════════════════════════╝" >&2
+      echo "" >&2
+      # Still start the server so /setup is accessible for configuration
+      echo "[first-run] Starting server despite init failure (setup wizard may be available)..." >&2
+    fi
+  fi
+
+  # --- Multi-user admin bootstrap via environment variables ---
+  if [ "$AUTH_MODE" = "multi_user" ]; then
+    if [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+      echo "[first-run] Creating initial admin user: $ADMIN_USERNAME"
+      # Idempotent: exits 0 if user already exists
+      python -m tldw_Server_API.app.core.AuthNZ.create_admin \
+        --username "$ADMIN_USERNAME" \
+        --password "$ADMIN_PASSWORD" \
+        ${ADMIN_EMAIL:+--email "$ADMIN_EMAIL"} \
+        --non-interactive 2>&1 || {
+          echo "[first-run] WARNING: Admin user creation returned non-zero (see above)." >&2
+        }
+    else
+      # Check if any users exist; warn if not
+      has_users=$(python -c "
+import asyncio, sys
+async def check():
+    try:
+        from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
+        db = await get_users_db()
+        users = await db.list_users(limit=1)
+        return len(users) > 0
+    except Exception:
+        return False
+sys.stdout.write('1' if asyncio.run(check()) else '0')
+" 2>/dev/null || echo "0")
+
+      if [ "$has_users" = "0" ]; then
+        echo ""
+        echo "======================================================================"
+        echo "  WARNING: Multi-user mode with no admin user configured!"
+        echo ""
+        echo "  Set ADMIN_USERNAME and ADMIN_PASSWORD env vars to create"
+        echo "  the first admin user automatically, or run:"
+        echo ""
+        echo "  docker compose exec app python -m \\"
+        echo "    tldw_Server_API.app.core.AuthNZ.create_admin"
+        echo "======================================================================"
+        echo ""
+      fi
+    fi
   fi
 fi
 

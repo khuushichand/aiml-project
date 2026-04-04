@@ -81,6 +81,17 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 - WebUI image: `Dockerfiles/Dockerfile.webui` (used by WebUI overlay)
 - Worker image: `Dockerfiles/Dockerfile.worker` (used by embeddings compose)
 
+## Published Images
+
+- The release workflow publishes release artifacts separately from the rolling `main` snapshot workflow.
+- `publish-ghcr-main` publishes `main` and `sha-<shortsha>` snapshots for the API, WebUI, and Admin UI images:
+  - API: `ghcr.io/<owner>/<repo>:main`
+  - WebUI: `ghcr.io/<owner>/<repo>-webui:main`
+  - Admin UI: `ghcr.io/<owner>/<repo>-admin-ui:main`
+- `sha-<shortsha>` is the cross-image-consistent tag for pinning all three images to the same revision.
+- The API image is direct-run friendly.
+- The WebUI and Admin UI images are compose-first in v1 unless the operator supplies compatible runtime wiring.
+
 ## Notes
 
 - Run compose commands from repo root so relative paths resolve correctly.
