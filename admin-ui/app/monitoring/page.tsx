@@ -1,5 +1,6 @@
 'use client';
 
+import { Suspense } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import MonitoringFeedbackBanners from './components/MonitoringFeedbackBanners';
@@ -30,6 +31,12 @@ function MonitoringPageContent() {
   );
 }
 
+// Suspense boundary required: useMonitoringPageController uses useSearchParams(),
+// which Next.js requires to be wrapped in Suspense for static generation.
 export default function MonitoringPage() {
-  return <MonitoringPageContent />;
+  return (
+    <Suspense fallback={<div className="p-4 lg:p-8 text-muted-foreground">Loading monitoring...</div>}>
+      <MonitoringPageContent />
+    </Suspense>
+  );
 }
