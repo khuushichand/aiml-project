@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Tooltip, Typography } from "antd"
+import { QuestionCircleOutlined } from "@ant-design/icons"
 
 import {
   clearExternalServerSlotSecret,
@@ -598,7 +599,12 @@ export const ExternalServersTab = ({
 
             <Space>
               <Space orientation="vertical">
-                <label htmlFor="mcp-external-server-transport">Transport</label>
+                <label htmlFor="mcp-external-server-transport">
+                  Transport{" "}
+                  <Tooltip title="How to communicate with the server. Use 'stdio' for local processes, 'websocket' for remote servers.">
+                    <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)", cursor: "help" }} />
+                  </Tooltip>
+                </label>
                 <select
                   id="mcp-external-server-transport"
                   aria-label="Transport"
@@ -672,8 +678,8 @@ export const ExternalServersTab = ({
         <Alert
           type="info"
           showIcon
-          title="No managed external servers are available yet."
-          description="Import a legacy server into MCP Hub before configuring secrets or bindings."
+          title="No external servers connected"
+          description="External MCP servers extend your AI assistant with tools like web search, code execution, and more. Click 'New Managed Server' above to add one, or import a legacy server from the list below."
         />
       )}
 
@@ -708,7 +714,12 @@ export const ExternalServersTab = ({
                     </Space>
                     <Space>
                       <Space orientation="vertical">
-                        <label htmlFor="mcp-external-slot-secret-kind">Secret Kind</label>
+                        <label htmlFor="mcp-external-slot-secret-kind">
+                          Secret Kind{" "}
+                          <Tooltip title="The type of credential needed. 'bearer_token' for API keys, 'api_key' for simple keys, 'client_secret' for OAuth.">
+                            <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)", cursor: "help" }} />
+                          </Tooltip>
+                        </label>
                         <select
                           id="mcp-external-slot-secret-kind"
                           aria-label="Secret Kind"
@@ -988,7 +999,24 @@ export const ExternalServersTab = ({
         bordered
         loading={loading}
         dataSource={servers}
-        locale={{ emptyText: <Empty description="No external servers configured" /> }}
+        locale={{
+          emptyText: (
+            <Empty
+              description={
+                <Space orientation="vertical" size={4}>
+                  <Typography.Text type="secondary">No external servers configured</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    External MCP servers extend your AI assistant with tools like web search, code execution, and more.
+                  </Typography.Text>
+                </Space>
+              }
+            >
+              <Button type="primary" onClick={openCreateForm}>
+                Add New Server
+              </Button>
+            </Empty>
+          )
+        }}
         renderItem={(server) => (
           <List.Item>
             <Space wrap size="small" style={{ width: "100%", justifyContent: "space-between" }}>
