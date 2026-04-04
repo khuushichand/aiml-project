@@ -48,7 +48,7 @@ class ManuscriptProjectResponse(BaseModel):
     status: str
     synopsis: str | None = None
     target_word_count: int | None = None
-    settings_json: str | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
     word_count: int = 0
     created_at: datetime
     last_modified: datetime
@@ -248,3 +248,350 @@ class ManuscriptSearchResult(BaseModel):
 class ManuscriptSearchResponse(BaseModel):
     query: str
     results: list[ManuscriptSearchResult] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Character
+# ---------------------------------------------------------------------------
+
+_CHARACTER_ROLES = Literal["protagonist", "antagonist", "supporting", "minor", "mentioned"]
+
+
+class ManuscriptCharacterCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255, description="Character name")
+    role: _CHARACTER_ROLES = Field("supporting", description="Character role")
+    cast_group: str | None = Field(None, description="Grouping label (e.g. 'heroes', 'villains')")
+    full_name: str | None = Field(None, description="Full / legal name")
+    age: str | None = Field(None, description="Age or age range")
+    gender: str | None = Field(None, description="Gender")
+    appearance: str | None = Field(None, description="Physical description")
+    personality: str | None = Field(None, description="Personality traits")
+    backstory: str | None = Field(None, description="Character backstory")
+    motivation: str | None = Field(None, description="Primary motivation")
+    arc_summary: str | None = Field(None, description="Summary of character arc")
+    notes: str | None = Field(None, description="Free-form notes")
+    custom_fields: dict[str, Any] = Field(default_factory=dict, description="Arbitrary key-value data")
+    sort_order: float = Field(0, description="Sort order")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptCharacterUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255, description="Character name")
+    role: _CHARACTER_ROLES | None = Field(None, description="Character role")
+    cast_group: str | None = Field(None, description="Grouping label")
+    full_name: str | None = Field(None, description="Full / legal name")
+    age: str | None = Field(None, description="Age or age range")
+    gender: str | None = Field(None, description="Gender")
+    appearance: str | None = Field(None, description="Physical description")
+    personality: str | None = Field(None, description="Personality traits")
+    backstory: str | None = Field(None, description="Character backstory")
+    motivation: str | None = Field(None, description="Primary motivation")
+    arc_summary: str | None = Field(None, description="Summary of character arc")
+    notes: str | None = Field(None, description="Free-form notes")
+    custom_fields: dict[str, Any] | None = Field(None, description="Arbitrary key-value data")
+    sort_order: float | None = Field(None, description="Sort order")
+
+
+class ManuscriptCharacterResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    role: str
+    cast_group: str | None = None
+    full_name: str | None = None
+    age: str | None = None
+    gender: str | None = None
+    appearance: str | None = None
+    personality: str | None = None
+    backstory: str | None = None
+    motivation: str | None = None
+    arc_summary: str | None = None
+    notes: str | None = None
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    sort_order: float = 0
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# Character Relationship
+# ---------------------------------------------------------------------------
+
+
+class ManuscriptRelationshipCreate(BaseModel):
+    from_character_id: str = Field(..., description="Source character ID")
+    to_character_id: str = Field(..., description="Target character ID")
+    relationship_type: str = Field(..., min_length=1, description="Relationship type (e.g. 'sibling')")
+    description: str | None = Field(None, description="Details about the relationship")
+    bidirectional: bool = Field(True, description="Whether the relationship is mutual")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptRelationshipResponse(BaseModel):
+    id: str
+    project_id: str
+    from_character_id: str
+    to_character_id: str
+    relationship_type: str
+    description: str | None = None
+    bidirectional: bool = True
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# World Info
+# ---------------------------------------------------------------------------
+
+_WORLD_INFO_KINDS = Literal["location", "item", "faction", "concept", "event", "custom"]
+
+
+class ManuscriptWorldInfoCreate(BaseModel):
+    kind: _WORLD_INFO_KINDS = Field(..., description="Category of world-info entry")
+    name: str = Field(..., min_length=1, max_length=255, description="Entry name")
+    description: str | None = Field(None, description="Entry description")
+    parent_id: str | None = Field(None, description="Parent world-info entry ID")
+    properties: dict[str, Any] = Field(default_factory=dict, description="Arbitrary properties")
+    tags: list[str] = Field(default_factory=list, description="Tags")
+    sort_order: float = Field(0, description="Sort order")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptWorldInfoUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255, description="Entry name")
+    description: str | None = Field(None, description="Entry description")
+    parent_id: str | None = Field(None, description="Parent world-info entry ID")
+    properties: dict[str, Any] | None = Field(None, description="Arbitrary properties")
+    tags: list[str] | None = Field(None, description="Tags")
+    sort_order: float | None = Field(None, description="Sort order")
+
+
+class ManuscriptWorldInfoResponse(BaseModel):
+    id: str
+    project_id: str
+    kind: str
+    name: str
+    description: str | None = None
+    parent_id: str | None = None
+    properties: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    sort_order: float = 0
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# Plot Line
+# ---------------------------------------------------------------------------
+
+_PLOT_LINE_STATUSES = Literal["active", "resolved", "abandoned", "dormant"]
+
+
+class ManuscriptPlotLineCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500, description="Plot line title")
+    description: str | None = Field(None, description="Plot line description")
+    status: _PLOT_LINE_STATUSES = Field("active", description="Plot line status")
+    color: str | None = Field(None, description="Display colour hex code")
+    sort_order: float = Field(0, description="Sort order")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptPlotLineUpdate(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=500, description="Plot line title")
+    description: str | None = Field(None, description="Plot line description")
+    status: _PLOT_LINE_STATUSES | None = Field(None, description="Plot line status")
+    color: str | None = Field(None, description="Display colour hex code")
+    sort_order: float | None = Field(None, description="Sort order")
+
+
+class ManuscriptPlotLineResponse(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    description: str | None = None
+    status: str = "active"
+    color: str | None = None
+    sort_order: float = 0
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# Plot Event
+# ---------------------------------------------------------------------------
+
+_PLOT_EVENT_TYPES = Literal["setup", "conflict", "action", "emotional", "plot", "resolution"]
+
+
+class ManuscriptPlotEventCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500, description="Event title")
+    description: str | None = Field(None, description="Event description")
+    scene_id: str | None = Field(None, description="Associated scene ID")
+    chapter_id: str | None = Field(None, description="Associated chapter ID")
+    event_type: _PLOT_EVENT_TYPES = Field("plot", description="Event type")
+    sort_order: float = Field(0, description="Sort order")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptPlotEventUpdate(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=500, description="Event title")
+    description: str | None = Field(None, description="Event description")
+    scene_id: str | None = Field(None, description="Associated scene ID")
+    chapter_id: str | None = Field(None, description="Associated chapter ID")
+    event_type: _PLOT_EVENT_TYPES | None = Field(None, description="Event type")
+    sort_order: float | None = Field(None, description="Sort order")
+
+
+class ManuscriptPlotEventResponse(BaseModel):
+    id: str
+    project_id: str
+    plot_line_id: str
+    title: str
+    description: str | None = None
+    scene_id: str | None = None
+    chapter_id: str | None = None
+    event_type: str = "plot"
+    sort_order: float = 0
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# Plot Hole
+# ---------------------------------------------------------------------------
+
+_PLOT_HOLE_SEVERITIES = Literal["low", "medium", "high", "critical"]
+_PLOT_HOLE_STATUSES = Literal["open", "investigating", "resolved", "wontfix"]
+_PLOT_HOLE_DETECTED_BY = Literal["manual", "ai"]
+
+
+class ManuscriptPlotHoleCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500, description="Plot hole title")
+    description: str | None = Field(None, description="Plot hole description")
+    severity: _PLOT_HOLE_SEVERITIES = Field("medium", description="Severity level")
+    scene_id: str | None = Field(None, description="Associated scene ID")
+    chapter_id: str | None = Field(None, description="Associated chapter ID")
+    plot_line_id: str | None = Field(None, description="Associated plot line ID")
+    detected_by: _PLOT_HOLE_DETECTED_BY = Field("manual", description="Detection method")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptPlotHoleUpdate(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=500, description="Plot hole title")
+    description: str | None = Field(None, description="Plot hole description")
+    severity: _PLOT_HOLE_SEVERITIES | None = Field(None, description="Severity level")
+    status: _PLOT_HOLE_STATUSES | None = Field(None, description="Plot hole status")
+    resolution: str | None = Field(None, description="Resolution description")
+    scene_id: str | None = Field(None, description="Associated scene ID")
+    chapter_id: str | None = Field(None, description="Associated chapter ID")
+    plot_line_id: str | None = Field(None, description="Associated plot line ID")
+
+
+class ManuscriptPlotHoleResponse(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    description: str | None = None
+    severity: str = "medium"
+    status: str = "open"
+    resolution: str | None = None
+    scene_id: str | None = None
+    chapter_id: str | None = None
+    plot_line_id: str | None = None
+    detected_by: str = "manual"
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# Citation
+# ---------------------------------------------------------------------------
+
+
+class ManuscriptCitationCreate(BaseModel):
+    source_type: str = Field(..., min_length=1, description="Source type (e.g. 'rag', 'web', 'manual')")
+    source_id: str | None = Field(None, description="Source item ID (e.g. media item ID)")
+    source_title: str | None = Field(None, description="Human-readable source title")
+    excerpt: str | None = Field(None, description="Quoted excerpt from source")
+    query_used: str | None = Field(None, description="RAG query that found this source")
+    anchor_offset: int | None = Field(None, description="Character offset in scene content")
+    id: str | None = Field(None, description="Optional client-provided UUID")
+
+
+class ManuscriptCitationResponse(BaseModel):
+    id: str
+    project_id: str
+    scene_id: str
+    source_type: str
+    source_id: str | None = None
+    source_title: str | None = None
+    excerpt: str | None = None
+    query_used: str | None = None
+    anchor_offset: int | None = None
+    created_at: datetime
+    last_modified: datetime
+    deleted: bool = False
+    client_id: str
+    version: int
+
+
+# ---------------------------------------------------------------------------
+# Scene linking
+# ---------------------------------------------------------------------------
+
+
+class SceneCharacterLink(BaseModel):
+    character_id: str = Field(..., description="Character ID to link")
+    is_pov: bool = Field(False, description="Whether this character is the POV character")
+
+
+class SceneCharacterLinkResponse(BaseModel):
+    scene_id: str
+    character_id: str
+    is_pov: bool = False
+    name: str
+    role: str
+
+
+class SceneWorldInfoLink(BaseModel):
+    world_info_id: str = Field(..., description="World-info entry ID to link")
+
+
+class SceneWorldInfoLinkResponse(BaseModel):
+    scene_id: str
+    world_info_id: str
+    name: str
+    kind: str
+
+
+# ---------------------------------------------------------------------------
+# Research
+# ---------------------------------------------------------------------------
+
+
+class ManuscriptResearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="Research query")
+    top_k: int = Field(5, ge=1, le=50, description="Maximum number of results to return")
+
+
+class ManuscriptResearchResponse(BaseModel):
+    query: str
+    results: list[dict[str, Any]] = Field(default_factory=list)
