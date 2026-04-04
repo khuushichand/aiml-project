@@ -80,6 +80,6 @@ describe("ResultsList FTUX", () => {
   it("persists dismissal to localStorage", () => {
     render(<ResultsList {...emptyProps} />)
     fireEvent.click(screen.getByText(/skip/i))
-    expect(localStorage.getItem("tldw_first_ingest_tutorial_dismissed")).toBe("true")
+    expect(localStorage.getItem("tldw:media:first-ingest-dismissed")).toBe("true")
   })
 })

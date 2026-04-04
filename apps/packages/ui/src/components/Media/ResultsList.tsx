@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '@/utils/dateFormatters'
 import { highlightMatches } from '@/components/Media/highlightMatches'
 
+const FIRST_INGEST_DISMISS_KEY = 'tldw:media:first-ingest-dismissed'
+
 export type ResultsViewMode = 'standard' | 'compact'
 
 interface Result {
@@ -106,15 +108,14 @@ export function ResultsList({
   const hasSearchQuery = searchQuery.trim().length > 0
   const isCompact = viewMode === 'compact'
 
-  const DISMISS_KEY = 'tldw_first_ingest_tutorial_dismissed'
   const [tutorialDismissed, setTutorialDismissed] = useState(() => {
-    try { return localStorage.getItem(DISMISS_KEY) === 'true' } catch { return false }
+    try { return localStorage.getItem(FIRST_INGEST_DISMISS_KEY) === 'true' } catch { return false }
   })
   const [ingestUrl, setIngestUrl] = useState('')
 
   const handleDismissTutorial = useCallback(() => {
     setTutorialDismissed(true)
-    try { localStorage.setItem(DISMISS_KEY, 'true') } catch { /* noop */ }
+    try { localStorage.setItem(FIRST_INGEST_DISMISS_KEY, 'true') } catch { /* noop */ }
   }, [])
 
   const handleIngestClick = useCallback(() => {

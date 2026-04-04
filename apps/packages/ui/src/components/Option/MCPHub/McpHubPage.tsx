@@ -19,7 +19,7 @@ import type {
   McpHubGovernanceAuditTabKey
 } from "@/services/tldw/mcp-hub"
 
-const EXPLAINER_DISMISSED_KEY = "tldw_mcp_hub_explainer_dismissed"
+const EXPLAINER_DISMISSED_KEY = "tldw:mcp-hub:explainer-dismissed"
 
 export const McpHubPage = () => {
   const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("tool-catalogs")

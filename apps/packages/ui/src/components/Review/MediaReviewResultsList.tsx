@@ -5,7 +5,7 @@ import type { MediaReviewState, MediaReviewActions } from "@/components/Review/m
 import { includesId } from "@/components/Review/media-review-types"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 
-const FIRST_INGEST_DISMISSED_KEY = "tldw_first_ingest_tutorial_dismissed"
+const FIRST_INGEST_DISMISSED_KEY = "tldw:media:first-ingest-dismissed"
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState
