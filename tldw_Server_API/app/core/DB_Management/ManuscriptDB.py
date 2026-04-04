@@ -21,6 +21,7 @@ and follow the existing optimistic-locking / soft-delete conventions.
 """
 
 import json  # noqa: E402
+import sqlite3  # noqa: E402
 import uuid  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -46,6 +47,16 @@ _REORDER_ENTITY_TABLES = {
     "chapter": "manuscript_chapters",
     "scene": "manuscript_scenes",
 }
+
+# Allowed columns for update_* methods (C1 – prevent SQL injection via dict keys)
+_ALLOWED_PROJECT_COLUMNS = frozenset(
+    {"title", "subtitle", "author", "genre", "status", "synopsis", "target_word_count", "settings"}
+)
+_ALLOWED_PART_COLUMNS = frozenset({"title", "sort_order", "synopsis"})
+_ALLOWED_CHAPTER_COLUMNS = frozenset({"title", "part_id", "sort_order", "synopsis", "status"})
+_ALLOWED_SCENE_COLUMNS = frozenset(
+    {"title", "content_json", "content_plain", "synopsis", "sort_order", "status", "pov_character_id", "word_count"}
+)
 
 
 def _word_count(text: str | None) -> int:
@@ -154,6 +165,11 @@ class ManuscriptDBHelper:
         where = "WHERE deleted = 0"
         params: list[Any] = []
         if status_filter:
+            if status_filter not in _VALID_PROJECT_STATUSES:
+                raise ValueError(
+                    f"Invalid status filter: {status_filter!r}. "
+                    f"Must be one of {sorted(_VALID_PROJECT_STATUSES)}"
+                )
             where += " AND status = ?"
             params.append(status_filter)
 
@@ -193,6 +209,8 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
+            if key not in _ALLOWED_PROJECT_COLUMNS:
+                raise ValueError(f"Invalid column: {key}")
             if key == "settings":
                 set_parts.append("settings_json = ?")
                 params.append(json.dumps(value))
@@ -301,6 +319,8 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
+            if key not in _ALLOWED_PART_COLUMNS:
+                raise ValueError(f"Invalid column: {key}")
             set_parts.append(f"{key} = ?")
             params.append(value)
 
@@ -322,7 +342,10 @@ class ManuscriptDBHelper:
                 )
 
     def soft_delete_part(self, part_id: str, expected_version: int) -> None:
-        """Soft-delete a part with optimistic locking."""
+        """Soft-delete a part with optimistic locking.
+
+        Cascades the soft-delete to all child chapters and their scenes.
+        """
         now = self._now()
         next_version = expected_version + 1
 
@@ -339,6 +362,20 @@ class ManuscriptDBHelper:
                     entity="manuscript_parts",
                     entity_id=part_id,
                 )
+
+            # Cascade to child chapters
+            conn.execute(
+                "UPDATE manuscript_chapters SET deleted = 1, last_modified = ?, client_id = ? "
+                "WHERE part_id = ? AND deleted = 0",
+                (now, self._client_id, part_id),
+            )
+            # Cascade to scenes of those chapters (only non-deleted chapters)
+            conn.execute(
+                "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
+                "WHERE chapter_id IN (SELECT id FROM manuscript_chapters WHERE part_id = ? AND deleted = 0) "
+                "AND deleted = 0",
+                (now, self._client_id, part_id),
+            )
 
     # ------------------------------------------------------------------
     # Chapters
@@ -429,6 +466,8 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
+            if key not in _ALLOWED_CHAPTER_COLUMNS:
+                raise ValueError(f"Invalid column: {key}")
             set_parts.append(f"{key} = ?")
             params.append(value)
 
@@ -450,7 +489,10 @@ class ManuscriptDBHelper:
                 )
 
     def soft_delete_chapter(self, chapter_id: str, expected_version: int) -> None:
-        """Soft-delete a chapter with optimistic locking."""
+        """Soft-delete a chapter with optimistic locking.
+
+        Cascades the soft-delete to all child scenes.
+        """
         now = self._now()
         next_version = expected_version + 1
 
@@ -468,6 +510,13 @@ class ManuscriptDBHelper:
                     entity_id=chapter_id,
                 )
 
+            # Cascade to child scenes
+            conn.execute(
+                "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
+                "WHERE chapter_id = ? AND deleted = 0",
+                (now, self._client_id, chapter_id),
+            )
+
     # ------------------------------------------------------------------
     # Scenes
     # ------------------------------------------------------------------
@@ -478,7 +527,7 @@ class ManuscriptDBHelper:
         project_id: str,
         *,
         title: str = "Untitled Scene",
-        content_json: str = "{}",
+        content_json: str | None = None,
         content_plain: str = "",
         synopsis: str | None = None,
         sort_order: float = 0,
@@ -562,6 +611,8 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
+            if key not in _ALLOWED_SCENE_COLUMNS:
+                raise ValueError(f"Invalid column: {key}")
             set_parts.append(f"{key} = ?")
             params.append(value)
 
@@ -624,10 +675,12 @@ class ManuscriptDBHelper:
     # Word-count propagation
     # ------------------------------------------------------------------
 
-    def _propagate_word_counts(self, conn: Any, chapter_id: str, project_id: str) -> None:
+    def _propagate_word_counts(self, conn: sqlite3.Connection, chapter_id: str, project_id: str) -> None:
         """Cascade word counts: scenes -> chapter -> part (if any) -> project.
 
         Must be called inside an existing transaction (receives the connection).
+        Bumps ``version`` and ``client_id`` on each parent so that optimistic
+        locking and sync triggers stay consistent with other mutations.
         """
         now = self._now()
 
@@ -640,8 +693,10 @@ class ManuscriptDBHelper:
         ch_wc = int(ch_wc_row["wc"]) if ch_wc_row else 0
 
         conn.execute(
-            "UPDATE manuscript_chapters SET word_count = ?, last_modified = ? WHERE id = ?",
-            (ch_wc, now, chapter_id),
+            "UPDATE manuscript_chapters "
+            "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE id = ?",
+            (ch_wc, now, self._client_id, chapter_id),
         )
 
         # 2. Determine if the chapter belongs to a part
@@ -661,8 +716,10 @@ class ManuscriptDBHelper:
             part_wc = int(part_wc_row["wc"]) if part_wc_row else 0
 
             conn.execute(
-                "UPDATE manuscript_parts SET word_count = ?, last_modified = ? WHERE id = ?",
-                (part_wc, now, part_id),
+                "UPDATE manuscript_parts "
+                "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE id = ?",
+                (part_wc, now, self._client_id, part_id),
             )
 
         # 3. Project word count = SUM of its non-deleted scenes
@@ -675,8 +732,10 @@ class ManuscriptDBHelper:
         proj_wc = int(proj_wc_row["wc"]) if proj_wc_row else 0
 
         conn.execute(
-            "UPDATE manuscript_projects SET word_count = ?, last_modified = ? WHERE id = ?",
-            (proj_wc, now, project_id),
+            "UPDATE manuscript_projects "
+            "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE id = ?",
+            (proj_wc, now, self._client_id, project_id),
         )
 
     # ------------------------------------------------------------------
@@ -758,22 +817,40 @@ class ManuscriptDBHelper:
         """Full-text search across scene titles, plain content, and synopses.
 
         Returns matching scenes with FTS5 ``snippet()`` highlights.
+
+        .. note::
+            FTS5 is SQLite-only.  A ``NotImplementedError`` is raised if
+            the underlying database does not have the expected FTS table.
         """
+        # Escape FTS5 special characters by wrapping each term in double quotes
+        escaped_query = " ".join(
+            f'"{term.replace(chr(34), chr(34)*2)}"' for term in query.split() if term
+        )
+        if not escaped_query:
+            return []
+
         with self.db.transaction() as conn:
-            rows = conn.execute(
-                """
-                SELECT s.*,
-                       snippet(manuscript_scenes_fts, 1, '<b>', '</b>', '...', 32) AS snippet
-                FROM manuscript_scenes_fts AS fts
-                JOIN manuscript_scenes AS s ON s.rowid = fts.rowid
-                WHERE manuscript_scenes_fts MATCH ?
-                  AND s.project_id = ?
-                  AND s.deleted = 0
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (query, project_id, limit),
-            ).fetchall()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT s.*,
+                           snippet(manuscript_scenes_fts, 1, '<b>', '</b>', '...', 32) AS snippet
+                    FROM manuscript_scenes_fts AS fts
+                    JOIN manuscript_scenes AS s ON s.rowid = fts.rowid
+                    WHERE manuscript_scenes_fts MATCH ?
+                      AND s.project_id = ?
+                      AND s.deleted = 0
+                    ORDER BY rank
+                    LIMIT ?
+                    """,
+                    (escaped_query, project_id, limit),
+                ).fetchall()
+            except Exception as exc:
+                if "no such table" in str(exc).lower():
+                    raise NotImplementedError(
+                        "Full-text search is only supported on SQLite (FTS5)"
+                    ) from exc
+                raise
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -784,6 +861,8 @@ class ManuscriptDBHelper:
         self,
         entity_type: str,
         items: list[dict[str, Any]],
+        *,
+        project_id: str | None = None,
     ) -> None:
         """Batch-update ``sort_order`` (and optionally ``part_id`` for chapters).
 
@@ -792,9 +871,13 @@ class ManuscriptDBHelper:
         entity_type:
             One of ``"part"``, ``"chapter"``, ``"scene"``.
         items:
-            A list of dicts, each containing at minimum ``"id"`` and
-            ``"sort_order"``.  For chapters, an optional ``"part_id"`` can
-            be included to reparent.
+            A list of dicts, each containing at minimum ``"id"``,
+            ``"sort_order"``, and ``"version"``.  For chapters, an optional
+            ``"part_id"`` can be included to reparent.  The ``"version"``
+            field enables optimistic locking per item.
+        project_id:
+            When provided, every item is validated to belong to this project
+            before updating.
         """
         table = _REORDER_ENTITY_TABLES.get(entity_type)
         if table is None:
@@ -806,19 +889,48 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            # Validate project_id boundary when provided
+            if project_id is not None:
+                for item in items:
+                    row = conn.execute(
+                        f"SELECT project_id FROM {table} WHERE id = ? AND deleted = 0",  # nosec B608
+                        (item["id"],),
+                    ).fetchone()
+                    if row is None:
+                        raise ValueError(f"{entity_type} {item['id']!r} not found")
+                    if row["project_id"] != project_id:
+                        raise ValueError(
+                            f"{entity_type} {item['id']!r} does not belong to project {project_id!r}"
+                        )
+
             for item in items:
                 item_id = item["id"]
                 sort_order = item["sort_order"]
+                expected_version = item.get("version")
+
+                # Build version clause when expected_version is provided
+                version_clause = " AND version = ?" if expected_version is not None else ""
+                version_params = (expected_version,) if expected_version is not None else ()
 
                 if entity_type == "chapter" and "part_id" in item:
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE {table} SET sort_order = ?, part_id = ?, "  # nosec B608
-                        "last_modified = ? WHERE id = ? AND deleted = 0",
-                        (sort_order, item["part_id"], now, item_id),
+                        "last_modified = ?, version = version + 1 "
+                        f"WHERE id = ? AND deleted = 0{version_clause}",
+                        (sort_order, item["part_id"], now, item_id) + version_params,
                     )
                 else:
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE {table} SET sort_order = ?, "  # nosec B608
-                        "last_modified = ? WHERE id = ? AND deleted = 0",
-                        (sort_order, now, item_id),
+                        "last_modified = ?, version = version + 1 "
+                        f"WHERE id = ? AND deleted = 0{version_clause}",
+                        (sort_order, now, item_id) + version_params,
+                    )
+
+                if expected_version is not None and cur.rowcount == 0:
+                    raise ConflictError(
+                        f"{entity_type.title()} {item_id!r} reorder failed "
+                        f"(version conflict or not found).",
+                        entity=table,
+                        entity_id=item_id,
                     )
