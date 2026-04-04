@@ -679,6 +679,8 @@ class ManuscriptDBHelper:
         """Cascade word counts: scenes -> chapter -> part (if any) -> project.
 
         Must be called inside an existing transaction (receives the connection).
+        Bumps ``version`` and ``client_id`` on each parent so that optimistic
+        locking and sync triggers stay consistent with other mutations.
         """
         now = self._now()
 
@@ -691,8 +693,10 @@ class ManuscriptDBHelper:
         ch_wc = int(ch_wc_row["wc"]) if ch_wc_row else 0
 
         conn.execute(
-            "UPDATE manuscript_chapters SET word_count = ?, last_modified = ? WHERE id = ?",
-            (ch_wc, now, chapter_id),
+            "UPDATE manuscript_chapters "
+            "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE id = ?",
+            (ch_wc, now, self._client_id, chapter_id),
         )
 
         # 2. Determine if the chapter belongs to a part
@@ -712,8 +716,10 @@ class ManuscriptDBHelper:
             part_wc = int(part_wc_row["wc"]) if part_wc_row else 0
 
             conn.execute(
-                "UPDATE manuscript_parts SET word_count = ?, last_modified = ? WHERE id = ?",
-                (part_wc, now, part_id),
+                "UPDATE manuscript_parts "
+                "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE id = ?",
+                (part_wc, now, self._client_id, part_id),
             )
 
         # 3. Project word count = SUM of its non-deleted scenes
@@ -726,8 +732,10 @@ class ManuscriptDBHelper:
         proj_wc = int(proj_wc_row["wc"]) if proj_wc_row else 0
 
         conn.execute(
-            "UPDATE manuscript_projects SET word_count = ?, last_modified = ? WHERE id = ?",
-            (proj_wc, now, project_id),
+            "UPDATE manuscript_projects "
+            "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE id = ?",
+            (proj_wc, now, self._client_id, project_id),
         )
 
     # ------------------------------------------------------------------
