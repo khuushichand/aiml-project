@@ -7,7 +7,7 @@ import {
   SMOKE_LOAD_TIMEOUT
 } from "./smoke.setup"
 import { waitForAppShell } from "../utils/helpers"
-import type { Route } from "@playwright/test"
+import type { Page, Route } from "@playwright/test"
 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
 const UNRESOLVED_TEMPLATE_PATTERN = /\{\{[^{}\n]{1,120}\}\}/g
@@ -37,6 +37,15 @@ const fulfillJson = async (route: Route, status: number, data: unknown) => {
     contentType: "application/json",
     body: JSON.stringify(data)
   })
+}
+
+async function openSpeechInputSourcePicker(page: Page) {
+  const inputSourcePicker = page
+    .locator('[aria-label="Speech playground input source"]')
+    .first()
+  await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
+  await inputSourcePicker.focus()
+  await page.keyboard.press("ArrowDown")
 }
 
 test.describe("Stage 7 audio regression gate", () => {
@@ -253,11 +262,7 @@ test.describe("Stage 7 audio regression gate", () => {
     await page.goto("/speech", { waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
     await waitForAppShell(page, LOAD_TIMEOUT)
 
-    const inputSourcePicker = page
-      .locator('[aria-label="Speech playground input source"]')
-      .first()
-    await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
-    await inputSourcePicker.click()
+    await openSpeechInputSourcePicker(page)
     await expect(page.getByRole("option", { name: /Default microphone/i })).toBeVisible()
     await expect(page.getByRole("option", { name: /Tab audio/i })).toHaveCount(0)
     await expect(page.getByRole("option", { name: /System audio/i })).toHaveCount(0)

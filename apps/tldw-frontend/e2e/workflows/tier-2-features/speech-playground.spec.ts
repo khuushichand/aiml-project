@@ -14,9 +14,19 @@ import {
   skipIfServerUnavailable,
   assertNoCriticalErrors,
 } from "../../utils/fixtures"
+import type { Page } from "@playwright/test"
 import { SpeechPage } from "../../utils/page-objects/SpeechPage"
 import { expectApiCall } from "../../utils/api-assertions"
 import { seedAuth } from "../../utils/helpers"
+
+async function openSpeechInputSourcePicker(page: Page) {
+  const inputSourcePicker = page
+    .locator('[aria-label="Speech playground input source"]')
+    .first()
+  await expect(inputSourcePicker).toBeVisible()
+  await inputSourcePicker.focus()
+  await page.keyboard.press("ArrowDown")
+}
 
 test.describe("Speech Playground", () => {
   let speech: SpeechPage
@@ -54,11 +64,7 @@ test.describe("Speech Playground", () => {
       await expect(speech.stopButton).toBeVisible()
       await expect(speech.downloadButton).toBeVisible()
 
-      const inputSourcePicker = authedPage
-        .locator('[aria-label="Speech playground input source"]')
-        .first()
-      await expect(inputSourcePicker).toBeVisible()
-      await inputSourcePicker.click()
+      await openSpeechInputSourcePicker(authedPage)
       await expect(
         authedPage.getByRole("option", { name: /Default microphone/i })
       ).toBeVisible()

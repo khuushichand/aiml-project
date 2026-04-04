@@ -91,6 +91,7 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 - `sha-<shortsha>` is the cross-image-consistent tag for pinning all three images to the same revision.
 - The API image is direct-run friendly.
 - The WebUI and Admin UI images are compose-first in v1 unless the operator supplies compatible runtime wiring.
+- `BYOK_ENCRYPTION_KEY` is only auto-generated for fresh auth databases. When reusing an existing auth DB or volume with encrypted provider secrets, keep the prior key (or rotate via `BYOK_SECONDARY_ENCRYPTION_KEY`) instead of starting with a blank placeholder.
 
 ## Notes
 
