@@ -48,7 +48,7 @@ class ManuscriptProjectResponse(BaseModel):
     status: str
     synopsis: str | None = None
     target_word_count: int | None = None
-    settings_json: str | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
     word_count: int = 0
     created_at: datetime
     last_modified: datetime

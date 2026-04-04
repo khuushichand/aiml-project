@@ -116,9 +116,7 @@ class TestProjectCRUD:
         mdb.update_project(pid, {"settings": {"theme": "dark"}}, expected_version=1)
 
         proj = mdb.get_project(pid)
-        import json
-        settings = json.loads(proj["settings_json"])
-        assert settings == {"theme": "dark"}
+        assert proj["settings"] == {"theme": "dark"}
 
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")
