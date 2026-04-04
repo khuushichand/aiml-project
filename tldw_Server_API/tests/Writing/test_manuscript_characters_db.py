@@ -1,0 +1,305 @@
+# test_manuscript_characters_db.py
+# Unit tests for manuscript character, relationship, and scene-character CRUD.
+#
+from __future__ import annotations
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    ConflictError,
+)
+from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelper
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def mdb(tmp_path):
+    db = CharactersRAGDB(str(tmp_path / "test.db"), client_id="test_client")
+    return ManuscriptDBHelper(db)
+
+
+# ---------------------------------------------------------------------------
+# Character CRUD
+# ---------------------------------------------------------------------------
+
+class TestCharacterCRUD:
+    def test_create_and_get(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice", role="protagonist")
+        ch = mdb.get_character(cid)
+        assert ch is not None
+        assert ch["name"] == "Alice"
+        assert ch["role"] == "protagonist"
+        assert ch["project_id"] == pid
+        assert ch["version"] == 1
+        assert ch["deleted"] == 0
+
+    def test_create_with_custom_id(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Bob", character_id="custom-char-1")
+        assert cid == "custom-char-1"
+        ch = mdb.get_character("custom-char-1")
+        assert ch is not None
+        assert ch["name"] == "Bob"
+
+    def test_get_missing_returns_none(self, mdb):
+        assert mdb.get_character("nonexistent") is None
+
+    def test_list_characters(self, mdb):
+        pid = mdb.create_project("Novel")
+        mdb.create_character(pid, "Alice", role="protagonist")
+        mdb.create_character(pid, "Bob", role="antagonist")
+        mdb.create_character(pid, "Charlie", role="supporting")
+        chars = mdb.list_characters(pid)
+        assert len(chars) == 3
+
+    def test_list_characters_filter_by_role(self, mdb):
+        pid = mdb.create_project("Novel")
+        mdb.create_character(pid, "Alice", role="protagonist")
+        mdb.create_character(pid, "Bob", role="supporting")
+        chars = mdb.list_characters(pid, role_filter="protagonist")
+        assert len(chars) == 1
+        assert chars[0]["name"] == "Alice"
+
+    def test_list_characters_filter_by_cast_group(self, mdb):
+        pid = mdb.create_project("Novel")
+        mdb.create_character(pid, "Alice", cast_group="heroes")
+        mdb.create_character(pid, "Bob", cast_group="villains")
+        chars = mdb.list_characters(pid, cast_group_filter="heroes")
+        assert len(chars) == 1
+        assert chars[0]["name"] == "Alice"
+
+    def test_list_characters_ordered_by_sort_order(self, mdb):
+        pid = mdb.create_project("Novel")
+        mdb.create_character(pid, "Charlie", sort_order=3)
+        mdb.create_character(pid, "Alice", sort_order=1)
+        mdb.create_character(pid, "Bob", sort_order=2)
+        chars = mdb.list_characters(pid)
+        names = [c["name"] for c in chars]
+        assert names == ["Alice", "Bob", "Charlie"]
+
+    def test_update_character(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        mdb.update_character(cid, {"name": "Alicia", "backstory": "Born in..."}, expected_version=1)
+        ch = mdb.get_character(cid)
+        assert ch["name"] == "Alicia"
+        assert ch["backstory"] == "Born in..."
+        assert ch["version"] == 2
+
+    def test_update_character_version_conflict(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        with pytest.raises(ConflictError):
+            mdb.update_character(cid, {"name": "Nope"}, expected_version=99)
+
+    def test_update_character_empty_updates(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        # Should be a no-op
+        mdb.update_character(cid, {}, expected_version=1)
+        ch = mdb.get_character(cid)
+        assert ch["version"] == 1
+
+    def test_soft_delete_character(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        mdb.soft_delete_character(cid, expected_version=1)
+        assert mdb.get_character(cid) is None
+
+    def test_soft_delete_character_version_conflict(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        with pytest.raises(ConflictError):
+            mdb.soft_delete_character(cid, expected_version=99)
+
+    def test_soft_deleted_not_in_list(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        mdb.create_character(pid, "Bob")
+        mdb.soft_delete_character(cid, expected_version=1)
+        chars = mdb.list_characters(pid)
+        assert len(chars) == 1
+        assert chars[0]["name"] == "Bob"
+
+    def test_custom_fields_roundtrip(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice", custom_fields={"hair": "red", "magic": True})
+        ch = mdb.get_character(cid)
+        assert ch["custom_fields"]["hair"] == "red"
+        assert ch["custom_fields"]["magic"] is True
+
+    def test_custom_fields_default_empty(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Bob")
+        ch = mdb.get_character(cid)
+        assert ch["custom_fields"] == {}
+
+    def test_update_custom_fields(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice", custom_fields={"hair": "red"})
+        mdb.update_character(cid, {"custom_fields": {"hair": "blue", "eyes": "green"}}, expected_version=1)
+        ch = mdb.get_character(cid)
+        assert ch["custom_fields"]["hair"] == "blue"
+        assert ch["custom_fields"]["eyes"] == "green"
+
+    def test_full_character_fields(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(
+            pid, "Alice",
+            role="protagonist",
+            cast_group="heroes",
+            full_name="Alice Wonderland",
+            age="25",
+            gender="female",
+            appearance="Tall, blonde",
+            personality="Curious and brave",
+            backstory="Fell down a rabbit hole",
+            motivation="Find her way home",
+            arc_summary="Learns courage",
+            notes="Main character",
+        )
+        ch = mdb.get_character(cid)
+        assert ch["full_name"] == "Alice Wonderland"
+        assert ch["age"] == "25"
+        assert ch["gender"] == "female"
+        assert ch["appearance"] == "Tall, blonde"
+        assert ch["personality"] == "Curious and brave"
+        assert ch["backstory"] == "Fell down a rabbit hole"
+        assert ch["motivation"] == "Find her way home"
+        assert ch["arc_summary"] == "Learns courage"
+        assert ch["notes"] == "Main character"
+
+
+# ---------------------------------------------------------------------------
+# Character Relationships
+# ---------------------------------------------------------------------------
+
+class TestCharacterRelationships:
+    def test_create_and_list(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "sibling", description="Twins")
+        rels = mdb.list_relationships(pid)
+        assert len(rels) == 1
+        assert rels[0]["relationship_type"] == "sibling"
+        assert rels[0]["from_character_id"] == c1
+        assert rels[0]["to_character_id"] == c2
+        assert rels[0]["description"] == "Twins"
+
+    def test_create_with_custom_id(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rid = mdb.create_relationship(pid, c1, c2, "friend", relationship_id="rel-1")
+        assert rid == "rel-1"
+
+    def test_bidirectional_flag(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        mdb.create_relationship(pid, c1, c2, "mentor", bidirectional=False)
+        rels = mdb.list_relationships(pid)
+        assert rels[0]["bidirectional"] == 0
+
+    def test_delete_relationship(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "rival")
+        mdb.soft_delete_relationship(rel_id, expected_version=1)
+        rels = mdb.list_relationships(pid)
+        assert len(rels) == 0
+
+    def test_delete_relationship_version_conflict(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "rival")
+        with pytest.raises(ConflictError):
+            mdb.soft_delete_relationship(rel_id, expected_version=99)
+
+    def test_multiple_relationships(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        c3 = mdb.create_character(pid, "Charlie")
+        mdb.create_relationship(pid, c1, c2, "friend")
+        mdb.create_relationship(pid, c1, c3, "rival")
+        mdb.create_relationship(pid, c2, c3, "sibling")
+        rels = mdb.list_relationships(pid)
+        assert len(rels) == 3
+
+
+# ---------------------------------------------------------------------------
+# Scene-Character Linking
+# ---------------------------------------------------------------------------
+
+class TestSceneCharacterLinking:
+    def test_link_and_list(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice", role="protagonist")
+        mdb.link_scene_character(scene_id, char_id)
+        linked = mdb.list_scene_characters(scene_id)
+        assert len(linked) == 1
+        assert linked[0]["character_id"] == char_id
+        assert linked[0]["name"] == "Alice"
+        assert linked[0]["role"] == "protagonist"
+
+    def test_link_with_pov(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+        mdb.link_scene_character(scene_id, char_id, is_pov=True)
+        linked = mdb.list_scene_characters(scene_id)
+        assert linked[0]["is_pov"] == 1
+
+    def test_link_idempotent(self, mdb):
+        """INSERT OR IGNORE should not raise on duplicate."""
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+        mdb.link_scene_character(scene_id, char_id)
+        mdb.link_scene_character(scene_id, char_id)  # Should not raise
+        linked = mdb.list_scene_characters(scene_id)
+        assert len(linked) == 1
+
+    def test_unlink(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+        mdb.link_scene_character(scene_id, char_id)
+        mdb.unlink_scene_character(scene_id, char_id)
+        assert len(mdb.list_scene_characters(scene_id)) == 0
+
+    def test_multiple_characters_per_scene(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        mdb.link_scene_character(scene_id, c1)
+        mdb.link_scene_character(scene_id, c2)
+        linked = mdb.list_scene_characters(scene_id)
+        assert len(linked) == 2
+
+    def test_deleted_character_excluded_from_list(self, mdb):
+        """If a character is soft-deleted, it should not appear in scene links."""
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+        mdb.link_scene_character(scene_id, char_id)
+        mdb.soft_delete_character(char_id, expected_version=1)
+        linked = mdb.list_scene_characters(scene_id)
+        assert len(linked) == 0

@@ -813,3 +813,842 @@ class ManuscriptDBHelper:
                         "last_modified = ? WHERE id = ? AND deleted = 0",
                         (sort_order, now, item_id),
                     )
+
+    # ==================================================================
+    # Characters
+    # ==================================================================
+
+    def create_character(
+        self,
+        project_id: str,
+        name: str,
+        *,
+        role: str = "supporting",
+        cast_group: str | None = None,
+        full_name: str | None = None,
+        age: str | None = None,
+        gender: str | None = None,
+        appearance: str | None = None,
+        personality: str | None = None,
+        backstory: str | None = None,
+        motivation: str | None = None,
+        arc_summary: str | None = None,
+        notes: str | None = None,
+        custom_fields: dict[str, Any] | None = None,
+        sort_order: float = 0,
+        character_id: str | None = None,
+    ) -> str:
+        """Insert a new character and return its ID."""
+        cid = character_id or self._uuid()
+        now = self._now()
+        cf_json = json.dumps(custom_fields) if custom_fields else "{}"
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_characters
+                    (id, project_id, name, role, cast_group, full_name, age, gender,
+                     appearance, personality, backstory, motivation, arc_summary,
+                     notes, custom_fields_json, sort_order,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    cid, project_id, name, role, cast_group, full_name, age, gender,
+                    appearance, personality, backstory, motivation, arc_summary,
+                    notes, cf_json, sort_order,
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created manuscript character {} in project {}", cid, project_id)
+        return cid
+
+    def get_character(self, character_id: str) -> dict[str, Any] | None:
+        """Fetch a character by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_characters WHERE id = ? AND deleted = 0",
+                (character_id,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["custom_fields"] = json.loads(d.pop("custom_fields_json", "{}"))
+        return d
+
+    def list_characters(
+        self,
+        project_id: str,
+        *,
+        role_filter: str | None = None,
+        cast_group_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List non-deleted characters for a project, optionally filtered."""
+        where = "project_id = ? AND deleted = 0"
+        params: list[Any] = [project_id]
+        if role_filter:
+            where += " AND role = ?"
+            params.append(role_filter)
+        if cast_group_filter:
+            where += " AND cast_group = ?"
+            params.append(cast_group_filter)
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"SELECT * FROM manuscript_characters WHERE {where} ORDER BY sort_order",  # nosec B608
+                params,
+            )
+            rows = cur.fetchall()
+
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["custom_fields"] = json.loads(d.pop("custom_fields_json", "{}"))
+            results.append(d)
+        return results
+
+    def update_character(
+        self,
+        character_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a character with optimistic locking."""
+        if not updates:
+            return
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        if "custom_fields" in updates:
+            updates["custom_fields_json"] = json.dumps(updates.pop("custom_fields"))
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([character_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_characters SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Character {character_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_characters",
+                    entity_id=character_id,
+                )
+
+    def soft_delete_character(self, character_id: str, expected_version: int) -> None:
+        """Soft-delete a character with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_characters "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, character_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Character {character_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_characters",
+                    entity_id=character_id,
+                )
+
+    # ==================================================================
+    # Character Relationships
+    # ==================================================================
+
+    def create_relationship(
+        self,
+        project_id: str,
+        from_character_id: str,
+        to_character_id: str,
+        relationship_type: str,
+        *,
+        description: str | None = None,
+        bidirectional: bool = True,
+        relationship_id: str | None = None,
+    ) -> str:
+        """Insert a character relationship and return its ID."""
+        rid = relationship_id or self._uuid()
+        now = self._now()
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_character_relationships
+                    (id, project_id, from_character_id, to_character_id,
+                     relationship_type, description, bidirectional,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    rid, project_id, from_character_id, to_character_id,
+                    relationship_type, description, int(bidirectional),
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created relationship {} in project {}", rid, project_id)
+        return rid
+
+    def list_relationships(self, project_id: str) -> list[dict[str, Any]]:
+        """List non-deleted relationships for a project."""
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM manuscript_character_relationships "
+                "WHERE project_id = ? AND deleted = 0",
+                (project_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def soft_delete_relationship(self, relationship_id: str, expected_version: int) -> None:
+        """Soft-delete a relationship with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_character_relationships "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, relationship_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Relationship {relationship_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_character_relationships",
+                    entity_id=relationship_id,
+                )
+
+    # ==================================================================
+    # Scene-Character Linking
+    # ==================================================================
+
+    def link_scene_character(
+        self,
+        scene_id: str,
+        character_id: str,
+        *,
+        is_pov: bool = False,
+    ) -> None:
+        """Link a character to a scene (INSERT OR IGNORE)."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO manuscript_scene_characters "
+                "(scene_id, character_id, is_pov) VALUES (?, ?, ?)",
+                (scene_id, character_id, int(is_pov)),
+            )
+
+    def unlink_scene_character(self, scene_id: str, character_id: str) -> None:
+        """Remove a character-scene link."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM manuscript_scene_characters "
+                "WHERE scene_id = ? AND character_id = ?",
+                (scene_id, character_id),
+            )
+
+    def list_scene_characters(self, scene_id: str) -> list[dict[str, Any]]:
+        """List characters linked to a scene, including name and role."""
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT sc.scene_id, sc.character_id, sc.is_pov, "
+                "       c.name, c.role "
+                "FROM manuscript_scene_characters sc "
+                "JOIN manuscript_characters c ON c.id = sc.character_id AND c.deleted = 0 "
+                "WHERE sc.scene_id = ?",
+                (scene_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ==================================================================
+    # World Info
+    # ==================================================================
+
+    def create_world_info(
+        self,
+        project_id: str,
+        kind: str,
+        name: str,
+        *,
+        description: str | None = None,
+        parent_id: str | None = None,
+        properties: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        sort_order: float = 0,
+        world_info_id: str | None = None,
+    ) -> str:
+        """Insert a world-info entry and return its ID."""
+        wid = world_info_id or self._uuid()
+        now = self._now()
+        props_json = json.dumps(properties) if properties else "{}"
+        tags_json = json.dumps(tags) if tags else "[]"
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_world_info
+                    (id, project_id, kind, name, description, parent_id,
+                     properties_json, tags_json, sort_order,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    wid, project_id, kind, name, description, parent_id,
+                    props_json, tags_json, sort_order,
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created world info {} in project {}", wid, project_id)
+        return wid
+
+    def get_world_info(self, world_info_id: str) -> dict[str, Any] | None:
+        """Fetch a world-info entry by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_world_info WHERE id = ? AND deleted = 0",
+                (world_info_id,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["properties"] = json.loads(d.pop("properties_json", "{}"))
+        d["tags"] = json.loads(d.pop("tags_json", "[]"))
+        return d
+
+    def list_world_info(
+        self,
+        project_id: str,
+        *,
+        kind_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List non-deleted world-info entries for a project."""
+        where = "project_id = ? AND deleted = 0"
+        params: list[Any] = [project_id]
+        if kind_filter:
+            where += " AND kind = ?"
+            params.append(kind_filter)
+
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM manuscript_world_info WHERE {where} ORDER BY sort_order",  # nosec B608
+                params,
+            ).fetchall()
+
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["properties"] = json.loads(d.pop("properties_json", "{}"))
+            d["tags"] = json.loads(d.pop("tags_json", "[]"))
+            results.append(d)
+        return results
+
+    def update_world_info(
+        self,
+        world_info_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a world-info entry with optimistic locking."""
+        if not updates:
+            return
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        if "properties" in updates:
+            updates["properties_json"] = json.dumps(updates.pop("properties"))
+        if "tags" in updates:
+            updates["tags_json"] = json.dumps(updates.pop("tags"))
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([world_info_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_world_info SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"WorldInfo {world_info_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_world_info",
+                    entity_id=world_info_id,
+                )
+
+    def soft_delete_world_info(self, world_info_id: str, expected_version: int) -> None:
+        """Soft-delete a world-info entry with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_world_info "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, world_info_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"WorldInfo {world_info_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_world_info",
+                    entity_id=world_info_id,
+                )
+
+    # ==================================================================
+    # Scene-World Info Linking
+    # ==================================================================
+
+    def link_scene_world_info(self, scene_id: str, world_info_id: str) -> None:
+        """Link a world-info entry to a scene (INSERT OR IGNORE)."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO manuscript_scene_world_info "
+                "(scene_id, world_info_id) VALUES (?, ?)",
+                (scene_id, world_info_id),
+            )
+
+    def unlink_scene_world_info(self, scene_id: str, world_info_id: str) -> None:
+        """Remove a world-info-scene link."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM manuscript_scene_world_info "
+                "WHERE scene_id = ? AND world_info_id = ?",
+                (scene_id, world_info_id),
+            )
+
+    def list_scene_world_info(self, scene_id: str) -> list[dict[str, Any]]:
+        """List world-info entries linked to a scene, including name and kind."""
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT sw.scene_id, sw.world_info_id, "
+                "       w.name, w.kind "
+                "FROM manuscript_scene_world_info sw "
+                "JOIN manuscript_world_info w ON w.id = sw.world_info_id AND w.deleted = 0 "
+                "WHERE sw.scene_id = ?",
+                (scene_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ==================================================================
+    # Plot Lines
+    # ==================================================================
+
+    def create_plot_line(
+        self,
+        project_id: str,
+        title: str,
+        *,
+        description: str | None = None,
+        status: str = "active",
+        color: str | None = None,
+        sort_order: float = 0,
+        plot_line_id: str | None = None,
+    ) -> str:
+        """Insert a new plot line and return its ID."""
+        pid = plot_line_id or self._uuid()
+        now = self._now()
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_plot_lines
+                    (id, project_id, title, description, status, color, sort_order,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    pid, project_id, title, description, status, color, sort_order,
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created plot line {} in project {}", pid, project_id)
+        return pid
+
+    def get_plot_line(self, plot_line_id: str) -> dict[str, Any] | None:
+        """Fetch a plot line by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_plot_lines WHERE id = ? AND deleted = 0",
+                (plot_line_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_plot_lines(self, project_id: str) -> list[dict[str, Any]]:
+        """List non-deleted plot lines for a project ordered by sort_order."""
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM manuscript_plot_lines "
+                "WHERE project_id = ? AND deleted = 0 ORDER BY sort_order",
+                (project_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_plot_line(
+        self,
+        plot_line_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a plot line with optimistic locking."""
+        if not updates:
+            return
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([plot_line_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_plot_lines SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"PlotLine {plot_line_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_lines",
+                    entity_id=plot_line_id,
+                )
+
+    def soft_delete_plot_line(self, plot_line_id: str, expected_version: int) -> None:
+        """Soft-delete a plot line with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_plot_lines "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, plot_line_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"PlotLine {plot_line_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_plot_lines",
+                    entity_id=plot_line_id,
+                )
+
+    # ==================================================================
+    # Plot Events
+    # ==================================================================
+
+    def create_plot_event(
+        self,
+        project_id: str,
+        plot_line_id: str,
+        title: str,
+        *,
+        description: str | None = None,
+        scene_id: str | None = None,
+        chapter_id: str | None = None,
+        event_type: str = "plot",
+        sort_order: float = 0,
+        event_id: str | None = None,
+    ) -> str:
+        """Insert a new plot event and return its ID."""
+        eid = event_id or self._uuid()
+        now = self._now()
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_plot_events
+                    (id, project_id, plot_line_id, scene_id, chapter_id,
+                     title, description, event_type, sort_order,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    eid, project_id, plot_line_id, scene_id, chapter_id,
+                    title, description, event_type, sort_order,
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created plot event {} for plot line {}", eid, plot_line_id)
+        return eid
+
+    def list_plot_events(self, plot_line_id: str) -> list[dict[str, Any]]:
+        """List non-deleted plot events for a plot line ordered by sort_order."""
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM manuscript_plot_events "
+                "WHERE plot_line_id = ? AND deleted = 0 ORDER BY sort_order",
+                (plot_line_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_plot_event(
+        self,
+        event_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a plot event with optimistic locking."""
+        if not updates:
+            return
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([event_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_plot_events SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"PlotEvent {event_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_events",
+                    entity_id=event_id,
+                )
+
+    def soft_delete_plot_event(self, event_id: str, expected_version: int) -> None:
+        """Soft-delete a plot event with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_plot_events "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, event_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"PlotEvent {event_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_plot_events",
+                    entity_id=event_id,
+                )
+
+    # ==================================================================
+    # Plot Holes
+    # ==================================================================
+
+    def create_plot_hole(
+        self,
+        project_id: str,
+        title: str,
+        *,
+        description: str | None = None,
+        severity: str = "medium",
+        scene_id: str | None = None,
+        chapter_id: str | None = None,
+        plot_line_id: str | None = None,
+        detected_by: str = "manual",
+        plot_hole_id: str | None = None,
+    ) -> str:
+        """Insert a new plot hole and return its ID."""
+        phid = plot_hole_id or self._uuid()
+        now = self._now()
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_plot_holes
+                    (id, project_id, title, description, severity, status,
+                     scene_id, chapter_id, plot_line_id, resolution, detected_by,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, NULL, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    phid, project_id, title, description, severity,
+                    scene_id, chapter_id, plot_line_id, detected_by,
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created plot hole {} in project {}", phid, project_id)
+        return phid
+
+    def get_plot_hole(self, plot_hole_id: str) -> dict[str, Any] | None:
+        """Fetch a plot hole by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_plot_holes WHERE id = ? AND deleted = 0",
+                (plot_hole_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_plot_holes(
+        self,
+        project_id: str,
+        *,
+        status_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List non-deleted plot holes for a project."""
+        where = "project_id = ? AND deleted = 0"
+        params: list[Any] = [project_id]
+        if status_filter:
+            where += " AND status = ?"
+            params.append(status_filter)
+
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM manuscript_plot_holes WHERE {where}",  # nosec B608
+                params,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_plot_hole(
+        self,
+        plot_hole_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a plot hole with optimistic locking."""
+        if not updates:
+            return
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([plot_hole_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_plot_holes SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"PlotHole {plot_hole_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_holes",
+                    entity_id=plot_hole_id,
+                )
+
+    def soft_delete_plot_hole(self, plot_hole_id: str, expected_version: int) -> None:
+        """Soft-delete a plot hole with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_plot_holes "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, plot_hole_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"PlotHole {plot_hole_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_plot_holes",
+                    entity_id=plot_hole_id,
+                )
+
+    # ==================================================================
+    # Citations
+    # ==================================================================
+
+    def create_citation(
+        self,
+        project_id: str,
+        scene_id: str,
+        source_type: str,
+        *,
+        source_id: str | None = None,
+        source_title: str | None = None,
+        excerpt: str | None = None,
+        query_used: str | None = None,
+        anchor_offset: int | None = None,
+        citation_id: str | None = None,
+    ) -> str:
+        """Insert a new citation and return its ID."""
+        cid = citation_id or self._uuid()
+        now = self._now()
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO manuscript_citations
+                    (id, project_id, scene_id, source_type, source_id,
+                     source_title, excerpt, query_used, anchor_offset,
+                     created_at, last_modified, deleted, client_id, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                """,
+                (
+                    cid, project_id, scene_id, source_type, source_id,
+                    source_title, excerpt, query_used, anchor_offset,
+                    now, now, self._client_id,
+                ),
+            )
+        logger.debug("Created citation {} for scene {}", cid, scene_id)
+        return cid
+
+    def list_citations(self, scene_id: str) -> list[dict[str, Any]]:
+        """List non-deleted citations for a scene."""
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM manuscript_citations "
+                "WHERE scene_id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def soft_delete_citation(self, citation_id: str, expected_version: int) -> None:
+        """Soft-delete a citation with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_citations "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, citation_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Citation {citation_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_citations",
+                    entity_id=citation_id,
+                )

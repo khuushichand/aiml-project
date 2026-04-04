@@ -531,7 +531,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 41  # Schema v41 adds manuscript management tables
+    _CURRENT_SCHEMA_VERSION = 42  # Schema v42 adds characters, world info, plot, citations
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3826,6 +3826,801 @@ UPDATE db_schema_version
    AND version < 41;
 """
 
+    # --- Migration: V41 -> V42 (Characters, world info, plot, citations) ---
+    _MIGRATION_SQL_V41_TO_V42 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 42 — Characters, world info, plot, citations (2026-04-XX)
+───────────────────────────────────────────────────────────────*/
+
+-- CHARACTERS
+CREATE TABLE IF NOT EXISTS manuscript_characters (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'supporting'
+                    CHECK(role IN ('protagonist','antagonist','supporting','minor','mentioned')),
+  cast_group      TEXT,
+  full_name       TEXT,
+  age             TEXT,
+  gender          TEXT,
+  appearance      TEXT,
+  personality     TEXT,
+  backstory       TEXT,
+  motivation      TEXT,
+  arc_summary     TEXT,
+  notes           TEXT,
+  custom_fields_json TEXT NOT NULL DEFAULT '{}',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mchr_project ON manuscript_characters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mchr_role ON manuscript_characters(project_id, role);
+CREATE INDEX IF NOT EXISTS idx_mchr_deleted ON manuscript_characters(deleted);
+
+-- CHARACTER RELATIONSHIPS
+CREATE TABLE IF NOT EXISTS manuscript_character_relationships (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  from_character_id TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  to_character_id   TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL,
+  description       TEXT,
+  bidirectional     BOOLEAN NOT NULL DEFAULT 1,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted           BOOLEAN NOT NULL DEFAULT 0,
+  client_id         TEXT NOT NULL DEFAULT 'unknown',
+  version           INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcrel_project ON manuscript_character_relationships(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_from ON manuscript_character_relationships(from_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_to ON manuscript_character_relationships(to_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_deleted ON manuscript_character_relationships(deleted);
+
+-- WORLD INFO
+CREATE TABLE IF NOT EXISTS manuscript_world_info (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK(kind IN ('location','item','faction','concept','event','custom')),
+  name            TEXT NOT NULL,
+  description     TEXT,
+  parent_id       TEXT REFERENCES manuscript_world_info(id) ON DELETE SET NULL,
+  properties_json TEXT NOT NULL DEFAULT '{}',
+  tags_json       TEXT NOT NULL DEFAULT '[]',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mwi_project_kind ON manuscript_world_info(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_mwi_parent ON manuscript_world_info(parent_id);
+CREATE INDEX IF NOT EXISTS idx_mwi_deleted ON manuscript_world_info(deleted);
+
+-- PLOT LINES
+CREATE TABLE IF NOT EXISTS manuscript_plot_lines (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'active'
+                  CHECK(status IN ('active','resolved','abandoned','dormant')),
+  color         TEXT,
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpl_project ON manuscript_plot_lines(project_id);
+CREATE INDEX IF NOT EXISTS idx_mpl_deleted ON manuscript_plot_lines(deleted);
+
+-- PLOT EVENTS
+CREATE TABLE IF NOT EXISTS manuscript_plot_events (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  plot_line_id  TEXT NOT NULL REFERENCES manuscript_plot_lines(id) ON DELETE CASCADE,
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  event_type    TEXT NOT NULL DEFAULT 'plot'
+                  CHECK(event_type IN ('setup','conflict','action','emotional','plot','resolution')),
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpe_plot_line ON manuscript_plot_events(plot_line_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mpe_scene ON manuscript_plot_events(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mpe_deleted ON manuscript_plot_events(deleted);
+
+-- PLOT HOLES
+CREATE TABLE IF NOT EXISTS manuscript_plot_holes (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  severity      TEXT NOT NULL DEFAULT 'medium'
+                  CHECK(severity IN ('low','medium','high','critical')),
+  status        TEXT NOT NULL DEFAULT 'open'
+                  CHECK(status IN ('open','investigating','resolved','wontfix')),
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  plot_line_id  TEXT REFERENCES manuscript_plot_lines(id) ON DELETE SET NULL,
+  resolution    TEXT,
+  detected_by   TEXT NOT NULL DEFAULT 'manual'
+                  CHECK(detected_by IN ('manual','ai')),
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mph_project ON manuscript_plot_holes(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_mph_deleted ON manuscript_plot_holes(deleted);
+
+-- SCENE-CHARACTER LINKING (no soft delete, no version — simple join table)
+CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  is_pov        BOOLEAN NOT NULL DEFAULT 0,
+  PRIMARY KEY (scene_id, character_id)
+);
+
+-- SCENE-WORLD_INFO LINKING
+CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
+  scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  PRIMARY KEY (scene_id, world_info_id)
+);
+
+-- CITATIONS (references from RAG into manuscript)
+CREATE TABLE IF NOT EXISTS manuscript_citations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  source_type   TEXT NOT NULL,
+  source_id     TEXT,
+  source_title  TEXT,
+  excerpt       TEXT,
+  query_used    TEXT,
+  anchor_offset INTEGER,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcit_scene ON manuscript_citations(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_project ON manuscript_citations(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_deleted ON manuscript_citations(deleted);
+
+/* ── sync triggers: manuscript_characters ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_characters_sync_create;
+DROP TRIGGER IF EXISTS manuscript_characters_sync_update;
+DROP TRIGGER IF EXISTS manuscript_characters_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_characters_sync_undelete;
+
+CREATE TRIGGER manuscript_characters_sync_create
+AFTER INSERT ON manuscript_characters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
+                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_characters_sync_update
+AFTER UPDATE ON manuscript_characters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.role IS NOT NEW.role OR
+     OLD.cast_group IS NOT NEW.cast_group OR
+     OLD.full_name IS NOT NEW.full_name OR
+     OLD.appearance IS NOT NEW.appearance OR
+     OLD.personality IS NOT NEW.personality OR
+     OLD.backstory IS NOT NEW.backstory OR
+     OLD.motivation IS NOT NEW.motivation OR
+     OLD.arc_summary IS NOT NEW.arc_summary OR
+     OLD.custom_fields_json IS NOT NEW.custom_fields_json OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
+                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_characters_sync_delete
+AFTER UPDATE ON manuscript_characters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_characters_sync_undelete
+AFTER UPDATE ON manuscript_characters
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
+                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_character_relationships ─────── */
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_create;
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_update;
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_undelete;
+
+CREATE TRIGGER manuscript_character_relationships_sync_create
+AFTER INSERT ON manuscript_character_relationships BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,
+                     'from_character_id',NEW.from_character_id,'to_character_id',NEW.to_character_id,
+                     'relationship_type',NEW.relationship_type,'description',NEW.description,
+                     'bidirectional',NEW.bidirectional,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_character_relationships_sync_update
+AFTER UPDATE ON manuscript_character_relationships
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.relationship_type IS NOT NEW.relationship_type OR
+     OLD.description IS NOT NEW.description OR
+     OLD.bidirectional IS NOT NEW.bidirectional OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,
+                     'from_character_id',NEW.from_character_id,'to_character_id',NEW.to_character_id,
+                     'relationship_type',NEW.relationship_type,'description',NEW.description,
+                     'bidirectional',NEW.bidirectional,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_character_relationships_sync_delete
+AFTER UPDATE ON manuscript_character_relationships
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_character_relationships_sync_undelete
+AFTER UPDATE ON manuscript_character_relationships
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,
+                     'from_character_id',NEW.from_character_id,'to_character_id',NEW.to_character_id,
+                     'relationship_type',NEW.relationship_type,'description',NEW.description,
+                     'bidirectional',NEW.bidirectional,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_world_info ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_create;
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_update;
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_undelete;
+
+CREATE TRIGGER manuscript_world_info_sync_create
+AFTER INSERT ON manuscript_world_info BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
+                     'description',NEW.description,'parent_id',NEW.parent_id,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_world_info_sync_update
+AFTER UPDATE ON manuscript_world_info
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.kind IS NOT NEW.kind OR
+     OLD.name IS NOT NEW.name OR
+     OLD.description IS NOT NEW.description OR
+     OLD.parent_id IS NOT NEW.parent_id OR
+     OLD.properties_json IS NOT NEW.properties_json OR
+     OLD.tags_json IS NOT NEW.tags_json OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
+                     'description',NEW.description,'parent_id',NEW.parent_id,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_world_info_sync_delete
+AFTER UPDATE ON manuscript_world_info
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_world_info_sync_undelete
+AFTER UPDATE ON manuscript_world_info
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
+                     'description',NEW.description,'parent_id',NEW.parent_id,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_plot_lines ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_create;
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_update;
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_undelete;
+
+CREATE TRIGGER manuscript_plot_lines_sync_create
+AFTER INSERT ON manuscript_plot_lines BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'status',NEW.status,'color',NEW.color,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_lines_sync_update
+AFTER UPDATE ON manuscript_plot_lines
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.description IS NOT NEW.description OR
+     OLD.status IS NOT NEW.status OR
+     OLD.color IS NOT NEW.color OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'status',NEW.status,'color',NEW.color,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_lines_sync_delete
+AFTER UPDATE ON manuscript_plot_lines
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_plot_lines_sync_undelete
+AFTER UPDATE ON manuscript_plot_lines
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'status',NEW.status,'color',NEW.color,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_plot_events ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_create;
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_update;
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_undelete;
+
+CREATE TRIGGER manuscript_plot_events_sync_create
+AFTER INSERT ON manuscript_plot_events BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'plot_line_id',NEW.plot_line_id,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,
+                     'title',NEW.title,'description',NEW.description,'event_type',NEW.event_type,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_events_sync_update
+AFTER UPDATE ON manuscript_plot_events
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.description IS NOT NEW.description OR
+     OLD.event_type IS NOT NEW.event_type OR
+     OLD.scene_id IS NOT NEW.scene_id OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'plot_line_id',NEW.plot_line_id,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,
+                     'title',NEW.title,'description',NEW.description,'event_type',NEW.event_type,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_events_sync_delete
+AFTER UPDATE ON manuscript_plot_events
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_plot_events_sync_undelete
+AFTER UPDATE ON manuscript_plot_events
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'plot_line_id',NEW.plot_line_id,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,
+                     'title',NEW.title,'description',NEW.description,'event_type',NEW.event_type,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_plot_holes ──────────────────── */
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_create;
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_update;
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_undelete;
+
+CREATE TRIGGER manuscript_plot_holes_sync_create
+AFTER INSERT ON manuscript_plot_holes BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'severity',NEW.severity,'status',NEW.status,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,'plot_line_id',NEW.plot_line_id,
+                     'resolution',NEW.resolution,'detected_by',NEW.detected_by,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_holes_sync_update
+AFTER UPDATE ON manuscript_plot_holes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.description IS NOT NEW.description OR
+     OLD.severity IS NOT NEW.severity OR
+     OLD.status IS NOT NEW.status OR
+     OLD.resolution IS NOT NEW.resolution OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'severity',NEW.severity,'status',NEW.status,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,'plot_line_id',NEW.plot_line_id,
+                     'resolution',NEW.resolution,'detected_by',NEW.detected_by,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_holes_sync_delete
+AFTER UPDATE ON manuscript_plot_holes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_plot_holes_sync_undelete
+AFTER UPDATE ON manuscript_plot_holes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'severity',NEW.severity,'status',NEW.status,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,'plot_line_id',NEW.plot_line_id,
+                     'resolution',NEW.resolution,'detected_by',NEW.detected_by,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_citations ───────────────────── */
+DROP TRIGGER IF EXISTS manuscript_citations_sync_create;
+DROP TRIGGER IF EXISTS manuscript_citations_sync_update;
+DROP TRIGGER IF EXISTS manuscript_citations_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_citations_sync_undelete;
+
+CREATE TRIGGER manuscript_citations_sync_create
+AFTER INSERT ON manuscript_citations BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scene_id',NEW.scene_id,
+                     'source_type',NEW.source_type,'source_id',NEW.source_id,
+                     'source_title',NEW.source_title,'excerpt',NEW.excerpt,
+                     'query_used',NEW.query_used,'anchor_offset',NEW.anchor_offset,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_citations_sync_update
+AFTER UPDATE ON manuscript_citations
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.source_type IS NOT NEW.source_type OR
+     OLD.source_id IS NOT NEW.source_id OR
+     OLD.source_title IS NOT NEW.source_title OR
+     OLD.excerpt IS NOT NEW.excerpt OR
+     OLD.query_used IS NOT NEW.query_used OR
+     OLD.anchor_offset IS NOT NEW.anchor_offset OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scene_id',NEW.scene_id,
+                     'source_type',NEW.source_type,'source_id',NEW.source_id,
+                     'source_title',NEW.source_title,'excerpt',NEW.excerpt,
+                     'query_used',NEW.query_used,'anchor_offset',NEW.anchor_offset,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_citations_sync_delete
+AFTER UPDATE ON manuscript_citations
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_citations_sync_undelete
+AFTER UPDATE ON manuscript_citations
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scene_id',NEW.scene_id,
+                     'source_type',NEW.source_type,'source_id',NEW.source_id,
+                     'source_title',NEW.source_title,'excerpt',NEW.excerpt,
+                     'query_used',NEW.query_used,'anchor_offset',NEW.anchor_offset,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 42
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 42;
+"""
+
+    _MIGRATION_SQL_V41_TO_V42_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 42 — Characters, world info, plot, citations (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_characters (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'supporting'
+                    CHECK(role IN ('protagonist','antagonist','supporting','minor','mentioned')),
+  cast_group      TEXT,
+  full_name       TEXT,
+  age             TEXT,
+  gender          TEXT,
+  appearance      TEXT,
+  personality     TEXT,
+  backstory       TEXT,
+  motivation      TEXT,
+  arc_summary     TEXT,
+  notes           TEXT,
+  custom_fields_json TEXT NOT NULL DEFAULT '{}',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mchr_project ON manuscript_characters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mchr_role ON manuscript_characters(project_id, role);
+CREATE INDEX IF NOT EXISTS idx_mchr_deleted ON manuscript_characters(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_character_relationships (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  from_character_id TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  to_character_id   TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL,
+  description       TEXT,
+  bidirectional     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted           BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id         TEXT NOT NULL DEFAULT 'unknown',
+  version           INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcrel_project ON manuscript_character_relationships(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_from ON manuscript_character_relationships(from_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_to ON manuscript_character_relationships(to_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_deleted ON manuscript_character_relationships(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_world_info (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK(kind IN ('location','item','faction','concept','event','custom')),
+  name            TEXT NOT NULL,
+  description     TEXT,
+  parent_id       TEXT REFERENCES manuscript_world_info(id) ON DELETE SET NULL,
+  properties_json TEXT NOT NULL DEFAULT '{}',
+  tags_json       TEXT NOT NULL DEFAULT '[]',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mwi_project_kind ON manuscript_world_info(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_mwi_parent ON manuscript_world_info(parent_id);
+CREATE INDEX IF NOT EXISTS idx_mwi_deleted ON manuscript_world_info(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_plot_lines (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'active'
+                  CHECK(status IN ('active','resolved','abandoned','dormant')),
+  color         TEXT,
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpl_project ON manuscript_plot_lines(project_id);
+CREATE INDEX IF NOT EXISTS idx_mpl_deleted ON manuscript_plot_lines(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_plot_events (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  plot_line_id  TEXT NOT NULL REFERENCES manuscript_plot_lines(id) ON DELETE CASCADE,
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  event_type    TEXT NOT NULL DEFAULT 'plot'
+                  CHECK(event_type IN ('setup','conflict','action','emotional','plot','resolution')),
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpe_plot_line ON manuscript_plot_events(plot_line_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mpe_scene ON manuscript_plot_events(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mpe_deleted ON manuscript_plot_events(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_plot_holes (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  severity      TEXT NOT NULL DEFAULT 'medium'
+                  CHECK(severity IN ('low','medium','high','critical')),
+  status        TEXT NOT NULL DEFAULT 'open'
+                  CHECK(status IN ('open','investigating','resolved','wontfix')),
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  plot_line_id  TEXT REFERENCES manuscript_plot_lines(id) ON DELETE SET NULL,
+  resolution    TEXT,
+  detected_by   TEXT NOT NULL DEFAULT 'manual'
+                  CHECK(detected_by IN ('manual','ai')),
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mph_project ON manuscript_plot_holes(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_mph_deleted ON manuscript_plot_holes(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  is_pov        BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (scene_id, character_id)
+);
+
+CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
+  scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  PRIMARY KEY (scene_id, world_info_id)
+);
+
+CREATE TABLE IF NOT EXISTS manuscript_citations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  source_type   TEXT NOT NULL,
+  source_id     TEXT,
+  source_title  TEXT,
+  excerpt       TEXT,
+  query_used    TEXT,
+  anchor_offset INTEGER,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcit_scene ON manuscript_citations(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_project ON manuscript_citations(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_deleted ON manuscript_citations(deleted);
+
+UPDATE db_schema_version
+   SET version = 42
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 42;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5669,6 +6464,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V40->V41: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V41 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v41_to_v42(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V41 to V42 (characters, world info, plot, citations)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V41 to V42 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V41_TO_V42)
+            final_version = self._get_db_version(conn)
+            if final_version != 42:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V41->V42 failed version check. Expected 42, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V42 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V41->V42 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V41->V42 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V41->V42: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V42 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -6626,6 +7441,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 41 and current_db_version == 40:
                         self._migrate_from_v40_to_v41(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 42 and current_db_version == 41:
+                        self._migrate_from_v41_to_v42(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -7059,6 +7877,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 41 and current_db_version == 40:
                     self._migrate_from_v40_to_v41(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 42 and current_db_version == 41:
+                    self._migrate_from_v41_to_v42(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -9025,6 +9846,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 41:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V40_TO_V41_POSTGRES, conn, expected_version=41)
                 current_version = 41
+            if current_version < 42:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V41_TO_V42_POSTGRES, conn, expected_version=42)
+                current_version = 42
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
