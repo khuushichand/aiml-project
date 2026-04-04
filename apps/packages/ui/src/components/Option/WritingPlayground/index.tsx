@@ -91,6 +91,8 @@ import { WritingPlaygroundShell } from "./WritingPlaygroundShell"
 import { WritingPlaygroundLibraryPanel } from "./WritingPlaygroundLibraryPanel"
 import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
 import { WritingPlaygroundInspectorPanel } from "./WritingPlaygroundInspectorPanel"
+import { CharacterWorldTab } from "./CharacterWorldTab"
+import { ResearchTab } from "./ResearchTab"
 import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
 import {
@@ -2043,6 +2045,9 @@ export const WritingPlayground = () => {
     </div>
   )
 
+  const charactersTabContent = <CharacterWorldTab isOnline={isOnline} />
+  const researchTabContent = <ResearchTab isOnline={isOnline} />
+
   const inspectorDrawerContent = (
     <div className="p-3">
       <WritingPlaygroundInspectorPanel
@@ -2052,7 +2057,9 @@ export const WritingPlayground = () => {
           sampling: t("option:writingPlayground.sidebarSampling", "Sampling"),
           context: t("option:writingPlayground.sidebarContext", "Context"),
           setup: t("option:writingPlayground.sidebarSetup", "Setup"),
-          inspect: t("option:writingPlayground.sidebarInspect", "Analysis")
+          inspect: t("option:writingPlayground.sidebarInspect", "Analysis"),
+          characters: t("option:writingPlayground.sidebarCharacters", "Characters"),
+          research: t("option:writingPlayground.sidebarResearch", "Research")
         }}
         tabBadges={{
           inspect: responseInspectorRowsAll.length > 0 ? (<Tag color="blue" className="!m-0 !px-1 !text-[10px]">{responseInspectorRowsAll.length}</Tag>) : null
@@ -2091,6 +2098,8 @@ export const WritingPlayground = () => {
         context={contextTabContent}
         setup={setupTabContent}
         inspect={inspectTabContent}
+        characters={charactersTabContent}
+        research={researchTabContent}
       />
     </div>
   )
