@@ -164,7 +164,7 @@ Confirm that you can build, install, and run the project from release artifacts.
 - [ ] If you publish images or packages to a registry, verify that tags and metadata match the release version and that consumers can pull and run them.
 - [ ] Confirm the GitHub Actions publish workflow ran for the release, and that GHCR + Docker Hub have updated tags for `tldw-server`, `tldw-server-worker`, and `tldw-server-audio-worker`.
 - [ ] Verify release publish prerequisites are set: `DOCKERHUB_IMAGE` repo variable and `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets.
-- [ ] Keep release-published tags as the source of truth; release artifact verification remains tied to release-published tags, and API/WebUI/Admin UI main snapshots do not replace release-tag validation. WebUI/Admin UI currently have snapshot tags only.
+- [ ] Verify that release-published tags are the source of truth for artifact verification and are not replaced by main snapshots (note: WebUI/Admin UI currently have snapshot tags only).
 - [ ] Validate GHCR attestations exist for each published image version (app/worker/audio-worker).
 - [ ] From a clean host environment, run the released Docker image with minimal configuration and exercise a short ingest → search → chat flow end-to-end.
 - [ ] Verify that contributor-friendly dev entrypoints (for example `make server-up-dev`) still work as documented.
