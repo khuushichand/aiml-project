@@ -243,8 +243,6 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
-            if key not in _ALLOWED_PROJECT_COLUMNS:
-                raise ValueError(f"Invalid column: {key}")
             if key == "settings":
                 set_parts.append("settings_json = ?")
                 params.append(json.dumps(value))
@@ -357,8 +355,6 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
-            if key not in _ALLOWED_PART_COLUMNS:
-                raise ValueError(f"Invalid column: {key}")
             set_parts.append(f"{key} = ?")
             params.append(value)
 
@@ -508,8 +504,6 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
-            if key not in _ALLOWED_CHAPTER_COLUMNS:
-                raise ValueError(f"Invalid column: {key}")
             set_parts.append(f"{key} = ?")
             params.append(value)
 
@@ -657,8 +651,6 @@ class ManuscriptDBHelper:
         set_parts: list[str] = []
         params: list[Any] = []
         for key, value in updates.items():
-            if key not in _ALLOWED_SCENE_COLUMNS:
-                raise ValueError(f"Invalid column: {key}")
             set_parts.append(f"{key} = ?")
             params.append(value)
 
