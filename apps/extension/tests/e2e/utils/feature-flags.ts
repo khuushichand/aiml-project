@@ -6,7 +6,6 @@
  * All feature flags enabled - use this to test the new UX redesign.
  */
 export const ALL_FEATURE_FLAGS_ENABLED = {
-  ff_newOnboarding: true,
   ff_newChat: true,
   ff_newSettings: true,
   ff_commandPalette: true,
@@ -19,7 +18,6 @@ export const ALL_FEATURE_FLAGS_ENABLED = {
  * All feature flags disabled - use this for baseline/comparison tests.
  */
 export const ALL_FEATURE_FLAGS_DISABLED = {
-  ff_newOnboarding: false,
   ff_newChat: false,
   ff_newSettings: false,
   ff_commandPalette: false,
@@ -32,7 +30,6 @@ export const ALL_FEATURE_FLAGS_DISABLED = {
  * Feature flag keys for reference.
  */
 export const FEATURE_FLAG_KEYS = {
-  NEW_ONBOARDING: 'ff_newOnboarding',
   NEW_CHAT: 'ff_newChat',
   NEW_SETTINGS: 'ff_newSettings',
   COMMAND_PALETTE: 'ff_commandPalette',

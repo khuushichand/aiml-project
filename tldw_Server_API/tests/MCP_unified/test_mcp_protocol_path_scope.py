@@ -8,6 +8,7 @@ class _FakeModule:
 
     def __init__(self, tool_def: dict) -> None:
         self._tool_def = dict(tool_def)
+        self.execute_calls: list[dict] = []
 
     async def get_tools(self) -> list[dict]:
         return [dict(self._tool_def)]
@@ -27,6 +28,7 @@ class _FakeModule:
         return None
 
     async def execute_tool(self, tool_name: str, arguments: dict, context=None):  # noqa: ANN001, ARG002
+        self.execute_calls.append({"tool_name": tool_name, "arguments": dict(arguments or {})})
         return {"ok": True}
 
     async def execute_with_circuit_breaker(
@@ -294,6 +296,320 @@ async def test_handle_tools_call_raises_approval_for_path_allowlist_violation(mo
     assert approval["reason"] == "path_outside_allowlist_scope"
     assert approval["scope_context"]["path_allowlist_prefixes"] == ["src"]
     assert fake_approval_service.calls[0]["approval_reason"] == "path_outside_allowlist_scope"
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_requires_approval_for_fs_write_text_out_of_scope_before_execution(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import ApprovalRequiredError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+    from tldw_Server_API.app.services import mcp_hub_path_enforcement_service as path_service_mod
+
+    tool_def = {
+        "name": "fs.write_text",
+        "description": "Write a text file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "management",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+            "capabilities": ["filesystem.write"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_path_service = _FakePathEnforcementService(
+        {
+            "enabled": True,
+            "within_scope": False,
+            "reason": "path_outside_current_folder_scope",
+            "force_approval": True,
+            "normalized_paths": ["/tmp/project/README.md"],
+            "scope_payload": {
+                "path_scope_mode": "cwd_descendants",
+                "workspace_root": "/tmp/project",
+                "scope_root": "/tmp/project/src",
+                "normalized_paths": ["/tmp/project/README.md"],
+                "reason": "path_outside_current_folder_scope",
+            },
+        }
+    )
+    fake_approval_service = _FakeApprovalService()
+
+    async def _fake_get_path_service():
+        return fake_path_service
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(path_service_mod, "get_mcp_hub_path_enforcement_service", _fake_get_path_service)
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["fs.write_text"],
+            "approval_policy_id": 1,
+            "policy_document": {
+                "path_scope_mode": "cwd_descendants",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-fs-write-path-scope",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher", "cwd": "src"},
+    )
+
+    with pytest.raises(ApprovalRequiredError):
+        await protocol._handle_tools_call(
+            {"name": "fs.write_text", "arguments": {"path": "../README.md", "content": "blocked"}},
+            context,
+        )
+
+    assert fake_path_service.calls[0]["tool_name"] == "fs.write_text"
+    assert fake_module.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_requires_approval_for_run_chain_preflight_path_scope(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
+    from tldw_Server_API.app.core.MCP_unified.modules.implementations.run_command_module import (
+        RunCommandModule,
+    )
+    from tldw_Server_API.app.core.MCP_unified.protocol import ApprovalRequiredError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+    from tldw_Server_API.app.services import mcp_hub_path_enforcement_service as path_service_mod
+
+    fs_write_tool = {
+        "name": "fs.write_text",
+        "description": "Write text",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "management",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+            "capabilities": ["filesystem.write"],
+        },
+    }
+    fs_read_tool = {
+        "name": "fs.read_text",
+        "description": "Read text",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+            "capabilities": ["filesystem.read"],
+        },
+    }
+
+    class _FilesystemModule:
+        name = "filesystem"
+
+        def __init__(self) -> None:
+            self.execute_calls: list[dict] = []
+
+        async def get_tools(self) -> list[dict]:
+            return [dict(fs_write_tool), dict(fs_read_tool)]
+
+        async def get_tool_def(self, tool_name: str) -> dict | None:
+            if tool_name == "fs.write_text":
+                return dict(fs_write_tool)
+            if tool_name == "fs.read_text":
+                return dict(fs_read_tool)
+            return None
+
+        def is_write_tool_def(self, tool_def: dict) -> bool:
+            return tool_def.get("name") == "fs.write_text"
+
+        def sanitize_input(self, input_data):  # noqa: ANN001
+            return input_data
+
+        def validate_tool_arguments(self, tool_name: str, arguments: dict) -> None:  # noqa: ARG002
+            return None
+
+        async def execute_tool(self, tool_name: str, arguments: dict, context=None):  # noqa: ANN001, ARG002
+            self.execute_calls.append({"tool_name": tool_name, "arguments": dict(arguments or {})})
+            return {"ok": True}
+
+        async def execute_with_circuit_breaker(
+            self,
+            func,  # noqa: ANN001
+            tool_name: str,
+            arguments: dict,
+            context=None,  # noqa: ANN001
+        ):
+            return await func(tool_name, arguments, context=context)
+
+    class _MultiRegistry:
+        def __init__(self, modules: dict[str, object], tool_to_module: dict[str, str]) -> None:
+            self._modules = dict(modules)
+            self._tool_to_module = dict(tool_to_module)
+
+        async def find_module_for_tool(self, tool_name: str):  # noqa: ANN001
+            module_id = self._tool_to_module.get(tool_name)
+            if module_id is None:
+                return None
+            return self._modules.get(module_id)
+
+        def get_module_id_for_tool(self, tool_name: str) -> str | None:
+            return self._tool_to_module.get(tool_name)
+
+        async def get_all_modules(self) -> dict[str, object]:
+            return dict(self._modules)
+
+    class _ConditionalPathService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def evaluate_tool_call(self, **kwargs) -> dict:  # noqa: ANN003
+            self.calls.append(dict(kwargs))
+            if kwargs.get("tool_name") == "fs.write_text":
+                return {
+                    "enabled": True,
+                    "within_scope": False,
+                    "reason": "path_outside_current_folder_scope",
+                    "force_approval": True,
+                    "normalized_paths": ["/tmp/project/secret.txt"],
+                    "scope_payload": {
+                        "path_scope_mode": "cwd_descendants",
+                        "workspace_root": "/tmp/project",
+                        "scope_root": "/tmp/project/src",
+                        "normalized_paths": ["/tmp/project/secret.txt"],
+                        "reason": "path_outside_current_folder_scope",
+                    },
+                }
+            return {
+                "enabled": True,
+                "within_scope": True,
+                "reason": None,
+                "force_approval": False,
+                "normalized_paths": [],
+                "scope_payload": None,
+            }
+
+    class _ConditionalApprovalService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def evaluate_tool_call(self, **kwargs) -> dict:  # noqa: ANN003
+            self.calls.append(dict(kwargs))
+            if kwargs.get("tool_name") == "fs.write_text":
+                return {
+                    "status": "approval_required",
+                    "approval": {
+                        "approval_policy_id": 1,
+                        "tool_name": "fs.write_text",
+                        "reason": kwargs.get("approval_reason"),
+                        "scope_context": dict(kwargs.get("scope_payload") or {}),
+                    },
+                }
+            return {"status": "allow"}
+
+    path_service = _ConditionalPathService()
+    approval_service = _ConditionalApprovalService()
+
+    async def _fake_get_path_service():
+        return path_service
+
+    async def _fake_get_approval_service():
+        return approval_service
+
+    monkeypatch.setattr(path_service_mod, "get_mcp_hub_path_enforcement_service", _fake_get_path_service)
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    run_module = RunCommandModule(ModuleConfig(name="run", settings={"protocol": protocol}))
+    filesystem_module = _FilesystemModule()
+    protocol.module_registry = _MultiRegistry(
+        modules={"run_command": run_module, "filesystem": filesystem_module},
+        tool_to_module={
+            "run": "run_command",
+            "fs.write_text": "filesystem",
+            "fs.read_text": "filesystem",
+        },
+    )
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["run", "fs.write_text", "fs.read_text"],
+            "approval_policy_id": 1,
+            "policy_document": {
+                "path_scope_mode": "cwd_descendants",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-run-preflight-path-scope",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-1",
+        metadata={"persona_id": "researcher", "cwd": "src"},
+    )
+
+    with pytest.raises(ApprovalRequiredError):
+        await protocol._handle_tools_call(
+            {"name": "run", "arguments": {"command": "write ../secret.txt hi && cat ../secret.txt"}},
+            context,
+        )
+
+    assert filesystem_module.execute_calls == []
+    assert [call.get("tool_name") for call in path_service.calls] == ["run", "fs.write_text"]
 
 
 @pytest.mark.asyncio

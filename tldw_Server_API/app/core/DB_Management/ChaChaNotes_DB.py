@@ -108,6 +108,7 @@ from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
     normalize_fsrs_settings,
     simulate_fsrs_review_transition,
 )
+from tldw_Server_API.app.core.Persona.buddy import resolve_persona_buddy_profile  # noqa: E402
 
 #
 ########################################################################################################################
@@ -530,7 +531,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 39  # Schema v39 adds workspace ownership for quizzes/decks and workspace policy
+    _CURRENT_SCHEMA_VERSION = 41  # Schema v41 adds manuscript management tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -623,6 +624,9 @@ class CharactersRAGDB:
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("study_packs", "id"),
+        ("study_pack_cards", "id"),
+        ("flashcard_citations", "id"),
         ("study_assistant_threads", "id"),
         ("study_assistant_messages", "id"),
         ("writing_templates", "id"),
@@ -3284,6 +3288,599 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 39;
 """
+    _MIGRATION_SQL_V39_TO_V40 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31)
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+    _MIGRATION_SQL_V39_TO_V40_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31) [Postgres]
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+    _MIGRATION_SQL_V40_TO_V41 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 41 - Manuscript management tables (2026-04-03)
+───────────────────────────────────────────────────────────────*/
+
+/* ── manuscript_projects ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_projects (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL,
+  subtitle         TEXT,
+  author           TEXT,
+  genre            TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK(status IN ('draft','outlining','writing','revising','complete','archived')),
+  synopsis         TEXT,
+  target_word_count INTEGER,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  settings_json    TEXT NOT NULL DEFAULT '{}',
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_projects_deleted
+  ON manuscript_projects(deleted);
+
+/* ── manuscript_parts ──────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_parts (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_deleted
+  ON manuscript_parts(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_project
+  ON manuscript_parts(project_id, sort_order);
+
+/* ── manuscript_chapters ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_chapters (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  part_id          TEXT REFERENCES manuscript_parts(id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  pov_character_id TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_deleted
+  ON manuscript_chapters(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_project
+  ON manuscript_chapters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_part
+  ON manuscript_chapters(part_id, sort_order);
+
+/* ── manuscript_scenes ─────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_scenes (
+  id               TEXT PRIMARY KEY,
+  chapter_id       TEXT NOT NULL REFERENCES manuscript_chapters(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  content_json     TEXT,
+  content_plain    TEXT,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  pov_character_id TEXT,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_deleted
+  ON manuscript_scenes(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_chapter
+  ON manuscript_scenes(chapter_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
+  ON manuscript_scenes(project_id);
+
+/* ── manuscript_scenes FTS5 ────────────────────────────────── */
+CREATE VIRTUAL TABLE IF NOT EXISTS manuscript_scenes_fts
+USING fts5(
+  title, content_plain, synopsis,
+  content='manuscript_scenes',
+  content_rowid='rowid'
+);
+
+DROP TRIGGER IF EXISTS manuscript_scenes_ai;
+DROP TRIGGER IF EXISTS manuscript_scenes_au;
+DROP TRIGGER IF EXISTS manuscript_scenes_ad;
+
+CREATE TRIGGER manuscript_scenes_ai
+AFTER INSERT ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(rowid, title, content_plain, synopsis)
+  SELECT new.rowid, new.title, new.content_plain, new.synopsis
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER manuscript_scenes_au
+AFTER UPDATE ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(manuscript_scenes_fts, rowid, title, content_plain, synopsis)
+  SELECT 'delete', old.rowid, old.title, old.content_plain, old.synopsis
+  WHERE old.deleted = 0;
+
+  INSERT INTO manuscript_scenes_fts(rowid, title, content_plain, synopsis)
+  SELECT new.rowid, new.title, new.content_plain, new.synopsis
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER manuscript_scenes_ad
+AFTER DELETE ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(manuscript_scenes_fts, rowid, title, content_plain, synopsis)
+  VALUES('delete', old.rowid, old.title, old.content_plain, old.synopsis);
+END;
+
+/* ── sync triggers: manuscript_projects ────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_projects_sync_create;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_update;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_undelete;
+
+CREATE TRIGGER manuscript_projects_sync_create
+AFTER INSERT ON manuscript_projects BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_update
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.subtitle IS NOT NEW.subtitle OR
+     OLD.author IS NOT NEW.author OR
+     OLD.genre IS NOT NEW.genre OR
+     OLD.status IS NOT NEW.status OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.target_word_count IS NOT NEW.target_word_count OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.settings_json IS NOT NEW.settings_json OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_delete
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_undelete
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_parts ───────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_parts_sync_create;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_update;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_undelete;
+
+CREATE TRIGGER manuscript_parts_sync_create
+AFTER INSERT ON manuscript_parts BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_update
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_delete
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_undelete
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_chapters ────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_create;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_update;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_undelete;
+
+CREATE TRIGGER manuscript_chapters_sync_create
+AFTER INSERT ON manuscript_chapters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_update
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.part_id IS NOT NEW.part_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.pov_character_id IS NOT NEW.pov_character_id OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.status IS NOT NEW.status OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_delete
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_undelete
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_scenes ──────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_create;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_update;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_undelete;
+
+CREATE TRIGGER manuscript_scenes_sync_create
+AFTER INSERT ON manuscript_scenes BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_update
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.content_json IS NOT NEW.content_json OR
+     OLD.content_plain IS NOT NEW.content_plain OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.pov_character_id IS NOT NEW.pov_character_id OR
+     OLD.status IS NOT NEW.status OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_delete
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_undelete
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── FK consistency triggers: parent project_id must match ─── */
+DROP TRIGGER IF EXISTS manuscript_chapters_check_project;
+DROP TRIGGER IF EXISTS manuscript_chapters_check_project_update;
+DROP TRIGGER IF EXISTS manuscript_scenes_check_project;
+DROP TRIGGER IF EXISTS manuscript_scenes_check_project_update;
+
+CREATE TRIGGER manuscript_chapters_check_project
+BEFORE INSERT ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
+    THEN RAISE(ABORT, 'chapter project_id must match its parent part project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_chapters_check_project_update
+BEFORE UPDATE ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
+    THEN RAISE(ABORT, 'chapter project_id must match its parent part project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_scenes_check_project
+BEFORE INSERT ON manuscript_scenes
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_chapters WHERE id = NEW.chapter_id) != NEW.project_id
+    THEN RAISE(ABORT, 'scene project_id must match its parent chapter project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_scenes_check_project_update
+BEFORE UPDATE ON manuscript_scenes
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_chapters WHERE id = NEW.chapter_id) != NEW.project_id
+    THEN RAISE(ABORT, 'scene project_id must match its parent chapter project_id')
+  END;
+END;
+
+UPDATE db_schema_version
+   SET version = 41
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 41;
+"""
+
+    _MIGRATION_SQL_V40_TO_V41_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 41 - Manuscript management tables (2026-04-03) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+/* ── manuscript_projects ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_projects (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL,
+  subtitle         TEXT,
+  author           TEXT,
+  genre            TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK(status IN ('draft','outlining','writing','revising','complete','archived')),
+  synopsis         TEXT,
+  target_word_count INTEGER,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  settings_json    TEXT NOT NULL DEFAULT '{}',
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_projects_deleted
+  ON manuscript_projects(deleted);
+
+/* ── manuscript_parts ──────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_parts (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_deleted
+  ON manuscript_parts(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_project
+  ON manuscript_parts(project_id, sort_order);
+
+/* ── manuscript_chapters ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_chapters (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  part_id          TEXT REFERENCES manuscript_parts(id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  pov_character_id TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_deleted
+  ON manuscript_chapters(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_project
+  ON manuscript_chapters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_part
+  ON manuscript_chapters(part_id, sort_order);
+
+/* ── manuscript_scenes ─────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_scenes (
+  id               TEXT PRIMARY KEY,
+  chapter_id       TEXT NOT NULL REFERENCES manuscript_chapters(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  content_json     TEXT,
+  content_plain    TEXT,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  pov_character_id TEXT,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_deleted
+  ON manuscript_scenes(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_chapter
+  ON manuscript_scenes(chapter_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
+  ON manuscript_scenes(project_id);
+
+/* Note: FTS5 is SQLite-only; Postgres would use tsvector/GIN instead.
+   Sync triggers also use SQLite-specific json_object(); Postgres equivalent
+   would use jsonb_build_object(). Skipped for now — only tables + indexes. */
+
+-- Postgres v40→v41 adds manuscript tables only (FTS5 and sync triggers are SQLite-specific)
+-- Version stays at 40 until Postgres equivalents (tsvector search, NOTIFY-based sync) are added
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5087,6 +5684,46 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V38->V39: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V39 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v39_to_v40(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V39 to V40 (persona buddy storage contract)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V39 to V40 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V39_TO_V40)
+            final_version = self._get_db_version(conn)
+            if final_version != 40:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V39->V40 failed version check. Expected 40, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V40 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V39->V40 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V39->V40 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V39->V40: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V40 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v40_to_v41(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V40 to V41 (manuscript management tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V40 to V41 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V40_TO_V41)
+            final_version = self._get_db_version(conn)
+            if final_version != 41:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V40->V41 failed version check. Expected 41, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V41 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V40->V41 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V40->V41 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V40->V41: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V41 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -5911,6 +6548,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_workspace_subresource_schema_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                    self._ensure_study_pack_schema_sqlite(conn)
                     self._ensure_study_assistant_schema_sqlite(conn)
                     self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                     self._ensure_flashcard_fts_triggers_sqlite(conn)
@@ -6036,6 +6674,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 39 and current_db_version == 38:
                         self._migrate_from_v38_to_v39(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 40 and current_db_version == 39:
+                        self._migrate_from_v39_to_v40(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 41 and current_db_version == 40:
+                        self._migrate_from_v40_to_v41(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -6368,6 +7012,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v36_to_v37(conn)
                             elif fallback_version == 37:
                                 self._migrate_from_v37_to_v38(conn)
+                            elif fallback_version == 38:
+                                self._migrate_from_v38_to_v39(conn)
+                            elif fallback_version == 39:
+                                self._migrate_from_v39_to_v40(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -6461,6 +7109,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 39 and current_db_version == 38:
                     self._migrate_from_v38_to_v39(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 40 and current_db_version == 39:
+                    self._migrate_from_v39_to_v40(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 41 and current_db_version == 40:
+                    self._migrate_from_v40_to_v41(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
@@ -6477,6 +7131,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_workspace_study_material_schema_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                self._ensure_study_pack_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
                 self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
@@ -7523,6 +8178,626 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL study assistant schema: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_study_pack_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure SQLite sync-log triggers exist for study pack tables."""
+        try:
+            table_names = {
+                str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading SQLite table inventory for study pack triggers: {exc}") from exc  # noqa: TRY003
+
+        if "sync_log" not in table_names:
+            return
+
+        study_packs_script = ""
+        if "study_packs" in table_names:
+            study_packs_script = """
+                CREATE TRIGGER study_packs_sync_create
+                AFTER INSERT ON study_packs BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_packs_sync_update
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.workspace_id IS NOT NEW.workspace_id OR
+                     OLD.title IS NOT NEW.title OR
+                     OLD.deck_id IS NOT NEW.deck_id OR
+                     OLD.source_bundle_json IS NOT NEW.source_bundle_json OR
+                     OLD.generation_options_json IS NOT NEW.generation_options_json OR
+                     OLD.status IS NOT NEW.status OR
+                     OLD.superseded_by_pack_id IS NOT NEW.superseded_by_pack_id OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_packs_sync_delete
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER study_packs_sync_undelete
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        study_pack_cards_script = ""
+        if "study_pack_cards" in table_names:
+            study_pack_cards_script = """
+                CREATE TRIGGER study_pack_cards_sync_create
+                AFTER INSERT ON study_pack_cards BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_update
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.study_pack_id IS NOT NEW.study_pack_id OR
+                     OLD.flashcard_uuid IS NOT NEW.flashcard_uuid OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_delete
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_undelete
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        flashcard_citations_script = ""
+        if "flashcard_citations" in table_names:
+            flashcard_citations_script = """
+                CREATE TRIGGER flashcard_citations_sync_create
+                AFTER INSERT ON flashcard_citations BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_update
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.flashcard_uuid IS NOT NEW.flashcard_uuid OR
+                     OLD.source_type IS NOT NEW.source_type OR
+                     OLD.source_id IS NOT NEW.source_id OR
+                     OLD.citation_text IS NOT NEW.citation_text OR
+                     OLD.locator IS NOT NEW.locator OR
+                     OLD.ordinal IS NOT NEW.ordinal OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_delete
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_undelete
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        try:
+            conn.executescript(
+                f"""
+                DROP TRIGGER IF EXISTS study_packs_sync_create;
+                DROP TRIGGER IF EXISTS study_packs_sync_update;
+                DROP TRIGGER IF EXISTS study_packs_sync_delete;
+                DROP TRIGGER IF EXISTS study_packs_sync_undelete;
+                {study_packs_script}
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_create;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_update;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_delete;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_undelete;
+                {study_pack_cards_script}
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_create;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_update;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_delete;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_undelete;
+                {flashcard_citations_script}
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study pack sync triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_pack_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure study pack tables exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_packs(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+                  title TEXT NOT NULL,
+                  deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  source_bundle_json TEXT NOT NULL,
+                  generation_options_json TEXT,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+                  superseded_by_pack_id INTEGER REFERENCES study_packs(id) ON DELETE SET NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_pack_cards(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  study_pack_id INTEGER NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+                  flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_citations(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  source_type TEXT NOT NULL CHECK(source_type IN ('note', 'media', 'message')),
+                  source_id TEXT NOT NULL,
+                  citation_text TEXT,
+                  locator TEXT,
+                  ordinal INTEGER NOT NULL DEFAULT 0,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deleted ON study_packs(deleted)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_pack_id ON study_pack_cards(study_pack_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_flashcard_uuid ON study_pack_cards(flashcard_uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_deleted ON study_pack_cards(deleted)")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_pack_cards_unique_active
+                    ON study_pack_cards(study_pack_id, flashcard_uuid)
+                 WHERE deleted = 0
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study pack schema: {exc}") from exc  # noqa: TRY003
+
+        self._ensure_study_pack_sync_triggers_sqlite(conn)
+
+    def _ensure_study_pack_schema_postgres(self, conn) -> None:
+        """Ensure study pack tables exist for PostgreSQL."""
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS study_packs(
+              id BIGSERIAL PRIMARY KEY,
+              workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+              title TEXT NOT NULL,
+              deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+              source_bundle_json TEXT NOT NULL,
+              generation_options_json TEXT,
+              status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+              superseded_by_pack_id BIGINT REFERENCES study_packs(id) ON DELETE SET NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS study_pack_cards(
+              id BIGSERIAL PRIMARY KEY,
+              study_pack_id BIGINT NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+              flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS flashcard_citations(
+              id BIGSERIAL PRIMARY KEY,
+              flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+              source_type TEXT NOT NULL CHECK(source_type IN ('note', 'media', 'message')),
+              source_id TEXT NOT NULL,
+              citation_text TEXT,
+              locator TEXT,
+              ordinal INTEGER NOT NULL DEFAULT 0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_deleted ON study_packs(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_pack_id ON study_pack_cards(study_pack_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_flashcard_uuid ON study_pack_cards(flashcard_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_deleted ON study_pack_cards(deleted)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_study_pack_cards_unique_active
+                ON study_pack_cards(study_pack_id, flashcard_uuid)
+             WHERE deleted = FALSE
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)",
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)",
+        ]
+        try:
+            for statement in statements:
+                self.backend.execute(statement, connection=conn)
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study pack schema: {exc}") from exc  # noqa: TRY003
+
+        try:
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION study_packs_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'workspace_id', NEW.workspace_id,
+                        'title', NEW.title,
+                        'deck_id', NEW.deck_id,
+                        'source_bundle_json', NEW.source_bundle_json,
+                        'generation_options_json', NEW.generation_options_json,
+                        'status', NEW.status,
+                        'superseded_by_pack_id', NEW.superseded_by_pack_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.workspace_id IS DISTINCT FROM NEW.workspace_id OR
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.deck_id IS DISTINCT FROM NEW.deck_id OR
+                    OLD.source_bundle_json IS DISTINCT FROM NEW.source_bundle_json OR
+                    OLD.generation_options_json IS DISTINCT FROM NEW.generation_options_json OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.superseded_by_pack_id IS DISTINCT FROM NEW.superseded_by_pack_id OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'workspace_id', NEW.workspace_id,
+                        'title', NEW.title,
+                        'deck_id', NEW.deck_id,
+                        'source_bundle_json', NEW.source_bundle_json,
+                        'generation_options_json', NEW.generation_options_json,
+                        'status', NEW.status,
+                        'superseded_by_pack_id', NEW.superseded_by_pack_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION study_pack_cards_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'study_pack_id', NEW.study_pack_id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.study_pack_id IS DISTINCT FROM NEW.study_pack_id OR
+                    OLD.flashcard_uuid IS DISTINCT FROM NEW.flashcard_uuid OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'study_pack_id', NEW.study_pack_id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION flashcard_citations_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'citation_text', NEW.citation_text,
+                        'locator', NEW.locator,
+                        'ordinal', NEW.ordinal,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.flashcard_uuid IS DISTINCT FROM NEW.flashcard_uuid OR
+                    OLD.source_type IS DISTINCT FROM NEW.source_type OR
+                    OLD.source_id IS DISTINCT FROM NEW.source_id OR
+                    OLD.citation_text IS DISTINCT FROM NEW.citation_text OR
+                    OLD.locator IS DISTINCT FROM NEW.locator OR
+                    OLD.ordinal IS DISTINCT FROM NEW.ordinal OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'citation_text', NEW.citation_text,
+                        'locator', NEW.locator,
+                        'ordinal', NEW.ordinal,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS study_packs_sync_log ON study_packs", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER study_packs_sync_log AFTER INSERT OR UPDATE ON study_packs "
+                "FOR EACH ROW EXECUTE FUNCTION study_packs_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS study_pack_cards_sync_log ON study_pack_cards", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER study_pack_cards_sync_log AFTER INSERT OR UPDATE ON study_pack_cards "
+                "FOR EACH ROW EXECUTE FUNCTION study_pack_cards_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS flashcard_citations_sync_log ON flashcard_citations", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER flashcard_citations_sync_log AFTER INSERT OR UPDATE ON flashcard_citations "
+                "FOR EACH ROW EXECUTE FUNCTION flashcard_citations_sync_log_fn()",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study pack sync triggers: {exc}") from exc  # noqa: TRY003
+
     def _ensure_quiz_remediation_conversion_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure quiz remediation conversion storage exists for SQLite."""
         try:
@@ -7799,6 +9074,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_workspace_study_material_schema_postgres(conn)
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V38_TO_V39_POSTGRES, conn, expected_version=39)
                 current_version = 39
+            if current_version < 40:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40_POSTGRES, conn, expected_version=40)
+                current_version = 40
+            if current_version < 41:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V40_TO_V41_POSTGRES, conn, expected_version=41)
+                current_version = 41
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -7807,6 +9088,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             self._ensure_flashcard_asset_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
+            self._ensure_study_pack_schema_postgres(conn)
             self._ensure_study_assistant_schema_postgres(conn)
             self._ensure_workspace_study_material_schema_postgres(conn)
             self._ensure_quiz_remediation_conversion_schema_postgres(conn)
@@ -10287,6 +11569,38 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item["deleted"] = self._as_bool(item.get("deleted"))
         return item
 
+    def _persona_buddy_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona buddy DB `row: Any` to an API-safe dict."""
+        if not row:
+            return None
+        item = dict(row)
+        buddy_label = str(item.get("persona_id") or "unknown")
+        item["derived_core"] = self._decode_persona_json_object(
+            item.get("derived_core_json"),
+            field_name="derived_core_json",
+            context_label=f"persona buddy {buddy_label}",
+        )
+        item["overlay_preferences"] = self._decode_persona_json_object(
+            item.get("overlay_preferences_json"),
+            field_name="overlay_preferences_json",
+            context_label=f"persona buddy {buddy_label}",
+        )
+        try:
+            item["resolved_profile"] = resolve_persona_buddy_profile(
+                derived_core=item["derived_core"],
+                overlay_preferences=item["overlay_preferences"],
+            )
+        except (TypeError, KeyError, ValueError) as exc:
+            logger.warning(
+                "Unable to resolve persona buddy profile for persona_id={}: {}",
+                buddy_label,
+                exc,
+            )
+            raise CharactersRAGDBError(
+                f"Unable to resolve persona buddy profile for persona_id={buddy_label}."
+            ) from exc
+        return item
+
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a scope rule DB `row: Any` to an API-safe dict.
 
@@ -10534,27 +11848,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted_personas: bool = False,
     ) -> dict[str, Any] | None:
         """Fetch a persona exemplar owned by a user."""
-        clauses = [
-            "pe.id = ?",
-            "pe.persona_id = ?",
-            "pe.user_id = ?",
-            "pp.id = pe.persona_id",
-            "pp.user_id = pe.user_id",
-        ]
-        params: list[Any] = [exemplar_id, persona_id, user_id]
-        if not include_disabled:
-            clauses.append("pe.enabled = 1")
-        if not include_deleted:
-            clauses.append("pe.deleted = 0")
-        if not include_deleted_personas:
-            clauses.append("pp.deleted = 0")
-        query = (
-            "SELECT pe.* "
-            "FROM persona_exemplars pe "
-            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
-            "WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        query = """
+            SELECT pe.*
+              FROM persona_exemplars pe
+              JOIN persona_profiles pp
+                ON pp.id = pe.persona_id
+               AND pp.user_id = pe.user_id
+             WHERE pe.id = ?
+               AND pe.persona_id = ?
+               AND pe.user_id = ?
+               AND (? OR pe.enabled = 1)
+               AND (? OR pe.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
+             LIMIT 1
+        """
+        params = (
+            exemplar_id,
+            persona_id,
+            user_id,
+            bool(include_disabled),
+            bool(include_deleted),
+            bool(include_deleted_personas),
         )
-        cursor = self.execute_query(query, tuple(params))
+        cursor = self.execute_query(query, params)
         return self._persona_exemplar_row_to_dict(cursor.fetchone())
 
     def list_persona_exemplars(
@@ -10569,30 +11885,31 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List persona exemplars for a user, optionally filtered to a persona."""
-        clauses = [
-            "pe.user_id = ?",
-            "pp.id = pe.persona_id",
-            "pp.user_id = pe.user_id",
-        ]
-        params: list[Any] = [user_id]
-        if persona_id is not None:
-            clauses.append("pe.persona_id = ?")
-            params.append(persona_id)
-        if not include_disabled:
-            clauses.append("pe.enabled = 1")
-        if not include_deleted:
-            clauses.append("pe.deleted = 0")
-        if not include_deleted_personas:
-            clauses.append("pp.deleted = 0")
-        query = (
-            "SELECT pe.* "
-            "FROM persona_exemplars pe "
-            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
-            "WHERE " + " AND ".join(clauses) + " "
-            "ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC LIMIT ? OFFSET ?"
+        query = """
+            SELECT pe.*
+              FROM persona_exemplars pe
+              JOIN persona_profiles pp
+                ON pp.id = pe.persona_id
+               AND pp.user_id = pe.user_id
+             WHERE pe.user_id = ?
+               AND (? IS NULL OR pe.persona_id = ?)
+               AND (? OR pe.enabled = 1)
+               AND (? OR pe.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
+             ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC
+             LIMIT ? OFFSET ?
+        """
+        params = (
+            user_id,
+            persona_id,
+            persona_id,
+            bool(include_disabled),
+            bool(include_deleted),
+            bool(include_deleted_personas),
+            max(1, int(limit)),
+            max(0, int(offset)),
         )
-        params.extend([max(1, int(limit)), max(0, int(offset))])
-        cursor = self.execute_query(query, tuple(params))
+        cursor = self.execute_query(query, params)
         return [self._persona_exemplar_row_to_dict(row) for row in cursor.fetchall() if row]
 
     def update_persona_exemplar(
@@ -10620,81 +11937,108 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "notes",
             "deleted",
         }
-        set_parts: list[str] = []
-        params: list[Any] = []
+        normalized_updates: dict[str, Any] = {}
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
 
         for key, value in update_data.items():
             if key not in allowed_fields:
                 continue
             if key == "kind":
-                params.append(
-                    self._normalize_exemplar_enum(
-                        value,
-                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
-                        field_name="kind",
-                        default="style",
-                    )
+                normalized_updates["kind"] = self._normalize_exemplar_enum(
+                    value,
+                    allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+                    field_name="kind",
+                    default="style",
                 )
-                set_parts.append("kind = ?")
             elif key == "content":
                 content = self._normalize_nullable_text(value)
                 if not content:
                     raise InputError("content cannot be empty.")  # noqa: TRY003
-                params.append(content)
-                set_parts.append("content = ?")
+                normalized_updates["content"] = content
             elif key == "tone":
-                params.append(self._normalize_persona_exemplar_tone(value))
-                set_parts.append("tone = ?")
+                normalized_updates["tone"] = self._normalize_persona_exemplar_tone(value)
             elif key == "scenario_tags":
-                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]")
-                set_parts.append("scenario_tags_json = ?")
+                normalized_updates["scenario_tags_json"] = (
+                    self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]"
+                )
             elif key == "capability_tags":
-                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]")
-                set_parts.append("capability_tags_json = ?")
+                normalized_updates["capability_tags_json"] = (
+                    self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]"
+                )
             elif key == "priority":
                 try:
-                    params.append(int(value))
+                    normalized_updates["priority"] = int(value)
                 except (TypeError, ValueError) as exc:
                     raise InputError("priority must be an integer.") from exc  # noqa: TRY003
-                set_parts.append("priority = ?")
             elif key == "enabled":
-                params.append(bool_cast(self._as_bool(value)))
-                set_parts.append("enabled = ?")
+                normalized_updates["enabled"] = bool_cast(self._as_bool(value))
             elif key == "source_type":
-                params.append(
-                    self._normalize_exemplar_enum(
-                        value,
-                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
-                        field_name="source_type",
-                        default="manual",
-                    )
+                normalized_updates["source_type"] = self._normalize_exemplar_enum(
+                    value,
+                    allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+                    field_name="source_type",
+                    default="manual",
                 )
-                set_parts.append("source_type = ?")
+            elif key == "source_ref":
+                normalized_updates["source_ref"] = self._normalize_nullable_text(value)
+            elif key == "notes":
+                normalized_updates["notes"] = self._normalize_nullable_text(value)
             elif key == "deleted":
-                params.append(bool_cast(self._normalize_deleted_input(value)))
-                set_parts.append("deleted = ?")
-            else:
-                params.append(self._normalize_nullable_text(value))
-                set_parts.append(f"{key} = ?")
+                normalized_updates["deleted"] = bool_cast(self._normalize_deleted_input(value))
 
-        if not set_parts:
+        if not normalized_updates:
             raise InputError("No valid exemplar fields provided for update.")  # noqa: TRY003
 
         now = self._get_current_utc_timestamp_iso()
-        set_parts.append("last_modified = ?")
-        params.append(now)
-        set_parts.append("version = version + 1")
+        query = """
+            UPDATE persona_exemplars
+               SET kind = CASE WHEN ? THEN ? ELSE kind END,
+                   content = CASE WHEN ? THEN ? ELSE content END,
+                   tone = CASE WHEN ? THEN ? ELSE tone END,
+                   scenario_tags_json = CASE WHEN ? THEN ? ELSE scenario_tags_json END,
+                   capability_tags_json = CASE WHEN ? THEN ? ELSE capability_tags_json END,
+                   priority = CASE WHEN ? THEN ? ELSE priority END,
+                   enabled = CASE WHEN ? THEN ? ELSE enabled END,
+                   source_type = CASE WHEN ? THEN ? ELSE source_type END,
+                   source_ref = CASE WHEN ? THEN ? ELSE source_ref END,
+                   notes = CASE WHEN ? THEN ? ELSE notes END,
+                   deleted = CASE WHEN ? THEN ? ELSE deleted END,
+                   last_modified = ?,
+                   version = version + 1
+             WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0
+        """
+        params = (
+            "kind" in normalized_updates,
+            normalized_updates.get("kind"),
+            "content" in normalized_updates,
+            normalized_updates.get("content"),
+            "tone" in normalized_updates,
+            normalized_updates.get("tone"),
+            "scenario_tags_json" in normalized_updates,
+            normalized_updates.get("scenario_tags_json"),
+            "capability_tags_json" in normalized_updates,
+            normalized_updates.get("capability_tags_json"),
+            "priority" in normalized_updates,
+            normalized_updates.get("priority"),
+            "enabled" in normalized_updates,
+            normalized_updates.get("enabled"),
+            "source_type" in normalized_updates,
+            normalized_updates.get("source_type"),
+            "source_ref" in normalized_updates,
+            normalized_updates.get("source_ref"),
+            "notes" in normalized_updates,
+            normalized_updates.get("notes"),
+            "deleted" in normalized_updates,
+            normalized_updates.get("deleted"),
+            now,
+            exemplar_id,
+            persona_id,
+            user_id,
+        )
 
         with self.transaction() as conn:
             self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
-            query = (
-                "UPDATE persona_exemplars "
-                f"SET {', '.join(set_parts)} "
-                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
-            )
-            params.extend([exemplar_id, persona_id, user_id])
-            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
             cursor = conn.execute(prepared_query, prepared_params or ())
             return cursor.rowcount > 0
 
@@ -10996,6 +12340,252 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             update_data=update_data,
             expected_version=expected_version,
         )
+
+    def restore_persona_profile(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        expected_version: int,
+    ) -> bool:
+        """Restore a soft-deleted persona profile using optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        expected_version_value = self._parse_version_input(expected_version)
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        deleted_true = True if self.backend_type == BackendType.POSTGRESQL else 1
+        is_active_true = True if self.backend_type == BackendType.POSTGRESQL else 1
+
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            if not row:
+                return False
+
+            if not self._as_bool(row["deleted"]):
+                return True
+
+            current_db_version = int(row["version"])
+            if current_db_version != expected_version_value:
+                raise ConflictError(  # noqa: TRY003
+                    (
+                        f"Restore for persona profile {persona_id} failed: "
+                        f"version mismatch (db has {current_db_version}, expected {expected_version_value})."
+                    ),
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                )
+
+            query = (
+                "UPDATE persona_profiles "
+                "SET deleted = ?, is_active = ?, last_modified = ?, version = version + 1 "
+                "WHERE id = ? AND user_id = ? AND version = ? AND deleted = ?"
+            )
+            params = (
+                deleted_false,
+                is_active_true,
+                now,
+                persona_id,
+                user_id,
+                expected_version_value,
+                deleted_true,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            if cursor.rowcount > 0:
+                return True
+
+            final_state = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            return bool(final_state and not self._as_bool(final_state["deleted"]))
+
+    def get_persona_buddy(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        include_deleted_personas: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch one persona buddy row for a user-owned persona profile."""
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        query = """
+            SELECT pb.*
+              FROM persona_buddies pb
+              JOIN persona_profiles pp
+                ON pp.id = pb.persona_id
+               AND pp.user_id = pb.user_id
+             WHERE pb.persona_id = ?
+               AND pb.user_id = ?
+               AND (? OR pp.deleted = ?)
+             LIMIT 1
+        """
+        params = (
+            persona_id,
+            user_id,
+            bool(include_deleted_personas),
+            deleted_false,
+        )
+        cursor = self.execute_query(query, params)
+        return self._persona_buddy_row_to_dict(cursor.fetchone())
+
+    def list_persona_buddies(
+        self,
+        *,
+        user_id: str,
+        persona_ids: list[str],
+        include_deleted_personas: bool = False,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Fetch buddy rows for a batch of user-owned persona profiles."""
+        normalized_persona_ids = list(
+            dict.fromkeys(
+                str(persona_id or "").strip()
+                for persona_id in persona_ids
+                if str(persona_id or "").strip()
+            )
+        )
+        if not normalized_persona_ids:
+            return {}
+
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        placeholders = ", ".join("?" for _ in normalized_persona_ids)
+        query = (
+            "SELECT pb.* "
+            "FROM persona_buddies pb "
+            "JOIN persona_profiles pp "
+            "  ON pp.id = pb.persona_id "
+            " AND pp.user_id = pb.user_id "
+            f"WHERE pb.user_id = ? AND pb.persona_id IN ({placeholders}) "  # nosec B608
+            "AND (? OR pp.deleted = ?)"
+        )
+        params: list[Any] = [
+            user_id,
+            *normalized_persona_ids,
+            bool(include_deleted_personas),
+            deleted_false,
+        ]
+        cursor = self.execute_query(query, tuple(params))
+        buddies: dict[str, dict[str, Any] | None] = {
+            persona_id: None for persona_id in normalized_persona_ids
+        }
+        for row in cursor.fetchall():
+            buddy = self._persona_buddy_row_to_dict(row)
+            if buddy is None:
+                continue
+            persona_id = str(buddy.get("persona_id") or "").strip()
+            if persona_id:
+                buddies[persona_id] = buddy
+        return buddies
+
+    def upsert_persona_buddy(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        derivation_version: int,
+        source_fingerprint: str,
+        derived_core: dict[str, Any] | None,
+        overlay_preferences: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Insert or update one persona buddy row keyed by persona_id."""
+        if not source_fingerprint:
+            raise InputError("source_fingerprint is required for persona buddy upsert.")  # noqa: TRY003
+        try:
+            derivation_version_value = int(derivation_version)
+        except (TypeError, ValueError) as exc:
+            raise InputError("derivation_version must be an integer >= 1.") from exc  # noqa: TRY003
+        if derivation_version_value < 1:
+            raise InputError("derivation_version must be an integer >= 1.")  # noqa: TRY003
+
+        derived_core_json = self._ensure_json_string(derived_core if isinstance(derived_core, dict) else {}) or "{}"
+        overlay_preferences_json = (
+            self._ensure_json_string(overlay_preferences if isinstance(overlay_preferences, dict) else {}) or "{}"
+        )
+        now = self._get_current_utc_timestamp_iso()
+        update_query = (
+            "UPDATE persona_buddies "
+            "SET user_id = ?, derivation_version = ?, source_fingerprint = ?, derived_core_json = ?, "
+            "overlay_preferences_json = ?, last_modified = ?, version = version + 1 "
+            "WHERE persona_id = ? AND ("
+            "user_id <> ? OR derivation_version <> ? OR source_fingerprint <> ? OR "
+            "derived_core_json <> ? OR overlay_preferences_json <> ?"
+            ")"
+        )
+        update_params = (
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+            now,
+            persona_id,
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+        )
+        insert_query = (
+            "INSERT INTO persona_buddies("
+            "persona_id, user_id, derivation_version, source_fingerprint, derived_core_json, "
+            "overlay_preferences_json, created_at, last_modified, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        insert_params = (
+            persona_id,
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+            now,
+            now,
+            1,
+        )
+
+        def _load_persisted_item(connection: Any) -> dict[str, Any]:
+            row = connection.execute(
+                "SELECT * FROM persona_buddies WHERE persona_id = ? LIMIT 1",
+                (persona_id,),
+            ).fetchone()
+            item = self._persona_buddy_row_to_dict(row)
+            if not item:
+                raise CharactersRAGDBError("Failed to load persona buddy after upsert.")  # noqa: TRY003
+            return item
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            prepared_update, prepared_update_params = self._prepare_backend_statement(update_query, update_params)
+            update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+
+            if update_cursor.rowcount == 0:
+                existing_row = conn.execute(
+                    "SELECT 1 FROM persona_buddies WHERE persona_id = ? LIMIT 1",
+                    (persona_id,),
+                ).fetchone()
+                if existing_row:
+                    return _load_persisted_item(conn)
+
+                prepared_insert, prepared_insert_params = self._prepare_backend_statement(insert_query, insert_params)
+                try:
+                    conn.execute(prepared_insert, prepared_insert_params or ())
+                except sqlite3.IntegrityError as exc:
+                    msg = str(exc).lower()
+                    if "unique constraint failed" not in msg:
+                        raise
+                    update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+                    if update_cursor.rowcount == 0:
+                        return _load_persisted_item(conn)
+                except BackendDatabaseError as exc:
+                    if not self._is_unique_violation(exc):
+                        raise
+                    update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+                    if update_cursor.rowcount == 0:
+                        return _load_persisted_item(conn)
+
+            return _load_persisted_item(conn)
 
     def list_persona_scope_rules(
         self,
@@ -12709,6 +14299,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
+    _STUDY_PACK_JSON_FIELDS = ['source_bundle_json', 'generation_options_json']
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
     _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
@@ -20797,6 +22388,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
+    def get_deck_by_name(self, name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        """Fetch one deck row by name using the repository-wide unique-name invariant."""
+        if include_deleted:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? "
+                "ORDER BY id LIMIT 1"
+            )
+        else:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? AND deleted = 0 "
+                "ORDER BY id LIMIT 1"
+            )
+        try:
+            cursor = self.execute_query(query, (name,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
     def update_deck(
         self,
         deck_id: int,
@@ -21279,6 +22891,67 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def list_flashcard_tag_suggestions(
+        self,
+        q: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List global flashcard tag suggestions with per-tag usage counts."""
+        if limit <= 0:
+            return []
+
+        keyword_table = self._map_table_for_backend("keywords")
+        normalized_q = (q or "").strip()
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            where_clauses.extend(
+                [
+                    "f.deleted = FALSE",
+                    "kw.deleted = FALSE",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = FALSE))",
+                ]
+            )
+        else:
+            where_clauses.extend(
+                [
+                    "f.deleted = 0",
+                    "kw.deleted = 0",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = 0))",
+                ]
+            )
+
+        if normalized_q:
+            where_clauses.append("LOWER(kw.keyword) LIKE ?")
+            params.append(f"%{normalized_q.lower()}%")
+
+        order_keyword = self._case_insensitive_order_expression("kw.keyword")
+        where_sql = " AND ".join(where_clauses)
+        query = """
+            SELECT
+                kw.keyword AS tag,
+                COUNT(DISTINCT f.id) AS usage_count
+            FROM flashcards f
+            JOIN flashcard_keywords fk ON fk.card_id = f.id
+            JOIN {keyword_table} kw ON kw.id = fk.keyword_id
+            LEFT JOIN decks d ON d.id = f.deck_id
+            WHERE {where_sql}
+            GROUP BY kw.keyword
+            ORDER BY usage_count DESC, {order_keyword}
+            LIMIT ?
+        """.format_map(locals())  # nosec B608
+        params.append(limit)
+
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [
+                {"tag": str(row["tag"]), "count": int(row["usage_count"] or 0)}
+                for row in cursor.fetchall()
+            ]
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
@@ -22189,6 +23862,585 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # unlink extras
         for kid in cur_kw_ids - desired_kw_ids:
             conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
+
+    # ==========================
+    # Study Packs
+    # ==========================
+    def create_study_pack(
+        self,
+        *,
+        title: str,
+        workspace_id: str | None,
+        deck_id: int | None,
+        source_bundle_json: dict[str, Any] | str,
+        generation_options_json: dict[str, Any] | str | None,
+        status: str = "active",
+        superseded_by_pack_id: int | None = None,
+    ) -> int:
+        """Create a study pack row and return its integer id."""
+        if status not in ("active", "superseded"):
+            raise InputError("Invalid study pack status; must be 'active' or 'superseded'")  # noqa: TRY003
+
+        source_bundle_candidate: Any = source_bundle_json
+        if isinstance(source_bundle_json, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                source_bundle_candidate = json.loads(source_bundle_json)
+        if isinstance(source_bundle_candidate, dict):
+            source_items = source_bundle_candidate.get("items")
+            if isinstance(source_items, list):
+                for source_item in source_items:
+                    if not isinstance(source_item, dict):
+                        continue
+                    if self._normalize_nullable_text(source_item.get("source_id")) is None:
+                        raise InputError("Study pack source_id is required")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        source_bundle = self._ensure_json_string_from_mixed(source_bundle_json)
+        generation_options = self._ensure_json_string_from_mixed(generation_options_json)
+
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    "INSERT INTO study_packs("
+                    "workspace_id, title, deck_id, source_bundle_json, generation_options_json, "
+                    "status, superseded_by_pack_id, created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    workspace_id,
+                    title,
+                    deck_id,
+                    source_bundle,
+                    generation_options,
+                    status,
+                    superseded_by_pack_id,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    pack_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    pack_id = int(cursor.lastrowid)
+
+                if pack_id is None:
+                    raise CharactersRAGDBError("Failed to determine study pack ID after insert")  # noqa: TRY003
+                return pack_id
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack(self, pack_id: int) -> dict[str, Any] | None:
+        """Fetch a single active study pack by id."""
+        query = """
+            SELECT id, workspace_id, title, deck_id, source_bundle_json, generation_options_json,
+                   status, superseded_by_pack_id, created_at, last_modified, deleted, client_id, version
+              FROM study_packs
+             WHERE id = ? AND deleted = 0
+        """
+        try:
+            cursor = self.execute_query(query, (pack_id,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def add_study_pack_cards(self, study_pack_id: int, flashcard_uuids: list[str]) -> int:
+        """Attach flashcards to a study pack by UUID without relying on deck membership."""
+        if not flashcard_uuids:
+            return 0
+
+        now = self._get_current_utc_timestamp_iso()
+        if self.backend_type == BackendType.POSTGRESQL:
+            insert_sql = (
+                "INSERT INTO study_pack_cards("
+                "study_pack_id, flashcard_uuid, created_at, last_modified, deleted, client_id, version"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING"
+            )
+        else:
+            insert_sql = (
+                "INSERT OR IGNORE INTO study_pack_cards("
+                "study_pack_id, flashcard_uuid, created_at, last_modified, deleted, client_id, version"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?)"
+            )
+
+        params = [
+            (study_pack_id, card_uuid, now, now, False, self.client_id, 1)
+            for card_uuid in flashcard_uuids
+        ]
+        try:
+            with self.transaction() as conn:
+                before_row = conn.execute(
+                    "SELECT COUNT(*) FROM study_pack_cards WHERE study_pack_id = ? AND deleted = 0",
+                    (study_pack_id,),
+                ).fetchone()
+                before_count = int(before_row[0]) if before_row else 0
+                self.execute_many(insert_sql, params, commit=False)
+                after_row = conn.execute(
+                    "SELECT COUNT(*) FROM study_pack_cards WHERE study_pack_id = ? AND deleted = 0",
+                    (study_pack_id,),
+                ).fetchone()
+                after_count = int(after_row[0]) if after_row else before_count
+            return max(0, after_count - before_count)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add study pack cards: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add study pack cards: {exc}") from exc  # noqa: TRY003
+
+    def list_study_pack_cards(self, study_pack_id: int, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        """List study pack membership rows in insertion order."""
+        deleted_clause = "1=1" if include_deleted else "spc.deleted = 0"
+        query = f"""
+            SELECT spc.id, spc.study_pack_id, spc.flashcard_uuid, spc.created_at, spc.last_modified,
+                   spc.deleted, spc.client_id, spc.version, f.deck_id
+              FROM study_pack_cards spc
+              LEFT JOIN flashcards f ON f.uuid = spc.flashcard_uuid
+             WHERE spc.study_pack_id = ? AND {deleted_clause}
+             ORDER BY spc.id
+        """  # nosec B608
+        try:
+            cursor = self.execute_query(query, (study_pack_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def add_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Insert provenance citations for a flashcard."""
+        if not citations:
+            return 0
+
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as _:
+                self.execute_many(
+                    """
+                    INSERT INTO flashcard_citations(
+                        flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                        created_at, last_modified, deleted, client_id, version
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params,
+                    commit=False,
+                )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
+
+    def replace_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Replace the active citation set for a flashcard with the provided rows."""
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+
+    def replace_flashcard_citations_and_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        citations: list[dict[str, Any]],
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> int:
+        """Atomically replace citations and mirror the primary legacy source reference."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_citation_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_citation_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_citation_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(
+                f"Failed to replace flashcard citations and source summary: {exc}"
+            ) from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(
+                f"Failed to replace flashcard citations and source summary: {exc}"
+            ) from exc  # noqa: TRY003
+
+    def list_flashcard_citations(self, flashcard_uuid: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        """List citations for a flashcard ordered by ordinal."""
+        deleted_clause = "1=1" if include_deleted else "deleted = 0"
+        query = f"""
+            SELECT id, flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                   created_at, last_modified, deleted, client_id, version
+              FROM flashcard_citations
+             WHERE flashcard_uuid = ? AND {deleted_clause}
+             ORDER BY ordinal, id
+        """  # nosec B608
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def set_flashcard_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> bool:
+        """Persist the legacy flashcard source summary from the primary citation only."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                cursor = conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                return cursor.rowcount > 0
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack_for_flashcard(self, flashcard_uuid: str) -> dict[str, Any] | None:
+        """Return the first active study pack containing the flashcard."""
+        query = """
+            SELECT sp.id, sp.workspace_id, sp.title, sp.deck_id, sp.source_bundle_json, sp.generation_options_json,
+                   sp.status, sp.superseded_by_pack_id, sp.created_at, sp.last_modified, sp.deleted, sp.client_id, sp.version
+              FROM study_pack_cards spc
+              JOIN study_packs sp ON sp.id = spc.study_pack_id
+             WHERE spc.flashcard_uuid = ? AND spc.deleted = 0 AND sp.deleted = 0
+             ORDER BY spc.id ASC, sp.id ASC
+             LIMIT 1
+        """
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def soft_delete_study_pack(self, pack_id: int, expected_version: int | None = None) -> bool:
+        """Soft delete a study pack with optional optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT version, deleted FROM study_packs WHERE id = ?", (pack_id,)).fetchone()
+                if not row:
+                    raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                current_version = int(row["version"])
+                deleted = bool(row["deleted"])
+                if deleted:
+                    return True
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch deleting study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                update_query = """
+                    UPDATE study_packs
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                """
+                update_params: list[Any] = [now, self.client_id, pack_id]
+                if expected_version is not None:
+                    update_query += " AND version = ?"
+                    update_params.append(expected_version)
+                cursor = conn.execute(update_query, tuple(update_params))
+                if cursor.rowcount == 0:
+                    changed_row = conn.execute(
+                        "SELECT version, deleted FROM study_packs WHERE id = ?",
+                        (pack_id,),
+                    ).fetchone()
+                    if not changed_row:
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if bool(changed_row["deleted"]):
+                        return True
+                    if expected_version is not None and int(changed_row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch deleting study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    raise ConflictError(
+                        "Concurrent update deleting study pack",
+                        entity="study_packs",
+                        identifier=pack_id,
+                    )
+                return True
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed to delete study pack: {exc}") from exc  # noqa: TRY003
+
+    def supersede_study_pack(
+        self,
+        pack_id: int,
+        *,
+        superseded_by_pack_id: int,
+        expected_version: int | None = None,
+    ) -> bool:
+        """Mark a study pack superseded by another pack."""
+        if superseded_by_pack_id == pack_id:
+            raise InputError("Study pack cannot self-supersede")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    locked_rows: dict[int, Any] = {}
+                    for locked_pack_id in sorted((pack_id, superseded_by_pack_id)):
+                        locked_row = conn.execute(
+                            "SELECT id, version, deleted FROM study_packs WHERE id = ? FOR UPDATE",
+                            (locked_pack_id,),
+                        ).fetchone()
+                        if locked_row:
+                            locked_rows[int(locked_row["id"])] = locked_row
+                    row = locked_rows.get(pack_id)
+                    replacement_row = locked_rows.get(superseded_by_pack_id)
+                else:
+                    row = conn.execute("SELECT version, deleted FROM study_packs WHERE id = ?", (pack_id,)).fetchone()
+                    replacement_row = conn.execute(
+                        "SELECT id, deleted FROM study_packs WHERE id = ?",
+                        (superseded_by_pack_id,),
+                    ).fetchone()
+
+                if not row or bool(row["deleted"]):
+                    raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                current_version = int(row["version"])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                if not replacement_row:
+                    raise ConflictError(
+                        "Study pack replacement pack not found",
+                        entity="study_packs",
+                        identifier=superseded_by_pack_id,
+                    )
+                if bool(replacement_row["deleted"]):
+                    raise ConflictError(
+                        "Study pack replacement pack is deleted",
+                        entity="study_packs",
+                        identifier=superseded_by_pack_id,
+                    )
+                update_query = """
+                    UPDATE study_packs
+                       SET status = 'superseded',
+                           superseded_by_pack_id = ?,
+                           last_modified = ?,
+                           version = version + 1,
+                           client_id = ?
+                     WHERE id = ? AND deleted = 0
+                """
+                update_params: list[Any] = [superseded_by_pack_id, now, self.client_id, pack_id]
+                if expected_version is not None:
+                    update_query += " AND version = ?"
+                    update_params.append(expected_version)
+                cursor = conn.execute(update_query, tuple(update_params))
+                if cursor.rowcount == 0:
+                    changed_row = conn.execute(
+                        "SELECT version, deleted FROM study_packs WHERE id = ?",
+                        (pack_id,),
+                    ).fetchone()
+                    if not changed_row:
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if bool(changed_row["deleted"]):
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if expected_version is not None and int(changed_row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch updating study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    raise ConflictError(
+                        "Concurrent update superseding study pack",
+                        entity="study_packs",
+                        identifier=pack_id,
+                    )
+                return True
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed to supersede study pack: {exc}") from exc  # noqa: TRY003
 
     # ==========================
     # Quizzes (V12)

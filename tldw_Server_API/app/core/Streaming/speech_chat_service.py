@@ -80,6 +80,9 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSRateLimitError,
     TTSValidationError,
 )
+from tldw_Server_API.app.core.TTS.tts_request_resolution import (
+    resolve_tts_request_defaults,
+)
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 
 _ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "ogg", "opus", "aac", "flac", "webm", "m4a"}
@@ -674,11 +677,16 @@ async def run_speech_chat_turn(
     tts_start = time.time()
     tts_config = request_data.tts_config
     response_format = (tts_config.response_format if tts_config and tts_config.response_format else "mp3")
+    resolved_tts = resolve_tts_request_defaults(
+        provider=(tts_config.provider if tts_config else None),
+        model=(tts_config.model if tts_config else None),
+        voice=(tts_config.voice if tts_config else None),
+    )
 
     tts_request = OpenAISpeechRequest(
-        model=(tts_config.model if tts_config and tts_config.model else "kokoro"),
+        model=resolved_tts.model,
         input=assistant_text,
-        voice=(tts_config.voice if tts_config and tts_config.voice else "af_heart"),
+        voice=resolved_tts.voice,
         response_format=response_format,
         speed=(tts_config.speed if tts_config and tts_config.speed is not None else 1.0),
         extra_params=(tts_config.extra_params if tts_config else None),
@@ -689,7 +697,7 @@ async def run_speech_chat_turn(
         audio_chunks = []
         async for chunk in tts_service.generate_speech(
             tts_request,
-            provider=(tts_config.provider if tts_config and tts_config.provider else None),
+            provider=resolved_tts.provider,
             fallback=True,
         ):
             if chunk:
@@ -735,7 +743,7 @@ async def run_speech_chat_turn(
             labels={
                 "stt_provider": stt_provider or "default",
                 "llm_provider": llm_provider,
-                "tts_provider": (tts_config.provider if tts_config and tts_config.provider else "default"),
+                "tts_provider": resolved_tts.provider,
             },
         )
     except Exception as e:  # noqa: BLE001

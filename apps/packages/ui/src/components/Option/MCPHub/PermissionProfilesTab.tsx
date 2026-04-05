@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, Modal, Space, Tag, Typography } from "antd"
 
 import {
   createPermissionProfile,
@@ -76,9 +76,10 @@ export const PermissionProfilesTab = () => {
     try {
       const rows = await listPermissionProfiles()
       setProfiles(Array.isArray(rows) ? rows : [])
-    } catch {
+    } catch (err) {
       setProfiles([])
-      setErrorMessage("Failed to load MCP Hub permission profiles.")
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to load permission profiles: ${msg}`)
     } finally {
       setLoading(false)
     }
@@ -139,9 +140,10 @@ export const PermissionProfilesTab = () => {
     try {
       const rows = await listProfileCredentialBindings(profileId)
       setProfileBindings(Array.isArray(rows) ? rows : [])
-    } catch {
+    } catch (err) {
       setProfileBindings([])
-      setErrorMessage("Failed to load external server bindings.")
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to load external server bindings: ${msg}`)
     } finally {
       setBindingsLoading(false)
     }
@@ -184,28 +186,36 @@ export const PermissionProfilesTab = () => {
       }
       resetForm()
       await loadProfiles()
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error"
       setErrorMessage(
         editingId
-          ? "Failed to update MCP Hub permission profile."
-          : "Failed to create MCP Hub permission profile."
+          ? `Failed to update permission profile: ${msg}`
+          : `Failed to create permission profile: ${msg}`
       )
     } finally {
       setSaving(false)
     }
   }
 
-  const handleDelete = async (profileId: number) => {
-    if (typeof window !== "undefined" && !window.confirm("Delete this permission profile?")) {
-      return
-    }
-    setErrorMessage(null)
-    try {
-      await deletePermissionProfile(profileId)
-      await loadProfiles()
-    } catch {
-      setErrorMessage("Failed to delete MCP Hub permission profile.")
-    }
+  const handleDelete = (profile: McpHubPermissionProfile) => {
+    Modal.confirm({
+      title: "Delete Profile",
+      content: `Are you sure you want to delete the profile "${profile.name}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setErrorMessage(null)
+        try {
+          await deletePermissionProfile(profile.id)
+          await loadProfiles()
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete permission profile: ${msg}`)
+        }
+      }
+    })
   }
 
   const handleToggleExternalServer = async (
@@ -447,7 +457,21 @@ export const PermissionProfilesTab = () => {
       {loading ? (
         <Card loading size="small" />
       ) : profiles.length === 0 ? (
-        <Empty description="No permission profiles yet" />
+        <Empty
+          description={
+            <Space orientation="vertical" size={4}>
+              <Typography.Text type="secondary">No permission profiles yet</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                Profiles control which tools users and personas can access.
+                Before creating a profile, review the <Typography.Text strong>Tool Catalog</Typography.Text> to see available tools.
+              </Typography.Text>
+            </Space>
+          }
+        >
+          <Button type="primary" onClick={() => setCreateOpen(true)}>
+            Create Profile
+          </Button>
+        </Empty>
       ) : (
         <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           {profiles.map((profile) => (
@@ -469,7 +493,7 @@ export const PermissionProfilesTab = () => {
                   <Button size="small" onClick={() => openForEdit(profile)}>
                     Edit
                   </Button>
-                  <Button size="small" danger onClick={() => void handleDelete(profile.id)}>
+                  <Button size="small" danger onClick={() => handleDelete(profile)}>
                     Delete
                   </Button>
                 </Space>

@@ -19,13 +19,18 @@ import {
   useDecksQuery,
   useCreateFlashcardMutation,
   useCreateDeckMutation,
-  useDebouncedFormField
+  useDebouncedFormField,
+  type UseFlashcardQueriesOptions
 } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { FlashcardDeckReferenceSection } from "./FlashcardDeckReferenceSection"
+import { FlashcardTagPicker } from "./FlashcardTagPicker"
 import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import { formatDeckDisplayName } from "../utils/deck-display"
+import { normalizeOptionalFlashcardTags } from "../utils/tag-normalization"
 import {
   getSelectionFromElement,
   insertTextAtSelection,
@@ -72,12 +77,21 @@ interface FlashcardCreateDrawerProps {
   onSuccess?: () => void
 }
 
-export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
+type FlashcardCreateDrawerVisibilityProps = Pick<
+  UseFlashcardQueriesOptions,
+  "includeWorkspaceItems" | "workspaceId"
+>
+
+export const FlashcardCreateDrawer: React.FC<
+  FlashcardCreateDrawerProps & FlashcardCreateDrawerVisibilityProps
+> = ({
   open,
   onClose,
   decks: propDecks,
   decksLoading: propDecksLoading,
-  onSuccess
+  onSuccess,
+  includeWorkspaceItems,
+  workspaceId
 }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
@@ -124,7 +138,11 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const inlineSchedulerDraft = useDeckSchedulerDraft()
 
   // Queries and mutations - use props if provided, otherwise fetch
-  const decksQuery = useDecksQuery({ enabled: !propDecks })
+  const decksQuery = useDecksQuery({
+    enabled: !propDecks,
+    includeWorkspaceItems,
+    workspaceId
+  })
   const decks = propDecks ?? decksQuery.data ?? []
   const decksLoading = propDecksLoading ?? decksQuery.isLoading
   const selectedDeck = React.useMemo(
@@ -234,7 +252,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const handleCreate = async () => {
     try {
       const values = await form.validateFields()
-      await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
+      await createMutation.mutateAsync(
+        normalizeFlashcardTemplateFields({
+          ...values,
+          tags: normalizeOptionalFlashcardTags(values.tags)
+        })
+      )
       message.success(t("common:created", { defaultValue: "Created" }))
       form.resetFields()
       onSuccess?.()
@@ -250,13 +273,14 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const handleCreateAndAddAnother = async () => {
     try {
       const values = await form.validateFields()
-      await createMutation.mutateAsync(normalizeFlashcardTemplateFields(values))
+      await createMutation.mutateAsync(
+        normalizeFlashcardTemplateFields({
+          ...values,
+          tags: normalizeOptionalFlashcardTags(values.tags)
+        })
+      )
       message.success(t("common:created", { defaultValue: "Created" }))
-      // Keep deck selection but clear content
-      const deckId = form.getFieldValue("deck_id")
-      const modelType = form.getFieldValue("model_type")
-      form.resetFields()
-      form.setFieldsValue({ deck_id: deckId, model_type: modelType })
+      form.resetFields(["front", "back", "extra", "notes", "tags"])
       onSuccess?.()
     } catch (e: unknown) {
       if (e && typeof e === "object" && "errorFields" in e) return
@@ -358,43 +382,55 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             {t("option:flashcards.organization", { defaultValue: "Organization" })}
           </h3>
           {!showInlineCreate ? (
-            <Form.Item
-              name="deck_id"
-              label={t("option:flashcards.deck", { defaultValue: "Deck" })}
-              className="!mb-0"
-            >
-              <Select
-                placeholder={t("option:flashcards.selectDeck", {
-                  defaultValue: "Select deck"
+            <>
+              <Form.Item
+                name="deck_id"
+                label={t("option:flashcards.deck", { defaultValue: "Deck" })}
+                className="!mb-0"
+              >
+                <Select
+                  placeholder={t("option:flashcards.selectDeck", {
+                    defaultValue: "Select deck"
+                  })}
+                  allowClear
+                  loading={decksLoading}
+                  className="w-full"
+                  options={decks.map((d) => ({
+                    label: formatDeckDisplayName(d, `Deck ${d.id}`),
+                    value: d.id
+                  }))}
+                  popupRender={(menu) => (
+                    <>
+                      {menu}
+                      <Divider className="!my-2" />
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-primary hover:bg-primary/5 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          setShowInlineCreate(true)
+                        }}
+                      >
+                        <Plus className="size-4" />
+                        {t("option:flashcards.createNewDeck", {
+                          defaultValue: "Create new deck"
+                        })}
+                      </button>
+                    </>
+                  )}
+                />
+              </Form.Item>
+              <button
+                type="button"
+                className="text-xs text-primary hover:text-primaryStrong -mt-2 mb-2 block"
+                onClick={() => setShowInlineCreate(true)}
+                data-testid="flashcards-create-new-deck-link"
+              >
+                {t("option:flashcards.orCreateNewDeck", {
+                  defaultValue: "or create a new deck"
                 })}
-                allowClear
-                loading={decksLoading}
-                className="w-full"
-                options={decks.map((d) => ({
-                  label: d.name,
-                  value: d.id
-                }))}
-                popupRender={(menu) => (
-                  <>
-                    {menu}
-                    <Divider className="!my-2" />
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-primary hover:bg-primary/5 flex items-center gap-2"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        setShowInlineCreate(true)
-                      }}
-                    >
-                      <Plus className="size-4" />
-                      {t("option:flashcards.createNewDeck", {
-                        defaultValue: "Create new deck"
-                      })}
-                    </button>
-                  </>
-                )}
-              />
-            </Form.Item>
+              </button>
+            </>
           ) : (
             <>
               <div className="flex items-center gap-2">
@@ -499,6 +535,14 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           )}
         </div>
 
+        <FlashcardDeckReferenceSection
+          open={open}
+          deckId={selectedDeckId ?? null}
+          deckName={selectedDeck?.name ?? null}
+          includeWorkspaceItems={includeWorkspaceItems}
+          workspaceId={workspaceId}
+        />
+
         {/* Hidden fields for API compatibility */}
         <Form.Item name="reverse" hidden>
           <Input />
@@ -512,6 +556,31 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           <h3 className="text-sm font-medium text-text-muted mb-3">
             {t("option:flashcards.content", { defaultValue: "Content" })}
           </h3>
+
+          <Collapse
+            ghost
+            size="small"
+            className="mb-3"
+            defaultActiveKey={isClozeTemplate ? ["tips"] : undefined}
+            key={isClozeTemplate ? "cloze-tips" : "default-tips"}
+            items={[
+              {
+                key: "tips",
+                label: t("option:flashcards.writingTipsHeader", {
+                  defaultValue: "Tips for effective flashcards"
+                }),
+                children: (
+                  <ul className="list-disc pl-4 text-xs text-text-muted space-y-1">
+                    <li>{t("option:flashcards.writingTip1", { defaultValue: "Keep each card focused on one concept" })}</li>
+                    <li>{t("option:flashcards.writingTip2", { defaultValue: "Use simple, clear language on the front" })}</li>
+                    <li>{t("option:flashcards.writingTip3", { defaultValue: "Include context clues but avoid giving away the answer" })}</li>
+                    <li>{t("option:flashcards.writingTip4", { defaultValue: "Use images or diagrams when they help understanding" })}</li>
+                    <li>{t("option:flashcards.writingTip5", { defaultValue: "For cloze deletions, use {{syntax}} syntax", syntax: "{{c1::answer}}" })}</li>
+                  </ul>
+                )
+              }
+            ]}
+          />
 
           {/* Front - required */}
           <Form.Item
@@ -693,13 +762,12 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                     label={t("option:flashcards.tags", { defaultValue: "Tags" })}
                     className="!mb-0"
                   >
-                    <Select
-                      mode="tags"
+                    <FlashcardTagPicker
+                      active={open}
+                      dataTestId="flashcards-create-tag-picker"
                       placeholder={t("option:flashcards.tagsPlaceholder", {
                         defaultValue: "tag1, tag2"
                       })}
-                      open={false}
-                      allowClear
                     />
                   </Form.Item>
 

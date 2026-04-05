@@ -1074,6 +1074,9 @@ test.describe('Watchlists playground smoke', () => {
 
     await context.addInitScript(() => {
       ;(window as any).__watchlistsStubbed = true
+      try {
+        localStorage.setItem('watchlists:quickSetup:autoshown:v1', '1')
+      } catch {}
 
       const paginate = (list, page, size) => {
         const current = page || 1
@@ -1126,9 +1129,10 @@ test.describe('Watchlists playground smoke', () => {
     })
     await basePage.close().catch(() => {})
 
-    await expect(page.getByText('Quick setup')).toBeVisible()
+    const addFirstFeedButton = page.getByRole('button', { name: 'Add first feed' })
+    await expect(addFirstFeedButton).toBeVisible()
     await expect(page.getByText('Add Feed -> Create Monitor -> Review Results')).toBeVisible()
-    await page.getByRole('button', { name: 'Add first feed' }).click()
+    await addFirstFeedButton.click()
     await expect(page.getByRole('tab', { name: 'Feeds' })).toHaveAttribute('aria-selected', 'true')
 
     await context.close()
@@ -1144,6 +1148,9 @@ test.describe('Watchlists playground smoke', () => {
 
     await context.addInitScript(() => {
       ;(window as any).__watchlistsStubbed = true
+      try {
+        localStorage.setItem('watchlists:quickSetup:autoshown:v1', '1')
+      } catch {}
       ;(window as any).__watchlistsQuickSetup = {
         sourceBody: null,
         jobBody: null,
@@ -1300,8 +1307,9 @@ test.describe('Watchlists playground smoke', () => {
     })
     await basePage.close().catch(() => {})
 
-    await expect(page.getByText('Quick setup')).toBeVisible()
-    await page.getByRole('button', { name: 'Guided setup' }).click()
+    const guidedSetupButton = page.getByRole('button', { name: 'Guided setup' })
+    await expect(guidedSetupButton).toBeVisible()
+    await guidedSetupButton.click()
 
     const dialog = page.getByRole('dialog', { name: 'Guided quick setup' })
     await expect(dialog).toBeVisible()
@@ -1731,11 +1739,11 @@ test.describe('Watchlists playground smoke', () => {
           url: 'https://example.com/keyboard-1',
           title: 'Keyboard item one',
           summary: 'Summary one',
-          published_at: now(),
+          published_at: '2026-04-01T10:03:00.000Z',
           tags: ['keyboard'],
           status: 'ingested',
           reviewed: false,
-          created_at: now()
+          created_at: '2026-04-01T10:03:00.000Z'
         },
         {
           id: 2102,
@@ -1745,11 +1753,11 @@ test.describe('Watchlists playground smoke', () => {
           url: 'https://example.com/keyboard-2',
           title: 'Keyboard item two',
           summary: 'Summary two',
-          published_at: now(),
+          published_at: '2026-04-01T10:02:00.000Z',
           tags: ['keyboard'],
           status: 'ingested',
           reviewed: false,
-          created_at: now()
+          created_at: '2026-04-01T10:02:00.000Z'
         },
         {
           id: 2103,
@@ -1759,11 +1767,11 @@ test.describe('Watchlists playground smoke', () => {
           url: 'https://example.com/keyboard-3',
           title: 'Keyboard item three',
           summary: 'Summary three',
-          published_at: now(),
+          published_at: '2026-04-01T10:01:00.000Z',
           tags: ['keyboard'],
           status: 'filtered',
           reviewed: true,
-          created_at: now()
+          created_at: '2026-04-01T10:01:00.000Z'
         }
       ]
 

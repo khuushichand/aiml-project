@@ -10,6 +10,7 @@ import {
   User,
   Lock,
   AlertCircle,
+  Info,
   ExternalLink,
   Copy,
   ChevronDown,
@@ -17,6 +18,9 @@ import {
   Sparkles,
   ArrowRight,
   RefreshCw,
+  MessageSquare,
+  Shield,
+  BookOpen,
 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
@@ -36,6 +40,7 @@ import {
   useConnectionState,
   useConnectionActions,
 } from "@/hooks/useConnectionState"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useConnectionStore } from "@/store/connection"
 import { useDemoMode } from "@/context/demo-mode"
 import { requestQuickIngestIntro } from "@/utils/quick-ingest-open"
@@ -43,6 +48,7 @@ import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { cn } from "@/libs/utils"
+import { isExtensionRuntime } from "@/utils/browser-runtime"
 import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-registry"
 import {
   trackOnboardingFirstIngestSuccess,
@@ -165,8 +171,10 @@ interface Props {
 }
 
 const QUICK_INGEST_OPEN_DELAY_MS = 120
-const QUICK_INGEST_OPEN_RETRY_INTERVAL_MS = 120
-const QUICK_INGEST_OPEN_MAX_ATTEMPTS = 25
+const LOCALHOST_PROBE_URL = "http://localhost:8000/health"
+const LOCALHOST_PROBE_TIMEOUT_MS = 2_000
+const TROUBLESHOOTING_URL =
+  "https://github.com/rmusser01/tldw/blob/main/Docs/Getting_Started/TROUBLESHOOTING.md"
 
 /**
  * Single-step onboarding form for the new UX redesign.
@@ -180,6 +188,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   const { t } = useTranslation(["settings", "common"])
   const navigate = useNavigate()
   const { setDemoEnabled } = useDemoMode()
+  const { capabilities } = useServerCapabilities()
+  const familyGuardrailsAvailable = Boolean(capabilities?.hasGuardian)
   const connectionState = useConnectionState()
   const actions = useConnectionActions()
   const hostPermissionPromptKeyRef = useRef<string | null>(null)
@@ -342,7 +352,38 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
         if (!cfg?.serverUrl) {
           const fallback = await getTldwServerURL()
-          if (fallback) setServerUrl(fallback)
+          if (fallback) {
+            setServerUrl(fallback)
+          } else if (isExtensionRuntime()) {
+            // B1: Auto-probe localhost when no URL is configured (extension only)
+            // Use a normal CORS-mode fetch so we can distinguish a running server
+            // (which may reject CORS with a TypeError) from a truly unreachable
+            // host (which also throws TypeError but after an abort timeout).
+            const probeController = new AbortController()
+            const probeTimer = setTimeout(
+              () => probeController.abort(),
+              LOCALHOST_PROBE_TIMEOUT_MS
+            )
+            try {
+              const resp = await fetch(LOCALHOST_PROBE_URL, {
+                signal: probeController.signal,
+              })
+              clearTimeout(probeTimer)
+              if (resp.ok) {
+                setServerUrl("http://localhost:8000")
+              }
+            } catch (err) {
+              clearTimeout(probeTimer)
+              // A CORS rejection throws TypeError but the abort signal is NOT
+              // triggered. An unreachable host times out and the signal IS aborted.
+              if (err instanceof TypeError && !probeController.signal.aborted) {
+                // Likely a CORS rejection — server is present but CORS not
+                // configured for this origin. Still pre-fill the URL.
+                setServerUrl("http://localhost:8000")
+              }
+              // AbortError or truly unreachable — leave URL empty for manual entry
+            }
+          }
         }
       } catch {
         // Ignore config load errors
@@ -410,48 +451,58 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     setAuthTouched(false)
   }, [authMode, loginMethod])
 
+  // Derive a health-check URL from the user-entered server URL
+  const healthCheckUrl = useMemo(() => {
+    try {
+      const parsed = new URL(serverUrl.trim())
+      return `${parsed.origin}/health`
+    } catch {
+      return "http://localhost:8000/health"
+    }
+  }, [serverUrl])
+
   // Derive error messages from errorKind
   const errorHint = useMemo(() => {
     switch (errorKind) {
       case "dns_failed":
         return t(
           "settings:onboarding.errors.dns",
-          "Could not find server. Check the URL hostname."
+          "Could not find server. Check the URL for typos and make sure the hostname is correct."
         )
       case "refused":
         return t(
           "settings:onboarding.errors.refused",
-          "Connection refused. Is the server running?"
+          `The server is not accepting connections. Is it running? Try: curl ${healthCheckUrl}`
         )
       case "timeout":
         return t(
           "settings:onboarding.errors.timeout",
-          "Connection timed out. The server may be slow or unreachable."
+          "The server did not respond in time. If using Docker, check containers are running: docker ps"
         )
       case "cors_blocked":
         return t(
           "settings:onboarding.errors.cors",
-          "Browser could not complete the request (CORS or network). Verify the server URL is reachable from this browser and add this app origin to ALLOWED_ORIGINS."
+          "Your browser can't reach the server due to security settings. If you manage the server, add your browser's origin to ALLOWED_ORIGINS in the server's .env file. Otherwise, ask your server administrator for help."
         )
       case "ssl_error":
         return t(
           "settings:onboarding.errors.ssl",
-          "SSL certificate error. Check your server's HTTPS configuration."
+          "SSL certificate error. For local development, try http:// instead of https://"
         )
       case "auth_invalid":
         return t(
           "settings:onboarding.errors.auth",
-          "Invalid credentials. Check your API key or login details."
+          "API key not accepted. Check your key. Docker users: run make show-api-key in terminal"
         )
       case "server_error":
         return t(
           "settings:onboarding.errors.server",
-          "Server error (500). Check the server logs for details."
+          "The server returned an error. Check server logs for details: docker compose logs --tail=50"
         )
       default:
         return null
     }
-  }, [errorKind, t])
+  }, [errorKind, healthCheckUrl, t])
 
   const handleSendMagicLink = useCallback(async () => {
     if (!magicEmail.trim()) {
@@ -760,19 +811,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       navigate(path)
       if (options?.openQuickIngestIntro && typeof window !== "undefined") {
         window.setTimeout(() => {
-          let attempts = 0
-          const dispatchWhenReady = () => {
-            const triggerReady = Boolean(
-              document.querySelector('[data-testid="open-quick-ingest"]')
-            )
-            if (triggerReady || attempts >= QUICK_INGEST_OPEN_MAX_ATTEMPTS) {
-              requestQuickIngestIntro()
-              return
-            }
-            attempts += 1
-            window.setTimeout(dispatchWhenReady, QUICK_INGEST_OPEN_RETRY_INTERVAL_MS)
-          }
-          dispatchWhenReady()
+          requestQuickIngestIntro()
         }, QUICK_INGEST_OPEN_DELAY_MS)
       }
     },
@@ -798,6 +837,10 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
+  }, [finishAndNavigate])
+
+  const handleOpenFamilyFlow = useCallback(async () => {
+    await finishAndNavigate("/settings/family-guardrails")
   }, [finishAndNavigate])
 
   // Copy server command
@@ -896,6 +939,64 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                   "Follow this sequence to complete your first-value loop: ingest -> verify -> ask."
                 )}
           </p>
+        </div>
+
+        {/* Intent selector — route to persona-appropriate next step */}
+        <div data-testid="intent-selector" className="mb-6">
+          <p className="mb-3 text-sm font-medium text-text-muted">
+            {t("settings:onboarding.success.intentTitle", "What would you like to do first?")}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={handleOpenChatFlow}
+              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+            >
+              <MessageSquare className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium text-text">
+                {t("settings:onboarding.success.intentChat", "Chat with AI")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {t("settings:onboarding.success.intentChatDesc", "Start a conversation with your configured models.")}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenFamilyFlow}
+              disabled={!familyGuardrailsAvailable}
+              className={cn(
+                "flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors",
+                familyGuardrailsAvailable
+                  ? "hover:border-primary/50 hover:bg-surface2"
+                  : "opacity-50 cursor-not-allowed"
+              )}
+            >
+              <Shield className={cn("h-5 w-5", familyGuardrailsAvailable ? "text-primary" : "text-text-subtle")} />
+              <span className="text-sm font-medium text-text">
+                {t("settings:onboarding.success.intentFamily", "Set up family safety")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {familyGuardrailsAvailable
+                  ? t("settings:onboarding.success.intentFamilyDesc", "Create family profiles and content safety rules.")
+                  : t("settings:onboarding.success.intentFamilyUnavailable", "Not available on this server.")}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenIngestFlow}
+              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+            >
+              <BookOpen className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium text-text">
+                {t("settings:onboarding.success.intentResearch", "Research my documents")}
+              </span>
+              <span className="text-xs text-text-muted">
+                {t("settings:onboarding.success.intentResearchDesc", "Import documents and ask questions about them.")}
+              </span>
+            </button>
+          </div>
         </div>
 
         <div className="mb-6 rounded-2xl border border-border/70 bg-surface p-4">
@@ -1335,26 +1436,57 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             <button
               type="button"
               onClick={() => setAuthMode("multi-user")}
-              disabled={isConnecting}
+              disabled={isConnecting || isExtensionRuntime()}
               className={cn(
                 "flex-1 flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
-                authMode === "multi-user"
+                authMode === "multi-user" && !isExtensionRuntime()
                   ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border/70 text-text-muted hover:bg-surface2"
+                  : isExtensionRuntime()
+                    ? "border-border/40 text-text-subtle cursor-not-allowed opacity-60"
+                    : "border-border/70 text-text-muted hover:bg-surface2"
               )}
+              title={isExtensionRuntime() ? t("settings:onboarding.authMode.extensionApiKeyOnly", "The extension only supports API key authentication") : undefined}
             >
               <User className="size-4" />
               {t("settings:onboarding.authMode.multi", "Login")}
             </button>
           </div>
+          {/* Auth-mode-aware contextual hint */}
+          <p className="mt-1.5 text-xs text-text-muted" data-testid="onboarding-auth-mode-hint">
+            {authMode === "single-user"
+              ? t(
+                  "settings:onboarding.authMode.singleHint",
+                  "Single-user mode: paste your API key to connect. Best for personal or local setups."
+                )
+              : t(
+                  "settings:onboarding.authMode.multiHint",
+                  "Multi-user mode: log in with the credentials your administrator provided."
+                )}
+          </p>
+          {/* B2: Multi-user mode notice for extension context */}
+          {authMode === "multi-user" && isExtensionRuntime() && (
+            <div
+              className="mt-2 flex items-start gap-2 rounded-xl border border-amber-300/40 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-950/30"
+              data-testid="onboarding-multi-user-extension-notice"
+              role="note"
+            >
+              <Info className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                {t(
+                  "settings:onboarding.authMode.multiUserExtensionNotice",
+                  "Multi-user mode detected. The browser extension currently supports API key authentication only. Ask your admin for an API key."
+                )}
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* Auth Fields */}
-        {authMode === "single-user" ? (
+        {/* Auth Fields — extension always uses API key, even if server is multi-user */}
+        {authMode === "single-user" || (authMode === "multi-user" && isExtensionRuntime()) ? (
           <div>
             <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
               <Key className="size-4" />
-              {t("settings:onboarding.apiKey.label", "API Key")}
+              {t("settings:onboarding.apiKey.label", "Paste your API key")}
             </label>
             <Input.Password
               data-testid="onboarding-api-key"
@@ -1391,7 +1523,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               <p className="mt-1 text-xs text-text-subtle">
                 {t(
                   "settings:onboarding.apiKeyHelp",
-                  "Find your API key in tldw_server Settings"
+                  "Find your API key by running `make show-api-key` or checking your .env file for SINGLE_USER_API_KEY. Docker quickstart users connect automatically."
                 )}
               </p>
             )}
@@ -1603,6 +1735,12 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                     </p>
                   )}
                 </div>
+                <p className="text-xs text-text-subtle" data-testid="onboarding-multi-user-hint">
+                  {t(
+                    "settings:onboarding.multiUserHelp",
+                    "Ask your administrator for your username and password. If you don't have an account yet, contact your server admin."
+                  )}
+                </p>
               </div>
             )}
           </div>
@@ -1623,10 +1761,24 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             <ProgressItem
               label={t("settings:onboarding.progress.server", "Server reachable")}
               status={progress.serverReachable}
+              statusText={
+                progress.serverReachable === "checking"
+                  ? t("settings:onboarding.progress.serverChecking", "Checking server...")
+                  : progress.serverReachable === "success"
+                    ? t("settings:onboarding.progress.serverOk", "Reachable")
+                    : undefined
+              }
             />
             <ProgressItem
               label={t("settings:onboarding.progress.auth", "Authentication")}
               status={progress.authentication}
+              statusText={
+                progress.authentication === "checking"
+                  ? t("settings:onboarding.progress.authChecking", "Validating credentials...")
+                  : progress.authentication === "success"
+                    ? t("settings:onboarding.progress.authOk", "Connected!")
+                    : undefined
+              }
             />
             <ProgressItem
               label={t("settings:onboarding.progress.knowledge", "Knowledge index")}
@@ -1656,6 +1808,20 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                 )}
               </div>
             </div>
+            {/* B4: Troubleshooting docs link */}
+            <a
+              href={TROUBLESHOOTING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1 text-xs text-danger/80 underline decoration-danger/40 underline-offset-2 hover:text-danger"
+              data-testid="onboarding-troubleshooting-link"
+            >
+              {t(
+                "settings:onboarding.errors.troubleshootingLink",
+                "Having trouble? See setup guide"
+              )}
+              <ExternalLink className="size-3" />
+            </a>
           </div>
         )}
 

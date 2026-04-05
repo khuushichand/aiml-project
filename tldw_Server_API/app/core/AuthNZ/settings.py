@@ -395,8 +395,8 @@ class Settings(BaseSettings):
 
     # ===== BYOK Settings =====
     BYOK_ENABLED: bool = Field(
-        default=False,
-        description="Enable per-user BYOK keys in multi-user mode (ignored in single_user mode)"
+        default=True,
+        description="Enable per-user BYOK keys (requires BYOK_ENCRYPTION_KEY)"
     )
     BYOK_ALLOWED_PROVIDERS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,

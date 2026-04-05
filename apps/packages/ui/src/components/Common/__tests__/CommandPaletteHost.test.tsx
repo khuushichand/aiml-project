@@ -58,4 +58,33 @@ describe("CommandPaletteHost", () => {
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument()
   })
+
+  it("opens the palette with Control+K on standard routes", async () => {
+    render(
+      <MemoryRouter>
+        <CommandPaletteHost />
+      </MemoryRouter>
+    )
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true })
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+  })
+
+  it("opens the palette even when an input is focused", async () => {
+    render(
+      <MemoryRouter>
+        <div>
+          <input aria-label="composer" />
+          <CommandPaletteHost />
+        </div>
+      </MemoryRouter>
+    )
+
+    const input = screen.getByRole("textbox", { name: "composer" })
+    input.focus()
+    fireEvent.keyDown(input, { key: "k", ctrlKey: true })
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+  })
 })

@@ -509,7 +509,7 @@ class ReadingSummaryResponse(BaseModel):
 
 
 class ReadingTTSRequest(BaseModel):
-    model: str = Field(default="kokoro", description="TTS model identifier", example="kokoro")
+    model: str = Field(..., min_length=1, description="TTS model identifier", example="kokoro")
     voice: str = Field(default="af_heart", description="TTS voice identifier", example="af_heart")
     response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(default="mp3")
     stream: bool = Field(default=True)

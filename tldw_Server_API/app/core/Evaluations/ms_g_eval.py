@@ -312,7 +312,7 @@ def run_geval(
     }
     logging.debug("Results: %s", results)
 
-    if save is not None:
+    if save:
         logging.debug("Saving results to geval_results.json")
         save_eval_results(results)
         logging.debug("Results saved to geval_results.json")

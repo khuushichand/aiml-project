@@ -88,6 +88,22 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
       "common:error.imageBackendUnavailableHint",
       "Enable an image backend (e.g., Flux-Klein or ZTurbo) in your tldw server config, then try again."
     )
+  } else if (
+    lower.includes("no_provider_configured") ||
+    lower.includes("no llm providers are configured") ||
+    lower.includes("no providers configured") ||
+    lower.includes("provider_not_configured") ||
+    (lower.includes("provider") &&
+      (lower.includes("not configured") || lower.includes("no api key")))
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyNoProviderSummary",
+      "No LLM provider is configured on your server."
+    )
+    hint = i18n.t(
+      "common:error.friendlyNoProviderHint",
+      "Add an API key for OpenAI, Anthropic, or another provider in your server's .env file, then restart the server and try again."
+    )
   } else if (lower.includes("stream timeout: no updates received")) {
     summary = i18n.t(
       "common:error.friendlyTimeoutSummary",
@@ -96,6 +112,51 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
     hint = i18n.t(
       "common:error.friendlyTimeoutHint",
       "The server stopped streaming responses. Try again, or open Health & diagnostics to check server status."
+    )
+  } else if (
+    lower.includes("chunkererror") ||
+    lower.includes("chunker error") ||
+    lower.includes("chunking failed") ||
+    lower.includes("unable to chunk")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyChunkerSummary",
+      "This file couldn't be processed."
+    )
+    hint = i18n.t(
+      "common:error.friendlyChunkerHint",
+      "The server had trouble splitting the file into chunks. Try a different format or a smaller file."
+    )
+  } else if (
+    lower.includes("timeouterror") ||
+    lower.includes("timed out") ||
+    lower.includes("request timeout") ||
+    lower.includes("gateway timeout") ||
+    lower.includes("504")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyProcessingTimeoutSummary",
+      "Processing took too long."
+    )
+    hint = i18n.t(
+      "common:error.friendlyProcessingTimeoutHint",
+      "Try a smaller file, or increase the timeout in Settings."
+    )
+  } else if (
+    lower.includes("connectionerror") ||
+    lower.includes("connection refused") ||
+    lower.includes("econnrefused") ||
+    lower.includes("network error") ||
+    lower.includes("failed to fetch") ||
+    lower.includes("err_connection")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyConnectionSummary",
+      "Lost connection to the server."
+    )
+    hint = i18n.t(
+      "common:error.friendlyConnectionHint",
+      "Check that the server is running, then try again. Open Health & diagnostics for more details."
     )
   } else {
     summary = i18n.t(

@@ -4,6 +4,7 @@
  */
 
 import { bgRequest, bgUpload } from "@/services/background-proxy"
+import { getTldwTTSModel, getTldwTTSVoice } from "@/services/tts"
 import type {
   ClaimCluster,
   JobPreviewResult,
@@ -381,6 +382,9 @@ export interface WatchlistAudioSettingsTestRequest {
 export const testWatchlistAudioSettings = async (
   payload: WatchlistAudioSettingsTestRequest
 ): Promise<ArrayBuffer> => {
+  const model = payload.model || (await getTldwTTSModel())
+  const voice = payload.voice || (await getTldwTTSVoice())
+
   return bgRequest<ArrayBuffer>({
     path: "/api/v1/audio/speech",
     method: "POST",
@@ -390,9 +394,9 @@ export const testWatchlistAudioSettings = async (
     body: {
       input: payload.text,
       text: payload.text,
-      voice: payload.voice,
+      model,
+      voice,
       speed: payload.speed,
-      ...(payload.model ? { model: payload.model } : {}),
       ...(payload.response_format ? { response_format: payload.response_format } : {})
     },
     responseType: "arrayBuffer"

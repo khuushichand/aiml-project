@@ -250,6 +250,57 @@ def reset_pricing_catalog() -> PricingCatalog:
     return _DEFAULT_CATALOG
 
 
+def compute_token_cost(
+    model: str | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    provider: str | None = None,
+) -> float | None:
+    """Compute estimated cost in USD for the given token counts and model.
+
+    Returns None if *model* is not provided. When *provider* is not given,
+    all providers are searched for a matching model name. Rates are per 1K
+    tokens as defined in the pricing catalog.
+    """
+    if not model:
+        return None
+
+    catalog = get_pricing_catalog()
+
+    if provider:
+        prompt_rate, completion_rate, _estimated = catalog.get_rates(provider, model)
+    else:
+        # Search all providers for the best match (prefer exact over partial)
+        prompt_rate, completion_rate, _estimated = _lookup_model_across_providers(catalog, model)
+
+    cost = (prompt_tokens * prompt_rate + completion_tokens * completion_rate) / 1000.0
+    return round(cost, 6)
+
+
+def _lookup_model_across_providers(catalog: PricingCatalog, model: str) -> tuple[float, float, bool]:
+    """Search all providers for a model, preferring exact matches."""
+    mdl = model.lower()
+
+    # First pass: exact match across all providers
+    for prov_name, prov_map in catalog._catalog.items():
+        if mdl in prov_map:
+            r = prov_map[mdl]
+            if isinstance(r, dict) and r.get("placeholder"):
+                return 0.0, 0.0, True
+            return float(r.get("prompt", 0.0)), float(r.get("completion", 0.0)), False
+
+    # Second pass: partial match across all providers
+    for prov_name, prov_map in catalog._catalog.items():
+        for mk, r in prov_map.items():
+            if mk in mdl or mdl in mk:
+                if isinstance(r, dict) and r.get("placeholder"):
+                    return 0.0, 0.0, True
+                return float(r.get("prompt", 0.0)), float(r.get("completion", 0.0)), True
+
+    # Fallback: same conservative default as PricingCatalog.get_rates
+    return 0.01, 0.03, True
+
+
 def list_provider_models(provider: str) -> list[str]:
     """Return the list of known models for a provider from the pricing catalog.
 

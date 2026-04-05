@@ -13,10 +13,15 @@ import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 import { toTrimmedStringArray } from "@/services/tldw/client-utils"
+import { getTldwTTSModel, getTldwTTSVoice } from "@/services/tts"
 import {
   DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
   normalizeDefaultCharacterPreferenceId
 } from "@/utils/default-character-preference"
+import {
+  normalizePersonaBuddySummary,
+  type PersonaBuddySummary
+} from "@/types/persona-buddy"
 import {
   resolveWebUiQuickstartServerUrl,
   type BrowserSurface
@@ -914,7 +919,8 @@ export interface PersonaProfileSummary {
   name?: string | null
   character_card_id?: number | null
   origin_character_id?: number | null
-  [key: string]: unknown
+  buddy_summary?: PersonaBuddySummary | null
+  metadata?: Record<string, unknown> | null
 }
 
 export interface PersonaProfile extends PersonaProfileSummary {
@@ -1034,9 +1040,16 @@ export const normalizePersonaProfile = <T extends Record<string, unknown>>(
   input: T | null | undefined
 ): PersonaProfile => {
   const candidate = input && typeof input === "object" ? input : ({} as T)
+  const rawBuddySummary = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "buddy_summary"
+  )
+    ? candidate.buddy_summary
+    : candidate?.buddySummary
   return {
     ...candidate,
-    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+    id: String(candidate?.id ?? candidate?.persona_id ?? ""),
+    buddy_summary: normalizePersonaBuddySummary(rawBuddySummary)
   }
 }
 
@@ -1475,7 +1488,7 @@ export class TldwApiClient {
   }
 
   private getPlaceholderApiKeyMessage(): string {
-    return "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings → tldw server before continuing."
+    return "tldw server API key is still set to a placeholder value. Replace it with your real API key in Settings → tldw server before continuing."
   }
 
   async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
@@ -1788,6 +1801,87 @@ export class TldwApiClient {
     })
   }
 
+  // ── BYOK Provider Keys ──────────────────────────────────────────────
+
+  async listUserProviderKeys(): Promise<{
+    items: Array<{
+      provider: string
+      has_key: boolean
+      source: string
+      key_hint: string | null
+      auth_source: string | null
+      last_used_at: string | null
+    }>
+  }> {
+    return await this.request<{
+      items: Array<{
+        provider: string
+        has_key: boolean
+        source: string
+        key_hint: string | null
+        auth_source: string | null
+        last_used_at: string | null
+      }>
+    }>({
+      path: "/api/v1/users/keys",
+      method: "GET"
+    })
+  }
+
+  async upsertUserProviderKey(
+    provider: string,
+    apiKey: string,
+    opts?: { credential_fields?: Record<string, unknown>; metadata?: Record<string, unknown> }
+  ): Promise<{
+    provider: string
+    status: string
+    key_hint: string
+    updated_at: string
+  }> {
+    return await this.request<{
+      provider: string
+      status: string
+      key_hint: string
+      updated_at: string
+    }>({
+      path: "/api/v1/users/keys",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        provider,
+        api_key: apiKey,
+        ...opts,
+      }
+    })
+  }
+
+  async testUserProviderKey(
+    provider: string,
+    model?: string
+  ): Promise<{
+    provider: string
+    status: string
+    model: string | null
+  }> {
+    return await this.request<{
+      provider: string
+      status: string
+      model: string | null
+    }>({
+      path: "/api/v1/users/keys/test",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { provider, model }
+    })
+  }
+
+  async deleteUserProviderKey(provider: string): Promise<void> {
+    await this.request<void>({
+      path: `/api/v1/users/keys/${encodeURIComponent(provider)}`,
+      method: "DELETE"
+    })
+  }
+
   async getDefaultCharacterPreference(): Promise<string | null> {
     const profile = await this.getCurrentUserProfile({
       sections: "preferences"
@@ -2030,6 +2124,23 @@ export class TldwApiClient {
 
   async getProviders(): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
+  }
+
+  /**
+   * Check which LLM providers are configured on the server.
+   * Returns `{ providers: [...], any_configured: boolean }`.
+   */
+  async getProvidersStatus(): Promise<{
+    providers: Array<{
+      name: string
+      configured: boolean
+      requires_api_key: boolean
+      key_hint?: string | null
+      key_source?: string | null
+    }>
+    any_configured: boolean
+  }> {
+    return await bgRequest<any>({ path: '/api/v1/config/providers', method: 'GET' })
   }
 
   async getModelsMetadata(options?: {
@@ -6779,17 +6890,20 @@ export class TldwApiClient {
 
   async generateReadingItemTts(
     itemId: string,
-    options?: { voice?: string }
+    options?: { model?: string; voice?: string }
   ): Promise<{ audio_url: string }> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/tts` as const
+    const model = options?.model || (await getTldwTTSModel())
+    const voice = options?.voice || (await getTldwTTSVoice())
     const data = await bgRequest<ArrayBuffer>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: {
+        model,
+        voice,
         response_format: "mp3",
         stream: false,
-        ...(options || {})
       },
       responseType: "arrayBuffer"
     })

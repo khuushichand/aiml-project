@@ -125,3 +125,119 @@ def test_idempotent_registration():
 
     _ensure_registered()
     _ensure_registered()  # Should not raise
+
+
+def test_record_run_first_rollout_uses_expected_labels(monkeypatch):
+    """Verify ACP run-first rollout labels are recorded through the shared registry helpers."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
+
+    calls = []
+    monkeypatch.setattr(acp_metrics, "_ensure_registered", lambda: None)
+    monkeypatch.setattr(
+        acp_metrics,
+        "increment_counter",
+        lambda name, value=1, labels=None: calls.append((name, value, labels)),
+    )
+
+    acp_metrics.record_run_first_rollout(
+        agent_type="mcp",
+        presentation_variant="acp_phase2b_v1",
+        cohort="default_on",
+        provider="openai",
+        model="gpt-4o-mini",
+        eligible=True,
+        ineligible_reason=None,
+    )
+
+    assert calls == [
+        (
+            "acp_run_first_rollout_total",
+            1,
+            {
+                "agent_type": "mcp",
+                "presentation_variant": "acp_phase2b_v1",
+                "cohort": "default_on",
+                "provider": "openai",
+                "model": "set",
+                "eligible": "true",
+                "ineligible_reason": "none",
+            },
+        )
+    ]
+
+
+def test_record_run_first_rollout_preserves_out_of_cohort_labels(monkeypatch):
+    """Verify ACP run-first rollout labels preserve out_of_cohort telemetry values."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
+
+    calls = []
+    monkeypatch.setattr(acp_metrics, "_ensure_registered", lambda: None)
+    monkeypatch.setattr(
+        acp_metrics,
+        "increment_counter",
+        lambda name, value=1, labels=None: calls.append((name, value, labels)),
+    )
+
+    acp_metrics.record_run_first_rollout(
+        agent_type="mcp",
+        presentation_variant="acp_phase2b_v1",
+        cohort="out_of_cohort",
+        provider="openai",
+        model="gpt-4o-mini",
+        eligible=False,
+        ineligible_reason="provider_not_in_rollout_allowlist",
+    )
+
+    assert calls == [
+        (
+            "acp_run_first_rollout_total",
+            1,
+            {
+                "agent_type": "mcp",
+                "presentation_variant": "acp_phase2b_v1",
+                "cohort": "out_of_cohort",
+                "provider": "openai",
+                "model": "set",
+                "eligible": "false",
+                "ineligible_reason": "provider_not_in_rollout_allowlist",
+            },
+        )
+    ]
+def test_record_run_first_completion_proxy_end_turn(monkeypatch):
+    """Verify completion proxy metrics preserve the ACP rollout labels and outcome."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
+
+    calls = []
+    monkeypatch.setattr(acp_metrics, "_ensure_registered", lambda: None)
+    monkeypatch.setattr(
+        acp_metrics,
+        "increment_counter",
+        lambda name, value=1, labels=None: calls.append((name, value, labels)),
+    )
+
+    acp_metrics.record_run_first_completion_proxy(
+        agent_type="mcp",
+        presentation_variant="acp_phase2b_v1",
+        cohort="default_on",
+        provider="openai",
+        model="gpt-4o-mini",
+        eligible=True,
+        outcome="end_turn",
+    )
+
+    assert calls == [
+        (
+            "acp_run_first_completion_proxy_total",
+            1,
+            {
+                "agent_type": "mcp",
+                "presentation_variant": "acp_phase2b_v1",
+                "cohort": "default_on",
+                "provider": "openai",
+                "model": "set",
+                "eligible": "true",
+                "ineligible_reason": "none",
+                "outcome": "end_turn",
+            },
+        )
+    ]

@@ -63,9 +63,9 @@
     "i18next": "^25.0.0",
     "i18next-icu": "^2.4.1",
     "katex": "^0.16.0",
-    "lucide-react": "^0.500.0",
+    "lucide-react": ">=0.561.0 <0.563.0",
     "marked": ">=15.0.0 <16.0.0",
-    "mermaid": "^10.0.0",
+    "mermaid": "^11.12.2",
     "prism-react-renderer": "^2.0.0",
     "property-information": ">=6.0.0 <7.0.0",
     "react": "^18.0.0",
@@ -81,7 +81,7 @@
     "turndown": "^7.0.0",
     "wxt": "^0.20.0",
     "xlsx": "^0.18.0",
-    "zustand": ">=4.0.0 <5.0.0",
+    "zustand": ">=4.0.0",
     "react-joyride": "^2.9.0",
     "react-pdf": "^9.0.0",
     "pdfjs-dist": "^4.0.0",
@@ -89,6 +89,12 @@
     "xterm": "^5.3.0",
     "jszip": "^3.10.1",
     "gpt-tokenizer": "^3.4.0",
-    "@monaco-editor/react": "^4.6.0"
+    "@monaco-editor/react": "^4.6.0",
+    "@tiptap/core": "^3.22.1",
+    "@tiptap/react": "^3.22.1",
+    "@tiptap/starter-kit": "^3.22.1",
+    "@tiptap/extension-placeholder": "^3.22.1",
+    "@tiptap/extension-character-count": "^3.22.1",
+    "@tiptap/pm": "^3.22.1"
   }
 }

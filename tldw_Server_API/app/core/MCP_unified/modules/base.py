@@ -488,6 +488,32 @@ class BaseModule(ABC):
         except Exception:
             return False
 
+    def is_write_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_def: dict[str, Any] | None = None,
+    ) -> bool:
+        """Determine whether a specific tool invocation should be treated as write-capable.
+
+        Default behavior:
+        - Prefer tool-definition classification when ``tool_def`` is available
+        - Fallback to legacy name-based heuristic otherwise
+        """
+        try:
+            if tool_def is not None:
+                return self.is_write_tool_def(tool_def)
+        except Exception:
+            logger.debug(
+                "Falling back to tool-name write heuristic after tool definition classification failure",
+            )
+        try:
+            import re as _re
+
+            return bool(_re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
+        except Exception:
+            return False
+
 
 # Helper functions for creating MCP-compliant definitions
 

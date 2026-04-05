@@ -180,6 +180,7 @@ export interface NotesEditorPaneProps {
   toggleNotePinned: (id: string | number) => Promise<void>
   copySelected: (mode: SingleNoteCopyMode) => Promise<void>
   handleGenerateFlashcardsFromNote: () => void
+  handleCreateStudyPackFromNote?: () => void
   handleOpenNotesStudio: () => void
   exportSelected: (format: SingleNoteExportFormat) => void
   saveNote: () => Promise<void>
@@ -300,6 +301,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   toggleNotePinned,
   copySelected,
   handleGenerateFlashcardsFromNote,
+  handleCreateStudyPackFromNote,
   handleOpenNotesStudio,
   exportSelected,
   saveNote,
@@ -424,7 +426,9 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         onCopy={(mode) => {
           void copySelected(mode)
         }}
+        canCreateStudyPack={!editorDisabled && selectedId != null && !isDirty && Boolean(title.trim())}
         onGenerateFlashcards={handleGenerateFlashcardsFromNote}
+        onCreateStudyPack={handleCreateStudyPackFromNote}
         onOpenNotesStudio={handleOpenNotesStudio}
         onExport={(format) => {
           exportSelected(format)

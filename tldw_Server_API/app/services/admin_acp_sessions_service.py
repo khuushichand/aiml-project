@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+from tldw_Server_API.app.core.Usage.pricing_catalog import compute_token_cost
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +75,12 @@ class SessionRecord:
     needs_bootstrap: bool = False
     # Forking lineage
     forked_from: str | None = None
+    # Model used for cost estimation
+    model: str | None = None
+    # Token budget fields
+    token_budget: int | None = None
+    auto_terminate_at_budget: bool = False
+    budget_exhausted: bool = False
 
     def to_info_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
         return {
@@ -99,6 +106,20 @@ class SessionRecord:
             "policy_provenance_summary": self.policy_provenance_summary,
             "policy_refresh_error": self.policy_refresh_error,
             "forked_from": self.forked_from,
+            "model": self.model,
+            "estimated_cost_usd": compute_token_cost(
+                model=self.model,
+                prompt_tokens=self.usage.prompt_tokens,
+                completion_tokens=self.usage.completion_tokens,
+            ),
+            "token_budget": self.token_budget,
+            "auto_terminate_at_budget": self.auto_terminate_at_budget,
+            "budget_exhausted": self.budget_exhausted,
+            "budget_remaining": (
+                max(0, self.token_budget - self.usage.total_tokens)
+                if self.token_budget is not None
+                else None
+            ),
         }
 
     def to_detail_dict(
@@ -202,6 +223,8 @@ class AgentConfig:
     enabled: bool = True
     created_at: str = ""
     updated_at: str | None = None
+    default_token_budget: int | None = None
+    default_auto_terminate_at_budget: bool = True
     max_token_budget: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -225,6 +248,8 @@ class AgentConfig:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "is_configured": is_configured,
+            "default_token_budget": self.default_token_budget,
+            "default_auto_terminate_at_budget": self.default_auto_terminate_at_budget,
             "max_token_budget": self.max_token_budget,
         }
 
@@ -329,6 +354,10 @@ class ACPSessionStore:
             bootstrap_ready=d.get("bootstrap_ready", True),
             needs_bootstrap=d.get("needs_bootstrap", False),
             forked_from=d.get("forked_from"),
+            model=d.get("model"),
+            token_budget=d.get("token_budget"),
+            auto_terminate_at_budget=d.get("auto_terminate_at_budget", False),
+            budget_exhausted=d.get("budget_exhausted", False),
         )
 
     # ------------------------------------------------------------------
@@ -419,6 +448,9 @@ class ACPSessionStore:
         policy_provenance_summary: dict[str, Any] | None = None,
         policy_refresh_error: str | None = None,
         forked_from: str | None = None,
+        model: str | None = None,
+        token_budget: int | None = None,
+        auto_terminate_at_budget: bool = False,
     ) -> SessionRecord:
         d = self._db.register_session(
             session_id=session_id,
@@ -439,9 +471,33 @@ class ACPSessionStore:
             policy_provenance_summary=policy_provenance_summary,
             policy_refresh_error=policy_refresh_error,
             forked_from=forked_from,
+            model=model,
+            token_budget=token_budget,
+            auto_terminate_at_budget=auto_terminate_at_budget,
         )
         logger.debug("Registered ACP session {} for user {}", session_id, user_id)
         return self._dict_to_record(d)
+
+    async def update_session_budget(
+        self,
+        session_id: str,
+        token_budget: int | None,
+        auto_terminate_at_budget: bool,
+    ) -> SessionRecord | None:
+        """Update the token budget for a session. Returns updated record or None."""
+        updated = self._db.update_session_budget(
+            session_id, token_budget, auto_terminate_at_budget,
+        )
+        if not updated:
+            return None
+        return await self.get_session(session_id)
+
+    async def check_and_enforce_budget(self, session_id: str) -> bool:
+        """Check if session has exceeded its token budget.
+
+        Returns True if the session was terminated due to budget exhaustion.
+        """
+        return self._db.check_budget_and_terminate(session_id)
 
     async def update_policy_snapshot_state(
         self,
@@ -581,6 +637,39 @@ class ACPSessionStore:
 
             return self._dict_to_record(d, messages)
 
+    # -- Aggregation --------------------------------------------------------
+
+    async def get_agent_metrics(self) -> list[dict[str, Any]]:
+        """Aggregate session metrics per agent type.
+
+        Delegates to the SQLite backend for an efficient GROUP BY query,
+        then enriches each entry with ``total_estimated_cost_usd`` computed
+        from per-session model and token counts via the pricing catalog.
+        """
+        metrics = self._db.aggregate_metrics_by_agent()
+
+        # Compute per-session costs and aggregate by agent_type
+        cost_by_agent: dict[str, float] = {}
+        try:
+            for row in self._db.get_session_cost_data():
+                cost = compute_token_cost(
+                    model=row.get("model"),
+                    prompt_tokens=row.get("prompt_tokens", 0) or 0,
+                    completion_tokens=row.get("completion_tokens", 0) or 0,
+                )
+                if cost is not None:
+                    agent = row.get("agent_type", "custom")
+                    cost_by_agent[agent] = cost_by_agent.get(agent, 0.0) + cost
+        except Exception as exc:
+            logger.warning("Failed to compute agent cost metrics: {}", exc)
+
+        for m in metrics:
+            agent = m["agent_type"]
+            total_cost = cost_by_agent.get(agent)
+            m["total_estimated_cost_usd"] = round(total_cost, 6) if total_cost else None
+
+        return metrics
+
     # -- Agent Config CRUD --------------------------------------------------
 
     async def create_agent_config(self, data: dict[str, Any]) -> AgentConfig:
@@ -602,6 +691,8 @@ class ACPSessionStore:
                 enabled=data.get("enabled", True),
                 max_token_budget=data.get("max_token_budget"),
                 created_at=now,
+                default_token_budget=data.get("default_token_budget"),
+                default_auto_terminate_at_budget=data.get("default_auto_terminate_at_budget", True),
             )
             self._agent_configs[config.id] = config
         return config
@@ -613,7 +704,9 @@ class ACPSessionStore:
                 return None
             for key in ("name", "description", "system_prompt", "allowed_tools",
                         "denied_tools", "parameters", "requires_api_key",
-                        "org_id", "team_id", "enabled", "type", "max_token_budget"):
+                        "org_id", "team_id", "enabled", "type",
+                        "default_token_budget", "default_auto_terminate_at_budget",
+                        "max_token_budget"):
                 if key in data:
                     setattr(config, key, data[key])
             config.updated_at = datetime.now(timezone.utc).isoformat()

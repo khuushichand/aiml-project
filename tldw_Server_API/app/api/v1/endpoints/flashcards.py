@@ -10,70 +10,89 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_owner, get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
     DeckCreate,
     DeckUpdate,
-    FlashcardGenerateRequest,
-    FlashcardGenerateResponse,
+    Flashcard,
     FlashcardAnalyticsSummaryResponse,
     FlashcardAssetMetadata,
-    Flashcard,
     FlashcardBulkUpdateError,
     FlashcardBulkUpdateItem,
     FlashcardBulkUpdateResponse,
     FlashcardBulkUpdateResult,
     FlashcardCreate,
+    FlashcardGenerateRequest,
+    FlashcardGenerateResponse,
     FlashcardListResponse,
     FlashcardNextReviewResponse,
+    FlashcardResetSchedulingRequest,
     FlashcardReviewRequest,
     FlashcardReviewResponse,
     FlashcardResetSchedulingRequest,
+    FlashcardTagSuggestionsResponse,
     FlashcardsImportRequest,
     FlashcardTagsUpdate,
+    FlashcardUpdate,
+    StructuredQaImportPreviewRequest,
+    StructuredQaImportPreviewResponse,
     StudyAssistantContextResponse,
     StudyAssistantRespondRequest,
     StudyAssistantRespondResponse,
-    StructuredQaImportPreviewRequest,
-    StructuredQaImportPreviewResponse,
-    FlashcardUpdate,
+)
+from tldw_Server_API.app.api.v1.schemas.study_packs import (
+    StudyPackCreateJobRequest,
+    StudyPackJobAcceptedResponse,
+    StudyPackJobStatusResponse,
+    StudyPackSummaryResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
+from tldw_Server_API.app.core.Flashcards.apkg_importer import (
+    APKGImportError,
+    import_rows_from_apkg_bytes,
+)
 from tldw_Server_API.app.core.Flashcards.asset_refs import (
     build_flashcard_asset_markdown,
     build_flashcard_asset_reference,
     extract_flashcard_asset_uuids,
+)
+from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (
+    FsrsSettingsError,
+    build_fsrs_next_interval_previews,
 )
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (
     SchedulerSettingsError,
     build_next_interval_previews,
     get_default_scheduler_settings_envelope,
 )
-from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (
-    FsrsSettingsError,
-    build_fsrs_next_interval_previews,
-)
-from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
-from tldw_Server_API.app.core.Flashcards.apkg_importer import (
-    APKGImportError,
-    import_rows_from_apkg_bytes,
-)
 from tldw_Server_API.app.core.Flashcards.structured_qa_import import parse_structured_qa_preview
 from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_flashcard_assistant_context,
     generate_study_assistant_reply,
 )
-from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.StudyPacks.jobs import (
+    STUDY_PACKS_DOMAIN,
+    STUDY_PACKS_JOB_TYPE,
+    build_study_pack_job_payload,
+    extract_study_pack_source_items,
+    study_pack_jobs_queue,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.image_validation import (
     get_max_flashcard_asset_bytes,
@@ -186,6 +205,13 @@ _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
 )
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+_STUDY_PACK_JOB_STATUS_MAP = {
+    "queued": "queued",
+    "processing": "running",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "cancelled",
+}
 
 
 def _int_env(name: str, default: int) -> int:
@@ -234,6 +260,83 @@ def _resolve_flashcard_generation_provider(request_provider: str | None) -> str:
 
     fallback = str(DEFAULT_LLM_PROVIDER or "openai").strip().lower()
     return fallback or "openai"
+
+
+def _is_admin_principal(principal: AuthPrincipal) -> bool:
+    perms = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    return bool("admin" in roles or perms & _ADMIN_CLAIM_PERMISSIONS or FLASHCARDS_ADMIN.lower() in perms)
+
+
+def _serialize_study_pack(pack: dict[str, Any]) -> dict[str, Any]:
+    return StudyPackSummaryResponse.model_validate(pack).model_dump(mode="json")
+
+
+def _serialize_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
+    raw_status = str(job.get("status") or "").strip().lower()
+    return {
+        "id": int(job["id"]),
+        "status": _STUDY_PACK_JOB_STATUS_MAP.get(raw_status, "queued"),
+        "domain": str(job.get("domain") or ""),
+        "queue": str(job.get("queue") or ""),
+        "job_type": str(job.get("job_type") or ""),
+    }
+
+
+def _ensure_study_pack_job_access(job: dict[str, Any], *, current_user: User, principal: AuthPrincipal) -> None:
+    if _is_admin_principal(principal):
+        return
+    owner_user_id = str(job.get("owner_user_id") or "").strip()
+    if owner_user_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Study-pack job not found")
+
+
+def _study_pack_from_job_result(db: CharactersRAGDB, job: dict[str, Any]) -> dict[str, Any] | None:
+    result = job.get("result") or {}
+    pack_id = result.get("pack_id") if isinstance(result, dict) else None
+    if pack_id is None:
+        return None
+    pack = db.get_study_pack(int(pack_id))
+    return _serialize_study_pack(pack) if pack else None
+
+
+def _public_study_pack_job_error(job: dict[str, Any]) -> str | None:
+    raw_status = str(job.get("status") or "").strip().lower()
+    if raw_status == "cancelled":
+        reason = str(job.get("cancellation_reason") or "").strip()
+        return reason or "Study pack generation was cancelled."
+    if raw_status != "failed":
+        return None
+
+    raw_error = str(job.get("last_error") or job.get("error_message") or "").strip()
+    if raw_error:
+        logger.warning("Study-pack job {} failed: {}", int(job["id"]), raw_error)
+    return "Study pack generation failed."
+
+
+async def _study_pack_db_for_job(
+    job: dict[str, Any],
+    *,
+    request_db: CharactersRAGDB,
+    current_user: User,
+    principal: AuthPrincipal,
+) -> CharactersRAGDB:
+    if not _is_admin_principal(principal):
+        return request_db
+
+    owner_user_id = str(job.get("owner_user_id") or "").strip()
+    if not owner_user_id or owner_user_id == str(current_user.id):
+        return request_db
+
+    return await get_chacha_db_for_owner(int(owner_user_id))
 
 
 def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
@@ -927,6 +1030,34 @@ def list_flashcards(
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcards") from e
+
+
+@router.get(
+    "/tags",
+    response_model=FlashcardTagSuggestionsResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+def list_flashcard_tag_suggestions(
+    q: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=100),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> FlashcardTagSuggestionsResponse:
+    """List global flashcard tag suggestions.
+
+    Args:
+        q: Optional trimmed substring filter applied case-insensitively to tag names.
+        limit: Maximum number of suggestions to return.
+        db: Flashcards database dependency for the current user.
+
+    Returns:
+        A typed response containing matching tag suggestions and the number returned.
+    """
+    try:
+        items = db.list_flashcard_tag_suggestions(q=q, limit=limit)
+        return FlashcardTagSuggestionsResponse(items=items, count=len(items))
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to list flashcard tag suggestions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list flashcard tag suggestions") from e
 
 
 @router.get("/analytics/summary", response_model=FlashcardAnalyticsSummaryResponse)
@@ -1625,6 +1756,110 @@ def get_next_review_card(
         raise HTTPException(status_code=500, detail="Failed to fetch next review card") from e
 
 
+@router.post("/study-packs/jobs", response_model=StudyPackJobAcceptedResponse, status_code=202)
+def create_study_pack_job(
+    payload: StudyPackCreateJobRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    try:
+        _ensure_workspace_exists(db, payload.workspace_id)
+        job = jm.create_job(
+            domain=STUDY_PACKS_DOMAIN,
+            queue=study_pack_jobs_queue(),
+            job_type=STUDY_PACKS_JOB_TYPE,
+            payload=build_study_pack_job_payload(payload),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=2,
+        )
+        return {"job": _serialize_study_pack_job(job)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/study-packs/jobs/{job_id}", response_model=StudyPackJobStatusResponse)
+async def get_study_pack_job_status(
+    job_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+):
+    job = jm.get_job(job_id)
+    if not job or str(job.get("domain") or "").strip().lower() != STUDY_PACKS_DOMAIN:
+        raise HTTPException(status_code=404, detail="Study-pack job not found")
+    _ensure_study_pack_job_access(job, current_user=current_user, principal=principal)
+
+    study_pack = None
+    raw_status = str(job.get("status") or "").strip().lower()
+    if raw_status == "completed":
+        study_pack_db = await _study_pack_db_for_job(
+            job,
+            request_db=db,
+            current_user=current_user,
+            principal=principal,
+        )
+        study_pack = _study_pack_from_job_result(study_pack_db, job)
+    error = _public_study_pack_job_error(job)
+    return {
+        "job": _serialize_study_pack_job(job),
+        "study_pack": study_pack,
+        "error": error,
+    }
+
+
+@router.get("/study-packs/{pack_id}", response_model=StudyPackSummaryResponse)
+def get_study_pack_detail(
+    pack_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    pack = db.get_study_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Study pack not found")
+    return _serialize_study_pack(pack)
+
+
+@router.post("/study-packs/{pack_id}/regenerate", response_model=StudyPackJobAcceptedResponse, status_code=202)
+def regenerate_study_pack(
+    pack_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    pack = db.get_study_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Study pack not found")
+
+    source_items = extract_study_pack_source_items(pack.get("source_bundle_json"))
+    if not source_items:
+        raise HTTPException(status_code=400, detail="Study pack source bundle is empty")
+
+    request = StudyPackCreateJobRequest.model_validate(
+        {
+            "title": pack.get("title"),
+            "workspace_id": pack.get("workspace_id"),
+            "deck_mode": "new",
+            "source_items": source_items,
+        }
+    )
+    job = jm.create_job(
+        domain=STUDY_PACKS_DOMAIN,
+        queue=study_pack_jobs_queue(),
+        job_type=STUDY_PACKS_JOB_TYPE,
+        payload=build_study_pack_job_payload(
+            request,
+            regenerate_from_pack_id=pack_id,
+            expected_version=int(pack["version"]) if pack.get("version") is not None else None,
+        ),
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=2,
+    )
+    return {"job": _serialize_study_pack_job(job)}
+
+
 @router.get("/{card_uuid}/assistant", response_model=StudyAssistantContextResponse)
 def get_flashcard_assistant(
     card_uuid: str,
@@ -1638,6 +1873,10 @@ def get_flashcard_assistant(
             "messages": context["history"],
             "context_snapshot": _build_assistant_context_snapshot(context),
             "available_actions": context["available_actions"],
+            "citations": context.get("citations") or [],
+            "primary_citation": context.get("primary_citation"),
+            "deep_dive_target": context.get("deep_dive_target"),
+            "study_pack": context.get("study_pack"),
         }
     except HTTPException:
         raise
@@ -1800,7 +2039,7 @@ def export_flashcards(
     include_workspace_items: bool = False,
     tag: Optional[str] = None,
     q: Optional[str] = None,
-    format: Optional[str] = Query("csv", pattern="^(csv|apkg)$"),
+    export_format: Optional[str] = Query("csv", alias="format", pattern="^(csv|apkg|json)$"),
     include_reverse: Optional[bool] = False,
     delimiter: Optional[str] = Query('\t', description="CSV/TSV delimiter; default tab"),
     include_header: Optional[bool] = Query(False, description="Include header row for CSV/TSV"),
@@ -1819,7 +2058,48 @@ def export_flashcards(
             limit=100000,
             offset=0,
         )
-        if format == 'apkg':
+        if export_format == 'json':
+            def _parse_tags(raw) -> list:
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, list):
+                            return [str(t).strip() for t in parsed if str(t).strip()]
+                        return []
+                    except (json.JSONDecodeError, TypeError):
+                        return []
+                if isinstance(raw, list):
+                    return [str(t).strip() for t in raw if str(t).strip()]
+                return []
+
+            def _stream_json():
+                yield "[\n"
+                first = True
+                for item in items:
+                    row = {
+                        "front": item.get("front", ""),
+                        "back": item.get("back", ""),
+                        "notes": item.get("notes", ""),
+                        "tags": _parse_tags(item.get("tags_json")),
+                        "deck": item.get("deck_name", ""),
+                        "model_type": item.get("model_type", "basic"),
+                        "extra": item.get("extra", ""),
+                        "reverse": bool(item.get("reverse")),
+                        "is_cloze": bool(item.get("is_cloze")),
+                    }
+                    chunk = json.dumps(row, ensure_ascii=False)
+                    if not first:
+                        yield ",\n"
+                    first = False
+                    yield "  " + chunk
+                yield "\n]\n"
+
+            return StreamingResponse(
+                _stream_json(),
+                media_type="application/json; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=flashcards.json"},
+            )
+        if export_format == 'apkg':
             apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
 
             def asset_loader(asset_uuid: str) -> dict[str, Any]:

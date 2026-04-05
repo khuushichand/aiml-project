@@ -616,3 +616,111 @@ export async function getWritingWordcloud(
 ): Promise<WritingWordcloudResponse> {
   return await wordcloudClient.get<WritingWordcloudResponse>(id)
 }
+
+// ── Manuscript API ─────────────────────────────────────
+
+const manuscriptProjectsClient = createResourceClient({
+  basePath: "/api/v1/writing/manuscripts/projects" as AllowedPath,
+  detailPath: (id) =>
+    `/api/v1/writing/manuscripts/projects/${encodeURIComponent(String(id))}` as AllowedPath,
+})
+
+export async function listManuscriptProjects(params?: {
+  status?: string
+  limit?: number
+  offset?: number
+}) {
+  return manuscriptProjectsClient.list(params)
+}
+
+export async function getManuscriptProject(id: string) {
+  return manuscriptProjectsClient.get(id)
+}
+
+export async function createManuscriptProject(data: Record<string, unknown>) {
+  return manuscriptProjectsClient.create(data)
+}
+
+export async function updateManuscriptProject(
+  id: string,
+  data: Record<string, unknown>,
+  version: number,
+) {
+  return manuscriptProjectsClient.update(id, data, {
+    headers: buildExpectedVersionHeaders(version),
+  })
+}
+
+export async function deleteManuscriptProject(id: string, version: number) {
+  return manuscriptProjectsClient.remove(id, undefined, {
+    headers: buildExpectedVersionHeaders(version),
+  })
+}
+
+export async function getManuscriptStructure(projectId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/structure` as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function searchManuscriptScenes(
+  projectId: string,
+  query: string,
+  limit = 20,
+) {
+  const qs = buildQuery({ q: query, limit })
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/search${qs}` as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function reorderManuscriptItems(
+  projectId: string,
+  entityType: "parts" | "chapters" | "scenes",
+  items: { id: string; sort_order: number; version: number; new_parent_id?: string | null }[],
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/reorder` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { entity_type: entityType, items },
+  })
+}
+
+// Scene-level CRUD (needs chapter context for create)
+export async function createManuscriptScene(
+  chapterId: string,
+  data: Record<string, unknown>,
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/chapters/${encodeURIComponent(chapterId)}/scenes` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data,
+  })
+}
+
+export async function getManuscriptScene(sceneId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}` as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function updateManuscriptScene(
+  sceneId: string,
+  data: Record<string, unknown>,
+  version: number,
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}` as AllowedPath,
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "expected-version": String(version),
+    },
+    body: data,
+  })
+}

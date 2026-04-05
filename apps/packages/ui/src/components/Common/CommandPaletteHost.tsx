@@ -34,7 +34,19 @@ export const CommandPaletteHost = ({
       action: openPalette,
       description: "Open command palette",
       enabled: shortcutEnabled,
-      allowInInput: false
+      allowInInput: true
+    },
+    [openPalette, shortcutEnabled]
+  )
+
+  useShortcut(
+    {
+      key: "k",
+      modifiers: ["ctrl"],
+      action: openPalette,
+      description: "Open command palette",
+      enabled: shortcutEnabled,
+      allowInInput: true
     },
     [openPalette, shortcutEnabled]
   )

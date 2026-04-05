@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   listDecks,
   listFlashcards,
+  listFlashcardTagSuggestions,
   createFlashcard,
   createFlashcardsBulk,
   updateFlashcardsBulk,
@@ -51,6 +52,13 @@ export interface UseFlashcardQueriesOptions {
   enabled?: boolean
   includeWorkspaceItems?: boolean
   workspaceId?: string | null
+}
+
+export interface UseFlashcardDeckRecentCardsQueryOptions extends UseFlashcardQueriesOptions {
+}
+export interface UseGlobalFlashcardTagSuggestionsQueryOptions {
+  enabled?: boolean
+  limit?: number
 }
 
 const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
@@ -175,6 +183,80 @@ export function useFlashcardAssistantQuery(
     queryKey: ["flashcards:assistant", cardUuid ?? null],
     queryFn: ({ signal }) => getFlashcardAssistant(cardUuid!, { signal }),
     enabled: (options?.enabled ?? flashcardsEnabled) && !!cardUuid
+  })
+}
+
+/**
+ * Hook for fetching recent cards for a deck reference view.
+ */
+export function useFlashcardDeckRecentCardsQuery(
+  deckId: number | null | undefined,
+  options?: UseFlashcardDeckRecentCardsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
+  const limit = options?.limit ?? 6
+
+  return useQuery({
+    queryKey: ["flashcards:deck:recent", deckId ?? null, limit, visibilityParams],
+    queryFn: async (): Promise<Flashcard[]> => {
+      if (deckId == null) {
+        return []
+      }
+      const response = await listFlashcards({
+        deck_id: deckId,
+        due_status: "all",
+        limit,
+        offset: 0,
+        order_by: "created_at",
+        ...visibilityParams
+      })
+      return response.items || []
+    },
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!deckId
+  })
+}
+
+/**
+ * Hook for searching cards in a deck reference view.
+ */
+export function useFlashcardDeckSearchQuery(
+  params: {
+    deckId: number | null | undefined
+    query: string
+    limit?: number
+  },
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
+  const trimmedQuery = params.query.trim()
+  const limit = params.limit ?? 20
+
+  return useQuery({
+    queryKey: [
+      "flashcards:deck:search",
+      params.deckId ?? null,
+      trimmedQuery,
+      limit,
+      visibilityParams
+    ],
+    queryFn: async (): Promise<Flashcard[]> => {
+      if (params.deckId == null || trimmedQuery.length === 0) {
+        return []
+      }
+      const response = await listFlashcards({
+        deck_id: params.deckId,
+        q: trimmedQuery,
+        due_status: "all",
+        limit,
+        offset: 0,
+        order_by: "created_at",
+        ...visibilityParams
+      })
+      return response.items || []
+    },
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!params.deckId && trimmedQuery.length > 0
   })
 }
 
@@ -437,6 +519,29 @@ export function useTagSuggestionsQuery(
         left.localeCompare(right, undefined, { sensitivity: "base" })
       )
     },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching global flashcard tag suggestions for create/edit tag autocompletion.
+ */
+export function useGlobalFlashcardTagSuggestionsQuery(
+  query: string | null | undefined,
+  options?: UseGlobalFlashcardTagSuggestionsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const limit = options?.limit ?? 50
+  const normalizedQuery = query?.trim() || undefined
+
+  return useQuery({
+    queryKey: ["flashcards:tags:suggestions:global", normalizedQuery ?? null, limit],
+    queryFn: ({ signal }) =>
+      listFlashcardTagSuggestions({
+        q: normalizedQuery,
+        limit,
+        signal
+      }),
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }

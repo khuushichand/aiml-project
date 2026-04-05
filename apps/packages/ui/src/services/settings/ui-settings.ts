@@ -327,7 +327,18 @@ export const SIDEBAR_SHORTCUTS_COLLAPSED_SETTING = defineSetting(
   }
 )
 
-export const SIDEBAR_SHORTCUT_MAX_COUNT = 10
+export const PERSONA_BUDDY_SHELL_ENABLED_SETTING = defineSetting(
+  "tldw:personaBuddyShellEnabled",
+  true,
+  (value) => coerceBoolean(value, true),
+  {
+    area: "local",
+    localStorageKey: "tldw:personaBuddyShellEnabled",
+    mirrorToLocalStorage: true
+  }
+)
+
+export const SIDEBAR_SHORTCUT_MAX_COUNT = 14
 
 export const HEADER_SHORTCUT_IDS = [
   "chat",
@@ -346,6 +357,7 @@ export const HEADER_SHORTCUT_IDS = [
   "notes",
   "watchlists",
   "integrations",
+  "mcp-hub",
   "scheduled-tasks",
   "collections",
   "skills",
@@ -368,8 +380,11 @@ export const HEADER_SHORTCUT_IDS = [
   "documentation",
   "chatbooks-playground",
   "moderation-playground",
+  "family-guardrails",
+  "guardian",
   "admin-llamacpp",
   "admin-mlx",
+  "admin-monitoring",
   "settings",
   "account",
   "billing"
@@ -446,8 +461,12 @@ export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
   "world-books",
   "knowledge-qa",
   "media",
+  "watchlists",
   "document-workspace",
-  "moderation-playground"
+  "flashcards",
+  "moderation-playground",
+  "tts-playground",
+  "stt-playground"
 ]
 
 const areShortcutSelectionsEqual = (

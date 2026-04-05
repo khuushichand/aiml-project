@@ -8,6 +8,7 @@ import {
   skipIfServerUnavailable,
 } from "../utils/fixtures"
 import { TEST_CONFIG, dismissConnectionModals, waitForConnection } from "../utils/helpers"
+import { openQuickIngestDialog } from "../utils/journey-helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -179,6 +180,7 @@ async function openOnboardingSuccessScreen(
 
   const needsConnect = await connect.isVisible().catch(() => false)
   if (needsConnect) {
+    await clearOnboardingBlockingOverlays(page)
     await connect.click()
   }
 
@@ -222,9 +224,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
   test.beforeEach(async ({ authedPage }) => {
     ensureEvidenceDirectory()
     await authedPage.addInitScript((cfg) => {
-      try {
-        localStorage.setItem("ff_newOnboarding", JSON.stringify(true))
-      } catch {}
       try {
         localStorage.setItem(
           "tldwConfig",
@@ -331,19 +330,19 @@ test.describe("Onboarding Ingestion-First Journey", () => {
 
       await openOnboardingSuccessScreen(authedPage)
 
-      await authedPage
-        .getByTestId("onboarding-success-ingest")
-        .evaluate((el: HTMLElement) => el.click())
-      const quickIngestDialog = authedPage
-        .getByRole("dialog", { name: /quick ingest/i })
-        .first()
-      await expect(quickIngestDialog).toBeVisible({ timeout: 15_000 })
+      await clickOnboardingCtaAndExpectRoute(
+        authedPage,
+        "onboarding-success-ingest",
+        /\/media(?:[/?#].*)?$/
+      )
+      await waitForConnection(authedPage)
+      const quickIngestDialog = await openQuickIngestDialog(authedPage, 20_000)
       await captureStep(
         authedPage,
         evidenceRows,
         viewport.label,
         "05-quick-ingest-modal",
-        "Quick Ingest modal reachable from onboarding ingest CTA."
+        "Onboarding ingest CTA routes to Media, where Quick Ingest remains reachable."
       )
 
       const quickIngestClose = quickIngestDialog
@@ -356,7 +355,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await expect(authedPage).toHaveURL(/\/(?:[/?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/media(?:[/?#].*)?$/, {
         timeout: 20_000,
       })
       await openOnboardingSuccessScreen(authedPage)

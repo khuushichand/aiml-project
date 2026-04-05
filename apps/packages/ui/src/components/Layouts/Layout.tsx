@@ -81,6 +81,8 @@ type OptionLayoutProps = {
   children: React.ReactNode
   hideHeader?: boolean
   hideSidebar?: boolean
+  notificationCount?: number
+  onOpenNotifications?: () => void
 }
 
 const SHORTCUT_LOADING_MIN_MS = 0
@@ -114,7 +116,9 @@ const OptionLayoutEffects = () => {
 const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   children,
   hideHeader = false,
-  hideSidebar = false
+  hideSidebar = false,
+  notificationCount,
+  onOpenNotifications
 }) => {
   const confirmDanger = useConfirmDanger()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -369,6 +373,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
                 sidebarCollapsed={showChatSidebar && isMobile ? !sidebarOpen : chatSidebarCollapsed}
+                notificationCount={notificationCount}
+                onOpenNotifications={onOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -382,6 +388,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
                 sidebarCollapsed={showChatSidebar && isMobile ? !sidebarOpen : chatSidebarCollapsed}
+                notificationCount={notificationCount}
+                onOpenNotifications={onOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">

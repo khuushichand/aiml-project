@@ -1,6 +1,7 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
 const {
@@ -151,12 +152,11 @@ describe("WorldBooksManager stage-3 action affordances", () => {
     vi.clearAllMocks()
   })
 
-  it("uses explicit attachment affordance and consistent icon action labels", () => {
+  it("uses explicit attachment affordance and consistent icon action labels", async () => {
+    const user = userEvent.setup()
     render(<WorldBooksManager />)
 
-    expect(
-      screen.getByRole("button", { name: "View attached characters for Arcana (1)" })
-    ).toBeInTheDocument()
+    expect(screen.getByText("Open to load")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Edit world book" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Manage entries" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Duplicate world book" })).toBeInTheDocument()
@@ -164,5 +164,10 @@ describe("WorldBooksManager stage-3 action affordances", () => {
     expect(screen.getByRole("button", { name: "Export world book" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "View world book statistics" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Delete world book" })).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Quick attach characters" }))
+    expect(
+      await screen.findByRole("button", { name: "View attached characters for Arcana (1)" })
+    ).toBeInTheDocument()
   })
 })

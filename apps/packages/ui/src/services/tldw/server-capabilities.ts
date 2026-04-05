@@ -40,6 +40,7 @@ export type ServerCapabilities = {
   hasPersonalization: boolean
   hasGuardian: boolean
   hasSelfMonitoring: boolean
+  ffmpegAvailable: boolean | null
   specVersion: string | null
   specSource: "authoritative" | "fallback"
 }
@@ -82,6 +83,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasPersonalization: false,
   hasGuardian: false,
   hasSelfMonitoring: false,
+  ffmpegAvailable: null,
   specVersion: null,
   specSource: "authoritative"
 }
@@ -178,6 +180,7 @@ const fallbackSpec = {
 type DocsInfoResponse = {
   capabilities?: Record<string, unknown> | null
   supported_features?: Record<string, unknown> | null
+  ffmpeg_available?: boolean | null
 }
 
 const CAPABILITIES_CACHE_TTL_MS = 5 * 60 * 1000
@@ -402,7 +405,11 @@ const applyDocsInfoFeatureGates = (
     hasPersonalization:
       personalizationFeatureEnabled === null
         ? capabilities.hasPersonalization
-        : capabilities.hasPersonalization && personalizationFeatureEnabled
+        : capabilities.hasPersonalization && personalizationFeatureEnabled,
+    ffmpegAvailable:
+      docsInfo?.ffmpeg_available != null
+        ? Boolean(docsInfo.ffmpeg_available)
+        : capabilities.ffmpegAvailable
   }
 }
 
@@ -512,6 +519,7 @@ const computeCapabilities = (
       has("/api/v1/self-monitoring/rules") ||
       has("/api/v1/self-monitoring/alerts") ||
       has("/api/v1/self-monitoring/crisis-resources"),
+    ffmpegAvailable: null,
     specVersion: spec?.info?.version ?? null,
     specSource
   }

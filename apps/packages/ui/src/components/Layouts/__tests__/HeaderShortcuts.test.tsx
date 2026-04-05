@@ -21,7 +21,7 @@ const ALL_SHORTCUT_IDS = [
   "knowledge-qa", "media", "document-workspace",
   "repo2txt",
   "multi-item-review", "collections",
-  "watchlists", "integrations", "scheduled-tasks", "notes", "chatbooks-playground", "flashcards",
+  "watchlists", "integrations", "mcp-hub", "scheduled-tasks", "notes", "chatbooks-playground", "flashcards",
   "quizzes", "evaluations", "chunking-playground",
   "stt-playground", "tts-playground", "audiobook-studio",
   "workflows", "writing-playground", "acp-playground",
@@ -109,6 +109,10 @@ describe("HeaderShortcuts launcher modal", () => {
           labelDefault: "Integrations"
         }),
         expect.objectContaining({
+          to: "/mcp-hub",
+          labelDefault: "MCP Hub"
+        }),
+        expect.objectContaining({
           to: "/scheduled-tasks",
           labelDefault: "Scheduled Tasks"
         }),
@@ -118,6 +122,23 @@ describe("HeaderShortcuts launcher modal", () => {
         })
       ])
     )
+  })
+
+  it("shows MCP Hub in the automation launcher group and search results", () => {
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
+    )
+
+    const nav = screen.getByLabelText("Categories")
+    fireEvent.click(within(nav).getByText("Automation & Agents"))
+
+    expect(screen.getByText("MCP Hub")).toBeInTheDocument()
+
+    const input = screen.getByPlaceholderText("Search pages...")
+    fireEvent.change(input, { target: { value: "mcp" } })
+
+    const listbox = screen.getByRole("listbox")
+    expect(within(listbox).getByText("MCP Hub")).toBeInTheDocument()
   })
 
   it("renders a dialog when open (expanded=true)", () => {

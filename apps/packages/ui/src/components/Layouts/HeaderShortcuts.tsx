@@ -31,6 +31,7 @@ const META_LABEL = isMac ? "\u2318" : "Ctrl+"
 type ResolvedItem = {
   item: HeaderShortcutItem
   label: string
+  description: string | null
   groupId: string
   groupTitle: string
 }
@@ -127,6 +128,9 @@ export function HeaderShortcuts({
           (item): ResolvedItem => ({
             item,
             label: t(item.labelKey, item.labelDefault),
+            description: item.descriptionKey
+              ? t(item.descriptionKey, item.descriptionDefault ?? "")
+              : item.descriptionDefault ?? null,
             groupId: group.id,
             groupTitle: t(group.titleKey, group.titleDefault)
           })
@@ -144,7 +148,11 @@ export function HeaderShortcuts({
     let items = allItems
     if (query) {
       const q = query.toLowerCase()
-      items = items.filter((ri) => ri.label.toLowerCase().includes(q))
+      items = items.filter(
+        (ri) =>
+          ri.label.toLowerCase().includes(q) ||
+          (ri.description && ri.description.toLowerCase().includes(q))
+      )
     }
     if (activeCategory !== ALL_CATEGORY) {
       items = items.filter((ri) => ri.groupId === activeCategory)
@@ -155,7 +163,14 @@ export function HeaderShortcuts({
   /* ---------- match counts per category ---------- */
   const matchCounts = useMemo(() => {
     const queryFiltered = query
-      ? allItems.filter((ri) => ri.label.toLowerCase().includes(query.toLowerCase()))
+      ? (() => {
+          const q = query.toLowerCase()
+          return allItems.filter(
+            (ri) =>
+              ri.label.toLowerCase().includes(q) ||
+              (ri.description && ri.description.toLowerCase().includes(q))
+          )
+        })()
       : allItems
     const counts: Record<string, number> = { [ALL_CATEGORY]: queryFiltered.length }
     for (const g of resolvedGroups) {
@@ -488,8 +503,13 @@ export function HeaderShortcuts({
                           >
                             <Icon className="size-4" aria-hidden="true" />
                           </span>
-                          <span className="min-w-0 flex-1 truncate">
-                            {ri.label}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{ri.label}</span>
+                            {ri.description && (
+                              <span className="block truncate text-xs text-text-subtle/70">
+                                {ri.description}
+                              </span>
+                            )}
                           </span>
                           {ri.item.shortcutIndex != null && (
                             <kbd className="ml-auto shrink-0 rounded border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text-subtle">
@@ -556,7 +576,14 @@ export function HeaderShortcuts({
                             )}
                           >
                             <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                            <span className="min-w-0 truncate">{ri.label}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate">{ri.label}</span>
+                              {ri.description && (
+                                <span className="block truncate text-xs text-text-subtle/70">
+                                  {ri.description}
+                                </span>
+                              )}
+                            </span>
                             {ri.item.shortcutIndex != null && (
                               <kbd className="ml-auto shrink-0 rounded border border-border bg-surface2 px-1 py-0 text-[10px] text-text-subtle sm:px-1.5 sm:py-0.5 sm:text-xs">
                                 {META_LABEL}

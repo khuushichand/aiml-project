@@ -57,6 +57,7 @@ import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { restoreQueuedRequests } from "@/utils/chat-request-queue"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { buildStudyPackRoute } from "@/services/tldw/study-pack-handoff"
 import { CommandPaletteHost } from "@/components/Common/CommandPaletteHost"
 import type { ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import {
@@ -545,6 +546,7 @@ const SidepanelChat = () => {
   const [noteDraftTitle, setNoteDraftTitle] = React.useState("")
   const [noteSuggestedTitle, setNoteSuggestedTitle] = React.useState("")
   const [noteSourceUrl, setNoteSourceUrl] = React.useState<string | undefined>()
+  const [noteSourceMessageId, setNoteSourceMessageId] = React.useState<string | null>(null)
   const [noteSaving, setNoteSaving] = React.useState(false)
   const [noteError, setNoteError] = React.useState<string | null>(null)
   const [ingestCard, setIngestCard] = React.useState<IngestCardState | null>(null)
@@ -591,6 +593,7 @@ const SidepanelChat = () => {
     setNoteDraftTitle("")
     setNoteSuggestedTitle("")
     setNoteSourceUrl(undefined)
+    setNoteSourceMessageId(null)
     setNoteSaving(false)
     setNoteError(null)
   }, [])
@@ -652,6 +655,34 @@ const SidepanelChat = () => {
     serverChatId,
     t
   ])
+
+  const handleCreateStudyPackFromSelection = React.useCallback(() => {
+    const title = (noteDraftTitle || noteSuggestedTitle).trim()
+    const messageId = noteSourceMessageId?.trim() || ""
+    if (!title || !messageId) {
+      setNoteError(
+        t(
+          "sidepanel:notes.studyPackUnavailable",
+          "This selection does not have a supported message source for study packs yet."
+        )
+      )
+      return
+    }
+
+    openOptionsHashRoute(
+      buildStudyPackRoute({
+        title,
+        sourceItems: [
+          {
+            sourceType: "message",
+            sourceId: messageId,
+            sourceTitle: title
+          }
+        ]
+      })
+    )
+    resetNoteModal()
+  }, [noteDraftTitle, noteSuggestedTitle, noteSourceMessageId, openOptionsHashRoute, resetNoteModal, t])
 
   const handleNoteSave = React.useCallback(async () => {
     const content = noteDraftContent.trim()
@@ -1847,10 +1878,15 @@ const SidepanelChat = () => {
         bgMsg.payload?.pageTitle as string | undefined,
         sourceUrl
       )
+      const rawMessageId =
+        typeof bgMsg.payload?.messageId === "string" || typeof bgMsg.payload?.messageId === "number"
+          ? String(bgMsg.payload.messageId)
+          : null
       setNoteDraftContent(selected)
       setNoteSuggestedTitle(suggestedTitle)
       setNoteDraftTitle(suggestedTitle)
       setNoteSourceUrl(sourceUrl)
+      setNoteSourceMessageId(rawMessageId)
       setNoteSaving(false)
       setNoteError(null)
         setNoteModalOpen(true)
@@ -2453,12 +2489,17 @@ const SidepanelChat = () => {
             onCancel={resetNoteModal}
             onSave={handleNoteSave}
             onGenerateFlashcards={handleGenerateFlashcardsFromSelection}
+            onCreateStudyPack={noteSourceMessageId ? handleCreateStudyPackFromSelection : undefined}
             modalTitle={t("sidepanel:notes.saveToNotesTitle", "Save to Notes")}
             saveText={t("common:save", "Save")}
             cancelText={t("common:cancel", "Cancel")}
             generateFlashcardsText={t(
               "sidepanel:notes.generateFlashcards",
               "Generate flashcards"
+            )}
+            createStudyPackText={t(
+              "sidepanel:notes.createStudyPack",
+              "Create study pack"
             )}
             titleLabel={t("sidepanel:notes.titleLabel", "Title")}
             contentLabel={t("sidepanel:notes.contentLabel", "Content")}

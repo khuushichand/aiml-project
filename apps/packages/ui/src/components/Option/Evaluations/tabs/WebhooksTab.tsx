@@ -36,6 +36,7 @@ const { Text } = Typography
 export const WebhooksTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
   const [form] = Form.useForm()
+  const [deletingWebhookUrl, setDeletingWebhookUrl] = React.useState<string | null>(null)
   const isOnline = useServerOnline()
 
   // Store state
@@ -47,7 +48,9 @@ export const WebhooksTab: React.FC = () => {
   const registerMutation = useRegisterWebhook()
   const deleteMutation = useDeleteWebhook()
 
-  const webhooks = webhooksResp?.data?.data || []
+  const webhooks = Array.isArray(webhooksResp?.data)
+    ? webhooksResp.data
+    : webhooksResp?.data?.data || []
 
   const handleRegister = async () => {
     try {
@@ -62,7 +65,7 @@ export const WebhooksTab: React.FC = () => {
     }
   }
 
-  const handleDelete = (webhookId: string) => {
+  const handleDelete = (url: string) => {
     Modal.confirm({
       title: t("evaluations:deleteWebhookConfirmTitle", {
         defaultValue: "Delete this webhook?"
@@ -72,7 +75,14 @@ export const WebhooksTab: React.FC = () => {
           "This will stop sending events to this URL. You can re-register it later."
       }),
       okButtonProps: { danger: true },
-      onOk: () => deleteMutation.mutateAsync(webhookId)
+      onOk: async () => {
+        setDeletingWebhookUrl(url)
+        try {
+          await deleteMutation.mutateAsync(url)
+        } finally {
+          setDeletingWebhookUrl((current) => (current === url ? null : current))
+        }
+      }
     })
   }
 
@@ -185,10 +195,10 @@ export const WebhooksTab: React.FC = () => {
           <div className="flex flex-col gap-2">
             {webhooks.map((hook: any) => (
               <Card
-                key={hook.id}
+                key={hook.webhook_id ?? hook.id ?? hook.url}
                 size="small"
                 className="hover:border-primary/70"
-                bodyStyle={{ padding: "8px 12px" }}
+                styles={{ body: { padding: "8px 12px" } }}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col">
@@ -204,14 +214,25 @@ export const WebhooksTab: React.FC = () => {
                       ))}
                     </div>
                     <Text type="secondary" className="text-[11px] mt-1">
-                      {t("common:id", { defaultValue: "ID" })}: {hook.id}
+                      {t("common:id", { defaultValue: "ID" })}:{" "}
+                      {String(hook.webhook_id ?? hook.id ?? "")}
                     </Text>
-                    {hook.is_active !== undefined && (
+                    {(hook.status || hook.is_active !== undefined) && (
                       <Tag
-                        color={hook.is_active ? "green" : "default"}
+                        color={
+                          hook.status
+                            ? String(hook.status).toLowerCase() === "active"
+                              ? "green"
+                              : "default"
+                            : hook.is_active
+                              ? "green"
+                              : "default"
+                        }
                         className="text-[10px] mt-1 w-fit"
                       >
-                        {hook.is_active
+                        {(hook.status
+                          ? String(hook.status).toLowerCase() === "active"
+                          : hook.is_active)
                           ? t("common:active", { defaultValue: "Active" })
                           : t("common:inactive", { defaultValue: "Inactive" })}
                       </Tag>
@@ -220,8 +241,8 @@ export const WebhooksTab: React.FC = () => {
                   <Button
                     size="small"
                     danger
-                    loading={deleteMutation.isPending}
-                    onClick={() => handleDelete(hook.id)}
+                    loading={deletingWebhookUrl === hook.url}
+                    onClick={() => handleDelete(hook.url)}
                   >
                     {t("common:delete", { defaultValue: "Delete" })}
                   </Button>

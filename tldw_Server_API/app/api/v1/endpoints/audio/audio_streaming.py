@@ -83,8 +83,12 @@ from tldw_Server_API.app.core.Streaming.phrase_chunker import PhraseChunker
 from tldw_Server_API.app.core.Streaming import speech_chat_service
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
+from tldw_Server_API.app.core.TTS.tts_request_resolution import (
+    resolve_tts_request_defaults,
+)
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils import normalize_model_and_variant
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
@@ -324,6 +328,40 @@ def _audio_ws_quota_error_payload(
     if _audio_ws_compat_error_type_enabled():
         payload["quota"] = quota
     return payload
+
+
+async def _guard_audio_ws_work_start(
+    websocket: WebSocket,
+    *,
+    kind: str,
+    outer_stream: Any = None,
+    request_id: Optional[str] = None,
+) -> bool:
+    app = getattr(websocket, "app", None)
+    if app is None:
+        return True
+    try:
+        assert_may_start_work(app, kind)
+        return True
+    except HTTPException:
+        payload = _audio_ws_error_payload(
+            code="service_unavailable",
+            message="Shutdown in progress",
+            request_id=request_id,
+            data={"kind": kind},
+        )
+        try:
+            if outer_stream:
+                await outer_stream.send_json(payload)
+            else:
+                await websocket.send_json(payload)
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            await websocket.close(code=1013, reason="shutdown_draining")
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            pass
+        return False
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -828,6 +866,13 @@ async def websocket_transcribe(
     )
     if not auth_ok:
         return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.stream.transcribe",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
+        return
 
     try:
         # Default configuration prefers explicit streaming model selection from
@@ -1323,6 +1368,13 @@ async def websocket_audio_chat_stream(
     )
     if not auth_ok:
         return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.chat.stream",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
+        return
 
     # Determine quota user id
     if is_multi_user_mode() and jwt_user_id is not None:
@@ -1548,9 +1600,14 @@ async def websocket_audio_chat_stream(
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             tts_speed = 1.0
         response_format = tts_cfg.get("format") or tts_cfg.get("response_format") or "pcm"
-        tts_model = tts_cfg.get("model", "kokoro")
-        tts_voice = tts_cfg.get("voice", "af_heart")
-        tts_provider = tts_cfg.get("provider")
+        resolved_tts = resolve_tts_request_defaults(
+            provider=tts_cfg.get("provider"),
+            model=tts_cfg.get("model"),
+            voice=tts_cfg.get("voice"),
+        )
+        tts_model = resolved_tts.model
+        tts_voice = resolved_tts.voice
+        tts_provider = resolved_tts.provider
         tts_extra_params = tts_cfg.get("extra_params") if isinstance(tts_cfg.get("extra_params"), dict) else None
 
         # Initialize STT transcriber + VAD gate
@@ -2574,6 +2631,13 @@ async def websocket_tts(
     )
     if not auth_ok:
         return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.stream.tts",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
+        return
 
     # Determine quota user id
     if is_multi_user_mode() and jwt_user_id is not None:
@@ -2657,11 +2721,16 @@ async def websocket_tts(
         extra_params = prompt_data.get("extra_params")
         if extra_params is not None and not isinstance(extra_params, dict):
             extra_params = None
+        resolved_tts = resolve_tts_request_defaults(
+            provider=prompt_data.get("provider"),
+            model=prompt_data.get("model"),
+            voice=prompt_data.get("voice"),
+        )
 
         speech_req = OpenAISpeechRequest(
-            model=prompt_data.get("model", "kokoro"),
+            model=resolved_tts.model,
             input=text,
-            voice=prompt_data.get("voice", "af_heart"),
+            voice=resolved_tts.voice,
             response_format=response_format,
             speed=speed_val,
             stream=True,
@@ -2669,7 +2738,7 @@ async def websocket_tts(
             extra_params=extra_params,
         )
 
-        provider_hint = prompt_data.get("provider")
+        provider_hint = resolved_tts.provider
         reg = _shim_get_metrics_registry()
         tts_service = await _shim_get_tts_service()
 
@@ -2839,6 +2908,13 @@ async def websocket_tts_realtime(
         ws_path="/api/v1/audio/stream/tts/realtime",
     )
     if not auth_ok:
+        return
+    if not await _guard_audio_ws_work_start(
+        websocket,
+        kind="audio.stream.tts.realtime",
+        outer_stream=_outer_stream,
+        request_id=request_id,
+    ):
         return
 
     if is_multi_user_mode() and jwt_user_id is not None:

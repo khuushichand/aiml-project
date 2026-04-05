@@ -17,15 +17,14 @@ import {
 import type { Page } from "@playwright/test"
 import { SpeechPage } from "../../utils/page-objects/SpeechPage"
 import { expectApiCall } from "../../utils/api-assertions"
-import { seedAuth } from "../../utils/helpers"
+import { getAntdSelectTrigger, seedAuth } from "../../utils/helpers"
 
 async function openSpeechInputSourcePicker(page: Page) {
-  const inputSourcePicker = page
-    .locator('[aria-label="Speech playground input source"]')
-    .first()
+  const inputSourcePicker = getAntdSelectTrigger(page, {
+    ariaLabel: "Speech playground input source",
+  })
   await expect(inputSourcePicker).toBeVisible()
-  await inputSourcePicker.focus()
-  await page.keyboard.press("ArrowDown")
+  await inputSourcePicker.click()
 }
 
 test.describe("Speech Playground", () => {

@@ -350,7 +350,7 @@ describe("ReviewTab study assistant panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Explain" }))
 
     await waitFor(() => {
-      expect(screen.getByText("Study assistant unavailable")).toBeInTheDocument()
+      expect(screen.getByText("Study assistant requires an LLM provider. Configure one in Settings \u2192 LLM Providers.")).toBeInTheDocument()
     })
     expect(screen.getByTestId("flashcards-review-show-answer")).toBeInTheDocument()
   })
@@ -433,6 +433,89 @@ describe("ReviewTab study assistant panel", () => {
           input_modality: "voice_transcript"
         }
       })
+    })
+  })
+
+  it("uses refreshed top-level remediation context after conflict recovery", async () => {
+    assistantMutateAsync.mockRejectedValueOnce(
+      Object.assign(new Error("Version mismatch"), { response: { status: 409 } })
+    )
+    assistantRefetchMock.mockImplementationOnce(async () => {
+      assistantQueryState = {
+        ...assistantQueryState,
+        data: {
+          ...assistantQueryState.data,
+          thread: {
+            ...assistantQueryState.data.thread,
+            version: 2,
+            message_count: 2
+          },
+          messages: [
+            ...(assistantQueryState.data?.messages ?? []),
+            {
+              id: 13,
+              thread_id: 9,
+              role: "assistant",
+              action_type: "follow_up",
+              input_modality: "text",
+              content: "Fresh thread update",
+              structured_payload: {},
+              context_snapshot: {},
+              provider: "openai",
+              model: "gpt-5",
+              created_at: "2026-03-13T08:05:00Z",
+              client_id: "test"
+            }
+          ],
+          citations: [
+            {
+              id: 1,
+              flashcard_uuid: "card-1",
+              source_type: "note",
+              source_id: "88",
+              citation_text: "Retry context adds the missing remediation quote.",
+              locator: "{\"section\":\"retry-context\"}",
+              ordinal: 0,
+              deleted: false,
+              client_id: "test",
+              version: 1
+            }
+          ],
+          primary_citation: {
+            id: 1,
+            flashcard_uuid: "card-1",
+            source_type: "note",
+            source_id: "88",
+            citation_text: "Retry context adds the missing remediation quote.",
+            locator: "{\"section\":\"retry-context\"}",
+            ordinal: 0,
+            deleted: false,
+            client_id: "test",
+            version: 1
+          },
+          deep_dive_target: {
+            source_type: "note",
+            source_id: "88",
+            citation_ordinal: 0,
+            route_kind: "exact_locator",
+            route: "/notes/88?section=retry-context",
+            available: true,
+            fallback_reason: null
+          }
+        }
+      }
+      return assistantQueryState
+    })
+    renderReviewTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Retry context adds the missing remediation quote\./)).toBeInTheDocument()
+      expect(screen.getByRole("link", { name: "Deep dive to source" })).toHaveAttribute(
+        "href",
+        "/notes/88?section=retry-context"
+      )
     })
   })
 })

@@ -1,4 +1,5 @@
 import React from "react"
+import { Link } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Alert,
@@ -11,6 +12,7 @@ import {
   Select,
   Space,
   Switch,
+  Tooltip,
   Typography
 } from "antd"
 import { useTranslation } from "react-i18next"
@@ -46,6 +48,9 @@ import {
   type StructuredQaImportPreviewDraft
 } from "@/services/flashcards"
 import type { FlashcardsGenerateIntent } from "@/services/tldw/flashcards-generate-handoff"
+import { getLlmProviders } from "@/services/prompt-studio"
+import type { StudyPackIntent } from "@/services/tldw/study-pack-handoff"
+import { StudyPackCreateDrawer } from "../components/StudyPackCreateDrawer"
 
 const { Text } = Typography
 
@@ -1448,6 +1453,13 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                         : "This APKG may expand into many cards. Review selected file details before confirming."
                 })}
               </Text>
+              <Text type="secondary" className="block">
+                {t("option:flashcards.largeImportUndoHint", {
+                  seconds: IMPORT_UNDO_SECONDS,
+                  defaultValue:
+                    "Large imports may take a moment to process. You'll have {{seconds}} seconds to undo after import completes."
+                })}
+              </Text>
               {importMode === "delimited" ? (
                 <Text type="secondary" className="block">
                   {t("option:flashcards.largeImportConfirmSummary", {
@@ -1681,14 +1693,14 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
 }
 
 /**
- * Export panel for CSV/APKG export.
+ * Export panel for CSV/JSON/APKG export.
  */
 const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
   const decksQuery = useDecksQuery()
   const [exportDeckId, setExportDeckId] = React.useState<number | null>(null)
-  const [exportFormat, setExportFormat] = React.useState<"csv" | "apkg">("csv")
+  const [exportFormat, setExportFormat] = React.useState<"csv" | "apkg" | "json">("csv")
   const [exportTag, setExportTag] = React.useState("")
   const [exportQueryText, setExportQueryText] = React.useState("")
   const [exportIncludeReverse, setExportIncludeReverse] = React.useState(false)
@@ -1748,6 +1760,14 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
           ...exportParams,
           format: "apkg"
         })
+      } else if (exportFormat === "json") {
+        const text = await exportFlashcards({
+          ...exportParams,
+          format: "json"
+        })
+        blob = new Blob([text], {
+          type: "application/json;charset=utf-8"
+        })
       } else {
         const text = await exportFlashcards({
           ...exportParams,
@@ -1768,6 +1788,8 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
       a.href = url
       if (exportFormat === "apkg") {
         a.download = "flashcards.apkg"
+      } else if (exportFormat === "json") {
+        a.download = "flashcards.json"
       } else {
         a.download = exportDelimiter === "\t" ? "flashcards.tsv" : "flashcards.csv"
       }
@@ -1780,9 +1802,11 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
         fileName:
           exportFormat === "apkg"
             ? "flashcards.apkg"
-            : exportDelimiter === "\t"
-              ? "flashcards.tsv"
-              : "flashcards.csv"
+            : exportFormat === "json"
+              ? "flashcards.json"
+              : exportDelimiter === "\t"
+                ? "flashcards.tsv"
+                : "flashcards.csv"
       })
       message.success(successCopy)
       onTransferAction?.({
@@ -1809,7 +1833,7 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
         <Text type="secondary">
           {t("option:flashcards.exportHelp", {
             defaultValue:
-              "Export filtered flashcards to delimited text (CSV/TSV) or Anki-compatible APKG format."
+              "Export filtered flashcards to delimited text (CSV/TSV), JSON, or Anki-compatible APKG format."
           })}
         </Text>
       </div>
@@ -1846,6 +1870,12 @@ const ExportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 defaultValue: "Delimited (CSV/TSV)"
               }),
               value: "csv"
+            },
+            {
+              label: t("option:flashcards.exportFormatJson", {
+                defaultValue: "JSON"
+              }),
+              value: "json"
             },
             { label: "APKG (Anki)", value: "apkg" }
           ]}
@@ -1983,6 +2013,24 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   const createMutation = useCreateFlashcardMutation()
   const createDeckMutation = useCreateDeckMutation()
   const decks = decksQuery.data || []
+
+  const llmProvidersQuery = useQuery({
+    queryKey: ["flashcards", "llm-providers"],
+    queryFn: () => getLlmProviders(),
+    staleTime: 60_000,
+    retry: 1
+  })
+
+  const hasLlmProviders = React.useMemo(() => {
+    if (llmProvidersQuery.isLoading || llmProvidersQuery.isError) return true // optimistic while loading or on error
+    if (llmProvidersQuery.data == null) return true // no data yet — assume available
+    // Unwrap ApiSendResponse envelope: actual payload is in .data
+    const raw = llmProvidersQuery.data as any
+    const data = raw?.data ?? raw
+    if (Array.isArray(data?.providers)) return data.providers.length > 0
+    if (typeof data?.total_configured === "number") return data.total_configured > 0
+    return true // fallback: assume available if shape unknown
+  }, [llmProvidersQuery.data, llmProvidersQuery.isLoading, llmProvidersQuery.isError])
 
   const sourceContext = React.useMemo<GenerateSourceContext | null>(() => {
     if (!initialIntent) return null
@@ -2294,6 +2342,12 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
         })}
         data-testid="flashcards-generate-text"
       />
+      <Typography.Text type="secondary" className="text-xs -mt-1">
+        {t("option:flashcards.generateQualityTip", {
+          defaultValue:
+            "Tip: Longer, more detailed source text produces higher quality flashcards. Aim for at least a paragraph."
+        })}
+      </Typography.Text>
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <Form.Item
           label={t("option:flashcards.generateNumCards", {
@@ -2377,6 +2431,18 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
             {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
           </Text>
         ) : null}
+        {!hasLlmProviders && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-3 md:col-span-2"
+            data-testid="flashcards-generate-no-llm-banner"
+            message={t("option:flashcards.generateNoLlmBanner", {
+              defaultValue:
+                "Flashcard generation requires an LLM provider. Configure one in Settings \u2192 LLM Providers."
+            })}
+          />
+        )}
         <Form.Item
           label={t("option:flashcards.generateProvider", {
             defaultValue: "Provider (optional)"
@@ -2417,16 +2483,47 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
           data-testid="flashcards-generate-focus-topics"
         />
       </Form.Item>
-      {generationError && <Alert type="error" showIcon title={generationError} />}
-      <Button
-        type="primary"
-        onClick={handleGenerate}
-        loading={generateMutation.isPending}
-        disabled={!sourceText.trim()}
-        data-testid="flashcards-generate-button"
+      {generationError && (
+        <Alert
+          type="error"
+          showIcon
+          title={generationError}
+          description={
+            <span className="text-xs">
+              {t("option:flashcards.generateProviderKeyHint", {
+                defaultValue: "If this is a provider or API key issue, "
+              })}
+              <Link to="/settings/provider-keys" className="text-primary hover:text-primaryStrong underline">
+                {t("option:flashcards.generateProviderKeyLink", {
+                  defaultValue: "configure provider keys in Settings"
+                })}
+              </Link>
+              .
+            </span>
+          }
+        />
+      )}
+      <Tooltip
+        title={
+          !hasLlmProviders
+            ? t("option:flashcards.generateNoLlmTooltip", {
+                defaultValue: "No LLM provider configured"
+              })
+            : undefined
+        }
       >
-        {t("option:flashcards.generateButton", { defaultValue: "Generate cards" })}
-      </Button>
+        <span>
+          <Button
+            type="primary"
+            onClick={handleGenerate}
+            loading={generateMutation.isPending}
+            disabled={!sourceText.trim() || !hasLlmProviders}
+            data-testid="flashcards-generate-button"
+          >
+            {t("option:flashcards.generateButton", { defaultValue: "Generate cards" })}
+          </Button>
+        </span>
+      </Tooltip>
 
       {generatedCards.length > 0 && (
         <div className="space-y-2">
@@ -2507,13 +2604,24 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
  */
 type ImportExportTabProps = {
   generateIntent?: FlashcardsGenerateIntent | null
+  studyPackIntent?: StudyPackIntent | null
 }
 
-export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent }) => {
+export const ImportExportTab: React.FC<ImportExportTabProps> = ({
+  generateIntent,
+  studyPackIntent
+}) => {
   const { t } = useTranslation(["option", "common"])
   const limitsQuery = useImportLimitsQuery()
   const [lastTransferAction, setLastTransferAction] =
     React.useState<TransferActionSummary | null>(null)
+  const [studyPackDrawerOpen, setStudyPackDrawerOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    if (studyPackIntent) {
+      setStudyPackDrawerOpen(true)
+    }
+  }, [studyPackIntent])
 
   const handleTransferAction = React.useCallback((summary: TransferActionSummaryInput) => {
     setLastTransferAction({
@@ -2552,6 +2660,38 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
     <div className="grid gap-4 grid-cols-1 xl:grid-cols-4">
       <Card
         className="xl:col-span-4"
+        title={t("option:flashcards.studyPackLauncherTitle", {
+          defaultValue: "Study packs"
+        })}
+        data-testid="flashcards-study-pack-launcher"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="max-w-3xl space-y-1">
+            <Text strong className="block">
+              {t("option:flashcards.studyPackLauncherHeadline", {
+                defaultValue: "Turn media or notes into a review queue."
+              })}
+            </Text>
+            <Text type="secondary">
+              {t("option:flashcards.studyPackLauncherBody", {
+                defaultValue:
+                  "Create a study pack from supported sources, then review the generated deck in Flashcards."
+              })}
+            </Text>
+          </div>
+          <Button
+            type="primary"
+            onClick={() => setStudyPackDrawerOpen(true)}
+            data-testid="study-pack-launcher-button"
+          >
+            {t("option:flashcards.studyPackLaunchButton", {
+              defaultValue: "Create study pack"
+            })}
+          </Button>
+        </div>
+      </Card>
+      <Card
+        className="xl:col-span-4"
         title={t("option:flashcards.transferSummaryTitle", {
           defaultValue: "Transfer summary"
         })}
@@ -2567,7 +2707,7 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
             <Text type="secondary">
               {t("option:flashcards.transferSummaryFormatsValue", {
                 defaultValue:
-                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Author: Generate, Image Occlusion · Export: TSV, CSV, APKG"
+                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Author: Generate, Image Occlusion · Export: TSV, CSV, JSON, APKG"
               })}
             </Text>
           </div>
@@ -2640,6 +2780,11 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
       >
         <ImageOcclusionTransferPanel onTransferAction={handleTransferAction} />
       </Card>
+      <StudyPackCreateDrawer
+        open={studyPackDrawerOpen}
+        onClose={() => setStudyPackDrawerOpen(false)}
+        initialIntent={studyPackIntent || null}
+      />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react"
 import { Modal, Button } from "antd"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 import { XCircle } from "lucide-react"
 import { browser } from "wxt/browser"
 import {
@@ -22,12 +23,14 @@ import {
 } from "@/services/tldw/quick-ingest-batch"
 import { reattachQuickIngestSession } from "@/services/tldw/quick-ingest-session-reattach"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 import {
   type PersistedWizardQueueItem,
   type QuickIngestSessionLifecycle,
   type QuickIngestSessionRecord,
   useQuickIngestSessionStore,
 } from "@/store/quick-ingest-session"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 import type {
   DetectedMediaType,
   ItemProgress,
@@ -762,6 +765,22 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     }
   }, [session.tracking])
 
+  // Track recently ingested document IDs for the DocumentPickerModal
+  const addRecentlyIngestedDocId = useQuickIngestStore(s => s.addRecentlyIngestedDocId)
+
+  useEffect(() => {
+    if (state.currentStep !== 5) return
+    for (const item of state.results) {
+      if (
+        item.status === "ok" &&
+        item.mediaId != null &&
+        ["pdf", "ebook", "document"].includes(item.type)
+      ) {
+        addRecentlyIngestedDocId(Number(item.mediaId))
+      }
+    }
+  }, [state.currentStep, state.results, addRecentlyIngestedDocId])
+
   useEffect(() => {
     if (!open || !state.isMinimized) return
     restore()
@@ -801,6 +820,105 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     const timer = window.setInterval(syncElapsed, 1000)
     return () => window.clearInterval(timer)
   }, [processingState.status, syncElapsed])
+
+  // ---------------------------------------------------------------------------
+  // Simulated progress advancement
+  //
+  // During long-running server-side processing (transcription, indexing) the
+  // UI receives no intermediate progress updates -- items stay stuck at 10%.
+  // This effect gradually advances non-terminal items through visual stages
+  // so the user sees continuous feedback while waiting.
+  //
+  // We use a ref to read the latest perItemProgress inside the interval
+  // callback so the effect only depends on `processingState.status` (avoiding
+  // a re-render feedback loop where updating progress re-triggers the effect).
+  // ---------------------------------------------------------------------------
+  const perItemProgressRef = useRef(processingState.perItemProgress)
+  useEffect(() => {
+    perItemProgressRef.current = processingState.perItemProgress
+  }, [processingState.perItemProgress])
+
+  const updateItemProgressRef = useRef(updateItemProgress)
+  useEffect(() => {
+    updateItemProgressRef.current = updateItemProgress
+  }, [updateItemProgress])
+
+  useEffect(() => {
+    if (processingState.status !== "running") return
+
+    const STAGE_ORDER: ItemProgressStatus[] = [
+      "uploading",
+      "processing",
+      "analyzing",
+      "storing",
+    ]
+    const TERMINAL = new Set<ItemProgressStatus>(["complete", "failed", "cancelled"])
+    /** Advance interval in ms -- slow enough to feel realistic. */
+    const TICK_MS = 3_000
+    /**
+     * Maximum simulated percent -- we cap at 90% so the bar never reaches
+     * 100% before the real server response arrives.
+     */
+    const MAX_SIMULATED_PERCENT = 90
+    /** Percent increment per tick. */
+    const PERCENT_STEP = 5
+
+    // TODO(i18n): extract STAGE_LABELS to i18n resources
+    const STAGE_LABELS: Record<string, string> = {
+      uploading: "Uploading",
+      processing: "Processing your file... This may take a few minutes for large files.",
+      analyzing: "Transcribing and indexing content",
+      storing: "Storing results",
+    }
+
+    const timer = window.setInterval(() => {
+      const items = perItemProgressRef.current
+      for (const p of items) {
+        if (TERMINAL.has(p.status)) continue
+
+        const currentStageIdx = STAGE_ORDER.indexOf(p.status)
+        if (currentStageIdx < 0) continue
+
+        let nextPercent = p.progressPercent + PERCENT_STEP
+        let nextStatus = p.status
+        let nextStage = p.currentStage
+
+        // Advance to the next visual stage at certain thresholds
+        if (nextPercent >= 35 && currentStageIdx === 0) {
+          nextStatus = "processing"
+          nextStage = STAGE_LABELS.processing
+        } else if (nextPercent >= 60 && currentStageIdx <= 1) {
+          nextStatus = "analyzing"
+          nextStage = STAGE_LABELS.analyzing
+        } else if (nextPercent >= 80 && currentStageIdx <= 2) {
+          nextStatus = "storing"
+          nextStage = STAGE_LABELS.storing
+        } else {
+          nextStage = STAGE_LABELS[p.status] || p.currentStage
+        }
+
+        if (nextPercent > MAX_SIMULATED_PERCENT) {
+          nextPercent = MAX_SIMULATED_PERCENT
+        }
+
+        // Only update if something actually changed
+        if (
+          nextPercent !== p.progressPercent ||
+          nextStatus !== p.status ||
+          nextStage !== p.currentStage
+        ) {
+          updateItemProgressRef.current({
+            ...p,
+            status: nextStatus,
+            progressPercent: nextPercent,
+            currentStage: nextStage,
+          })
+        }
+      }
+    }, TICK_MS)
+
+    return () => window.clearInterval(timer)
+  }, [processingState.status])
 
   useEffect(() => {
     const persistedTracking = persistedTrackingRef.current
@@ -1236,6 +1354,30 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     skipToProcessing()
   }, [skipToProcessing])
 
+  // Navigation callbacks for WizardResultsStep CTAs
+  const navigate = useNavigate()
+
+  const handleSearchKnowledge = useCallback(() => {
+    onClose()
+    window.setTimeout(() => navigate("/knowledge"), 150)
+  }, [navigate, onClose])
+
+  const handleOpenWorkspace = useCallback(
+    (item: WizardResultItem) => {
+      onClose()
+      const mediaId = item.mediaId
+      if (mediaId != null) {
+        window.setTimeout(
+          () => navigate(`${DOCUMENT_WORKSPACE_PATH}?open=${mediaId}`),
+          150
+        )
+      } else {
+        window.setTimeout(() => navigate(DOCUMENT_WORKSPACE_PATH), 150)
+      }
+    },
+    [navigate, onClose]
+  )
+
   // Render the current step
   const stepContent = useMemo(() => {
     switch (currentStep) {
@@ -1252,11 +1394,17 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       case 4:
         return <ProcessingStep />
       case 5:
-        return <WizardResultsStep onClose={onClose} />
+        return (
+          <WizardResultsStep
+            onClose={onClose}
+            onSearchKnowledge={handleSearchKnowledge}
+            onOpenWorkspace={handleOpenWorkspace}
+          />
+        )
       default:
         return null
     }
-  }, [currentStep, handleQuickProcess, onClose, open, state.isMinimized])
+  }, [currentStep, handleQuickProcess, handleSearchKnowledge, handleOpenWorkspace, onClose, open, state.isMinimized])
 
   return (
     <>

@@ -1325,7 +1325,26 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
               </p>
             </div>
           }
-        />
+        >
+          {onRetakeQuiz && (
+            <Button
+              type="primary"
+              onClick={() => onRetakeQuiz({
+                startQuizId: null,
+                highlightQuizId: null,
+                forceShowWorkspaceItems: false,
+                sourceTab: "results",
+                attemptId: null,
+                assignmentMode: null,
+                assignmentDueAt: null,
+                assignmentNote: null,
+                assignedByRole: null
+              })}
+            >
+              {t("option:quiz.takeAQuiz", { defaultValue: "Take a Quiz" })}
+            </Button>
+          )}
+        </Empty>
       </>
     )
   }

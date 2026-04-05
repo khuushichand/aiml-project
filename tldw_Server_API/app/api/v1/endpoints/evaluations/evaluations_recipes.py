@@ -1,185 +1,277 @@
+"""Recipe registry and parent recipe-run endpoints."""
+
 from __future__ import annotations
 
-import inspect
-from typing import Any
+from typing import Callable
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
-    create_error_response,
     get_eval_request_user,
+    require_eval_permissions,
     sanitize_error_message,
     verify_api_key,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
+from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
     RecipeDatasetValidationRequest,
-    RecipeRunRequest,
+    RecipeDatasetValidationResponse,
+    RecipeLaunchReadiness,
+    RecipeManifest,
+    RecipeRunCreateRequest,
+    RecipeRunRecord,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs import (
+    enqueue_recipe_run,
+    mark_recipe_run_enqueue_failure,
+)
+from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+    recipe_run_jobs_worker_enabled,
+)
+from tldw_Server_API.app.core.Evaluations.recipe_runs_service import (
+    RecipeDefinitionNotFoundError,
+    RecipeDefinitionNotLaunchableError,
+    RecipeRunNotFoundError,
+    RecipeRunsService,
     get_recipe_runs_service_for_user,
 )
+from tldw_Server_API.app.core.Evaluations.recipes.reporting import RecipeRunReport
+from tldw_Server_API.app.core.exceptions import RecipeEnqueueError
+
+recipes_router = APIRouter()
 
 
-recipe_router = APIRouter()
-
-_RECIPE_ENDPOINT_EXCEPTIONS = (
-    AttributeError,
-    ConnectionError,
-    KeyError,
-    LookupError,
-    OSError,
-    RuntimeError,
-    TypeError,
-    ValueError,
-)
-
-
-async def _maybe_await(value: Any) -> Any:
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
-def _get_service(current_user: User):
+def _service_for_user(current_user: User) -> RecipeRunsService:
     stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
-    return get_recipe_runs_service_for_user(stable_user_id), stable_user_id
+    return get_recipe_runs_service_for_user(stable_user_id)
 
 
-@recipe_router.get("/recipes")
-async def list_recipes(current_user: User = Depends(get_eval_request_user)):
+def _get_manifest_or_404(service: RecipeRunsService, recipe_id: str) -> RecipeManifest:
     try:
-        service, _ = _get_service(current_user)
-        recipes = await _maybe_await(service.list_recipes())
-        return {"object": "list", "data": recipes}
-    except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-        logger.error(f"Failed to list recipe manifests: {exc}")
-        raise create_error_response(
-            message=f"Failed to list recipe manifests: {sanitize_error_message(exc, 'listing recipes')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+        return service.get_manifest(recipe_id)
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
 
 
-@recipe_router.get("/recipes/{recipe_id}")
-async def get_recipe_manifest(recipe_id: str, current_user: User = Depends(get_eval_request_user)):
-    try:
-        service, _ = _get_service(current_user)
-        manifest = await _maybe_await(service.get_recipe_manifest(recipe_id))
-        return manifest
-    except HTTPException:
-        raise
-    except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-        logger.error(f"Failed to fetch recipe manifest: {exc}")
-        raise create_error_response(
-            message=f"Failed to fetch recipe manifest: {sanitize_error_message(exc, 'fetching recipe manifest')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+def get_recipe_run_job_enqueuer() -> Callable[..., str]:
+    """Return the callable used to enqueue recipe-run Jobs."""
+    return enqueue_recipe_run
 
 
-@recipe_router.post("/recipes/{recipe_id}/validate-dataset")
+@recipes_router.get(
+    "/recipes",
+    response_model=list[RecipeManifest],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
+async def list_recipe_manifests(
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
+    del user_ctx
+    return _service_for_user(current_user).list_manifests()
+
+
+@recipes_router.get(
+    "/recipes/{recipe_id}",
+    response_model=RecipeManifest,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
+async def get_recipe_manifest(
+    recipe_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
+    del user_ctx
+    service = _service_for_user(current_user)
+    return _get_manifest_or_404(service, recipe_id)
+
+
+@recipes_router.get(
+    "/recipes/{recipe_id}/launch-readiness",
+    response_model=RecipeLaunchReadiness,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
+async def get_recipe_launch_readiness(
+    recipe_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
+    del user_ctx
+    service = _service_for_user(current_user)
+    manifest = _get_manifest_or_404(service, recipe_id)
+    worker_enabled = recipe_run_jobs_worker_enabled()
+    if not manifest.launchable:
+        return RecipeLaunchReadiness(
+            recipe_id=recipe_id,
+            ready=False,
+            can_enqueue_runs=False,
+            can_reuse_completed_runs=False,
+            runtime_checks={
+                "recipe_launchable": False,
+                "recipe_run_worker_enabled": worker_enabled,
+            },
+            message=(
+                f"Recipe '{recipe_id}' is not launchable yet."
+                " It is exposed as a stub manifest only."
+            ),
+        )
+
+    message = None
+    if not worker_enabled:
+        message = (
+            "New recipe runs are unavailable because the recipe worker is not running on this server."
+        )
+
+    return RecipeLaunchReadiness(
+        recipe_id=recipe_id,
+        ready=worker_enabled,
+        can_enqueue_runs=worker_enabled,
+        can_reuse_completed_runs=True,
+        runtime_checks={
+            "recipe_launchable": True,
+            "recipe_run_worker_enabled": worker_enabled,
+        },
+        message=message,
+    )
+
+
+@recipes_router.post(
+    "/recipes/{recipe_id}/validate-dataset",
+    response_model=RecipeDatasetValidationResponse,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
 async def validate_recipe_dataset(
     recipe_id: str,
-    request: RecipeDatasetValidationRequest,
+    payload: RecipeDatasetValidationRequest,
+    user_ctx: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
+    del user_ctx
+    service = _service_for_user(current_user)
     try:
-        service, _ = _get_service(current_user)
-        validation = await _maybe_await(service.validate_recipe_dataset(recipe_id, request.model_dump()))
-        return validation
-    except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-        logger.error(f"Failed to validate recipe dataset: {exc}")
-        raise create_error_response(
-            message=f"Failed to validate recipe dataset: {sanitize_error_message(exc, 'validating recipe dataset')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        return service.validate_dataset(
+            recipe_id,
+            dataset_id=payload.dataset_id,
+            dataset=payload.dataset,
+            run_config=payload.run_config,
+        )
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
+    except RecipeDefinitionNotLaunchableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=sanitize_error_message(exc, "validating recipe dataset"),
         ) from exc
 
 
-@recipe_router.post("/recipes/{recipe_id}/runs", status_code=status.HTTP_202_ACCEPTED)
+@recipes_router.post(
+    "/recipes/{recipe_id}/runs",
+    response_model=RecipeRunRecord,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
+)
 async def create_recipe_run(
     recipe_id: str,
-    request: RecipeRunRequest,
-    user_id: str = Depends(verify_api_key),
+    payload: RecipeRunCreateRequest,
+    response: Response,
+    user_ctx: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    response: Response = None,
+    enqueue_run: Callable[..., str] = Depends(get_recipe_run_job_enqueuer),
 ):
+    del user_ctx
+    stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+    service = _service_for_user(current_user)
+    worker_enabled = recipe_run_jobs_worker_enabled()
     try:
-        service, stable_user_id = _get_service(current_user)
-        if idempotency_key:
+        record = service.create_run(
+            recipe_id,
+            dataset_id=payload.dataset_id,
+            dataset=payload.dataset,
+            run_config=payload.run_config,
+            force_rerun=payload.force_rerun,
+        )
+        if getattr(record.status, "value", record.status) == "pending":
+            if not worker_enabled:
+                mark_recipe_run_enqueue_failure(
+                    service,
+                    record,
+                    worker_state="disabled",
+                    error_code="recipe_run_worker_disabled",
+                    error_message=(
+                        "New recipe runs are unavailable because the recipe worker is not running on this server."
+                    ),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="recipe_run_worker_disabled",
+                )
             try:
-                existing_id = service.db.lookup_idempotency("recipe_run", idempotency_key, stable_user_id)
-                if existing_id:
-                    existing = await _maybe_await(service.get_recipe_run(existing_id, created_by=stable_user_id))
-                    if existing:
-                        if response is not None:
-                            response.headers["X-Idempotent-Replay"] = "true"
-                            response.headers["Idempotency-Key"] = idempotency_key
-                        return existing
-            except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-                logger.debug(f"recipe_runs: idempotency lookup failed for key {idempotency_key}: {exc}")
-        run = await _maybe_await(service.create_recipe_run(recipe_id, request.model_dump(), created_by=stable_user_id))
-        if run is None:
-            raise ValueError("Recipe run creation returned no result")
-        if idempotency_key and run.get("id"):
-            try:
-                service.db.record_idempotency("recipe_run", idempotency_key, run["id"], stable_user_id)
-            except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-                logger.debug(f"recipe_runs: failed to record idempotency for run {run.get('id')}: {exc}")
-        return run
-    except HTTPException:
-        raise
-    except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-        logger.error(f"Failed to create recipe run: {exc}")
-        raise create_error_response(
-            message=f"Failed to create recipe run: {sanitize_error_message(exc, 'creating recipe run')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                enqueue_run(record, owner_user_id=stable_user_id)
+            except RecipeEnqueueError as exc:
+                mark_recipe_run_enqueue_failure(
+                    service,
+                    record,
+                    error_code=exc.error_code,
+                    error_message=str(exc),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=exc.error_code,
+                ) from exc
+            if response is not None:
+                response.status_code = status.HTTP_202_ACCEPTED
+        elif response is not None:
+            response.status_code = status.HTTP_200_OK
+        if response is not None:
+            response.headers["Location"] = f"/api/v1/evaluations/recipe-runs/{record.run_id}"
+        return record
+    except RecipeDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found") from exc
+    except RecipeDefinitionNotLaunchableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.debug("Recipe run creation rejected: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=sanitize_error_message(exc, "creating recipe run"),
         ) from exc
 
 
-@recipe_router.get("/recipe-runs/{run_id}")
-async def get_recipe_run(run_id: str, current_user: User = Depends(get_eval_request_user)):
+@recipes_router.get(
+    "/recipe-runs/{run_id}",
+    response_model=RecipeRunRecord,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
+async def get_recipe_run(
+    run_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
+    del user_ctx
+    service = _service_for_user(current_user)
     try:
-        service, stable_user_id = _get_service(current_user)
-        run = await _maybe_await(service.get_recipe_run(run_id, created_by=stable_user_id))
-        if not run:
-            raise create_error_response(
-                message="Recipe run not found",
-                error_type="not_found_error",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-        return run
-    except HTTPException:
-        raise
-    except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-        logger.error(f"Failed to fetch recipe run: {exc}")
-        raise create_error_response(
-            message=f"Failed to fetch recipe run: {sanitize_error_message(exc, 'retrieving recipe run')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+        return service.get_run(run_id)
+    except RecipeRunNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe run not found") from exc
 
 
-@recipe_router.get("/recipe-runs/{run_id}/report")
-async def get_recipe_report(run_id: str, current_user: User = Depends(get_eval_request_user)):
+@recipes_router.get(
+    "/recipe-runs/{run_id}/report",
+    response_model=RecipeRunReport,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
+async def get_recipe_run_report(
+    run_id: str,
+    user_ctx: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
+    del user_ctx
+    service = _service_for_user(current_user)
     try:
-        service, stable_user_id = _get_service(current_user)
-        report = await _maybe_await(service.get_recipe_report(run_id, created_by=stable_user_id))
-        if not report:
-            raise create_error_response(
-                message="Recipe report not found",
-                error_type="not_found_error",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-        return report
-    except HTTPException:
-        raise
-    except _RECIPE_ENDPOINT_EXCEPTIONS as exc:
-        logger.error(f"Failed to fetch recipe report: {exc}")
-        raise create_error_response(
-            message=f"Failed to fetch recipe report: {sanitize_error_message(exc, 'retrieving recipe report')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+        return service.get_report(run_id)
+    except RecipeRunNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipe run not found") from exc
