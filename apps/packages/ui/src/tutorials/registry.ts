@@ -83,6 +83,8 @@ import { mcpHubTutorials } from "./definitions/mcp-hub"
 import { quizTutorials } from "./definitions/quiz"
 import { ttsTutorials } from "./definitions/tts"
 import { sttTutorials } from "./definitions/stt"
+import { watchlistsTutorials } from "./definitions/watchlists"
+import { monitoringTutorials } from "./definitions/monitoring"
 
 /**
  * Central registry of all available tutorials
@@ -103,7 +105,9 @@ export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
   ...mcpHubTutorials,
   ...quizTutorials,
   ...ttsTutorials,
-  ...sttTutorials
+  ...sttTutorials,
+  ...watchlistsTutorials,
+  ...monitoringTutorials
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
