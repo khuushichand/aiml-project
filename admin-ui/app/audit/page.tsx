@@ -16,7 +16,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Pagination } from '@/components/ui/pagination';
 import { FileText, RefreshCw, Filter, Eye, Clipboard, Trash2, Bell, ExternalLink, ShieldAlert } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { AuditLog } from '@/types';
+import type { AuditLog, UserWithKeyCount } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportAuditLogs, ExportFormat } from '@/lib/export';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
@@ -55,6 +55,10 @@ type ComplianceReportSummary = {
   categoryCounts: Array<{ category: string; count: number }>;
   userCounts: Array<{ userLabel: string; count: number }>;
   anomalies: string[];
+};
+
+type AdminUserCandidate = UserWithKeyCount & {
+  is_superuser?: boolean;
 };
 
 const SAVED_SEARCHES_STORAGE_KEY = 'admin.audit.saved-searches.v1';
@@ -500,18 +504,17 @@ function AuditPageContent() {
     try {
       setAdminUsersLoading(true);
       const response = await api.getUsersPage({ limit: '200' });
-      const items = Array.isArray(response?.items) ? response.items : [];
+      const items: AdminUserCandidate[] = Array.isArray(response?.items) ? response.items : [];
       const ids = new Set<number>();
       for (const user of items) {
-        const record = user as Record<string, unknown>;
-        const role = typeof record.role === 'string' ? record.role.toLowerCase() : '';
-        const roles = Array.isArray(record.roles) ? record.roles.map((r) => String(r).toLowerCase()) : [];
+        const role = user.role.toLowerCase();
+        const roles = Array.isArray(user.roles) ? user.roles.map((r) => String(r).toLowerCase()) : [];
         if (
           role === 'admin' || role === 'owner' || role === 'super_admin'
           || roles.includes('admin') || roles.includes('owner') || roles.includes('super_admin')
-          || record.is_superuser === true
+          || user.is_superuser === true
         ) {
-          const id = Number(record.id);
+          const id = Number(user.id);
           if (Number.isFinite(id)) ids.add(id);
         }
       }

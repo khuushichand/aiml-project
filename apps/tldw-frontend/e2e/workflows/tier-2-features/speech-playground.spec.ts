@@ -14,9 +14,18 @@ import {
   skipIfServerUnavailable,
   assertNoCriticalErrors,
 } from "../../utils/fixtures"
+import type { Page } from "@playwright/test"
 import { SpeechPage } from "../../utils/page-objects/SpeechPage"
 import { expectApiCall } from "../../utils/api-assertions"
 import { getAntdSelectTrigger, seedAuth } from "../../utils/helpers"
+
+async function openSpeechInputSourcePicker(page: Page) {
+  const inputSourcePicker = getAntdSelectTrigger(page, {
+    ariaLabel: "Speech playground input source",
+  })
+  await expect(inputSourcePicker).toBeVisible()
+  await inputSourcePicker.click()
+}
 
 test.describe("Speech Playground", () => {
   let speech: SpeechPage
@@ -54,11 +63,7 @@ test.describe("Speech Playground", () => {
       await expect(speech.stopButton).toBeVisible()
       await expect(speech.downloadButton).toBeVisible()
 
-      const inputSourcePicker = getAntdSelectTrigger(authedPage, {
-        ariaLabel: "Speech playground input source",
-      })
-      await expect(inputSourcePicker).toBeVisible()
-      await inputSourcePicker.click()
+      await openSpeechInputSourcePicker(authedPage)
       await expect(
         authedPage.getByRole("option", { name: /Default microphone/i })
       ).toBeVisible()

@@ -1739,11 +1739,11 @@ test.describe('Watchlists playground smoke', () => {
           url: 'https://example.com/keyboard-1',
           title: 'Keyboard item one',
           summary: 'Summary one',
-          published_at: now(),
+          published_at: '2026-04-01T10:03:00.000Z',
           tags: ['keyboard'],
           status: 'ingested',
           reviewed: false,
-          created_at: now()
+          created_at: '2026-04-01T10:03:00.000Z'
         },
         {
           id: 2102,
@@ -1753,11 +1753,11 @@ test.describe('Watchlists playground smoke', () => {
           url: 'https://example.com/keyboard-2',
           title: 'Keyboard item two',
           summary: 'Summary two',
-          published_at: now(),
+          published_at: '2026-04-01T10:02:00.000Z',
           tags: ['keyboard'],
           status: 'ingested',
           reviewed: false,
-          created_at: now()
+          created_at: '2026-04-01T10:02:00.000Z'
         },
         {
           id: 2103,
@@ -1767,11 +1767,11 @@ test.describe('Watchlists playground smoke', () => {
           url: 'https://example.com/keyboard-3',
           title: 'Keyboard item three',
           summary: 'Summary three',
-          published_at: now(),
+          published_at: '2026-04-01T10:01:00.000Z',
           tags: ['keyboard'],
           status: 'filtered',
           reviewed: true,
-          created_at: now()
+          created_at: '2026-04-01T10:01:00.000Z'
         }
       ]
 

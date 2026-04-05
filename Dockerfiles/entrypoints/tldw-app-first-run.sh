@@ -54,6 +54,76 @@ upsert_env() {
   chmod 600 "$ENV_FILE"
 }
 
+has_existing_auth_state() {
+  [ -f "${AUTH_MARKER_DIR}/.authnz_initialized_single_user" ] || \
+    [ -f "${AUTH_MARKER_DIR}/.authnz_initialized_multi_user" ] || \
+    [ -f "${AUTH_MARKER_FILE}" ]
+}
+
+count_existing_byok_payloads() {
+  python - <<'PY'
+import os
+import sqlite3
+import sys
+from urllib.parse import unquote, urlparse
+
+TABLES = ("user_provider_secrets", "org_provider_secrets")
+
+
+def count_sqlite(database_url: str) -> int:
+    parsed = urlparse(database_url)
+    raw_path = unquote(parsed.path or "")
+    if raw_path.startswith("//"):
+        raw_path = raw_path[1:]
+    db_path = raw_path if os.path.isabs(raw_path) else os.path.abspath(raw_path or "./Databases/users.db")
+    if not os.path.exists(db_path):
+        return 0
+
+    conn = sqlite3.connect(db_path)
+    try:
+        total = 0
+        for table in TABLES:
+            try:
+                row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            except sqlite3.Error:
+                continue
+            total += int((row or (0,))[0] or 0)
+        return total
+    finally:
+        conn.close()
+
+
+def count_postgres(database_url: str) -> int:
+    import psycopg
+
+    total = 0
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            for table in TABLES:
+                cur.execute("SELECT to_regclass(%s)", (table,))
+                row = cur.fetchone()
+                if not row or row[0] is None:
+                    continue
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                count_row = cur.fetchone()
+                total += int((count_row or (0,))[0] or 0)
+    return total
+
+
+database_url = (os.getenv("DATABASE_URL") or "sqlite:///./Databases/users.db").strip()
+try:
+    if database_url.startswith("postgres"):
+        result = count_postgres(database_url)
+    else:
+        result = count_sqlite(database_url)
+except Exception as exc:  # pragma: no cover - shell guard path
+    print(f"error:{exc}", file=sys.stderr)
+    sys.exit(1)
+
+sys.stdout.write(str(result))
+PY
+}
+
 ensure_env_file() {
   if [ -f "$ENV_FILE" ]; then
     return
@@ -113,6 +183,17 @@ for mcp_var in MCP_JWT_SECRET MCP_API_KEY_SALT BYOK_ENCRYPTION_KEY; do
   eval current_val="\${$mcp_var:-}"
   case "$current_val" in
     ""|CHANGE_ME*)
+      if [ "$mcp_var" = "BYOK_ENCRYPTION_KEY" ]; then
+        if existing_byok_payloads="$(count_existing_byok_payloads 2>/dev/null)"; then
+          if [ "${existing_byok_payloads:-0}" -gt 0 ]; then
+            echo "[entrypoint] Refusing to auto-generate BYOK_ENCRYPTION_KEY because ${existing_byok_payloads} encrypted BYOK payload(s) already exist. Reuse the previous key or configure BYOK_SECONDARY_ENCRYPTION_KEY for rotation." >&2
+            exit 1
+          fi
+        elif has_existing_auth_state; then
+          echo "[entrypoint] Existing auth state was detected but BYOK_ENCRYPTION_KEY could not be validated. Refusing to auto-generate a replacement key; provide the prior key explicitly." >&2
+          exit 1
+        fi
+      fi
       new_val="$(generate_key)"
       eval export "$mcp_var=$new_val"
       upsert_env "$mcp_var" "$new_val"
@@ -149,8 +230,8 @@ if [ "$RUN_AUTH_INIT_ON_START" != "0" ] && [ "$should_run_auth_init" = "1" ]; th
       echo "║  - DATABASE_URL is correct (if multi-user)                   ║" >&2
       echo "╚══════════════════════════════════════════════════════════════╝" >&2
       echo "" >&2
-      # Still start the server so /setup is accessible for configuration
-      echo "[first-run] Starting server despite init failure (setup wizard may be available)..." >&2
+      echo "[first-run] Auth initialization failed in non-interactive startup; refusing to continue." >&2
+      exit 1
     fi
   fi
 

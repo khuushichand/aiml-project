@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react"
 import { Modal, Button } from "antd"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 import { XCircle } from "lucide-react"
 import { browser } from "wxt/browser"
 import {
@@ -22,12 +23,14 @@ import {
 } from "@/services/tldw/quick-ingest-batch"
 import { reattachQuickIngestSession } from "@/services/tldw/quick-ingest-session-reattach"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 import {
   type PersistedWizardQueueItem,
   type QuickIngestSessionLifecycle,
   type QuickIngestSessionRecord,
   useQuickIngestSessionStore,
 } from "@/store/quick-ingest-session"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 import type {
   DetectedMediaType,
   ItemProgress,
@@ -762,6 +765,22 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     }
   }, [session.tracking])
 
+  // Track recently ingested document IDs for the DocumentPickerModal
+  const addRecentlyIngestedDocId = useQuickIngestStore(s => s.addRecentlyIngestedDocId)
+
+  useEffect(() => {
+    if (state.currentStep !== 5) return
+    for (const item of state.results) {
+      if (
+        item.status === "ok" &&
+        item.mediaId != null &&
+        ["pdf", "ebook", "document"].includes(item.type)
+      ) {
+        addRecentlyIngestedDocId(Number(item.mediaId))
+      }
+    }
+  }, [state.currentStep, state.results, addRecentlyIngestedDocId])
+
   useEffect(() => {
     if (!open || !state.isMinimized) return
     restore()
@@ -1335,6 +1354,30 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     skipToProcessing()
   }, [skipToProcessing])
 
+  // Navigation callbacks for WizardResultsStep CTAs
+  const navigate = useNavigate()
+
+  const handleSearchKnowledge = useCallback(() => {
+    onClose()
+    window.setTimeout(() => navigate("/knowledge"), 150)
+  }, [navigate, onClose])
+
+  const handleOpenWorkspace = useCallback(
+    (item: WizardResultItem) => {
+      onClose()
+      const mediaId = item.mediaId
+      if (mediaId != null) {
+        window.setTimeout(
+          () => navigate(`${DOCUMENT_WORKSPACE_PATH}?open=${mediaId}`),
+          150
+        )
+      } else {
+        window.setTimeout(() => navigate(DOCUMENT_WORKSPACE_PATH), 150)
+      }
+    },
+    [navigate, onClose]
+  )
+
   // Render the current step
   const stepContent = useMemo(() => {
     switch (currentStep) {
@@ -1351,11 +1394,17 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       case 4:
         return <ProcessingStep />
       case 5:
-        return <WizardResultsStep onClose={onClose} />
+        return (
+          <WizardResultsStep
+            onClose={onClose}
+            onSearchKnowledge={handleSearchKnowledge}
+            onOpenWorkspace={handleOpenWorkspace}
+          />
+        )
       default:
         return null
     }
-  }, [currentStep, handleQuickProcess, onClose, open, state.isMinimized])
+  }, [currentStep, handleQuickProcess, handleSearchKnowledge, handleOpenWorkspace, onClose, open, state.isMinimized])
 
   return (
     <>

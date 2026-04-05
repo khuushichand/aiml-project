@@ -91,6 +91,8 @@ import { WritingPlaygroundShell } from "./WritingPlaygroundShell"
 import { WritingPlaygroundLibraryPanel } from "./WritingPlaygroundLibraryPanel"
 import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
 import { WritingPlaygroundInspectorPanel } from "./WritingPlaygroundInspectorPanel"
+import { CharacterWorldTab } from "./CharacterWorldTab"
+import { ResearchTab } from "./ResearchTab"
 import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
 import {
@@ -169,7 +171,10 @@ export const WritingPlayground = () => {
     setEditorMode,
     focusMode,
     setFocusMode,
+    activeNodeId,
+    setActiveNodeId,
   } = useWritingPlaygroundStore()
+  // TODO Phase 2: React to activeNodeId changes to load scene content into editor
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
@@ -188,6 +193,7 @@ export const WritingPlayground = () => {
   // --- Local-only state (not managed by hooks) ---
   const [libraryView, setLibraryView] = React.useState<"sessions" | "manuscript">("sessions")
   const [tipTapContent, setTipTapContent] = React.useState<any>(null)
+  const editorTextChangedByTipTap = React.useRef(false)
   const [editorView, setEditorView] = React.useState<EditorViewMode>("edit")
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -284,6 +290,14 @@ export const WritingPlayground = () => {
     handleTemplateChange, handleThemeChange, handleChatModeChange,
     canCreateSession, canRenameSession
   } = sessionMgmt
+
+  // Sync TipTap content when editorText changes from an external source (e.g. session load, undo/redo, generate)
+  React.useEffect(() => {
+    if (editorMode === "tiptap" && !editorTextChangedByTipTap.current) {
+      setTipTapContent(plainTextToTipTapJson(editorText))
+    }
+    editorTextChangedByTipTap.current = false
+  }, [editorText])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const settingsDisabled = isGenerating || !activeSessionDetail
 
@@ -2043,6 +2057,9 @@ export const WritingPlayground = () => {
     </div>
   )
 
+  const charactersTabContent = <CharacterWorldTab isOnline={isOnline} />
+  const researchTabContent = <ResearchTab isOnline={isOnline} />
+
   const inspectorDrawerContent = (
     <div className="p-3">
       <WritingPlaygroundInspectorPanel
@@ -2052,7 +2069,9 @@ export const WritingPlayground = () => {
           sampling: t("option:writingPlayground.sidebarSampling", "Sampling"),
           context: t("option:writingPlayground.sidebarContext", "Context"),
           setup: t("option:writingPlayground.sidebarSetup", "Setup"),
-          inspect: t("option:writingPlayground.sidebarInspect", "Analysis")
+          inspect: t("option:writingPlayground.sidebarInspect", "Analysis"),
+          characters: t("option:writingPlayground.sidebarCharacters", "Characters"),
+          research: t("option:writingPlayground.sidebarResearch", "Research")
         }}
         tabBadges={{
           inspect: responseInspectorRowsAll.length > 0 ? (<Tag color="blue" className="!m-0 !px-1 !text-[10px]">{responseInspectorRowsAll.length}</Tag>) : null
@@ -2091,6 +2110,8 @@ export const WritingPlayground = () => {
         context={contextTabContent}
         setup={setupTabContent}
         inspect={inspectTabContent}
+        characters={charactersTabContent}
+        research={researchTabContent}
       />
     </div>
   )
@@ -2230,6 +2251,7 @@ export const WritingPlayground = () => {
                         <LazyWritingTipTapEditor
                           content={tipTapContent}
                           onContentChange={(json, plain) => {
+                            editorTextChangedByTipTap.current = true
                             setTipTapContent(json)
                             setEditorText(plain)
                           }}

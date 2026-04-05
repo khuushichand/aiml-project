@@ -10,7 +10,7 @@ export const SceneBreakExtension = Node.create({
   },
 
   renderHTML() {
-    return ["hr", { class: "scene-break", style: "border: none; text-align: center; margin: 1.5em 0;" }]
+    return ["hr", { class: "scene-break", style: "border: none; margin: 1.5em 0;" }]
   },
 
   addInputRules() {

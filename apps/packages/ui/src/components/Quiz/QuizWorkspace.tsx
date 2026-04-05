@@ -18,6 +18,7 @@ import {
   type DemoQuizQuestion
 } from "@/utils/demo-content"
 import { QuizPlayground } from "./QuizPlayground"
+import { useQuizzesQuery } from "./hooks"
 
 type DemoAnswerMap = Record<string, string>
 type DemoPreviewMode = "catalog" | "taking" | "results"
@@ -470,10 +471,25 @@ export const QuizWorkspace: React.FC = () => {
 
   const quizzesUnsupported = !capsLoading && !!capabilities && !capabilities.hasQuizzes
   const demoQuizzes = React.useMemo(() => getDemoQuizzes(t), [t])
-  const betaDescription = t("option:quiz.betaDescription", {
+
+  // Fetch quiz count for FTUX decisions (deduped by react-query when QuizPlayground also queries)
+  const { data: quizCountData, isLoading: isQuizCountLoading } = useQuizzesQuery(
+    { limit: 1, offset: 0 },
+    { enabled: isOnline && !quizzesUnsupported }
+  )
+  const totalQuizzes = quizCountData?.count ?? 0
+  const [showDemo, setShowDemo] = React.useState(false)
+
+  // Item 5: Split beta tooltip by context (connected vs demo)
+  const betaDescriptionConnected = t("option:quiz.betaDescriptionConnected", {
     defaultValue:
-      "Quiz Playground is in beta. Features and score semantics may change, and demo responses are not saved after you leave this page."
+      "Quiz Playground is in beta. Features and scoring may evolve. Your quiz data is saved to your server."
   })
+  const betaDescriptionDemo = t("option:quiz.betaDescriptionDemo", {
+    defaultValue:
+      "Quiz Playground is in beta. Demo answers are local to this session and will not be saved."
+  })
+  const betaDescription = isOnline ? betaDescriptionConnected : betaDescriptionDemo
 
   const handleRetryConnection = React.useCallback(() => {
     if (checkingConnection) return
@@ -760,6 +776,33 @@ export const QuizWorkspace: React.FC = () => {
         />
       </div>
       <QuizPlayground />
+      {!isQuizCountLoading && totalQuizzes === 0 && (
+        <div className="mt-4 text-center" data-testid="quiz-connected-demo-toggle">
+          {showDemo ? (
+            <>
+              <button
+                type="button"
+                className="mb-3 text-sm text-primary hover:text-primary/80"
+                onClick={() => setShowDemo(false)}
+              >
+                {t("option:quiz.hideDemoQuiz", { defaultValue: "Hide demo" })}
+              </button>
+              <DemoQuizPreview quizzes={demoQuizzes} />
+            </>
+          ) : (
+            <button
+              type="button"
+              className="text-sm text-primary hover:text-primary/80"
+              data-testid="quiz-try-demo-button"
+              onClick={() => setShowDemo(true)}
+            >
+              {t("option:quiz.tryDemoQuiz", {
+                defaultValue: "Try a demo quiz to see how it works"
+              })}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

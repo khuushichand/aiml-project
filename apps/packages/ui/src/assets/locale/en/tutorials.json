@@ -265,5 +265,31 @@
       "resultsTitle": "Review Results",
       "resultsContent": "See your scores, review incorrect answers, and track your progress over time."
     }
+  },
+  "watchlists": {
+    "basics": {
+      "label": "Watchlists Basics",
+      "description": "Learn how to add feeds, create monitors, and review collected articles",
+      "setupTitle": "Quick Setup",
+      "setupContent": "Start here to add your first feed and create a monitor. The guided setup walks you through it step by step.",
+      "feedsTitle": "Add Feeds",
+      "feedsContent": "Feeds are sources like RSS feeds or websites that your monitors check for new content.",
+      "monitorsTitle": "Create Monitors",
+      "monitorsContent": "Monitors run on a schedule to fetch and process content from your feeds. Choose a preset schedule like daily or hourly.",
+      "articlesTitle": "Review Articles",
+      "articlesContent": "Articles are collected content from successful monitor runs. Switch to the Articles tab to browse and read them."
+    }
+  },
+  "monitoring": {
+    "basics": {
+      "label": "Monitoring Basics",
+      "description": "Learn how to monitor server health and set up alert rules",
+      "overviewTitle": "System Overview",
+      "overviewContent": "This section shows your server's current health metrics and security status. Use the refresh button or enable auto-refresh to keep it up to date.",
+      "createRuleTitle": "Create Alert Rules",
+      "createRuleContent": "Set up rules to be notified when metrics cross thresholds. Pick a metric name, set a threshold and duration, then choose a severity level.",
+      "historyTitle": "Alert History",
+      "historyContent": "When alerts trigger, they appear here. You can assign alerts to yourself, snooze them, or escalate to critical."
+    }
   }
 }

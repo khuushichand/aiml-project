@@ -31,6 +31,8 @@ function MonitoringPageContent() {
   );
 }
 
+// Suspense boundary required: useMonitoringPageController uses useSearchParams(),
+// which Next.js requires to be wrapped in Suspense for static generation.
 export default function MonitoringPage() {
   return (
     <Suspense

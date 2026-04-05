@@ -141,7 +141,7 @@
     "uploadFailed": "Upload failed",
     "uploadMissingMediaId": "Upload succeeded but no media ID was returned",
     "unsupportedType": "This media type isn’t supported in the document workspace.",
-    "missingFile": "The original file is not available (it may have failed to store). Open in Media or re-upload with \"Keep original file\" enabled.",
+    "missingFile": "This document's original file was not preserved during ingest. To view it in the workspace, re-upload it using the Upload tab above, or re-ingest it \u2014 newer ingests automatically preserve document files.",
     "fileUnauthorized": "You don't have permission to access this document.",
     "openFailed": "Failed to open document",
     "healthWarningTitle": "Document workspace storage unavailable",

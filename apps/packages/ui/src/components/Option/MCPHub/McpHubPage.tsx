@@ -23,9 +23,9 @@ const EXPLAINER_DISMISSED_KEY = "tldw_mcp_hub_explainer_dismissed"
 
 export const McpHubPage = () => {
   const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("tool-catalogs")
-  const [explainerDismissed, setExplainerDismissed] = useState(
-    () => localStorage.getItem(EXPLAINER_DISMISSED_KEY) === "true"
-  )
+  const [explainerDismissed, setExplainerDismissed] = useState(() => {
+    try { return localStorage.getItem(EXPLAINER_DISMISSED_KEY) === "true" } catch { return false }
+  })
   const [drillTarget, setDrillTarget] = useState<McpHubDrillTarget | null>(null)
   const requestIdRef = useRef(0)
 
@@ -59,7 +59,7 @@ export const McpHubPage = () => {
 
   const handleExplainerClose = () => {
     setExplainerDismissed(true)
-    localStorage.setItem(EXPLAINER_DISMISSED_KEY, "true")
+    try { localStorage.setItem(EXPLAINER_DISMISSED_KEY, "true") } catch { /* ignore */ }
   }
 
   return (
