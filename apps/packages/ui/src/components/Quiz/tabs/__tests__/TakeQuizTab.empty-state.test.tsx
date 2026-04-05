@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 import { TakeQuizTab } from "../TakeQuizTab"
 import {
   useAttemptsQuery,
@@ -117,10 +118,12 @@ describe("TakeQuizTab empty-state guidance", () => {
 
   it("describes the take-flow state when no quizzes exist", () => {
     render(
-      <TakeQuizTab
-        onNavigateToGenerate={() => {}}
-        onNavigateToCreate={() => {}}
-      />
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+        />
+      </MemoryRouter>
     )
 
     expect(
@@ -128,5 +131,7 @@ describe("TakeQuizTab empty-state guidance", () => {
     ).toBeInTheDocument()
     const mediaLibraryLink = screen.getByRole("link", { name: /media library/i })
     expect(mediaLibraryLink).toHaveAttribute("href", "/media")
+    expect(screen.getByText(/Generate one from your/)).toBeInTheDocument()
+    expect(screen.getByText(/or create one manually/)).toBeInTheDocument()
   })
 })

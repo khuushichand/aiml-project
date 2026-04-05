@@ -84,7 +84,8 @@ vi.mock("@/hooks/useConnectionState", () => ({
 }))
 
 vi.mock("../hooks", () => ({
-  useQuizzesQuery: () => ({ data: undefined, isLoading: false })
+  useQuizzesQuery: () => ({ data: undefined, isLoading: false }),
+  useAttemptsQuery: () => ({ data: { count: 0 } })
 }))
 
 vi.mock("../QuizPlayground", () => ({

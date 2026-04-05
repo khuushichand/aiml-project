@@ -4,7 +4,8 @@ import {
   getProcessPathForType,
   inferIngestTypeFromUrl,
   inferUploadMediaTypeFromFile,
-  normalizeMediaType
+  normalizeMediaType,
+  shouldKeepOriginalFile
 } from "@/services/tldw/media-routing"
 import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import {
@@ -375,13 +376,6 @@ const submitPersistentAdd = async ({
     })
   )
 
-/** Document types whose original file should be preserved for Document Workspace. */
-const KEEP_FILE_TYPES = new Set(["pdf", "ebook", "document"])
-
-/** Returns true if this media type's original file should be stored on the server. */
-export const shouldKeepOriginalFile = (mediaType: string): boolean =>
-  KEEP_FILE_TYPES.has(mediaType)
-
 const buildFields = ({
   rawType,
   entry,
@@ -407,7 +401,7 @@ const buildFields = ({
     perform_analysis: Boolean(common?.perform_analysis),
     perform_chunking: resolvePerformChunking(common?.perform_chunking),
     overwrite_existing: Boolean(common?.overwrite_existing),
-    keep_original_file: persist && shouldKeepOriginalFile(mediaType)
+    keep_original_file: persist && shouldKeepOriginalFile(rawType)
   }
 
   const nested: Record<string, any> = {}

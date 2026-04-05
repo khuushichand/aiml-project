@@ -21,8 +21,6 @@ import { formatDateTime } from '@/lib/format';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw } from 'lucide-react';
-import { ExportMenu } from '@/components/ui/export-menu';
-import { exportLogs, ExportFormat } from '@/lib/export';
 
 type SystemLogEntry = {
   timestamp?: string | null;

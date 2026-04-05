@@ -8,7 +8,8 @@ import { z } from 'zod';
  */
 const buildEnvSchema = z.object({
   NEXT_PUBLIC_API_URL: z
-    .string({ required_error: 'NEXT_PUBLIC_API_URL is required' })
+    .string()
+    .min(1, 'NEXT_PUBLIC_API_URL is required')
     .url('NEXT_PUBLIC_API_URL must be a valid URL'),
   NEXT_PUBLIC_API_VERSION: z.string().default('v1'),
   NEXT_PUBLIC_DEFAULT_AUTH_MODE: z
@@ -17,11 +18,11 @@ const buildEnvSchema = z.object({
   NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN: z
     .string()
     .transform((v) => v === 'true')
-    .default('false'),
+    .default(false),
   NEXT_PUBLIC_BILLING_ENABLED: z
     .string()
     .transform((v) => v === 'true')
-    .default('false'),
+    .default(false),
 });
 
 /**

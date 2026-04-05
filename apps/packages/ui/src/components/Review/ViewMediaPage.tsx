@@ -303,24 +303,29 @@ const MediaPageContent: React.FC = () => {
 
   // --- Hooks ---
   const search = useMediaSearch({ t, message })
+  const { refetch: searchRefetch } = search
 
   const viewPrefs = useMediaViewPreferences()
 
   // Auto-refresh media results when Quick Ingest completes
-  const { refetch: searchRefetch } = search
+  const searchRefetchRef = useRef(searchRefetch)
+  const ingestRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => { searchRefetchRef.current = searchRefetch }, [searchRefetch])
   useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout>
     const handleIngestComplete = () => {
-      timeoutId = setTimeout(() => {
-        searchRefetch()
-      }, 1500)
+      if (ingestRefreshTimeoutRef.current !== null) {
+        clearTimeout(ingestRefreshTimeoutRef.current)
+      }
+      ingestRefreshTimeoutRef.current = setTimeout(() => { searchRefetchRef.current() }, 1500)
     }
     window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     return () => {
-      clearTimeout(timeoutId)
+      if (ingestRefreshTimeoutRef.current !== null) {
+        clearTimeout(ingestRefreshTimeoutRef.current)
+      }
       window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     }
-  }, [searchRefetch])
+  }, [])
 
   // Compute display results (filtered by favorites/collections)
   // Need selection hook first for favorites/collections, but selection needs displayResults.
@@ -1773,6 +1778,7 @@ const MediaPageContent: React.FC = () => {
               hasNext={nav.hasNext}
               currentIndex={nav.selectedIndex >= 0 ? nav.selectedIndex : 0}
               totalResults={displayResults.length}
+              isLibraryEmpty={isEmptyLibrary}
               onChatWithMedia={handleChatWithMedia}
               onChatAboutMedia={handleChatAboutMedia}
               onGenerateFlashcardsFromContent={handleGenerateFlashcardsFromMedia}

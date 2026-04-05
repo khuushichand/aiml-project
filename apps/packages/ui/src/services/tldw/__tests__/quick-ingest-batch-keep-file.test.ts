@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
-import { shouldKeepOriginalFile } from "../quick-ingest-batch"
+import { shouldKeepOriginalFile } from "../media-routing"
 
 describe("shouldKeepOriginalFile", () => {
   it("returns true for pdf media type", () => {
@@ -29,5 +29,13 @@ describe("shouldKeepOriginalFile", () => {
 
   it("returns false for unknown types", () => {
     expect(shouldKeepOriginalFile("auto")).toBe(false)
+  })
+
+  it("normalizes uppercase input", () => {
+    expect(shouldKeepOriginalFile("PDF")).toBe(true)
+  })
+
+  it("returns true for epub alias", () => {
+    expect(shouldKeepOriginalFile("epub")).toBe(true)
   })
 })

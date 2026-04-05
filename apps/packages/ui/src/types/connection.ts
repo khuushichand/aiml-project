@@ -1,3 +1,5 @@
+export type UserPersona = "family" | "researcher" | "explorer" | null
+
 export enum ConnectionPhase {
   UNCONFIGURED = "unconfigured",
   SEARCHING = "searching",
@@ -11,6 +13,8 @@ export type KnowledgeStatus =
   | "indexing"
   | "offline"
   | "empty"
+
+export type UserPersona = "family" | "researcher" | "explorer" | null
 
 export type ConnectionState = {
   phase: ConnectionPhase
@@ -31,6 +35,7 @@ export type ConnectionState = {
   configStep: "none" | "url" | "auth" | "health"
   errorKind: "none" | "auth" | "unreachable" | "partial"
   hasCompletedFirstRun: boolean
+  userPersona: UserPersona
 
   // Debug/observability hooks (no external telemetry):
   // count how many times we've re-checked connectivity since the last

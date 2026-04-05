@@ -676,6 +676,19 @@ export async function searchManuscriptScenes(
   })
 }
 
+export async function reorderManuscriptItems(
+  projectId: string,
+  entityType: "parts" | "chapters" | "scenes",
+  items: { id: string; sort_order: number; version: number; new_parent_id?: string | null }[],
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/reorder` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { entity_type: entityType, items },
+  })
+}
+
 // Scene-level CRUD (needs chapter context for create)
 export async function createManuscriptScene(
   chapterId: string,
@@ -709,5 +722,182 @@ export async function updateManuscriptScene(
       "expected-version": String(version),
     },
     body: data,
+  })
+}
+
+// ── Characters ──────────────────────────────────────────
+
+export async function listManuscriptCharacters(
+  projectId: string,
+  params?: { role?: string; cast_group?: string },
+) {
+  const query = new URLSearchParams()
+  if (params?.role) query.set("role", params.role)
+  if (params?.cast_group) query.set("cast_group", params.cast_group)
+  const qs = query.toString()
+  const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters${qs ? `?${qs}` : ""}`
+  return await bgRequest({
+    path: path as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function createManuscriptCharacter(
+  projectId: string,
+  data: Record<string, unknown>,
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data,
+  })
+}
+
+export async function deleteManuscriptCharacter(characterId: string, version: number) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/characters/${encodeURIComponent(characterId)}` as AllowedPath,
+    method: "DELETE",
+    headers: buildExpectedVersionHeaders(version),
+  })
+}
+
+// ── Relationships ───────────────────────────────────────
+
+export async function listManuscriptRelationships(projectId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters/relationships` as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function createManuscriptRelationship(
+  projectId: string,
+  data: Record<string, unknown>,
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters/relationships` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data,
+  })
+}
+
+// ── World Info ──────────────────────────────────────────
+
+export async function listManuscriptWorldInfo(
+  projectId: string,
+  params?: { kind?: string },
+) {
+  const query = new URLSearchParams()
+  if (params?.kind) query.set("kind", params.kind)
+  const qs = query.toString()
+  const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/world-info${qs ? `?${qs}` : ""}`
+  return await bgRequest({
+    path: path as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function createManuscriptWorldInfo(
+  projectId: string,
+  data: Record<string, unknown>,
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/world-info` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data,
+  })
+}
+
+// ── Plot Lines ──────────────────────────────────────────
+
+export async function listManuscriptPlotLines(projectId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-lines` as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function createManuscriptPlotLine(
+  projectId: string,
+  data: Record<string, unknown>,
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-lines` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data,
+  })
+}
+
+// ── Plot Holes ──────────────────────────────────────────
+
+export async function listManuscriptPlotHoles(projectId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-holes` as AllowedPath,
+    method: "GET",
+  })
+}
+
+// ── Scene Linking ───────────────────────────────────────
+
+export async function linkSceneCharacter(sceneId: string, characterId: string, isPov = false) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/characters` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { character_id: characterId, is_pov: isPov },
+  })
+}
+
+export async function unlinkSceneCharacter(sceneId: string, characterId: string) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/characters/${encodeURIComponent(characterId)}` as AllowedPath,
+    method: "DELETE",
+  })
+}
+
+export async function listSceneCharacters(sceneId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/characters` as AllowedPath,
+    method: "GET",
+  })
+}
+
+// ── Citations ───────────────────────────────────────────
+
+export async function listManuscriptCitations(sceneId: string) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/citations` as AllowedPath,
+    method: "GET",
+  })
+}
+
+export async function createManuscriptCitation(
+  sceneId: string,
+  data: Record<string, unknown>,
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/citations` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data,
+  })
+}
+
+// ── Research ────────────────────────────────────────────
+
+export async function searchManuscriptResearch(
+  sceneId: string,
+  query: string,
+  topK = 5,
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/research` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { query, top_k: topK },
   })
 }

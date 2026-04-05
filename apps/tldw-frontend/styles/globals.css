@@ -1,1 +1,9 @@
 @import "../../packages/ui/src/assets/tailwind.css";
+
+/* Citation mark styles for TipTap editor */
+.citation-mark {
+  background: rgba(59, 130, 246, 0.1);
+  border-bottom: 1px dashed #3b82f6;
+  cursor: pointer;
+  padding: 0 2px;
+}
