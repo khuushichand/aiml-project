@@ -592,6 +592,15 @@ class ManuscriptResearchRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=50, description="Maximum number of results to return")
 
 
+class ManuscriptResearchResult(BaseModel):
+    """A single research result item."""
+    source_id: str | None = None
+    title: str
+    excerpt: str | None = None
+    source_type: str | None = None
+    relevance_score: float | None = None
+
+
 class ManuscriptResearchResponse(BaseModel):
     query: str
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[ManuscriptResearchResult] = Field(default_factory=list)

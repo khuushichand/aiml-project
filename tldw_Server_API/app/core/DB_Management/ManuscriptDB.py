@@ -47,6 +47,43 @@ _REORDER_ENTITY_TABLES = {
     "scene": "manuscript_scenes",
 }
 
+# Column whitelists for dynamic UPDATE statements — keys are the *caller*
+# names (before any JSON-column mapping performed inside the method).
+_UPDATABLE_PROJECT_COLS = frozenset({
+    "title", "subtitle", "author", "genre", "status",
+    "synopsis", "target_word_count", "word_count",
+    "settings",  # mapped to settings_json by update_project()
+})
+_UPDATABLE_PART_COLS = frozenset({"title", "sort_order", "synopsis", "word_count"})
+_UPDATABLE_CHAPTER_COLS = frozenset({
+    "title", "status", "sort_order", "synopsis", "pov_character_id", "word_count",
+})
+_UPDATABLE_SCENE_COLS = frozenset({
+    "title", "content_json", "content_plain", "status",
+    "sort_order", "synopsis", "word_count", "pov_character_id",
+})
+_UPDATABLE_CHARACTER_COLS = frozenset({
+    "name", "role", "cast_group", "full_name", "age", "gender",
+    "appearance", "personality", "backstory", "motivation",
+    "arc_summary", "notes", "sort_order",
+    "custom_fields",  # mapped to custom_fields_json by update_character()
+})
+_UPDATABLE_WORLD_INFO_COLS = frozenset({
+    "kind", "name", "description", "parent_id", "sort_order",
+    "properties", "tags",  # mapped to *_json by update_world_info()
+})
+_UPDATABLE_PLOT_LINE_COLS = frozenset({
+    "title", "description", "status", "color", "sort_order",
+})
+_UPDATABLE_PLOT_EVENT_COLS = frozenset({
+    "title", "description", "event_type", "sort_order",
+    "scene_id", "chapter_id",
+})
+_UPDATABLE_PLOT_HOLE_COLS = frozenset({
+    "title", "description", "severity", "status", "resolution",
+    "scene_id", "chapter_id", "plot_line_id", "detected_by",
+})
+
 
 def _word_count(text: str | None) -> int:
     """Return the number of whitespace-delimited words in *text*."""
@@ -137,7 +174,11 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["settings"] = json.loads(d.pop("settings_json", "{}"))
+        return d
 
     def list_projects(
         self,
@@ -166,7 +207,12 @@ class ManuscriptDBHelper:
                 [*params, limit, offset],
             ).fetchall()
 
-        return [dict(r) for r in rows], int(total)
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["settings"] = json.loads(d.pop("settings_json", "{}"))
+            results.append(d)
+        return results, int(total)
 
     def update_project(
         self,
@@ -177,6 +223,10 @@ class ManuscriptDBHelper:
         """Update a project with optimistic locking."""
         if not updates:
             return
+
+        unknown = set(updates) - _UPDATABLE_PROJECT_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for project: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -285,6 +335,10 @@ class ManuscriptDBHelper:
         """Update a part with optimistic locking."""
         if not updates:
             return
+
+        unknown = set(updates) - _UPDATABLE_PART_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for part: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -414,6 +468,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_CHAPTER_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for chapter: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -542,6 +600,10 @@ class ManuscriptDBHelper:
         """
         if not updates:
             return
+
+        unknown = set(updates) - _UPDATABLE_SCENE_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for scene: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -917,6 +979,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_CHARACTER_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for character: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1001,6 +1067,15 @@ class ManuscriptDBHelper:
             )
         logger.debug("Created relationship {} in project {}", rid, project_id)
         return rid
+
+    def get_relationship(self, relationship_id: str) -> dict[str, Any] | None:
+        """Fetch a relationship by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_character_relationships WHERE id = ? AND deleted = 0",
+                (relationship_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def list_relationships(self, project_id: str) -> list[dict[str, Any]]:
         """List non-deleted relationships for a project."""
@@ -1164,6 +1239,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_WORLD_INFO_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for world_info: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1313,6 +1392,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_PLOT_LINE_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for plot_line: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1397,6 +1480,15 @@ class ManuscriptDBHelper:
         logger.debug("Created plot event {} for plot line {}", eid, plot_line_id)
         return eid
 
+    def get_plot_event(self, event_id: str) -> dict[str, Any] | None:
+        """Fetch a plot event by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_plot_events WHERE id = ? AND deleted = 0",
+                (event_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_plot_events(self, plot_line_id: str) -> list[dict[str, Any]]:
         """List non-deleted plot events for a plot line ordered by sort_order."""
         with self.db.transaction() as conn:
@@ -1416,6 +1508,10 @@ class ManuscriptDBHelper:
         """Update a plot event with optimistic locking."""
         if not updates:
             return
+
+        unknown = set(updates) - _UPDATABLE_PLOT_EVENT_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for plot_event: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -1540,6 +1636,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_PLOT_HOLE_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for plot_hole: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1623,6 +1723,15 @@ class ManuscriptDBHelper:
             )
         logger.debug("Created citation {} for scene {}", cid, scene_id)
         return cid
+
+    def get_citation(self, citation_id: str) -> dict[str, Any] | None:
+        """Fetch a citation by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_citations WHERE id = ? AND deleted = 0",
+                (citation_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def list_citations(self, scene_id: str) -> list[dict[str, Any]]:
         """List non-deleted citations for a scene."""

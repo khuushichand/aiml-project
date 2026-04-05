@@ -116,9 +116,19 @@ class TestProjectCRUD:
         mdb.update_project(pid, {"settings": {"theme": "dark"}}, expected_version=1)
 
         proj = mdb.get_project(pid)
-        import json
-        settings = json.loads(proj["settings_json"])
-        assert settings == {"theme": "dark"}
+        assert proj["settings"] == {"theme": "dark"}
+
+    def test_project_settings_roundtrip(self, mdb):
+        pid = mdb.create_project("With Settings", settings={"font": "serif", "columns": 2})
+        proj = mdb.get_project(pid)
+        assert proj["settings"] == {"font": "serif", "columns": 2}
+        assert "settings_json" not in proj
+
+    def test_list_projects_settings_deserialized(self, mdb):
+        mdb.create_project("P1", settings={"a": 1})
+        projects, _ = mdb.list_projects()
+        assert projects[0]["settings"] == {"a": 1}
+        assert "settings_json" not in projects[0]
 
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")

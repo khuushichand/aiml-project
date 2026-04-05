@@ -235,6 +235,35 @@ class TestCharacterRelationships:
         rels = mdb.list_relationships(pid)
         assert len(rels) == 3
 
+    def test_get_relationship(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "sibling", description="Twins")
+        rel = mdb.get_relationship(rel_id)
+        assert rel is not None
+        assert rel["relationship_type"] == "sibling"
+        assert rel["from_character_id"] == c1
+        assert rel["to_character_id"] == c2
+        assert rel["description"] == "Twins"
+
+    def test_get_relationship_missing(self, mdb):
+        assert mdb.get_relationship("nonexistent") is None
+
+    def test_get_relationship_deleted(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "rival")
+        mdb.soft_delete_relationship(rel_id, expected_version=1)
+        assert mdb.get_relationship(rel_id) is None
+
+    def test_update_character_rejects_unknown_column(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        with pytest.raises(ValueError, match="Unknown update column"):
+            mdb.update_character(cid, {"malicious_col": "x"}, expected_version=1)
+
 
 # ---------------------------------------------------------------------------
 # Scene-Character Linking

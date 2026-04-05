@@ -1093,8 +1093,6 @@ async def update_character(
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
-    if "custom_fields" in update_data:
-        update_data["custom_fields_json"] = json.dumps(update_data.pop("custom_fields"))
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1170,9 +1168,7 @@ async def create_relationship(
             bidirectional=payload.bidirectional,
             relationship_id=payload.id,
         )
-        # Fetch the created relationship from the list (no get_relationship helper)
-        rels = helper.list_relationships(project_id)
-        rel = next((r for r in rels if r["id"] == rel_id), None)
+        rel = helper.get_relationship(rel_id)
         if not rel:
             raise CharactersRAGDBError("Relationship created but could not be retrieved")
         return ManuscriptRelationshipResponse(**rel)
@@ -1342,10 +1338,6 @@ async def update_world_info(
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
-    if "properties" in update_data:
-        update_data["properties_json"] = json.dumps(update_data.pop("properties"))
-    if "tags" in update_data:
-        update_data["tags_json"] = json.dumps(update_data.pop("tags"))
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1560,8 +1552,7 @@ async def create_plot_event(
             sort_order=payload.sort_order,
             event_id=payload.id,
         )
-        events = helper.list_plot_events(plot_line_id)
-        event = next((e for e in events if e["id"] == event_id), None)
+        event = helper.get_plot_event(event_id)
         if not event:
             raise CharactersRAGDBError("Plot event created but could not be retrieved")
         return ManuscriptPlotEventResponse(**event)
@@ -1925,8 +1916,7 @@ async def create_citation(
             anchor_offset=payload.anchor_offset,
             citation_id=payload.id,
         )
-        citations = helper.list_citations(scene_id)
-        citation = next((c for c in citations if c["id"] == citation_id), None)
+        citation = helper.get_citation(citation_id)
         if not citation:
             raise CharactersRAGDBError("Citation created but could not be retrieved")
         return ManuscriptCitationResponse(**citation)

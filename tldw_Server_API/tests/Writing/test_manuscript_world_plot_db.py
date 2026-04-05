@@ -345,6 +345,25 @@ class TestPlotEventCRUD:
         events = mdb.list_plot_events(pl_id)
         assert events[0]["event_type"] == "plot"
 
+    def test_get_plot_event(self, mdb):
+        pid = mdb.create_project("Novel")
+        pl_id = mdb.create_plot_line(pid, "Main Quest")
+        pe_id = mdb.create_plot_event(pid, pl_id, "Ring found", event_type="setup")
+        event = mdb.get_plot_event(pe_id)
+        assert event is not None
+        assert event["title"] == "Ring found"
+        assert event["event_type"] == "setup"
+
+    def test_get_plot_event_missing(self, mdb):
+        assert mdb.get_plot_event("nonexistent") is None
+
+    def test_get_plot_event_deleted(self, mdb):
+        pid = mdb.create_project("Novel")
+        pl_id = mdb.create_plot_line(pid, "Quest")
+        pe_id = mdb.create_plot_event(pid, pl_id, "Event")
+        mdb.soft_delete_plot_event(pe_id, expected_version=1)
+        assert mdb.get_plot_event(pe_id) is None
+
 
 # ---------------------------------------------------------------------------
 # Plot Hole CRUD
@@ -507,6 +526,31 @@ class TestCitationCRUD:
         cit_id = mdb.create_citation(pid, scene_id, source_type="note")
         with pytest.raises(ConflictError):
             mdb.soft_delete_citation(cit_id, expected_version=99)
+
+    def test_get_citation(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="S1", content_plain="text")
+        cit_id = mdb.create_citation(
+            pid, scene_id, source_type="media_db",
+            source_title="Wikipedia", excerpt="Key fact",
+        )
+        cit = mdb.get_citation(cit_id)
+        assert cit is not None
+        assert cit["source_title"] == "Wikipedia"
+        assert cit["source_type"] == "media_db"
+        assert cit["excerpt"] == "Key fact"
+
+    def test_get_citation_missing(self, mdb):
+        assert mdb.get_citation("nonexistent") is None
+
+    def test_get_citation_deleted(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="S1", content_plain="text")
+        cit_id = mdb.create_citation(pid, scene_id, source_type="note")
+        mdb.soft_delete_citation(cit_id, expected_version=1)
+        assert mdb.get_citation(cit_id) is None
 
     def test_citations_scoped_to_scene(self, mdb):
         """Citations listed for one scene should not include those from another."""

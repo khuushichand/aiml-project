@@ -4015,7 +4015,13 @@ AFTER INSERT ON manuscript_characters BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4027,11 +4033,14 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.role IS NOT NEW.role OR
      OLD.cast_group IS NOT NEW.cast_group OR
      OLD.full_name IS NOT NEW.full_name OR
+     OLD.age IS NOT NEW.age OR
+     OLD.gender IS NOT NEW.gender OR
      OLD.appearance IS NOT NEW.appearance OR
      OLD.personality IS NOT NEW.personality OR
      OLD.backstory IS NOT NEW.backstory OR
      OLD.motivation IS NOT NEW.motivation OR
      OLD.arc_summary IS NOT NEW.arc_summary OR
+     OLD.notes IS NOT NEW.notes OR
      OLD.custom_fields_json IS NOT NEW.custom_fields_json OR
      OLD.sort_order IS NOT NEW.sort_order OR
      OLD.last_modified IS NOT NEW.last_modified OR
@@ -4040,7 +4049,13 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4062,7 +4077,13 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4140,6 +4161,7 @@ AFTER INSERT ON manuscript_world_info BEGIN
   VALUES('manuscript_world_info', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4162,6 +4184,7 @@ BEGIN
   VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4185,6 +4208,7 @@ BEGIN
   VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
