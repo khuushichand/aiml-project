@@ -82,4 +82,14 @@ describe("ResultsList FTUX", () => {
     fireEvent.click(screen.getByText(/skip/i))
     expect(localStorage.getItem("tldw:media:first-ingest-dismissed")).toBe("true")
   })
+
+  it("migrates the legacy tutorial dismissal key on read", () => {
+    localStorage.setItem("tldw_first_ingest_tutorial_dismissed", "true")
+
+    render(<ResultsList {...emptyProps} />)
+
+    expect(screen.queryByTestId("first-ingest-tutorial")).not.toBeInTheDocument()
+    expect(localStorage.getItem("tldw:media:first-ingest-dismissed")).toBe("true")
+    expect(localStorage.getItem("tldw_first_ingest_tutorial_dismissed")).toBeNull()
+  })
 })

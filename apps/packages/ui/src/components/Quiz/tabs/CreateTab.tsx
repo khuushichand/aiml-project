@@ -144,7 +144,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [saveProgress, setSaveProgress] = React.useState<SaveProgressState | null>(null)
   const hasLoadedDraft = React.useRef(false)
-  const lastWarningTs = React.useRef(0)
+  const lastRecommendationRef = React.useRef<string | null>(null)
 
   const createQuizMutation = useCreateQuizMutation()
   const createQuestionMutation = useCreateQuestionMutation()
@@ -222,19 +222,21 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       const result = writeCreateDraft(currentDraft)
       if (!result) {
         setDraftStorageUnavailable(true)
+        lastRecommendationRef.current = null
       } else if (typeof result === "object" && result.recommendation) {
-        const now = Date.now()
-        if (now - lastWarningTs.current >= 30_000) {
-          lastWarningTs.current = now
+        if (lastRecommendationRef.current !== result.recommendation) {
+          lastRecommendationRef.current = result.recommendation
           messageApi.warning(result.recommendation)
         }
+      } else {
+        lastRecommendationRef.current = null
       }
     }, 300)
 
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [currentDraft, isDirty, pendingDraft])
+  }, [currentDraft, isDirty, messageApi, pendingDraft])
 
   React.useEffect(() => {
     if (!isDirty) return

@@ -283,15 +283,20 @@ const MediaPageContent: React.FC = () => {
 
   // Auto-refresh media results when Quick Ingest completes
   const searchRefetchRef = useRef(searchRefetch)
+  const ingestRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => { searchRefetchRef.current = searchRefetch }, [searchRefetch])
   useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout>
     const handleIngestComplete = () => {
-      timeoutId = setTimeout(() => { searchRefetchRef.current() }, 1500)
+      if (ingestRefreshTimeoutRef.current !== null) {
+        clearTimeout(ingestRefreshTimeoutRef.current)
+      }
+      ingestRefreshTimeoutRef.current = setTimeout(() => { searchRefetchRef.current() }, 1500)
     }
     window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     return () => {
-      clearTimeout(timeoutId)
+      if (ingestRefreshTimeoutRef.current !== null) {
+        clearTimeout(ingestRefreshTimeoutRef.current)
+      }
       window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     }
   }, [])

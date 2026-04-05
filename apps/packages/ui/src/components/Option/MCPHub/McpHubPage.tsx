@@ -18,13 +18,15 @@ import type {
   McpHubGovernanceAuditNavigateTarget,
   McpHubGovernanceAuditTabKey
 } from "@/services/tldw/mcp-hub"
-
-const EXPLAINER_DISMISSED_KEY = "tldw:mcp-hub:explainer-dismissed"
+import {
+  persistMcpHubExplainerDismissed,
+  readMcpHubExplainerDismissed
+} from "@/utils/ftux-storage"
 
 export const McpHubPage = () => {
   const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("tool-catalogs")
   const [explainerDismissed, setExplainerDismissed] = useState(
-    () => localStorage.getItem(EXPLAINER_DISMISSED_KEY) === "true"
+    () => readMcpHubExplainerDismissed()
   )
   const [drillTarget, setDrillTarget] = useState<McpHubDrillTarget | null>(null)
   const requestIdRef = useRef(0)
@@ -59,7 +61,7 @@ export const McpHubPage = () => {
 
   const handleExplainerClose = () => {
     setExplainerDismissed(true)
-    localStorage.setItem(EXPLAINER_DISMISSED_KEY, "true")
+    persistMcpHubExplainerDismissed()
   }
 
   return (

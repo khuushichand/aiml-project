@@ -8,6 +8,7 @@
  */
 
 import { create } from "zustand"
+import { FAMILY_GUARDRAILS_WIZARD_TELEMETRY_STORAGE_KEY } from "@/utils/family-guardrails-wizard-telemetry"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -25,6 +26,8 @@ const ONBOARDING_TELEMETRY_KEY = "tldw:onboarding:ingestion:telemetry"
  * localStorage key set after the initial setup/connection flow completes.
  */
 const FIRST_RUN_COMPLETE_KEY = "__tldw_first_run_complete"
+const MODERATION_ONBOARDING_KEY = "moderation-playground-onboarded"
+const QUIZ_ATTEMPT_SCAN_DONE_KEY = "tldw:milestones:quiz-attempt-scan-done"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -157,15 +160,47 @@ export const useMilestoneStore = create<MilestoneState>()((set, get) => ({
       // ignore malformed telemetry
     }
 
+    // ── family mission milestones ────────────────────────────────────
+    if (current.family_profiles_created == null) {
+      try {
+        const raw = localStorage.getItem(FAMILY_GUARDRAILS_WIZARD_TELEMETRY_STORAGE_KEY)
+        if (raw) {
+          const telemetry = JSON.parse(raw)
+          if (
+            typeof telemetry?.counters?.setup_completed === "number" &&
+            telemetry.counters.setup_completed > 0
+          ) {
+            updates.family_profiles_created =
+              typeof telemetry?.last_event_at === "number" ? telemetry.last_event_at : now
+          }
+        }
+      } catch {
+        // ignore malformed family telemetry
+      }
+    }
+
+    if (current.content_rules_reviewed == null) {
+      try {
+        if (localStorage.getItem(MODERATION_ONBOARDING_KEY) === "true") {
+          updates.content_rules_reviewed = now
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     // ── first_quiz_taken ─────────────────────────────────────────────
     if (current.first_quiz_taken == null) {
       try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i)
-          if (key && key.startsWith("quiz-attempt-")) {
-            updates.first_quiz_taken = now
-            break
+        if (localStorage.getItem(QUIZ_ATTEMPT_SCAN_DONE_KEY) !== "1") {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i)
+            if (key && key.startsWith("quiz-attempt-")) {
+              updates.first_quiz_taken = now
+              break
+            }
           }
+          localStorage.setItem(QUIZ_ATTEMPT_SCAN_DONE_KEY, "1")
         }
       } catch {
         // ignore
@@ -181,6 +216,11 @@ export const useMilestoneStore = create<MilestoneState>()((set, get) => ({
   },
 
   resetMilestones: () => {
+    try {
+      localStorage.removeItem(QUIZ_ATTEMPT_SCAN_DONE_KEY)
+    } catch {
+      // ignore
+    }
     persistMilestones({})
     set({ completedMilestones: {} })
   }

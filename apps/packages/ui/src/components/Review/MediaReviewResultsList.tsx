@@ -4,21 +4,10 @@ import { Upload } from "lucide-react"
 import type { MediaReviewState, MediaReviewActions } from "@/components/Review/media-review-types"
 import { includesId } from "@/components/Review/media-review-types"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
-
-const FIRST_INGEST_DISMISSED_KEY = "tldw:media:first-ingest-dismissed"
-const LEGACY_FIRST_INGEST_DISMISSED_KEY = "tldw_first_ingest_tutorial_dismissed"
-
-// One-time migration: honor dismissals stored under the old key
-try {
-  if (
-    typeof localStorage !== "undefined" &&
-    !localStorage.getItem(FIRST_INGEST_DISMISSED_KEY) &&
-    localStorage.getItem(LEGACY_FIRST_INGEST_DISMISSED_KEY)
-  ) {
-    localStorage.setItem(FIRST_INGEST_DISMISSED_KEY, "true")
-    localStorage.removeItem(LEGACY_FIRST_INGEST_DISMISSED_KEY)
-  }
-} catch { /* ignore */ }
+import {
+  persistFirstIngestDismissed,
+  readFirstIngestDismissed
+} from "@/utils/ftux-storage"
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState
@@ -36,20 +25,12 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
   } = state
 
   const [tutorialDismissed, setTutorialDismissed] = React.useState(() => {
-    try {
-      return localStorage.getItem(FIRST_INGEST_DISMISSED_KEY) === "true"
-    } catch {
-      return false
-    }
+    return readFirstIngestDismissed()
   })
 
   const handleDismissTutorial = React.useCallback(() => {
     setTutorialDismissed(true)
-    try {
-      localStorage.setItem(FIRST_INGEST_DISMISSED_KEY, "true")
-    } catch {
-      // ignore storage errors
-    }
+    persistFirstIngestDismissed()
   }, [])
 
   // Show first-ingest tutorial when library is empty (no query, no results, not fetching)

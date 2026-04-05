@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { useMilestoneStore } from "../milestones"
 
 describe("milestone store", () => {
@@ -130,6 +130,64 @@ describe("milestone store", () => {
     localStorage.setItem("quiz-attempt-abc123", JSON.stringify({ score: 8 }))
     useMilestoneStore.getState().bootstrapFromExistingUsage()
     expect(useMilestoneStore.getState().isMilestoneCompleted("first_quiz_taken")).toBe(true)
+  })
+
+  it("bootstraps family_profiles_created from family wizard telemetry", () => {
+    localStorage.setItem(
+      "tldw:family-guardrails:wizard:telemetry",
+      JSON.stringify({
+        version: 1,
+        counters: {
+          setup_started: 1,
+          draft_resumed: 0,
+          step_viewed: 4,
+          step_completed: 4,
+          step_error: 0,
+          setup_completed: 1,
+          drop_off: 0
+        },
+        by_cohort: {
+          new_household: {
+            setup_started: 1,
+            draft_resumed: 0,
+            setup_completed: 1,
+            drop_off: 0
+          },
+          existing_household: {
+            setup_started: 0,
+            draft_resumed: 0,
+            setup_completed: 0,
+            drop_off: 0
+          }
+        },
+        last_event_at: Date.now(),
+        recent_events: []
+      })
+    )
+
+    useMilestoneStore.getState().bootstrapFromExistingUsage()
+
+    expect(useMilestoneStore.getState().isMilestoneCompleted("family_profiles_created")).toBe(true)
+  })
+
+  it("bootstraps content_rules_reviewed from moderation onboarding state", () => {
+    localStorage.setItem("moderation-playground-onboarded", "true")
+
+    useMilestoneStore.getState().bootstrapFromExistingUsage()
+
+    expect(useMilestoneStore.getState().isMilestoneCompleted("content_rules_reviewed")).toBe(true)
+  })
+
+  it("caches the quiz-attempt bootstrap scan after the first run", () => {
+    const keySpy = vi.spyOn(Storage.prototype, "key")
+
+    useMilestoneStore.getState().bootstrapFromExistingUsage()
+    expect(localStorage.getItem("tldw:milestones:quiz-attempt-scan-done")).toBe("1")
+
+    keySpy.mockClear()
+    useMilestoneStore.getState().bootstrapFromExistingUsage()
+
+    expect(keySpy).not.toHaveBeenCalled()
   })
 
   it("bootstrap does not overwrite already-completed milestones", () => {

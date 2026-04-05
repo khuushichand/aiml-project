@@ -37,6 +37,7 @@ describe("StorageQuotaBanner", () => {
     mockQuota.usedBytes = 4.1 * 1024 * 1024
     render(<StorageQuotaBanner />)
     expect(screen.getByTestId("storage-quota-banner-warning")).toBeInTheDocument()
+    expect(screen.getByText("Storage getting full")).toBeInTheDocument()
     expect(screen.getByText(/82%/)).toBeInTheDocument()
   })
 
@@ -46,6 +47,7 @@ describe("StorageQuotaBanner", () => {
     mockQuota.usedBytes = 4.85 * 1024 * 1024
     render(<StorageQuotaBanner />)
     expect(screen.getByTestId("storage-quota-banner-exceeded")).toBeInTheDocument()
+    expect(screen.getByText("Storage nearly full")).toBeInTheDocument()
   })
 
   it("exceeded banner cannot be dismissed", () => {
