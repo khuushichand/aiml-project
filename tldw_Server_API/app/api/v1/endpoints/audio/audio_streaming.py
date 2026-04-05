@@ -89,6 +89,12 @@ from tldw_Server_API.app.core.TTS.tts_request_resolution import (
 )
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils import normalize_model_and_variant
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_policy import (
+    RedactingWebSocketProxy,
+    apply_transcript_text_policy,
+    get_websocket_auth_principal,
+    resolve_effective_stt_policy,
+)
 from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
 
 if TYPE_CHECKING:
@@ -941,6 +947,13 @@ async def websocket_transcribe(
             _s = _get_settings()
             user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
+        effective_stt_policy = await resolve_effective_stt_policy(
+            principal=get_websocket_auth_principal(websocket),
+            user_id=int(user_id_for_usage) if user_id_for_usage is not None else None,
+            db=None,
+        )
+        policy_websocket = RedactingWebSocketProxy(websocket, policy=effective_stt_policy)
+
         acquired_stream = False
 
         ok_stream, msg_stream = await _can_start_stream(user_id_for_usage)
@@ -1035,6 +1048,11 @@ async def websocket_transcribe(
             snapshot = str(text or "").strip()
             if not snapshot or not persistence_enabled:
                 return
+            snapshot = apply_transcript_text_policy(
+                snapshot,
+                policy=effective_stt_policy,
+                is_partial=not is_final,
+            )
             now = time.time()
             if not is_final:
                 if not persistence_partial_enabled:
@@ -1237,7 +1255,7 @@ async def websocket_transcribe(
 
         try:
             await handle_unified_websocket(
-                websocket,
+                policy_websocket,
                 config,
                 on_audio_seconds=_on_audio_quota,
                 on_heartbeat=_on_heartbeat,

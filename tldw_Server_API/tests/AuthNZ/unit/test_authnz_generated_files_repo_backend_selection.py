@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -150,3 +151,17 @@ async def test_create_file_postgres_backend_selection_uses_fetchrow():
     assert "returning *" in query.lower()
     assert "$1" in query
     assert len(params) >= 18
+
+
+def test_generated_files_repo_exposes_stt_audio_constants() -> None:
+    repo_module = importlib.import_module(
+        "tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo"
+    )
+
+    file_category = getattr(repo_module, "FILE_CATEGORY_STT_AUDIO", None)
+    source_feature = getattr(repo_module, "SOURCE_FEATURE_STT", None)
+
+    assert file_category == "stt_audio"
+    assert source_feature == "stt"
+    assert file_category in repo_module.VALID_FILE_CATEGORIES
+    assert source_feature in repo_module.VALID_SOURCE_FEATURES

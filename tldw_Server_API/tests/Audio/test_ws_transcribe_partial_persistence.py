@@ -61,6 +61,7 @@ class DummyWebSocket:
         self.headers: dict[str, str] = {}
         self.query_params: dict[str, str] = query_params or {}
         self.client = SimpleNamespace(host="127.0.0.1")
+        self.state = SimpleNamespace()
         self.sent_json: list[dict[str, Any]] = []
         self.closed = False
         self.close_code: int | None = None
@@ -119,6 +120,11 @@ def _mock_transcribe_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(audio, "add_daily_minutes", _add_minutes)
     monkeypatch.setattr(audio, "heartbeat_stream", _heartbeat)
     monkeypatch.setattr(audio_streaming, "is_multi_user_mode", lambda: False)
+
+    # Import unified streaming before patching the shared streams module so
+    # these tests do not leak a patched WebSocketStream binding into later
+    # Audio_Streaming_Unified imports.
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified  # noqa: F401
 
     # Force websocket_transcribe to use its simple _BareStream adapter.
     import tldw_Server_API.app.core.Streaming.streams as streams_mod
@@ -341,3 +347,166 @@ async def test_stream_transcribe_uses_default_streaming_model_from_config(monkey
 
     assert captured.get("model") == "parakeet"
     assert captured.get("variant") == "onnx"
+
+
+@pytest.mark.asyncio
+async def test_stream_transcribe_redacts_partial_and_final_payloads_when_partials_must_be_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STT_REDACT_PII", "1")
+    monkeypatch.setenv("STT_REDACT_CATEGORIES", "pii_email")
+    monkeypatch.setenv("STT_ALLOW_UNREDACTED_PARTIALS", "0")
+
+    ws = DummyWebSocket(
+        query_params={
+            "persist_transcript": "1",
+            "persist_partial_transcript": "1",
+            "media_id": "42",
+        }
+    )
+    db = DummyMediaDB()
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(audio_streaming, "_resolve_media_db_for_user", lambda _user: db)
+
+    def _upsert(
+        db_instance,
+        media_id: int,
+        transcription: str,
+        whisper_model: str,
+        created_at=None,
+        **kwargs: Any,
+    ):  # noqa: ANN001
+        calls.append(
+            {
+                "db": db_instance,
+                "media_id": media_id,
+                "transcription": transcription,
+                "whisper_model": whisper_model,
+                "created_at": created_at,
+                **kwargs,
+            }
+        )
+        return {"id": len(calls)}
+
+    monkeypatch.setattr(audio_streaming, "upsert_transcript", _upsert)
+
+    async def _mock_handle(
+        _websocket,
+        config,
+        *,
+        on_audio_seconds=None,  # noqa: ARG001
+        on_heartbeat=None,  # noqa: ARG001
+        on_stream_config_resolved=None,
+        on_transcript_result=None,
+        on_full_transcript=None,
+    ):
+        if on_stream_config_resolved is not None:
+            await on_stream_config_resolved({"type": "config", "transcription_model": "stream-live-model"}, config)
+        await _websocket.send_json({"type": "partial", "text": "contact alice@example.com", "is_final": False})
+        if on_transcript_result is not None:
+            await on_transcript_result({"type": "partial", "text": "contact alice@example.com", "is_final": False}, "")
+        await _websocket.send_json(
+            {"type": "transcription", "text": "contact alice@example.com now", "is_final": True}
+        )
+        if on_transcript_result is not None:
+            await on_transcript_result(
+                {"type": "transcription", "text": "contact alice@example.com now", "is_final": True},
+                "contact alice@example.com now",
+            )
+        await _websocket.send_json({"type": "full_transcript", "text": "contact alice@example.com now"})
+        if on_full_transcript is not None:
+            await on_full_transcript("contact alice@example.com now", False)
+
+    monkeypatch.setattr(audio_streaming, "handle_unified_websocket", _mock_handle)
+
+    await audio_streaming.websocket_transcribe(ws, token=None)
+
+    partials = [payload for payload in ws.sent_json if payload.get("type") == "partial"]
+    finals = [
+        payload
+        for payload in ws.sent_json
+        if payload.get("type") in {"transcription", "full_transcript"}
+    ]
+    assert partials and finals
+    assert all("[PII]" in payload["text"] for payload in partials)
+    assert all("[PII]" in payload["text"] for payload in finals)
+    assert calls
+    assert all("[PII]" in call["transcription"] for call in calls)
+    assert all("alice@example.com" not in call["transcription"] for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_stream_transcribe_allows_unredacted_partials_but_redacts_final_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STT_REDACT_PII", "1")
+    monkeypatch.setenv("STT_REDACT_CATEGORIES", "pii_email")
+    monkeypatch.setenv("STT_ALLOW_UNREDACTED_PARTIALS", "1")
+
+    ws = DummyWebSocket(
+        query_params={
+            "persist_transcript": "1",
+            "persist_partial_transcript": "1",
+            "media_id": "42",
+        }
+    )
+    db = DummyMediaDB()
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(audio_streaming, "_resolve_media_db_for_user", lambda _user: db)
+
+    def _upsert(
+        db_instance,
+        media_id: int,
+        transcription: str,
+        whisper_model: str,
+        created_at=None,
+        **kwargs: Any,
+    ):  # noqa: ANN001
+        calls.append(
+            {
+                "db": db_instance,
+                "media_id": media_id,
+                "transcription": transcription,
+                "whisper_model": whisper_model,
+                "created_at": created_at,
+                **kwargs,
+            }
+        )
+        return {"id": len(calls)}
+
+    monkeypatch.setattr(audio_streaming, "upsert_transcript", _upsert)
+
+    async def _mock_handle(
+        _websocket,
+        config,
+        *,
+        on_audio_seconds=None,  # noqa: ARG001
+        on_heartbeat=None,  # noqa: ARG001
+        on_stream_config_resolved=None,
+        on_transcript_result=None,
+        on_full_transcript=None,
+    ):
+        if on_stream_config_resolved is not None:
+            await on_stream_config_resolved({"type": "config", "transcription_model": "stream-live-model"}, config)
+        await _websocket.send_json({"type": "partial", "text": "contact alice@example.com", "is_final": False})
+        if on_transcript_result is not None:
+            await on_transcript_result({"type": "partial", "text": "contact alice@example.com", "is_final": False}, "")
+        await _websocket.send_json(
+            {"type": "full_transcript", "text": "contact alice@example.com now", "is_final": True}
+        )
+        if on_full_transcript is not None:
+            await on_full_transcript("contact alice@example.com now", False)
+
+    monkeypatch.setattr(audio_streaming, "handle_unified_websocket", _mock_handle)
+
+    await audio_streaming.websocket_transcribe(ws, token=None)
+
+    partials = [payload for payload in ws.sent_json if payload.get("type") == "partial"]
+    finals = [payload for payload in ws.sent_json if payload.get("type") == "full_transcript"]
+    assert partials and finals
+    assert partials[0]["text"] == "contact alice@example.com"
+    assert "[PII]" in finals[0]["text"]
+    assert any(call["transcription"] == "contact alice@example.com" for call in calls)
+    assert any("[PII]" in call["transcription"] for call in calls)

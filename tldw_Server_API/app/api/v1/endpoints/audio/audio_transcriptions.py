@@ -16,7 +16,12 @@ from loguru import logger
 import soundfile as sf
 from starlette import status
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+    get_auth_principal,
+    get_db_transaction,
+    require_token_scope,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
@@ -31,7 +36,15 @@ from tldw_Server_API.app.core.Audio.dictation_error_taxonomy import (
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC
 from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_policy import (
+    apply_transcript_text_policy,
+    build_audio_retention_decision,
+    redact_timed_segments,
+    resolve_effective_stt_policy,
+    retain_stt_audio_artifact,
+)
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -453,6 +466,8 @@ async def create_transcription(
     seg_embeddings_provider: Optional[str] = Form(default=None, description="Embeddings provider override for TreeSeg"),
     seg_embeddings_model: Optional[str] = Form(default=None, description="Embeddings model override for TreeSeg"),
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
 ):
     """
     Transcribes audio into the input language.
@@ -577,6 +592,11 @@ async def create_transcription(
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
     canonical_path = None
+    effective_stt_policy = await resolve_effective_stt_policy(
+        principal=principal,
+        user_id=int(current_user.id) if getattr(current_user, "id", None) is not None else None,
+        db=db,
+    )
     try:
         first_chunk = await file.read(upload_chunk_size)
         file_extension = _resolve_audio_upload_suffix(
@@ -960,6 +980,16 @@ async def create_transcription(
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Custom vocabulary postprocessing failed; continuing without it: {exc}")
 
+        transcribed_text = apply_transcript_text_policy(
+            transcribed_text,
+            policy=effective_stt_policy,
+            is_partial=False,
+        )
+        timed_segments = redact_timed_segments(
+            _normalize_timed_segments(segments_for_timing),
+            policy=effective_stt_policy,
+        )
+
         try:
             await _add_daily_minutes(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
@@ -969,8 +999,21 @@ async def create_transcription(
                 e,
                 rid,
             )
-
-        timed_segments = _normalize_timed_segments(segments_for_timing)
+        retention_decision = build_audio_retention_decision(effective_stt_policy)
+        if not retention_decision.delete_after_success and canonical_path:
+            try:
+                await retain_stt_audio_artifact(
+                    user_id=int(current_user.id),
+                    source_path=canonical_path,
+                    original_filename=file.filename,
+                    policy=effective_stt_policy,
+                    org_id=effective_stt_policy.org_id,
+                )
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Failed to retain STT audio artifact; continuing with delete-after-success fallback. error={}",
+                    exc,
+                )
 
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
