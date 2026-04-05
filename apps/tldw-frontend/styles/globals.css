@@ -2,8 +2,8 @@
 
 /* Citation mark styles for TipTap editor */
 .citation-mark {
-  background: rgba(59, 130, 246, 0.1);
-  border-bottom: 1px dashed #3b82f6;
+  background: rgb(var(--color-primary) / 0.1);
+  border-bottom: 1px dashed rgb(var(--color-primary));
   cursor: pointer;
   padding: 0 2px;
 }

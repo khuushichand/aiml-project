@@ -7,7 +7,7 @@ from typing import Any, NoReturn
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     ChapterSummary,
@@ -62,6 +62,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelper
 
 router = APIRouter()
@@ -92,6 +94,29 @@ _MANUSCRIPT_NONCRITICAL_EXCEPTIONS = (
     json.JSONDecodeError,
 )
 
+
+async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
+    """Enforce a rate limit for the given user and scope."""
+    try:
+        allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        retry_after = 60
+        logger.exception(
+            "Rate limiter check failed for user_id={} scope={}",
+            user_id,
+            scope,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable",
+            headers={"Retry-After": str(retry_after)},
+        ) from exc
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded for {scope}",
+            headers={"Retry-After": str(meta.get("retry_after", 60))},
+        )
 
 
 def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
@@ -884,7 +909,7 @@ async def create_character(
             motivation=payload.motivation,
             arc_summary=payload.arc_summary,
             notes=payload.notes,
-            custom_fields=payload.custom_fields,
+            custom_fields=payload.custom_fields or None,
             sort_order=payload.sort_order,
             character_id=payload.id,
         )
@@ -1045,9 +1070,7 @@ async def create_relationship(
             bidirectional=payload.bidirectional,
             relationship_id=payload.id,
         )
-        # Fetch the created relationship from the list (no get_relationship helper)
-        rels = helper.list_relationships(project_id)
-        rel = next((r for r in rels if r["id"] == rel_id), None)
+        rel = helper.get_relationship(rel_id)
         if not rel:
             raise CharactersRAGDBError("Relationship created but could not be retrieved")
         return ManuscriptRelationshipResponse(**rel)
@@ -1431,8 +1454,7 @@ async def create_plot_event(
             sort_order=payload.sort_order,
             event_id=payload.id,
         )
-        events = helper.list_plot_events(plot_line_id)
-        event = next((e for e in events if e["id"] == event_id), None)
+        event = helper.get_plot_event(event_id)
         if not event:
             raise CharactersRAGDBError("Plot event created but could not be retrieved")
         return ManuscriptPlotEventResponse(**event)
@@ -1796,8 +1818,7 @@ async def create_citation(
             anchor_offset=payload.anchor_offset,
             citation_id=payload.id,
         )
-        citations = helper.list_citations(scene_id)
-        citation = next((c for c in citations if c["id"] == citation_id), None)
+        citation = helper.get_citation(citation_id)
         if not citation:
             raise CharactersRAGDBError("Citation created but could not be retrieved")
         return ManuscriptCitationResponse(**citation)

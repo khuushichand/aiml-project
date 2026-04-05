@@ -78,6 +78,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
       queryClient.invalidateQueries({ queryKey: ["manuscript-characters", activeProjectId] })
       setNewCharName("")
     },
+    onError: (err: Error) => {
+      console.debug("[CharacterWorldTab] Failed to create character", err)
+    },
   })
 
   const addWorldMutation = useMutation({
@@ -87,6 +90,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
       queryClient.invalidateQueries({ queryKey: ["manuscript-world-info", activeProjectId] })
       setNewWorldName("")
     },
+    onError: (err: Error) => {
+      console.debug("[CharacterWorldTab] Failed to create world info", err)
+    },
   })
 
   const addPlotMutation = useMutation({
@@ -94,6 +100,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["manuscript-plot-lines", activeProjectId] })
       setNewPlotTitle("")
+    },
+    onError: (err: Error) => {
+      console.debug("[CharacterWorldTab] Failed to create plot line", err)
     },
   })
 
@@ -131,7 +140,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               icon={<Plus className="h-3 w-3" />}
               disabled={!newCharName.trim() || !isOnline}
               loading={addCharMutation.isPending}
-              onClick={() => addCharMutation.mutate(newCharName.trim())}
+              onClick={() => isOnline && addCharMutation.mutate(newCharName.trim())}
             />
           </div>
           {charsLoading ? <Spin size="small" /> : (
@@ -178,7 +187,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               icon={<Plus className="h-3 w-3" />}
               disabled={!newWorldName.trim() || !isOnline}
               loading={addWorldMutation.isPending}
-              onClick={() => addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
+              onClick={() => isOnline && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
             />
           </div>
           {worldLoading ? <Spin size="small" /> : (
@@ -217,7 +226,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 icon={<Plus className="h-3 w-3" />}
                 disabled={!newPlotTitle.trim() || !isOnline}
                 loading={addPlotMutation.isPending}
-                onClick={() => addPlotMutation.mutate(newPlotTitle.trim())}
+                onClick={() => isOnline && addPlotMutation.mutate(newPlotTitle.trim())}
               />
             </div>
             {plotLoading ? <Spin size="small" /> : (

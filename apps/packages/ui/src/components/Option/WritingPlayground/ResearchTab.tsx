@@ -1,58 +1,61 @@
-import { useState, useEffect, useRef } from "react"
-import { Button, Empty, Input, List, Spin, Tag, Typography } from "antd"
+import { useEffect, useRef, useState } from "react"
+import { Button, Empty, Input, List, Spin, Typography } from "antd"
 import { Search, BookOpen, Plus } from "lucide-react"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import { searchManuscriptResearch, createManuscriptCitation } from "@/services/writing-playground"
 
 type ResearchTabProps = { isOnline: boolean }
+type ResearchResult = Record<string, any>
+type SearchSnapshot = { sceneId: string; query: string; token: symbol }
 
 export function ResearchTab({ isOnline }: ResearchTabProps) {
   const { activeNodeId } = useWritingPlaygroundStore()
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<any[]>([])
+  const [results, setResults] = useState<ResearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [citedIds, setCitedIds] = useState<Set<string>>(new Set())
-  const [searchSceneId, setSearchSceneId] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState("")
-
-  const activeNodeIdRef = useRef(activeNodeId)
-  activeNodeIdRef.current = activeNodeId
+  const lastSearchSnapshotRef = useRef<SearchSnapshot | null>(null)
 
   useEffect(() => {
+    lastSearchSnapshotRef.current = null
     setResults([])
     setCitedIds(new Set())
-    setSearchSceneId(null)
-    setSearchQuery("")
-    setSearching(false)
   }, [activeNodeId])
 
   const handleSearch = async () => {
     const trimmedQuery = query.trim()
     if (!trimmedQuery || !activeNodeId) return
+    const snapshot = { sceneId: activeNodeId, query: trimmedQuery, token: Symbol("research-search") }
+    lastSearchSnapshotRef.current = snapshot
     setSearching(true)
-    const sceneId = activeNodeId
     try {
-      const resp = await searchManuscriptResearch(sceneId, trimmedQuery)
-      if (activeNodeIdRef.current === sceneId) {
+      const resp = await searchManuscriptResearch(snapshot.sceneId, snapshot.query)
+      if (
+        lastSearchSnapshotRef.current?.token === snapshot.token
+        && activeNodeId === snapshot.sceneId
+      ) {
         setResults((resp as any).results || [])
-        setSearchSceneId(sceneId)
-        setSearchQuery(trimmedQuery)
       }
     } catch {
-      setResults([])
+      if (lastSearchSnapshotRef.current?.token === snapshot.token) {
+        setResults([])
+      }
     } finally {
-      setSearching(false)
+      if (lastSearchSnapshotRef.current?.token === snapshot.token) {
+        setSearching(false)
+      }
     }
   }
 
-  const handleCite = async (result: any) => {
-    if (!searchSceneId) return
+  const handleCite = async (result: ResearchResult) => {
+    const snapshot = lastSearchSnapshotRef.current
+    if (!activeNodeId || !snapshot || snapshot.sceneId !== activeNodeId) return
     try {
-      await createManuscriptCitation(searchSceneId, {
+      await createManuscriptCitation(activeNodeId, {
         source_type: result.source_type || "research",
         source_title: result.title || result.source_title || "Untitled",
         excerpt: result.snippet || result.excerpt || "",
-        query_used: searchQuery,
+        query_used: snapshot.query,
       })
       setCitedIds((prev) => new Set(prev).add(result.id || result.title))
     } catch {

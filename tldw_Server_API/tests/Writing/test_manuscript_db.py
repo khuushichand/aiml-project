@@ -118,6 +118,18 @@ class TestProjectCRUD:
         proj = mdb.get_project(pid)
         assert proj["settings"] == {"theme": "dark"}
 
+    def test_project_settings_roundtrip(self, mdb):
+        pid = mdb.create_project("With Settings", settings={"font": "serif", "columns": 2})
+        proj = mdb.get_project(pid)
+        assert proj["settings"] == {"font": "serif", "columns": 2}
+        assert "settings_json" not in proj
+
+    def test_list_projects_settings_deserialized(self, mdb):
+        mdb.create_project("P1", settings={"a": 1})
+        projects, _ = mdb.list_projects()
+        assert projects[0]["settings"] == {"a": 1}
+        assert "settings_json" not in projects[0]
+
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")
 
@@ -263,6 +275,18 @@ class TestChapterCRUD:
 
         ch = mdb.get_chapter(cid)
         assert ch["title"] == "New"
+        assert ch["version"] == 2
+
+    def test_update_chapter_part_id(self, mdb):
+        pid = mdb.create_project("Novel")
+        part_a = mdb.create_part(pid, "Part A")
+        part_b = mdb.create_part(pid, "Part B")
+        cid = mdb.create_chapter(pid, "Movable", part_id=part_a)
+
+        mdb.update_chapter(cid, {"part_id": part_b}, expected_version=1)
+
+        ch = mdb.get_chapter(cid)
+        assert ch["part_id"] == part_b
         assert ch["version"] == 2
 
     def test_update_chapter_version_conflict(self, mdb):

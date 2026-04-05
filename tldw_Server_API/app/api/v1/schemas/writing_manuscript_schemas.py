@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import json
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +41,12 @@ class ManuscriptProjectUpdate(BaseModel):
     settings: dict[str, Any] | None = Field(None, description="Project settings JSON")
 
 
+class ManuscriptProjectSettings(BaseModel):
+    """Structured manuscript project settings with forward-compatible keys."""
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ManuscriptProjectResponse(BaseModel):
     id: str
     title: str
@@ -50,7 +56,7 @@ class ManuscriptProjectResponse(BaseModel):
     status: str
     synopsis: str | None = None
     target_word_count: int | None = None
-    settings: dict[str, Any] = Field(default_factory=dict)
+    settings: ManuscriptProjectSettings = Field(default_factory=ManuscriptProjectSettings)
     word_count: int = 0
     created_at: datetime
     last_modified: datetime
@@ -609,6 +615,15 @@ class ManuscriptResearchRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=50, description="Maximum number of results to return")
 
 
+class ManuscriptResearchResult(BaseModel):
+    """A single research result item."""
+    source_id: str | None = None
+    title: str
+    excerpt: str | None = None
+    source_type: str | None = None
+    relevance_score: float | None = None
+
+
 class ManuscriptResearchResponse(BaseModel):
     query: str
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[ManuscriptResearchResult] = Field(default_factory=list)
