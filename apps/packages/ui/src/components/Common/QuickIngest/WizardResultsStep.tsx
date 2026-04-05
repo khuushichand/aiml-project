@@ -324,11 +324,11 @@ export const WizardResultsStep: React.FC<WizardResultsStepProps> = ({
                   {qi("wizard.results.searchKnowledge", "Search in Knowledge")}
                 </button>
               )}
-              {onOpenWorkspace && successes.some(s => shouldKeepOriginalFile(s.type)) && (
+              {onOpenWorkspace && successes.some(s => s.persisted && shouldKeepOriginalFile(s.type)) && (
                 <button
                   type="button"
                   onClick={() => {
-                    const docItem = successes.find(s => shouldKeepOriginalFile(s.type))
+                    const docItem = successes.find(s => s.persisted && shouldKeepOriginalFile(s.type))
                     if (docItem) onOpenWorkspace(docItem)
                   }}
                   className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text hover:bg-surface2 transition-colors"

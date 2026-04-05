@@ -28,6 +28,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined
 } from "@ant-design/icons"
+import { Link } from "react-router-dom"
 import {
   useAttemptsQuery,
   useQuizzesQuery,

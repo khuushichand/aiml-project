@@ -128,12 +128,14 @@ type QuickIngestStore = {
   }) => void
   resetLastRunSummary: () => void
   /**
-   * Media IDs of recently ingested documents (most recent first, max 20).
-   * Used by DocumentPickerModal to surface a "Recently ingested" section.
+   * Recently ingested documents (most recent first, max 20).
+   * Stores {id, type} tuples so DocumentPickerModal can pass type info
+   * to handleOpen and route to the correct viewer.
    */
-  recentlyIngestedDocIds: number[]
-  addRecentlyIngestedDocId: (id: number) => void
-  clearRecentlyIngestedDocIds: () => void
+  recentlyIngestedDocs: Array<{ id: number; type: string; title?: string }>
+  addRecentlyIngestedDoc: (doc: { id: number; type: string; title?: string }) => void
+  addRecentlyIngestedDocs: (docs: Array<{ id: number; type: string; title?: string }>) => void
+  clearRecentlyIngestedDocs: () => void
 }
 
 export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) => ({
@@ -325,12 +327,20 @@ export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) 
     set({
       lastRunSummary: createInitialQuickIngestLastRunSummary()
     }),
-  recentlyIngestedDocIds: [],
-  addRecentlyIngestedDocId: (id) =>
+  recentlyIngestedDocs: [] as Array<{ id: number; type: string; title?: string }>,
+  addRecentlyIngestedDoc: (doc) =>
     set((s) => ({
-      recentlyIngestedDocIds: [id, ...s.recentlyIngestedDocIds.filter((x) => x !== id)].slice(0, 20),
+      recentlyIngestedDocs: [doc, ...s.recentlyIngestedDocs.filter((x) => x.id !== doc.id)].slice(0, 20),
     })),
-  clearRecentlyIngestedDocIds: () => set({ recentlyIngestedDocIds: [] }),
+  addRecentlyIngestedDocs: (newDocs) =>
+    set((s) => {
+      const ids = new Set(newDocs.map((d) => d.id))
+      const filteredExisting = s.recentlyIngestedDocs.filter((d) => !ids.has(d.id))
+      return {
+        recentlyIngestedDocs: [...newDocs, ...filteredExisting].slice(0, 20),
+      }
+    }),
+  clearRecentlyIngestedDocs: () => set({ recentlyIngestedDocs: [] }),
 }))
 
 if (typeof window !== "undefined") {

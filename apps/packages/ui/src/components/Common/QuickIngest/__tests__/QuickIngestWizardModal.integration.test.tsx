@@ -158,6 +158,7 @@ vi.mock("lucide-react", () => {
     "ArrowLeft",
     "ArrowRight",
     "ChevronDown",
+    "ChevronRight",
     "Minimize2",
     "XCircle",
     "Info",
@@ -355,6 +356,19 @@ const ReopenableConfigStepHarness: React.FC<{ onClose: () => void }> = ({
       />
     </IngestWizardProvider>
   )
+}
+
+/**
+ * Expand the "Advanced options" collapsible in the configure step.
+ * Must be called after navigating to step 2 (configure).
+ * No-ops if already expanded (toggle shows "Hide advanced options").
+ */
+const expandAdvancedOptions = async (user: ReturnType<typeof userEvent.setup>) => {
+  const collapsed = screen.queryByText("Advanced options")
+  if (collapsed) {
+    await user.click(collapsed)
+  }
+  // If already expanded ("Hide advanced options" is showing), nothing to do.
 }
 
 // ---------------------------------------------------------------------------
@@ -766,9 +780,16 @@ describe("QuickIngestWizardModal — real configure step", () => {
       name: /ingestion options – analysis/i,
     })
     expect(analysisToggle).toBeInTheDocument()
+    expect(screen.getByText("Next")).toBeInTheDocument()
+
+    // Advanced controls are hidden by default
+    expect(screen.queryByTitle("Captions toggle")).not.toBeInTheDocument()
+    expect(screen.queryByText("Review before saving")).not.toBeInTheDocument()
+
+    // Expand advanced options to reveal them
+    await expandAdvancedOptions(user)
     expect(screen.getByText("Review before saving")).toBeInTheDocument()
     expect(screen.getByTitle("Captions toggle")).toBeInTheDocument()
-    expect(screen.getByText("Next")).toBeInTheDocument()
 
     await user.click(analysisToggle)
 
@@ -785,6 +806,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     )
     await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const audioLanguageInput = await screen.findByTitle("Audio language")
     const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
@@ -822,6 +845,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     const audioLanguageInput = await screen.findByTitle("Audio language")
     const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
     const transcriptionModelSelect = screen.getByLabelText("Transcription model")
@@ -848,6 +873,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const audioLanguageSelect = await screen.findByLabelText("Audio language")
     await user.selectOptions(audioLanguageSelect, "en-US")
@@ -877,6 +904,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const audioLanguageSelect = await screen.findByLabelText("Audio language")
     await user.selectOptions(audioLanguageSelect, "en-US")
@@ -918,6 +947,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       typeDefaults: {
@@ -955,6 +986,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
@@ -1005,6 +1038,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       common: {
@@ -1043,6 +1078,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
@@ -1086,6 +1123,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const transcriptionModelSelect = await screen.findByLabelText(
       "Transcription model"
@@ -1133,6 +1172,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       advancedValues: {
@@ -1176,6 +1217,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       advancedValues: {
@@ -1218,6 +1261,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
     })
@@ -1225,6 +1270,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByRole("button", { name: /hide configure step/i }))
     await user.click(screen.getByRole("button", { name: /show configure step/i }))
+
+    await expandAdvancedOptions(user)
 
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()
