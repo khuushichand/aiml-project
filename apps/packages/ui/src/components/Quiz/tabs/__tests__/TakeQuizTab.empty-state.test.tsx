@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 import { TakeQuizTab } from "../TakeQuizTab"
 import {
   useAttemptsQuery,
@@ -117,15 +118,19 @@ describe("TakeQuizTab empty-state guidance", () => {
 
   it("describes the take-flow state when no quizzes exist", () => {
     render(
-      <TakeQuizTab
-        onNavigateToGenerate={() => {}}
-        onNavigateToCreate={() => {}}
-      />
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+        />
+      </MemoryRouter>
     )
 
     expect(
       screen.getByText("No quizzes available to take yet")
     ).toBeInTheDocument()
     expect(screen.getByText("media library")).toBeInTheDocument()
+    expect(screen.getByText(/Generate one from your/)).toBeInTheDocument()
+    expect(screen.getByText(/or create one manually/)).toBeInTheDocument()
   })
 })
