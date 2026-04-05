@@ -26,20 +26,20 @@ export function EventLineModal({ open, onClose }: EventLineModalProps) {
     enabled: open && !!activeProjectId,
   })
 
-  const plotLines = (plotLinesData as any)?.plot_lines || []
+  const plotLines = (plotLinesData as { plot_lines?: unknown[] } | undefined)?.plot_lines ?? []
 
-  const allEvents = plotLines.flatMap((pl: any) =>
-    (pl.events || []).map((ev: any) => ({
+  const allEvents = plotLines.flatMap((pl: Record<string, unknown>) =>
+    ((pl.events as Record<string, unknown>[] | undefined) || []).map((ev: Record<string, unknown>) => ({
       ...ev,
       plotLineTitle: pl.title,
     }))
   )
 
   // Sort events by sequence or created_at if available
-  const sortedEvents = [...allEvents].sort((a: any, b: any) => {
-    if (a.sequence != null && b.sequence != null) return a.sequence - b.sequence
-    const aTime = a.created_at || ""
-    const bTime = b.created_at || ""
+  const sortedEvents = [...allEvents].sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+    if (a.sequence != null && b.sequence != null) return (a.sequence as number) - (b.sequence as number)
+    const aTime = (a.created_at as string) || ""
+    const bTime = (b.created_at as string) || ""
     return aTime.localeCompare(bTime)
   })
 
@@ -52,26 +52,26 @@ export function EventLineModal({ open, onClose }: EventLineModalProps) {
       ) : (
         <div className="max-h-[500px] overflow-y-auto pr-2">
           <Timeline
-            items={sortedEvents.map((ev: any, idx: number) => ({
-              key: ev.id || idx,
-              color: EVENT_TYPE_COLORS[ev.event_type] || "gray",
+            items={sortedEvents.map((ev: Record<string, unknown>, idx: number) => ({
+              key: (ev.id as string) || idx,
+              color: EVENT_TYPE_COLORS[ev.event_type as string] || "gray",
               children: (
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
-                    <Typography.Text strong>{ev.title || ev.description || "Untitled event"}</Typography.Text>
+                    <Typography.Text strong>{(ev.title as string) || (ev.description as string) || "Untitled event"}</Typography.Text>
                     {ev.event_type && (
-                      <Tag color={EVENT_TYPE_COLORS[ev.event_type] || "default"} className="!text-[10px]">
-                        {ev.event_type}
+                      <Tag color={EVENT_TYPE_COLORS[ev.event_type as string] || "default"} className="!text-[10px]">
+                        {ev.event_type as string}
                       </Tag>
                     )}
                   </div>
                   {ev.description && ev.title && (
                     <Typography.Text type="secondary" className="text-xs">
-                      {ev.description}
+                      {ev.description as string}
                     </Typography.Text>
                   )}
                   <Typography.Text type="secondary" className="text-[10px]">
-                    Plot line: {ev.plotLineTitle}
+                    Plot line: {ev.plotLineTitle as string}
                   </Typography.Text>
                 </div>
               ),

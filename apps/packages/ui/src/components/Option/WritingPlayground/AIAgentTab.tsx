@@ -59,7 +59,10 @@ export function AIAgentTab({ isOnline }: AIAgentTabProps) {
         }
       }
       if (activeProjectId) {
-        const charsResp: ManuscriptCharacterListResponse = await listManuscriptCharacters(activeProjectId)
+        const [charsResp, worldResp] = await Promise.all([
+          listManuscriptCharacters(activeProjectId),
+          listManuscriptWorldInfo(activeProjectId),
+        ])
         const chars = charsResp.characters || []
         if (chars.length > 0) {
           const charList = chars.slice(0, 10).map((c: ManuscriptCharacter) =>
@@ -67,7 +70,6 @@ export function AIAgentTab({ isOnline }: AIAgentTabProps) {
           ).join("\n")
           parts.push(`[Characters]\n${charList}`)
         }
-        const worldResp: ManuscriptWorldInfoListResponse = await listManuscriptWorldInfo(activeProjectId)
         const items = worldResp.items || []
         if (items.length > 0) {
           const worldList = items.slice(0, 10).map((w: ManuscriptWorldInfoItem) =>

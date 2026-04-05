@@ -195,20 +195,20 @@ describe("WritingPlayground inspector tabs", () => {
     renderWithInspectorOpen()
 
     const samplingTab = screen.getByRole("tab", { name: "Sampling" })
-    const agentTab = screen.getByRole("tab", { name: "Agent" })
+    const feedbackTab = screen.getByRole("tab", { name: "Feedback" })
 
     samplingTab.focus()
     fireEvent.keyDown(samplingTab, { key: "ArrowLeft" })
-    expect(agentTab).toHaveAttribute("aria-selected", "true")
-    expect(agentTab).toHaveFocus()
+    expect(feedbackTab).toHaveAttribute("aria-selected", "true")
+    expect(feedbackTab).toHaveFocus()
 
-    fireEvent.keyDown(agentTab, { key: "Home" })
+    fireEvent.keyDown(feedbackTab, { key: "Home" })
     expect(samplingTab).toHaveAttribute("aria-selected", "true")
     expect(samplingTab).toHaveFocus()
 
     fireEvent.keyDown(samplingTab, { key: "End" })
-    expect(agentTab).toHaveAttribute("aria-selected", "true")
-    expect(agentTab).toHaveFocus()
+    expect(feedbackTab).toHaveAttribute("aria-selected", "true")
+    expect(feedbackTab).toHaveFocus()
   })
 
   it("shows template/theme management actions in Setup tab", () => {
@@ -269,7 +269,7 @@ describe("WritingPlayground inspector tabs", () => {
     }
   })
 
-  it("has seven tabs: Sampling, Context, Setup, Analysis, Characters, Research, Agent", () => {
+  it("has eight tabs: Sampling, Context, Setup, Analysis, Characters, Research, Agent, Feedback", () => {
     renderWithInspectorOpen()
 
     expect(screen.getByRole("tab", { name: "Sampling" })).toBeInTheDocument()
@@ -279,6 +279,7 @@ describe("WritingPlayground inspector tabs", () => {
     expect(screen.getByRole("tab", { name: "Characters" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Research" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Agent" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Feedback" })).toBeInTheDocument()
   })
 
   it("renders an Analysis panel title that matches the tab label", () => {

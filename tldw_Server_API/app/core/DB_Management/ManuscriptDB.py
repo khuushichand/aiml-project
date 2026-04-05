@@ -77,7 +77,7 @@ _UPDATABLE_PLOT_LINE_COLS = frozenset({
     "title", "description", "status", "color", "sort_order",
 })
 _UPDATABLE_PLOT_EVENT_COLS = frozenset({
-    "title", "description", "event_type", "sort_order",
+    "title", "description", "plot_line_id", "event_type", "sort_order",
     "scene_id", "chapter_id",
 })
 _UPDATABLE_PLOT_HOLE_COLS = frozenset({
@@ -111,6 +111,38 @@ class ManuscriptDBHelper:
         includes the V41 manuscript tables.
     """
 
+    # Column allowlists for update methods (defense-in-depth against injection)
+    _UPDATABLE_PROJECT_COLS = frozenset({
+        "title", "subtitle", "author", "genre", "status", "synopsis",
+        "target_word_count", "settings_json",
+    })
+    _UPDATABLE_PART_COLS = frozenset({"title", "sort_order", "synopsis"})
+    _UPDATABLE_CHAPTER_COLS = frozenset({
+        "title", "part_id", "sort_order", "synopsis", "pov_character_id", "status",
+    })
+    _UPDATABLE_SCENE_COLS = frozenset({
+        "title", "chapter_id", "sort_order", "content_json", "content_plain",
+        "synopsis", "pov_character_id", "status", "word_count",
+    })
+    _UPDATABLE_CHARACTER_COLS = frozenset({
+        "name", "role", "cast_group", "full_name", "age", "gender",
+        "appearance", "personality", "backstory", "motivation", "arc_summary",
+        "notes", "custom_fields_json", "sort_order",
+    })
+    _UPDATABLE_WORLD_INFO_COLS = frozenset({
+        "name", "description", "parent_id", "properties_json", "tags_json", "sort_order",
+    })
+    _UPDATABLE_PLOT_LINE_COLS = frozenset({
+        "title", "description", "status", "color", "sort_order",
+    })
+    _UPDATABLE_PLOT_EVENT_COLS = frozenset({
+        "title", "description", "plot_line_id", "scene_id", "chapter_id", "event_type", "sort_order",
+    })
+    _UPDATABLE_PLOT_HOLE_COLS = frozenset({
+        "title", "description", "severity", "status", "scene_id",
+        "chapter_id", "plot_line_id", "resolution", "detected_by",
+    })
+
     def __init__(self, db: CharactersRAGDB) -> None:
         self.db = db
 
@@ -128,17 +160,91 @@ class ManuscriptDBHelper:
     def _client_id(self) -> str:
         return self.db.client_id
 
-    def _deserialize_project_row(self, row: Any) -> dict[str, Any]:
-        """Return a project row with ``settings_json`` materialized as ``settings``."""
-        project = dict(row)
-        raw_settings = project.pop("settings_json", "{}")
+    @staticmethod
+    def _scene_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+        """Convert a raw scene DB row into API-friendly dict.
+
+        Deserializes ``content_json`` (string) into ``content`` (dict)
+        so the response schema can serve it as structured JSON.
+        """
+        d = dict(row)
+        raw = d.pop("content_json", None) or "{}"
         try:
-            parsed_settings = json.loads(raw_settings) if raw_settings else {}
-        except (TypeError, ValueError, json.JSONDecodeError):
-            logger.warning("Failed to deserialize manuscript project settings for {}", project.get("id"))
-            parsed_settings = {}
-        project["settings"] = parsed_settings if isinstance(parsed_settings, dict) else {}
-        return project
+            d["content"] = json.loads(raw)
+        except (ValueError, TypeError):
+            d["content"] = {}
+        return d
+
+    @staticmethod
+    def _project_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+        """Convert a raw project DB row into API-friendly dict."""
+        d = dict(row)
+        raw = d.pop("settings_json", None) or "{}"
+        try:
+            d["settings"] = json.loads(raw)
+        except (ValueError, TypeError):
+            d["settings"] = {}
+        return d
+
+    # Alias used by dev-branch callers (kept for compatibility).
+    _deserialize_project_row = _project_row_to_dict
+
+    # Tables eligible for cross-project ownership checks.
+    _PROJECT_CHECK_TABLES: frozenset[str] = frozenset({
+        "manuscript_characters",
+        "manuscript_scenes",
+        "manuscript_chapters",
+        "manuscript_world_info",
+        "manuscript_plot_lines",
+    })
+
+    def _assert_same_project(
+        self,
+        conn: Any,
+        table: str,
+        entity_id: str,
+        expected_project_id: str,
+        label: str = "entity",
+    ) -> None:
+        """Verify an entity belongs to the expected project.
+
+        Raises :class:`ValueError` on mismatch or missing row.
+        """
+        if table not in self._PROJECT_CHECK_TABLES:
+            raise ValueError(f"Internal error: unknown table '{table}'")
+        row = conn.execute(
+            f"SELECT project_id FROM {table} WHERE id = ? AND deleted = 0",  # nosec B608
+            (entity_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"{label} '{entity_id}' not found or deleted")
+        if row["project_id"] != expected_project_id:
+            raise ValueError(f"{label} '{entity_id}' belongs to a different project")
+
+    def _validate_plot_refs(
+        self,
+        conn: Any,
+        project_id: str,
+        *,
+        plot_line_id: str | None = None,
+        scene_id: str | None = None,
+        chapter_id: str | None = None,
+    ) -> None:
+        """Validate that plot-related references share the same project
+        and that scene belongs to chapter when both are supplied."""
+        if plot_line_id:
+            self._assert_same_project(conn, "manuscript_plot_lines", plot_line_id, project_id, "plot_line")
+        if scene_id:
+            self._assert_same_project(conn, "manuscript_scenes", scene_id, project_id, "scene")
+        if chapter_id:
+            self._assert_same_project(conn, "manuscript_chapters", chapter_id, project_id, "chapter")
+        if scene_id and chapter_id:
+            row = conn.execute(
+                "SELECT chapter_id FROM manuscript_scenes WHERE id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchone()
+            if row and row["chapter_id"] != chapter_id:
+                raise ValueError(f"Scene '{scene_id}' does not belong to chapter '{chapter_id}'")
 
     # ------------------------------------------------------------------
     # Projects
@@ -190,7 +296,7 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        return self._deserialize_project_row(row) if row else None
+        return self._project_row_to_dict(row) if row else None
 
     def list_projects(
         self,
@@ -200,31 +306,31 @@ class ManuscriptDBHelper:
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return ``(projects, total_count)`` with optional status filter."""
-        where = "WHERE deleted = 0"
-        params: list[Any] = []
-        if status_filter:
-            if status_filter not in _VALID_PROJECT_STATUSES:
-                raise ValueError(
-                    f"Invalid status filter: {status_filter!r}. "
-                    f"Must be one of {sorted(_VALID_PROJECT_STATUSES)}"
-                )
-            where += " AND status = ?"
-            params.append(status_filter)
-
         with self.db.transaction() as conn:
             total_row = conn.execute(
-                f"SELECT COUNT(*) AS cnt FROM manuscript_projects {where}",  # nosec B608
-                params,
+                """
+                SELECT COUNT(*) AS cnt
+                  FROM manuscript_projects
+                 WHERE deleted = 0
+                   AND (? IS NULL OR status = ?)
+                """,
+                (status_filter, status_filter),
             ).fetchone()
             total = total_row["cnt"] if total_row else 0
 
             rows = conn.execute(
-                f"SELECT * FROM manuscript_projects {where} "  # nosec B608
-                "ORDER BY last_modified DESC LIMIT ? OFFSET ?",
-                [*params, limit, offset],
+                """
+                SELECT *
+                  FROM manuscript_projects
+                 WHERE deleted = 0
+                   AND (? IS NULL OR status = ?)
+                 ORDER BY last_modified DESC
+                 LIMIT ? OFFSET ?
+                """,
+                (status_filter, status_filter, limit, offset),
             ).fetchall()
 
-        return [self._deserialize_project_row(r) for r in rows], int(total)
+        return [self._project_row_to_dict(r) for r in rows], int(total)
 
     def update_project(
         self,
@@ -247,10 +353,16 @@ class ManuscriptDBHelper:
         params: list[Any] = []
         for key, value in updates.items():
             if key == "settings":
+                col = "settings_json"
+            else:
+                col = key
+            if col not in self._UPDATABLE_PROJECT_COLS:
+                raise ValueError(f"Invalid update column for project: {key!r}")  # noqa: TRY003
+            if key == "settings":
                 set_parts.append("settings_json = ?")
                 params.append(json.dumps(value))
             else:
-                set_parts.append(f"{key} = ?")
+                set_parts.append(f"{col} = ?")
                 params.append(value)
 
         set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
@@ -607,13 +719,16 @@ class ManuscriptDBHelper:
         return sid
 
     def get_scene(self, scene_id: str) -> dict[str, Any] | None:
-        """Fetch a scene by ID; returns *None* if missing or deleted."""
+        """Fetch a scene by ID; returns *None* if missing or deleted.
+
+        The returned dict has ``content_json`` deserialized into ``content``.
+        """
         with self.db.transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM manuscript_scenes WHERE id = ? AND deleted = 0",
                 (scene_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._scene_row_to_dict(dict(row)) if row else None
 
     def list_scenes(self, chapter_id: str) -> list[dict[str, Any]]:
         """List non-deleted scenes for a chapter ordered by sort_order."""
@@ -623,7 +738,7 @@ class ManuscriptDBHelper:
                 "WHERE chapter_id = ? AND deleted = 0 ORDER BY sort_order",
                 (chapter_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._scene_row_to_dict(dict(r)) for r in rows]
 
     def update_scene(
         self,
@@ -674,8 +789,8 @@ class ManuscriptDBHelper:
                     entity_id=scene_id,
                 )
 
-            # Propagate if word count might have changed
-            if "content_plain" in updates:
+            # Propagate if the scene body changed.
+            if "content_plain" in updates or "content_json" in updates:
                 row = conn.execute(
                     "SELECT chapter_id, project_id FROM manuscript_scenes WHERE id = ?",
                     (scene_id,),
@@ -712,6 +827,20 @@ class ManuscriptDBHelper:
 
             if row:
                 self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
+
+    def get_all_scene_texts(self, project_id: str) -> list[str]:
+        """Get all scene plain texts for a project in narrative order (single query)."""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "SELECT s.content_plain "
+                "FROM manuscript_scenes s "
+                "JOIN manuscript_chapters c ON c.id = s.chapter_id AND c.deleted = 0 "
+                "LEFT JOIN manuscript_parts p ON p.id = c.part_id AND p.deleted = 0 "
+                "WHERE s.project_id = ? AND s.deleted = 0 "
+                "ORDER BY COALESCE(p.sort_order, -1), c.sort_order, s.sort_order",
+                (project_id,),
+            )
+            return [row["content_plain"] for row in cur.fetchall() if row["content_plain"]]
 
     # ------------------------------------------------------------------
     # Word-count propagation
@@ -1047,19 +1176,24 @@ class ManuscriptDBHelper:
         cast_group_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """List non-deleted characters for a project, optionally filtered."""
-        where = "project_id = ? AND deleted = 0"
-        params: list[Any] = [project_id]
-        if role_filter:
-            where += " AND role = ?"
-            params.append(role_filter)
-        if cast_group_filter:
-            where += " AND cast_group = ?"
-            params.append(cast_group_filter)
-
         with self.db.transaction() as conn:
             cur = conn.execute(
-                f"SELECT * FROM manuscript_characters WHERE {where} ORDER BY sort_order",  # nosec B608
-                params,
+                """
+                SELECT *
+                  FROM manuscript_characters
+                 WHERE project_id = ?
+                   AND deleted = 0
+                   AND (? IS NULL OR role = ?)
+                   AND (? IS NULL OR cast_group = ?)
+                 ORDER BY sort_order
+                """,
+                (
+                    project_id,
+                    role_filter,
+                    role_filter,
+                    cast_group_filter,
+                    cast_group_filter,
+                ),
             )
             rows = cur.fetchall()
 
@@ -1090,21 +1224,67 @@ class ManuscriptDBHelper:
         if "custom_fields" in updates:
             updates["custom_fields_json"] = json.dumps(updates.pop("custom_fields"))
 
-        set_parts: list[str] = []
-        params: list[Any] = []
-        for key, value in updates.items():
-            set_parts.append(f"{key} = ?")
-            params.append(value)
-
-        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
-        params.extend([now, next_version, self._client_id])
-        params.extend([character_id, expected_version])
-
         with self.db.transaction() as conn:
+            current_row = conn.execute(
+                """
+                SELECT *
+                  FROM manuscript_characters
+                 WHERE id = ? AND version = ? AND deleted = 0
+                """,
+                (character_id, expected_version),
+            ).fetchone()
+            if not current_row:
+                raise ConflictError(
+                    f"Character {character_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_characters",
+                    entity_id=character_id,
+                )
+
+            current = dict(current_row)
+            current.update(updates)
             cur = conn.execute(
-                f"UPDATE manuscript_characters SET {', '.join(set_parts)} "  # nosec B608
-                "WHERE id = ? AND version = ? AND deleted = 0",
-                params,
+                """
+                UPDATE manuscript_characters
+                   SET name = ?,
+                       role = ?,
+                       cast_group = ?,
+                       full_name = ?,
+                       age = ?,
+                       gender = ?,
+                       appearance = ?,
+                       personality = ?,
+                       backstory = ?,
+                       motivation = ?,
+                       arc_summary = ?,
+                       notes = ?,
+                       custom_fields_json = ?,
+                       sort_order = ?,
+                       last_modified = ?,
+                       version = ?,
+                       client_id = ?
+                 WHERE id = ? AND version = ? AND deleted = 0
+                """,
+                (
+                    current["name"],
+                    current["role"],
+                    current["cast_group"],
+                    current["full_name"],
+                    current["age"],
+                    current["gender"],
+                    current["appearance"],
+                    current["personality"],
+                    current["backstory"],
+                    current["motivation"],
+                    current["arc_summary"],
+                    current["notes"],
+                    current["custom_fields_json"],
+                    current["sort_order"],
+                    now,
+                    next_version,
+                    self._client_id,
+                    character_id,
+                    expected_version,
+                ),
             )
             if cur.rowcount == 0:
                 raise ConflictError(
@@ -1152,6 +1332,12 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            self._assert_same_project(
+                conn, "manuscript_characters", from_character_id, project_id, "from_character"
+            )
+            self._assert_same_project(
+                conn, "manuscript_characters", to_character_id, project_id, "to_character"
+            )
             conn.execute(
                 """
                 INSERT INTO manuscript_character_relationships
@@ -1218,12 +1404,26 @@ class ManuscriptDBHelper:
         *,
         is_pov: bool = False,
     ) -> None:
-        """Link a character to a scene (INSERT OR IGNORE)."""
+        """Link a character to a scene (upsert — updates ``is_pov`` on conflict)."""
         with self.db.transaction() as conn:
+            # Verify both entities belong to the same project.
+            scene_row = conn.execute(
+                "SELECT project_id FROM manuscript_scenes WHERE id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchone()
+            if scene_row is None:
+                raise ValueError(f"Scene '{scene_id}' not found or deleted")
+            self._assert_same_project(
+                conn, "manuscript_characters", character_id, scene_row["project_id"], "character"
+            )
             conn.execute(
-                "INSERT OR IGNORE INTO manuscript_scene_characters "
-                "(scene_id, character_id, is_pov) VALUES (?, ?, ?)",
-                (scene_id, character_id, int(is_pov)),
+                "INSERT INTO manuscript_scene_characters "
+                "(scene_id, character_id, is_pov, last_modified, client_id, version) "
+                "VALUES (?, ?, ?, ?, ?, 1) "
+                "ON CONFLICT(scene_id, character_id) DO UPDATE SET "
+                "is_pov = excluded.is_pov, last_modified = excluded.last_modified, "
+                "client_id = excluded.client_id, version = version + 1",
+                (scene_id, character_id, int(is_pov), self._now(), self._client_id),
             )
 
     def unlink_scene_character(self, scene_id: str, character_id: str) -> None:
@@ -1272,6 +1472,10 @@ class ManuscriptDBHelper:
         tags_json = json.dumps(tags) if tags else "[]"
 
         with self.db.transaction() as conn:
+            if parent_id:
+                self._assert_same_project(
+                    conn, "manuscript_world_info", parent_id, project_id, "parent_world_info"
+                )
             conn.execute(
                 """
                 INSERT INTO manuscript_world_info
@@ -1401,10 +1605,24 @@ class ManuscriptDBHelper:
     def link_scene_world_info(self, scene_id: str, world_info_id: str) -> None:
         """Link a world-info entry to a scene (INSERT OR IGNORE)."""
         with self.db.transaction() as conn:
+            # Verify both entities belong to the same project.
+            scene_row = conn.execute(
+                "SELECT project_id FROM manuscript_scenes WHERE id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchone()
+            if scene_row is None:
+                raise ValueError(f"Scene '{scene_id}' not found or deleted")
+            self._assert_same_project(
+                conn, "manuscript_world_info", world_info_id, scene_row["project_id"], "world_info"
+            )
             conn.execute(
-                "INSERT OR IGNORE INTO manuscript_scene_world_info "
-                "(scene_id, world_info_id) VALUES (?, ?)",
-                (scene_id, world_info_id),
+                "INSERT INTO manuscript_scene_world_info "
+                "(scene_id, world_info_id, last_modified, client_id, version) "
+                "VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(scene_id, world_info_id) DO UPDATE SET "
+                "last_modified = excluded.last_modified, "
+                "client_id = excluded.client_id, version = version + 1",
+                (scene_id, world_info_id, self._now(), self._client_id),
             )
 
     def unlink_scene_world_info(self, scene_id: str, world_info_id: str) -> None:
@@ -1564,6 +1782,10 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            self._validate_plot_refs(
+                conn, project_id,
+                plot_line_id=plot_line_id, scene_id=scene_id, chapter_id=chapter_id,
+            )
             conn.execute(
                 """
                 INSERT INTO manuscript_plot_events
@@ -1628,6 +1850,27 @@ class ManuscriptDBHelper:
         params.extend([event_id, expected_version])
 
         with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT project_id, plot_line_id, scene_id, chapter_id "
+                "FROM manuscript_plot_events WHERE id = ? AND deleted = 0",
+                (event_id,),
+            ).fetchone()
+            if row is None:
+                raise ConflictError(
+                    f"PlotEvent {event_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_events",
+                    entity_id=event_id,
+                )
+
+            ref_cols = {"plot_line_id", "scene_id", "chapter_id"} & updates.keys()
+            if ref_cols:
+                self._validate_plot_refs(
+                    conn,
+                    row["project_id"],
+                    plot_line_id=updates.get("plot_line_id", row["plot_line_id"]),
+                    scene_id=updates.get("scene_id", row["scene_id"]),
+                    chapter_id=updates.get("chapter_id", row["chapter_id"]),
+                )
             cur = conn.execute(
                 f"UPDATE manuscript_plot_events SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
@@ -1681,6 +1924,10 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            self._validate_plot_refs(
+                conn, project_id,
+                plot_line_id=plot_line_id, scene_id=scene_id, chapter_id=chapter_id,
+            )
             conn.execute(
                 """
                 INSERT INTO manuscript_plot_holes
@@ -1755,6 +2002,27 @@ class ManuscriptDBHelper:
         params.extend([plot_hole_id, expected_version])
 
         with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT project_id, plot_line_id, scene_id, chapter_id "
+                "FROM manuscript_plot_holes WHERE id = ? AND deleted = 0",
+                (plot_hole_id,),
+            ).fetchone()
+            if row is None:
+                raise ConflictError(
+                    f"PlotHole {plot_hole_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_holes",
+                    entity_id=plot_hole_id,
+                )
+
+            ref_cols = {"scene_id", "chapter_id", "plot_line_id"} & updates.keys()
+            if ref_cols:
+                self._validate_plot_refs(
+                    conn,
+                    row["project_id"],
+                    plot_line_id=updates.get("plot_line_id", row["plot_line_id"]),
+                    scene_id=updates.get("scene_id", row["scene_id"]),
+                    chapter_id=updates.get("chapter_id", row["chapter_id"]),
+                )
             cur = conn.execute(
                 f"UPDATE manuscript_plot_holes SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
@@ -1976,26 +2244,30 @@ class ManuscriptDBHelper:
 
         By default stale analyses are excluded unless *include_stale* is True.
         """
-        clauses = ["project_id = ?", "deleted = 0"]
-        params: list[Any] = [project_id]
-
-        if not include_stale:
-            clauses.append("stale = 0")
-        if scope_type is not None:
-            clauses.append("scope_type = ?")
-            params.append(scope_type)
-        if scope_id is not None:
-            clauses.append("scope_id = ?")
-            params.append(scope_id)
-        if analysis_type is not None:
-            clauses.append("analysis_type = ?")
-            params.append(analysis_type)
-
-        # Clauses are selected from fixed SQL fragments above; all user input stays parameterized in `params`.
-        sql = "SELECT * FROM manuscript_ai_analyses WHERE " + " AND ".join(clauses) + " ORDER BY created_at DESC"  # nosec B608
-
         with self.db.transaction() as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM manuscript_ai_analyses
+                 WHERE project_id = ?
+                   AND deleted = 0
+                   AND (? = 1 OR stale = 0)
+                   AND (? IS NULL OR scope_type = ?)
+                   AND (? IS NULL OR scope_id = ?)
+                   AND (? IS NULL OR analysis_type = ?)
+                 ORDER BY created_at DESC
+                """,
+                (
+                    project_id,
+                    1 if include_stale else 0,
+                    scope_type,
+                    scope_type,
+                    scope_id,
+                    scope_id,
+                    analysis_type,
+                    analysis_type,
+                ),
+            ).fetchall()
 
         results: list[dict[str, Any]] = []
         for row in rows:

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Button, Empty, List, Modal, Progress, Typography } from "antd"
+import { Button, Empty, List, Modal, Progress, Typography, message } from "antd"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import { getManuscriptStructure, analyzeChapter, listManuscriptAnalyses } from "@/services/writing-playground"
 
@@ -32,16 +32,16 @@ export function StoryPulseModal({ open, onClose }: StoryPulseModalProps) {
     enabled: open && !!activeProjectId,
   })
 
-  const analyses = (analysesData as any)?.analyses || []
+  const analyses = (analysesData as { analyses?: unknown[] } | undefined)?.analyses ?? []
 
   const allChapters = (() => {
     if (!structure) return []
-    const chapters: any[] = []
-    const s = structure as any
-    for (const part of s.parts || []) {
+    const chapters: Array<{ id: string; title: string }> = []
+    const s = structure as { parts?: Array<{ chapters?: Array<{ id: string; title: string }> }>; unassigned_chapters?: Array<{ id: string; title: string }> } | undefined
+    for (const part of s?.parts || []) {
       for (const ch of part.chapters || []) chapters.push(ch)
     }
-    for (const ch of s.unassigned_chapters || []) chapters.push(ch)
+    for (const ch of s?.unassigned_chapters || []) chapters.push(ch)
     return chapters
   })()
 
@@ -49,14 +49,16 @@ export function StoryPulseModal({ open, onClose }: StoryPulseModalProps) {
     setAnalyzing(chapterId)
     try {
       await analyzeChapter(chapterId, { analysis_types: ["pacing"] })
-      refetchAnalyses()
+      await refetchAnalyses()
+    } catch {
+      message.error("Failed to analyze chapter")
     } finally {
       setAnalyzing(null)
     }
   }
 
   const getAnalysisForChapter = (chapterId: string) =>
-    analyses.find((a: any) => a.scope_type === "chapter" && a.scope_id === chapterId)
+    analyses.find((a: Record<string, unknown>) => a.scope_type === "chapter" && a.scope_id === chapterId)
 
   return (
     <Modal title="Story Pulse" open={open} onCancel={onClose} footer={null} width={700}>
@@ -67,7 +69,7 @@ export function StoryPulseModal({ open, onClose }: StoryPulseModalProps) {
       ) : (
         <List
           dataSource={allChapters}
-          renderItem={(ch: any) => {
+          renderItem={(ch: { id: string; title: string }) => {
             const analysis = getAnalysisForChapter(ch.id)
             const result = analysis?.result || {}
             const isStale = analysis?.stale

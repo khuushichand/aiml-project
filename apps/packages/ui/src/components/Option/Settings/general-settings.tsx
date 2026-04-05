@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { Alert, Modal, Radio, Select, Switch } from "antd"
 import { useNavigate } from "react-router-dom"
 import { SearchModeSettings } from "./search-mode"
@@ -57,9 +58,12 @@ export const GeneralSettings = () => {
   const { restartOnboarding, setUserPersona } = useConnectionActions()
   const { completedTutorials, resetProgress: resetTutorialProgress } = useTutorialCompletion()
   const [, setShortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
+  const personaSeqRef = useRef(0)
 
   const handlePersonaChange = async (nextPersona: UserPersona) => {
+    const seq = ++personaSeqRef.current
     await setUserPersona(nextPersona)
+    if (seq !== personaSeqRef.current) return // stale
     const shortcuts = getDefaultShortcutsForPersona(nextPersona)
     await setShortcutSelection(shortcuts)
   }

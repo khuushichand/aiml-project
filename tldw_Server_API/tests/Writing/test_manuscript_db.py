@@ -124,6 +124,7 @@ class TestProjectCRUD:
 
         proj = mdb.get_project(pid)
         assert proj["settings"] == {"theme": "dark"}
+        assert "settings_json" not in proj
 
     def test_project_settings_roundtrip(self, mdb):
         pid = mdb.create_project("With Settings", settings={"font": "serif", "columns": 2})
@@ -137,12 +138,13 @@ class TestProjectCRUD:
         assert projects[0]["settings"] == {"a": 1}
         assert "settings_json" not in projects[0]
 
-    def test_list_projects_exposes_deserialized_settings(self, mdb):
-        mdb.create_project("With Settings", settings={"theme": "dark", "layout": "kanban"})
+    def test_list_projects_exposes_settings_dict(self, mdb):
+        mdb.create_project("With Settings", settings={"theme": "dark", "autosave": True})
+
         projects, total = mdb.list_projects()
 
         assert total == 1
-        assert projects[0]["settings"] == {"theme": "dark", "layout": "kanban"}
+        assert projects[0]["settings"] == {"theme": "dark", "autosave": True}
         assert "settings_json" not in projects[0]
 
     def test_update_project_version_conflict(self, mdb):

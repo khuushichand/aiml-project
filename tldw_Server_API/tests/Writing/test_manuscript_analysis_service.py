@@ -102,7 +102,10 @@ async def test_handles_llm_error():
         side_effect=RuntimeError("API down"),
     ):
         result = await analyze_pacing("Text")
-        assert "error" in result
+        assert result == {
+            "error": "analysis_failed",
+            "message": "Analysis service unavailable",
+        }
 
 
 @pytest.mark.asyncio

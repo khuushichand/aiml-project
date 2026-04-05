@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +171,8 @@ class ManuscriptSceneResponse(BaseModel):
     project_id: str
     title: str
     sort_order: float
-    content_json: str | None = None
-    content_plain: str | None = None
+    content: dict[str, Any] = Field(default_factory=dict)
+    content_plain: str = ""
     synopsis: str | None = None
     word_count: int = 0
     pov_character_id: str | None = None
@@ -637,10 +637,23 @@ class ManuscriptResearchResponse(BaseModel):
 class ManuscriptAnalysisRequest(BaseModel):
     analysis_types: list[Literal["pacing", "plot_holes", "consistency"]] = Field(
         default_factory=lambda: ["pacing"],
+        min_length=1,
         description="Analysis types to run: pacing, plot_holes, consistency",
     )
     provider: str | None = Field(None, description="LLM provider override")
     model: str | None = Field(None, description="Model override")
+
+    @field_validator("analysis_types")
+    @classmethod
+    def validate_analysis_types(cls, v: list[str]) -> list[str]:
+        allowed = {"pacing", "plot_holes", "consistency"}
+        invalid = set(v) - allowed
+        if invalid:
+            raise ValueError(
+                f"Unsupported analysis types: {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(allowed))}"
+            )
+        return v
 
 
 class ManuscriptAnalysisResponse(BaseModel):

@@ -44,6 +44,25 @@ class TestAnalysisCRUD:
         assert analysis["provider"] == "openai"
         assert analysis["model"] == "gpt-4o"
 
+    def test_analysis_sync_payload_includes_result_json(self, mdb):
+        pid = mdb.create_project("Novel")
+        aid = mdb.create_analysis(
+            pid,
+            "project",
+            pid,
+            "consistency",
+            {"ok": True, "score": 0.9},
+        )
+
+        row = mdb.db.execute_query(
+            "SELECT payload FROM sync_log WHERE entity = ? AND entity_id = ? "
+            "ORDER BY change_id DESC LIMIT 1",
+            ("manuscript_ai_analyses", aid),
+        ).fetchone()
+
+        payload = json.loads(row["payload"])
+        assert payload["result_json"] == json.dumps({"ok": True, "score": 0.9})
+
     def test_get_missing_returns_none(self, mdb):
         assert mdb.get_analysis("nonexistent") is None
 
@@ -137,6 +156,21 @@ class TestAnalysisCRUD:
         # Verify analysis is now stale
         analysis = mdb.get_analysis(aid)
         assert analysis["stale"] == 1
+
+    def test_scene_content_json_update_marks_analyses_stale(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        sid = mdb.create_scene(ch_id, pid, title="S1", content_json='{"type":"doc"}', content_plain="old text")
+        aid = mdb.create_analysis(pid, "scene", sid, "pacing", {"pacing": 0.5})
+        assert mdb.get_analysis(aid)["stale"] == 0
+
+        mdb.update_scene(
+            sid,
+            {"content_json": '{"type":"doc","content":[{"type":"paragraph"}]}'},
+            expected_version=1,
+        )
+
+        assert mdb.get_analysis(aid)["stale"] == 1
 
     def test_scene_update_non_content_does_not_mark_stale(self, mdb):
         pid = mdb.create_project("Novel")

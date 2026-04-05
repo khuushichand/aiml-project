@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Button, Empty, Modal, Table, Tag, Typography } from "antd"
+import { Button, Empty, Modal, Table, Tag, Typography, message } from "antd"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import {
   listManuscriptPlotLines,
@@ -42,15 +42,17 @@ export function PlotTrackerModal({ open, onClose }: PlotTrackerModalProps) {
     enabled: open && !!activeProjectId,
   })
 
-  const plotLines = (plotLinesData as any)?.plot_lines || []
-  const plotHoles = (plotHolesData as any)?.plot_holes || []
+  const plotLines = (plotLinesData as { plot_lines?: unknown[] } | undefined)?.plot_lines ?? []
+  const plotHoles = (plotHolesData as { plot_holes?: unknown[] } | undefined)?.plot_holes ?? []
 
   const handleDetect = async () => {
     if (!activeProjectId) return
     setDetecting(true)
     try {
       await analyzeProjectPlotHoles(activeProjectId)
-      refetchHoles()
+      await refetchHoles()
+    } catch {
+      message.error("Failed to detect plot holes")
     } finally {
       setDetecting(false)
     }

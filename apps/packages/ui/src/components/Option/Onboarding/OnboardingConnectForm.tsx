@@ -911,8 +911,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     await finishAndNavigate("/media")
   }, [finishAndNavigate])
 
-  const handleOpenChatFlow = useCallback(async () => {
-    // Don't set persona — chat users stay in default mode (persona = null)
+  const handleGoToChat = useCallback(async () => {
     try {
       await openSidepanelForActiveTab()
     } catch (err) {
@@ -920,6 +919,12 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     }
     await finishAndNavigate("/chat")
   }, [finishAndNavigate])
+
+  const handleOpenChatFlow = useCallback(async () => {
+    await actions.setUserPersona("explorer")
+    // Explorer persona sees all features — no shortcut filtering needed
+    await handleGoToChat()
+  }, [actions, handleGoToChat])
 
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
@@ -1106,7 +1111,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               primaryLabel={t("settings:onboarding.success.getStarted", "Get Started")}
               onPrimaryClick={handleOpenFamilyFlow}
               secondaryLabel={t("settings:onboarding.success.skipToChat", "Skip, go to chat")}
-              onSecondaryClick={handleOpenChatFlow}
+              onSecondaryClick={handleGoToChat}
               backLabel={t("settings:onboarding.success.backToChoices", "Back")}
               onBackClick={() => setSelectedIntent(null)}
             />
@@ -1123,7 +1128,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               primaryLabel={t("settings:onboarding.success.getStarted", "Get Started")}
               onPrimaryClick={handleOpenIngestFlow}
               secondaryLabel={t("settings:onboarding.success.skipToChat", "Skip, go to chat")}
-              onSecondaryClick={handleOpenChatFlow}
+              onSecondaryClick={handleGoToChat}
               backLabel={t("settings:onboarding.success.backToChoices", "Back")}
               onBackClick={() => setSelectedIntent(null)}
             />

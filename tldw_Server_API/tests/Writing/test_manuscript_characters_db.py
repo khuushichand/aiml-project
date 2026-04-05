@@ -359,6 +359,16 @@ class TestCharacterRelationships:
 # ---------------------------------------------------------------------------
 
 class TestSceneCharacterLinking:
+    def test_link_table_has_sync_metadata_columns(self, mdb):
+        columns = {
+            row["name"]
+            for row in mdb.db.execute_query(
+                "PRAGMA table_info('manuscript_scene_characters')"
+            ).fetchall()
+        }
+
+        assert {"deleted", "client_id", "version", "last_modified"}.issubset(columns)
+
     def test_link_and_list(self, mdb):
         pid = mdb.create_project("Novel")
         ch_id = mdb.create_chapter(pid, "Ch1")
@@ -379,6 +389,37 @@ class TestSceneCharacterLinking:
         mdb.link_scene_character(scene_id, char_id, is_pov=True)
         linked = mdb.list_scene_characters(scene_id)
         assert linked[0]["is_pov"] == 1
+
+    def test_relink_updates_is_pov(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+
+        mdb.link_scene_character(scene_id, char_id, is_pov=False)
+        mdb.link_scene_character(scene_id, char_id, is_pov=True)
+
+        linked = mdb.list_scene_characters(scene_id)
+        assert linked[0]["is_pov"] == 1
+
+    def test_link_writes_sync_log_entry(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+
+        before = mdb.db.execute_query(
+            "SELECT COUNT(*) AS count FROM sync_log WHERE entity = ?",
+            ("manuscript_scene_characters",),
+        ).fetchone()["count"]
+
+        mdb.link_scene_character(scene_id, char_id, is_pov=True)
+
+        after = mdb.db.execute_query(
+            "SELECT COUNT(*) AS count FROM sync_log WHERE entity = ?",
+            ("manuscript_scene_characters",),
+        ).fetchone()["count"]
+        assert after == before + 1
 
     def test_link_idempotent(self, mdb):
         """INSERT OR IGNORE should not raise on duplicate."""

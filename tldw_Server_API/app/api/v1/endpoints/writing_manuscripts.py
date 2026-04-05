@@ -7,7 +7,7 @@ from typing import Any, NoReturn
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     ChapterSummary,
@@ -69,8 +69,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelper
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_CAPABILITIES
 
@@ -101,30 +99,6 @@ _MANUSCRIPT_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     json.JSONDecodeError,
 )
-
-
-async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
-    """Enforce a rate limit for the given user and scope."""
-    try:
-        allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
-    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
-        retry_after = 60
-        logger.exception(
-            "Rate limiter check failed for user_id={} scope={}",
-            user_id,
-            scope,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable",
-            headers={"Retry-After": str(retry_after)},
-        ) from exc
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded for {scope}",
-            headers={"Retry-After": str(meta.get("retry_after", 60))},
-        )
 
 
 def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
@@ -267,9 +241,23 @@ async def update_project(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptProjectResponse:
     """Update a manuscript project with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
+    update_data: dict[str, Any] = {}
+    if payload.title is not None:
+        update_data["title"] = payload.title.strip()
+    if payload.subtitle is not None:
+        update_data["subtitle"] = payload.subtitle
+    if payload.author is not None:
+        update_data["author"] = payload.author
+    if payload.genre is not None:
+        update_data["genre"] = payload.genre
+    if payload.status is not None:
+        update_data["status"] = payload.status
+    if payload.synopsis is not None:
+        update_data["synopsis"] = payload.synopsis
+    if payload.target_word_count is not None:
+        update_data["target_word_count"] = payload.target_word_count
+    if payload.settings is not None:
+        update_data["settings"] = payload.settings
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -534,9 +522,13 @@ async def update_part(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptPartResponse:
     """Update a manuscript part with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
+    update_data: dict[str, Any] = {}
+    if payload.title is not None:
+        update_data["title"] = payload.title.strip()
+    if payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
+    if payload.synopsis is not None:
+        update_data["synopsis"] = payload.synopsis
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -673,9 +665,17 @@ async def update_chapter(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptChapterResponse:
     """Update a manuscript chapter with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
+    update_data: dict[str, Any] = {}
+    if payload.title is not None:
+        update_data["title"] = payload.title.strip()
+    if payload.part_id is not None:
+        update_data["part_id"] = payload.part_id
+    if payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
+    if payload.synopsis is not None:
+        update_data["synopsis"] = payload.synopsis
+    if payload.status is not None:
+        update_data["status"] = payload.status
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -832,14 +832,22 @@ async def update_scene(
     When ``content`` (TipTap JSON dict) is provided, it is serialised to
     ``content_json`` before storage.
     """
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
-    if "content" in update_data:
-        update_data["content_json"] = json.dumps(update_data.pop("content"))
-    elif "content_plain" in update_data:
+    update_data: dict[str, Any] = {}
+    if payload.title is not None:
+        update_data["title"] = payload.title.strip()
+    if payload.content is not None:
+        update_data["content_json"] = json.dumps(payload.content)
+    elif payload.content_plain is not None:
         # Plain-text-only edit: clear stale rich content so they don't diverge
         update_data["content_json"] = None
+    if payload.content_plain is not None:
+        update_data["content_plain"] = payload.content_plain
+    if payload.synopsis is not None:
+        update_data["synopsis"] = payload.synopsis
+    if payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
+    if payload.status is not None:
+        update_data["status"] = payload.status
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -847,8 +855,6 @@ async def update_scene(
     try:
         helper = _get_helper(db)
         helper.update_scene(scene_id, update_data, expected_version)
-        # Mark any cached analyses for this scene as stale
-        helper.mark_analyses_stale("scene", scene_id)
         scene = helper.get_scene(scene_id)
         if not scene:
             raise HTTPException(
@@ -897,12 +903,9 @@ async def create_character(
     project_id: str,
     payload: ManuscriptCharacterCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptCharacterResponse:
     """Create a new character within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         character_id = helper.create_character(
@@ -942,12 +945,9 @@ async def list_characters(
     role: str | None = Query(None, description="Filter by role"),
     cast_group: str | None = Query(None, description="Filter by cast group"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptCharacterResponse]:
     """List all characters within a project, optionally filtered by role or cast group."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         characters = helper.list_characters(
@@ -967,12 +967,9 @@ async def list_characters(
 async def get_character(
     character_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.get")),
 ) -> ManuscriptCharacterResponse:
     """Fetch a manuscript character by ID."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.get")
     try:
         helper = _get_helper(db)
         character = helper.get_character(character_id)
@@ -996,12 +993,9 @@ async def update_character(
     payload: ManuscriptCharacterUpdate,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptCharacterResponse:
     """Update a manuscript character with optimistic locking."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.update")
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
@@ -1033,12 +1027,9 @@ async def delete_character(
     character_id: str,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Soft-delete a manuscript character."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.soft_delete_character(character_id, expected_version)
@@ -1063,12 +1054,9 @@ async def create_relationship(
     project_id: str,
     payload: ManuscriptRelationshipCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptRelationshipResponse:
     """Create a relationship between two characters."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         rel_id = helper.create_relationship(
@@ -1097,12 +1085,9 @@ async def create_relationship(
 async def list_relationships(
     project_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptRelationshipResponse]:
     """List all character relationships within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         rels = helper.list_relationships(project_id)
@@ -1122,12 +1107,9 @@ async def delete_relationship(
     relationship_id: str,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Soft-delete a character relationship."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.soft_delete_relationship(relationship_id, expected_version)
@@ -1152,12 +1134,9 @@ async def create_world_info(
     project_id: str,
     payload: ManuscriptWorldInfoCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptWorldInfoResponse:
     """Create a new world-info entry within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         item_id = helper.create_world_info(
@@ -1189,12 +1168,9 @@ async def list_world_info(
     project_id: str,
     kind: str | None = Query(None, description="Filter by kind"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptWorldInfoResponse]:
     """List all world-info entries within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         items = helper.list_world_info(project_id, kind_filter=kind)
@@ -1212,12 +1188,9 @@ async def list_world_info(
 async def get_world_info(
     item_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.get")),
 ) -> ManuscriptWorldInfoResponse:
     """Fetch a world-info entry by ID."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.get")
     try:
         helper = _get_helper(db)
         item = helper.get_world_info(item_id)
@@ -1241,12 +1214,9 @@ async def update_world_info(
     payload: ManuscriptWorldInfoUpdate,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptWorldInfoResponse:
     """Update a world-info entry with optimistic locking."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.update")
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
@@ -1278,12 +1248,9 @@ async def delete_world_info(
     item_id: str,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Soft-delete a world-info entry."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.soft_delete_world_info(item_id, expected_version)
@@ -1308,12 +1275,9 @@ async def create_plot_line(
     project_id: str,
     payload: ManuscriptPlotLineCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptPlotLineResponse:
     """Create a new plot line within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         plot_line_id = helper.create_plot_line(
@@ -1342,12 +1306,9 @@ async def create_plot_line(
 async def list_plot_lines(
     project_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptPlotLineResponse]:
     """List all plot lines within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         lines = helper.list_plot_lines(project_id)
@@ -1367,12 +1328,9 @@ async def update_plot_line(
     payload: ManuscriptPlotLineUpdate,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptPlotLineResponse:
     """Update a plot line with optimistic locking."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.update")
     update_data = payload.model_dump(exclude_none=True)
     if "title" in update_data:
         update_data["title"] = update_data["title"].strip()
@@ -1404,12 +1362,9 @@ async def delete_plot_line(
     plot_line_id: str,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Soft-delete a plot line."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.soft_delete_plot_line(plot_line_id, expected_version)
@@ -1434,15 +1389,12 @@ async def create_plot_event(
     plot_line_id: str,
     payload: ManuscriptPlotEventCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptPlotEventResponse:
     """Create a new plot event within a plot line.
 
     The project_id is resolved from the plot line's parent project.
     """
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         # Resolve project_id from the plot line
@@ -1481,12 +1433,9 @@ async def create_plot_event(
 async def list_plot_events(
     plot_line_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptPlotEventResponse]:
     """List all plot events for a plot line."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         events = helper.list_plot_events(plot_line_id)
@@ -1511,12 +1460,9 @@ async def create_plot_hole(
     project_id: str,
     payload: ManuscriptPlotHoleCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptPlotHoleResponse:
     """Create a new plot hole entry."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         hole_id = helper.create_plot_hole(
@@ -1548,12 +1494,9 @@ async def list_plot_holes(
     project_id: str,
     status_filter: str | None = Query(None, alias="status", description="Filter by status"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptPlotHoleResponse]:
     """List all plot holes within a project."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         holes = helper.list_plot_holes(project_id, status_filter=status_filter)
@@ -1573,12 +1516,9 @@ async def update_plot_hole(
     payload: ManuscriptPlotHoleUpdate,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptPlotHoleResponse:
     """Update a plot hole with optimistic locking."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.update")
     update_data = payload.model_dump(exclude_none=True)
     if "title" in update_data:
         update_data["title"] = update_data["title"].strip()
@@ -1610,12 +1550,9 @@ async def delete_plot_hole(
     hole_id: str,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Soft-delete a plot hole."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.soft_delete_plot_hole(hole_id, expected_version)
@@ -1640,12 +1577,9 @@ async def link_scene_character(
     scene_id: str,
     payload: SceneCharacterLink,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> list[SceneCharacterLinkResponse]:
     """Link a character to a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         helper.link_scene_character(scene_id, payload.character_id, is_pov=payload.is_pov)
@@ -1664,12 +1598,9 @@ async def link_scene_character(
 async def list_scene_characters(
     scene_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[SceneCharacterLinkResponse]:
     """List all characters linked to a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         links = helper.list_scene_characters(scene_id)
@@ -1689,12 +1620,9 @@ async def unlink_scene_character(
     scene_id: str,
     character_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Remove the link between a character and a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.unlink_scene_character(scene_id, character_id)
@@ -1719,12 +1647,9 @@ async def link_scene_world_info(
     scene_id: str,
     payload: SceneWorldInfoLink,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> list[SceneWorldInfoLinkResponse]:
     """Link a world-info entry to a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         helper.link_scene_world_info(scene_id, payload.world_info_id)
@@ -1743,12 +1668,9 @@ async def link_scene_world_info(
 async def list_scene_world_info(
     scene_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[SceneWorldInfoLinkResponse]:
     """List all world-info entries linked to a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         links = helper.list_scene_world_info(scene_id)
@@ -1768,12 +1690,9 @@ async def unlink_scene_world_info(
     scene_id: str,
     world_info_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Remove the link between a world-info entry and a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.unlink_scene_world_info(scene_id, world_info_id)
@@ -1798,15 +1717,12 @@ async def create_citation(
     scene_id: str,
     payload: ManuscriptCitationCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.create")),
 ) -> ManuscriptCitationResponse:
     """Create a citation linked to a scene.
 
     The project_id is resolved from the scene's parent project.
     """
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.create")
     try:
         helper = _get_helper(db)
         # Resolve project_id from the scene
@@ -1845,12 +1761,9 @@ async def create_citation(
 async def list_citations(
     scene_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptCitationResponse]:
     """List all citations for a scene."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.list")
     try:
         helper = _get_helper(db)
         citations = helper.list_citations(scene_id)
@@ -1870,12 +1783,9 @@ async def delete_citation(
     citation_id: str,
     expected_version: int = Header(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
 ) -> Response:
     """Soft-delete a citation."""
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.delete")
     try:
         helper = _get_helper(db)
         helper.soft_delete_citation(citation_id, expected_version)
@@ -1899,15 +1809,12 @@ async def research_scene(
     scene_id: str,
     payload: ManuscriptResearchRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.get")),
 ) -> ManuscriptResearchResponse:
     """Search RAG sources relevant to a scene.
 
     This is a stub endpoint. Full RAG integration will be added in a follow-up.
     """
-    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.get")
     try:
         helper = _get_helper(db)
         # Verify scene exists
@@ -2110,21 +2017,9 @@ async def analyze_chapter(
 
 
 def _gather_project_text(helper: ManuscriptDBHelper, project_id: str) -> str:
-    """Collect all scene text across the whole project."""
-    structure = helper.get_project_structure(project_id)
-    all_text_parts: list[str] = []
-    for part in structure.get("parts", []):
-        for ch in part.get("chapters", []):
-            for sc in ch.get("scenes", []):
-                scene = helper.get_scene(sc["id"])
-                if scene:
-                    all_text_parts.append(scene.get("content_plain", "") or "")
-    for ch in structure.get("unassigned_chapters", []):
-        for sc in ch.get("scenes", []):
-            scene = helper.get_scene(sc["id"])
-            if scene:
-                all_text_parts.append(scene.get("content_plain", "") or "")
-    return "\n\n".join(all_text_parts)
+    """Collect all scene text across the whole project in a single query."""
+    all_texts = helper.get_all_scene_texts(project_id)
+    return "\n\n".join(all_texts)
 
 
 def _gather_character_and_world_summaries(

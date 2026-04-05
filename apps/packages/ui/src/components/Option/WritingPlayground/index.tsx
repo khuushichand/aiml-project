@@ -95,6 +95,8 @@ import { WritingPlaygroundInspectorPanel } from "./WritingPlaygroundInspectorPan
 import { CharacterWorldTab } from "./CharacterWorldTab"
 import { ResearchTab } from "./ResearchTab"
 import { AIAgentTab } from "./AIAgentTab"
+import { FeedbackTab } from "./FeedbackTab"
+import { MOOD_COLORS } from "./feedback-constants"
 import { WritingAnalysisModalHost } from "./WritingAnalysisModalHost"
 import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
@@ -118,7 +120,8 @@ import {
   useWritingGenerationSettings,
   useWritingContextComposition,
   useWritingInspectorPanels,
-  useWritingImportExport
+  useWritingImportExport,
+  useWritingFeedback
 } from "./hooks"
 import {
   ADVANCED_NUMBER_PARAMS,
@@ -419,6 +422,16 @@ export const WritingPlayground = () => {
     handleSnapshotImport, handleSessionImport,
     sessionImportDisabled, snapshotImportDisabled, snapshotExportDisabled
   } = importExport
+
+  // =====================================================================
+  // Hook 7: Writing Feedback (mood + echo chamber)
+  // =====================================================================
+  const feedback = useWritingFeedback({
+    editorText,
+    isOnline,
+    isGenerating,
+    selectedModel: selectedModel ?? undefined,
+  })
 
   // --- Diagnostics ---
   const showOffline = !isOnline
@@ -2064,6 +2077,7 @@ export const WritingPlayground = () => {
   const charactersTabContent = <CharacterWorldTab isOnline={isOnline} />
   const researchTabContent = <ResearchTab isOnline={isOnline} />
   const agentTabContent = <AIAgentTab isOnline={isOnline} />
+  const feedbackTabContent = <FeedbackTab {...feedback} />
 
   const inspectorDrawerContent = (
     <div className="p-3">
@@ -2077,7 +2091,8 @@ export const WritingPlayground = () => {
           inspect: t("option:writingPlayground.sidebarInspect", "Analysis"),
           characters: t("option:writingPlayground.sidebarCharacters", "Characters"),
           research: t("option:writingPlayground.sidebarResearch", "Research"),
-          agent: t("option:writingPlayground.sidebarAgent", "Agent")
+          agent: t("option:writingPlayground.sidebarAgent", "Agent"),
+          feedback: t("option:writingPlayground.sidebarFeedback", "Feedback")
         }}
         tabBadges={{
           inspect: responseInspectorRowsAll.length > 0 ? (<Tag color="blue" className="!m-0 !px-1 !text-[10px]">{responseInspectorRowsAll.length}</Tag>) : null
@@ -2119,6 +2134,7 @@ export const WritingPlayground = () => {
         characters={charactersTabContent}
         research={researchTabContent}
         agent={agentTabContent}
+        feedback={feedbackTabContent}
       />
     </div>
   )
@@ -2368,6 +2384,14 @@ export const WritingPlayground = () => {
               {generationTokenCount > 0 && (<span>{t("option:writingPlayground.generationTokensLabel", "{{count}} tokens", { count: generationTokenCount })}</span>)}
               {generationTokensPerSec > 0 && (<span>{t("option:writingPlayground.generationRateLabel", "{{rate}} tok/s", { rate: generationTokensPerSec >= 10 ? generationTokensPerSec.toFixed(1) : generationTokensPerSec.toFixed(2) })}</span>)}
               {isGenerating && generationElapsed > 0 && (<span>{generationElapsed}s</span>)}
+              {feedback.moodEnabled && feedback.currentMood && (
+                <Tag
+                  color={MOOD_COLORS[feedback.currentMood]}
+                  className="!text-xs !m-0"
+                >
+                  {feedback.currentMood}
+                </Tag>
+              )}
               <div className="flex-1" />
               {saveStatusLabel && (<span>{saveStatusLabel}</span>)}
               <span className="text-text-muted/60">{t("option:writingPlayground.shortcutsHint", "Ctrl+Enter to generate")}</span>
