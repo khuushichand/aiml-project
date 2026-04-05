@@ -277,6 +277,18 @@ class TestChapterCRUD:
         assert ch["title"] == "New"
         assert ch["version"] == 2
 
+    def test_update_chapter_part_id(self, mdb):
+        pid = mdb.create_project("Novel")
+        part_a = mdb.create_part(pid, "Part A")
+        part_b = mdb.create_part(pid, "Part B")
+        cid = mdb.create_chapter(pid, "Movable", part_id=part_a)
+
+        mdb.update_chapter(cid, {"part_id": part_b}, expected_version=1)
+
+        ch = mdb.get_chapter(cid)
+        assert ch["part_id"] == part_b
+        assert ch["version"] == 2
+
     def test_update_chapter_version_conflict(self, mdb):
         pid = mdb.create_project("Novel")
         cid = mdb.create_chapter(pid, "Ch")

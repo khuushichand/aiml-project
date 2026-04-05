@@ -57,7 +57,7 @@ _UPDATABLE_PROJECT_COLS = frozenset({
 })
 _UPDATABLE_PART_COLS = frozenset({"title", "sort_order", "synopsis", "word_count"})
 _UPDATABLE_CHAPTER_COLS = frozenset({
-    "title", "status", "sort_order", "synopsis", "pov_character_id", "word_count",
+    "title", "status", "sort_order", "synopsis", "pov_character_id", "word_count", "part_id",
 })
 _UPDATABLE_SCENE_COLS = frozenset({
     "title", "content_json", "content_plain", "status",

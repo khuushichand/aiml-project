@@ -827,8 +827,12 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
   const handleOpenIngestFlow = useCallback(async () => {
     await actions.setUserPersona("researcher")
-    const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
-    await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
+    try {
+      const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
+      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to persist researcher shortcuts", err)
+    }
     await finishAndNavigate("/media", { openQuickIngestIntro: true })
   }, [actions, finishAndNavigate])
 
@@ -855,7 +859,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       console.debug("[OnboardingConnectForm] Failed to open sidepanel", err)
     }
     await finishAndNavigate("/chat")
-  }, [actions, finishAndNavigate])
+  }, [finishAndNavigate])
 
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
