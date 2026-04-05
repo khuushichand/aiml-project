@@ -141,6 +141,22 @@ def _drop_oldest_stream_audio(
     dropper(paused_audio_chunks, dropped_seconds)
 
 
+def _build_transcript_diagnostics_payload(
+    *,
+    auto_commit: bool,
+    vad_status: str,
+    diarization_status: str,
+    diarization_details: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    builder = _load_audio_streaming_unified_attr("_build_transcript_diagnostics")
+    return builder(
+        auto_commit=auto_commit,
+        vad_status=vad_status,
+        diarization_status=diarization_status,
+        diarization_details=diarization_details,
+    )
+
+
 async def _handle_unified_websocket(*args, **kwargs):
     handler = _load_audio_streaming_unified_attr("handle_unified_websocket")
     return await handler(*args, **kwargs)
@@ -1661,6 +1677,7 @@ async def websocket_audio_chat_stream(
 
         turn_detector: Optional[Any] = None
         vad_warning_sent = False
+        vad_status = "disabled"
 
         async def _send_vad_warning(message: str, details: Optional[str]) -> None:
             payload: dict[str, Any] = {
@@ -1679,6 +1696,7 @@ async def websocket_audio_chat_stream(
 
         if config.enable_vad:
             try:
+                vad_status = "fail_open"
                 SileroCls = _shim_silero_cls()
                 turn_detector = SileroCls(
                     sample_rate=config.sample_rate,
@@ -1695,6 +1713,8 @@ async def websocket_audio_chat_stream(
                         turn_detector.unavailable_reason,
                     )
                     turn_detector = None
+                else:
+                    vad_status = "enabled"
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as vad_exc:
                 logger.debug(f"VAD init failed: {vad_exc}")
                 turn_detector = None
@@ -2212,8 +2232,13 @@ async def websocket_audio_chat_stream(
                     # EOS/turn-end anchor used for downstream voice-to-voice metric timing.
                     "voice_to_voice_start": eos_detected_at,
                 }
-                if auto:
-                    payload["auto_commit"] = True
+                payload.update(
+                    _build_transcript_diagnostics_payload(
+                        auto_commit=auto,
+                        vad_status=vad_status,
+                        diarization_status="disabled",
+                    )
+                )
                 if _outer_stream:
                     await _outer_stream.send_json(payload)
 
@@ -2449,12 +2474,14 @@ async def websocket_audio_chat_stream(
         async def _process_chat_audio(audio_bytes: bytes, *, allow_auto_commit: bool) -> None:
             nonlocal turn_detector
             nonlocal vad_warning_sent
+            nonlocal vad_status
             auto_commit_triggered = False
             commit_at = time.time()
             if allow_auto_commit and turn_detector:
                 auto_commit_triggered = turn_detector.observe(audio_bytes)
                 if not turn_detector.available and not vad_warning_sent:
                     vad_warning_sent = True
+                    vad_status = "fail_open"
                     await _send_vad_warning(
                         "Silero VAD disabled; continuing without auto-commit",
                         turn_detector.unavailable_reason,

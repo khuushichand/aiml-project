@@ -197,6 +197,74 @@ def _drop_oldest_buffered_audio(
         )
         remaining = max(0.0, remaining - dropped_chunk_seconds)
 
+
+_VALID_VAD_STATUSES = {"enabled", "disabled", "fail_open"}
+_VALID_DIARIZATION_STATUSES = {"enabled", "disabled", "unavailable"}
+_VALID_DIARIZATION_DETAIL_CODES = {
+    "init_unavailable",
+    "init_failed",
+    "persist_degraded",
+    "persist_disabled",
+    "finalize_failed",
+}
+_DIARIZATION_SUMMARY_MAX_LENGTH = 160
+
+
+def _normalize_stream_diagnostic_status(value: Any, *, allowed: set[str], default: str) -> str:
+    try:
+        normalized = str(value or "").strip().lower()
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        normalized = ""
+    return normalized if normalized in allowed else default
+
+
+def _sanitize_diarization_details(details: Any) -> dict[str, Any] | None:
+    if not isinstance(details, dict):
+        return None
+    code = _normalize_stream_diagnostic_status(
+        details.get("code"),
+        allowed=_VALID_DIARIZATION_DETAIL_CODES,
+        default="",
+    )
+    if not code:
+        return None
+    payload: dict[str, Any] = {"code": code}
+    summary = details.get("summary")
+    if summary is not None:
+        try:
+            summary_text = str(summary).strip()
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+            summary_text = ""
+        if summary_text:
+            payload["summary"] = summary_text[:_DIARIZATION_SUMMARY_MAX_LENGTH]
+    return payload
+
+
+def _build_transcript_diagnostics(
+    *,
+    auto_commit: bool,
+    vad_status: Any,
+    diarization_status: Any,
+    diarization_details: Any = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "auto_commit": bool(auto_commit),
+        "vad_status": _normalize_stream_diagnostic_status(
+            vad_status,
+            allowed=_VALID_VAD_STATUSES,
+            default="disabled",
+        ),
+        "diarization_status": _normalize_stream_diagnostic_status(
+            diarization_status,
+            allowed=_VALID_DIARIZATION_STATUSES,
+            default="unavailable",
+        ),
+    }
+    sanitized_details = _sanitize_diarization_details(diarization_details)
+    if sanitized_details is not None:
+        payload["diarization_details"] = sanitized_details
+    return payload
+
 # Expose get_whisper_model at module scope so tests can monkeypatch it.
 # Keep this lazy: importing Audio_Transcription_Lib at module import time can
 # force heavy dependency imports (e.g., torch/faster-whisper) in test contexts.
@@ -2591,6 +2659,9 @@ async def handle_unified_websocket(
     insights_engine: Optional[LiveMeetingInsights] = None
     diarizer: Optional[StreamingDiarizer] = None
     turn_detector: Optional[SileroTurnDetector] = None
+    vad_status = "disabled"
+    diarization_status = "disabled"
+    diarization_details: dict[str, Any] | None = None
     control_session = WSControlSession(_get_ws_control_protocol_config())
     paused_audio_chunks: deque[tuple[bytes, float]] = deque()
     vad_warning_sent = False
@@ -2785,6 +2856,7 @@ async def handle_unified_websocket(
             transcriber.initialize()
             logger.info(f"Transcriber initialized successfully for model: {config.model}")
             if config.enable_vad:
+                vad_status = "fail_open"
                 turn_detector = SileroTurnDetector(
                     sample_rate=config.sample_rate,
                     enabled=True,
@@ -2799,6 +2871,8 @@ async def handle_unified_websocket(
                         f"Silero VAD unavailable ({turn_detector.unavailable_reason}); continuing without auto-commit"
                     )
                     turn_detector = None
+                else:
+                    vad_status = "enabled"
         except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
             logger.exception(error_msg)
@@ -2914,6 +2988,11 @@ async def handle_unified_websocket(
                 )
                 ready = await diarizer.ensure_ready()
                 if not ready:
+                    diarization_status = "unavailable"
+                    diarization_details = {
+                        "code": "init_unavailable",
+                        "summary": "Diarization disabled: dependencies missing or initialization failed",
+                    }
                     logger.warning("Streaming diarizer unavailable during initialization; disabling diarization.")
                     await stream.send_json({
                         "type": "warning",
@@ -2923,6 +3002,8 @@ async def handle_unified_websocket(
                     })
                     diarizer = None
                 else:
+                    diarization_status = "enabled"
+                    diarization_details = None
                     await stream.send_json({
                         "type": "status",
                         "state": "diarization_enabled",
@@ -2933,6 +3014,11 @@ async def handle_unified_websocket(
                         },
                     })
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
+                diarization_status = "unavailable"
+                diarization_details = {
+                    "code": "init_failed",
+                    "summary": "Diarization disabled: initialization failed",
+                }
                 logger.exception("Failed to initialize streaming diarizer: {}", diar_err)
                 await stream.send_json({
                     "type": "warning",
@@ -2986,21 +3072,9 @@ async def handle_unified_websocket(
                     _eos_detected_at = _commit_ts
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 _eos_detected_at = _final_emit_at
-            payload = {
-                "type": "full_transcript",
-                "text": full_transcript,
-                "timestamp": _final_emit_at,
-                # EOS/turn-end anchor clients can thread into downstream TTS.
-                "voice_to_voice_start": _eos_detected_at,
-            }
-            if auto_commit:
-                payload["auto_commit"] = True
-            if on_full_transcript is not None:
-                try:
-                    await on_full_transcript(full_transcript, auto_commit)
-                except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
-                    logger.debug(f"on_full_transcript callback failed: {cb_exc}")
-            await stream.send_json(payload)
+            transcript_diarization_status = diarization_status
+            transcript_diarization_details = copy.deepcopy(diarization_details)
+            diarization_followup_frames: list[dict[str, Any]] = []
             # Record STT finalization latency metric (commit → final emit)
             try:
                 from tldw_Server_API.app.core.Metrics import get_metrics_registry
@@ -3032,7 +3106,7 @@ async def handle_unified_websocket(
                             }
                             for seg_id, info in sorted(mapping.items())
                         ]
-                        await stream.send_json({
+                        diarization_followup_frames.append({
                             "type": "diarization_summary",
                             "speaker_map": speaker_map,
                             "audio_path": audio_path,
@@ -3045,7 +3119,7 @@ async def handle_unified_websocket(
                             config.diarization_store_audio
                             and (audio_path is None or not audio_path)
                         ):
-                            await stream.send_json({
+                            diarization_followup_frames.append({
                                 "type": "warning",
                                 "warning_type": "audio_persistence_unavailable",
                                 "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
@@ -3054,13 +3128,21 @@ async def handle_unified_websocket(
                         if config.diarization_store_audio:
                             _method = getattr(diarizer, "persistence_method", None)
                             if audio_path and _method and _method != "soundfile":
-                                await stream.send_json({
+                                transcript_diarization_details = {
+                                    "code": "persist_degraded",
+                                    "summary": "Audio persisted using degraded fallback method",
+                                }
+                                diarization_followup_frames.append({
                                     "type": "status",
                                     "state": "diarization_persist_degraded",
                                     "persistence_method": _method,
                                 })
                             elif (not audio_path) or (_method is None):
-                                await stream.send_json({
+                                transcript_diarization_details = {
+                                    "code": "persist_disabled",
+                                    "summary": "Audio persistence unavailable for this session",
+                                }
+                                diarization_followup_frames.append({
                                     "type": "status",
                                     "state": "diarization_persist_disabled",
                                     "persistence_method": _method,
@@ -3068,7 +3150,36 @@ async def handle_unified_websocket(
                     except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
                 except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
+                    transcript_diarization_status = "unavailable"
+                    transcript_diarization_details = {
+                        "code": "finalize_failed",
+                        "summary": "Diarization finalize failed",
+                    }
                     logger.exception("Diarization finalize failed: {}", diar_err)
+
+            payload = {
+                "type": "full_transcript",
+                "text": full_transcript,
+                "timestamp": _final_emit_at,
+                # EOS/turn-end anchor clients can thread into downstream TTS.
+                "voice_to_voice_start": _eos_detected_at,
+            }
+            payload.update(
+                _build_transcript_diagnostics(
+                    auto_commit=auto_commit,
+                    vad_status=vad_status,
+                    diarization_status=transcript_diarization_status,
+                    diarization_details=transcript_diarization_details,
+                )
+            )
+            if on_full_transcript is not None:
+                try:
+                    await on_full_transcript(full_transcript, auto_commit)
+                except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                    logger.debug(f"on_full_transcript callback failed: {cb_exc}")
+            await stream.send_json(payload)
+            for frame in diarization_followup_frames:
+                await stream.send_json(frame)
 
         async def _process_audio_chunk(audio_bytes: bytes) -> bool:
             if transcriber is None:
@@ -3174,6 +3285,7 @@ async def handle_unified_websocket(
                         auto_commit_triggered = turn_detector.observe(audio_bytes)
                         if not turn_detector.available and not vad_warning_sent:
                             vad_warning_sent = True
+                            vad_status = "fail_open"
                             logger.warning(
                                 f"Silero VAD disabled mid-stream ({turn_detector.unavailable_reason}); continuing without auto-commit"
                             )
