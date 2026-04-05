@@ -170,22 +170,26 @@ const readLocalStoragePersona = (key: string): UserPersona => {
   return null
 }
 
+/** Read a single key from chrome.storage.local (extension context only). */
+const chromeStorageGet = (key: string): Promise<string | undefined> =>
+  new Promise((resolve) => {
+    chrome.storage.local.get(key, (res) => {
+      resolve(
+        res && Object.prototype.hasOwnProperty.call(res, key)
+          ? (res[key] as string)
+          : undefined
+      )
+    })
+  })
+
 const getUserPersonaFlag = async (): Promise<UserPersona> => {
   try {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-      return await new Promise<UserPersona>((resolve) => {
-        chrome.storage.local.get(USER_PERSONA_KEY, (res) => {
-          if (res && Object.prototype.hasOwnProperty.call(res, USER_PERSONA_KEY)) {
-            const value = res[USER_PERSONA_KEY]
-            if (typeof value === "string" && VALID_PERSONAS.has(value)) {
-              resolve(value as UserPersona)
-              return
-            }
-          }
-
-          resolve(readLocalStoragePersona(USER_PERSONA_KEY))
-        })
-      })
+      const value = await chromeStorageGet(USER_PERSONA_KEY)
+      if (typeof value === "string" && VALID_PERSONAS.has(value)) {
+        return value as UserPersona
+      }
+      return readLocalStoragePersona(USER_PERSONA_KEY)
     }
   } catch {
     // ignore storage read errors

@@ -59,6 +59,10 @@ from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     SceneWorldInfoLink,
     SceneWorldInfoLinkResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chat.chat_service import is_model_known_for_provider
+from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -66,6 +70,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelper
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_CAPABILITIES
 
 router = APIRouter()
 
@@ -106,11 +111,10 @@ def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
     if isinstance(exc, ConflictError):
         message = str(exc)
         lowered = message.lower()
-        # "version conflict or not found" is an optimistic-locking violation, not a pure 404
-        if "version conflict" in lowered:
-            logger.warning("Conflict error for {}: {}", entity_label, exc)
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message) from exc
-        if "not found" in lowered or "soft-deleted" in lowered or "soft deleted" in lowered:
+        # Check "not found" / "soft-deleted" first — the message may also contain
+        # "version conflict" (e.g. "version conflict or not found"), and a pure 404
+        # should not be reported as 409.
+        if ("not found" in lowered or "soft-deleted" in lowered or "soft deleted" in lowered) and "version conflict" not in lowered:
             logger.debug("Entity not found for {}: {}", entity_label, exc)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"{entity_label} not found"
@@ -322,6 +326,7 @@ async def get_project_structure(
                 sort_order=s["sort_order"],
                 word_count=s.get("word_count", 0),
                 status=s.get("status", "draft"),
+                version=s.get("version", 1),
             )
 
         def _chapter_summary(c: dict[str, Any]) -> ChapterSummary:
@@ -332,6 +337,7 @@ async def get_project_structure(
                 part_id=c.get("part_id"),
                 word_count=c.get("word_count", 0),
                 status=c.get("status", "draft"),
+                version=c.get("version", 1),
                 scenes=[_scene_summary(s) for s in c.get("scenes", [])],
             )
 
@@ -341,6 +347,7 @@ async def get_project_structure(
                 title=p["title"],
                 sort_order=p["sort_order"],
                 word_count=p.get("word_count", 0),
+                version=p.get("version", 1),
                 chapters=[_chapter_summary(c) for c in p.get("chapters", [])],
             )
 
@@ -375,14 +382,14 @@ async def reorder_entities(
 
     items = []
     for item in payload.items:
-        entry: dict[str, Any] = {"id": item.id, "sort_order": item.sort_order}
+        entry: dict[str, Any] = {"id": item.id, "sort_order": item.sort_order, "version": item.version}
         if item.new_parent_id is not None and entity_type == "chapter":
             entry["part_id"] = item.new_parent_id
         items.append(entry)
 
     try:
         helper = _get_helper(db)
-        helper.reorder_items(entity_type, items)
+        helper.reorder_items(entity_type, items, project_id=project_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "manuscript reorder")
@@ -740,7 +747,7 @@ async def create_scene(
             )
         project_id = chapter["project_id"]
 
-        content_json = "{}"
+        content_json = None
         if payload.content is not None:
             content_json = json.dumps(payload.content)
 
@@ -830,6 +837,9 @@ async def update_scene(
         update_data["title"] = payload.title.strip()
     if payload.content is not None:
         update_data["content_json"] = json.dumps(payload.content)
+    elif payload.content_plain is not None:
+        # Plain-text-only edit: clear stale rich content so they don't diverge
+        update_data["content_json"] = None
     if payload.content_plain is not None:
         update_data["content_plain"] = payload.content_plain
     if payload.synopsis is not None:
@@ -989,8 +999,6 @@ async def update_character(
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
-    if "custom_fields" in update_data:
-        update_data["custom_fields_json"] = json.dumps(update_data.pop("custom_fields"))
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1060,9 +1068,7 @@ async def create_relationship(
             bidirectional=payload.bidirectional,
             relationship_id=payload.id,
         )
-        # Fetch the created relationship from the list (no get_relationship helper)
-        rels = helper.list_relationships(project_id)
-        rel = next((r for r in rels if r["id"] == rel_id), None)
+        rel = helper.get_relationship(rel_id)
         if not rel:
             raise CharactersRAGDBError("Relationship created but could not be retrieved")
         return ManuscriptRelationshipResponse(**rel)
@@ -1214,10 +1220,6 @@ async def update_world_info(
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
-    if "properties" in update_data:
-        update_data["properties_json"] = json.dumps(update_data.pop("properties"))
-    if "tags" in update_data:
-        update_data["tags_json"] = json.dumps(update_data.pop("tags"))
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1414,8 +1416,7 @@ async def create_plot_event(
             sort_order=payload.sort_order,
             event_id=payload.id,
         )
-        events = helper.list_plot_events(plot_line_id)
-        event = next((e for e in events if e["id"] == event_id), None)
+        event = helper.get_plot_event(event_id)
         if not event:
             raise CharactersRAGDBError("Plot event created but could not be retrieved")
         return ManuscriptPlotEventResponse(**event)
@@ -1743,8 +1744,7 @@ async def create_citation(
             anchor_offset=payload.anchor_offset,
             citation_id=payload.id,
         )
-        citations = helper.list_citations(scene_id)
-        citation = next((c for c in citations if c["id"] == citation_id), None)
+        citation = helper.get_citation(citation_id)
         if not citation:
             raise CharactersRAGDBError("Citation created but could not be retrieved")
         return ManuscriptCitationResponse(**citation)
@@ -1837,6 +1837,60 @@ async def research_scene(
 _VALID_ANALYSIS_TYPES = {"pacing", "plot_holes", "consistency"}
 
 
+def _normalize_analysis_override(value: str | None) -> str | None:
+    """Normalize optional provider/model override strings."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _validate_analysis_overrides(
+    *,
+    provider: str | None,
+    model: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate analysis provider/model overrides against configured allowlists."""
+    normalized_provider = _normalize_analysis_override(provider)
+    normalized_model = _normalize_analysis_override(model)
+
+    provider_manager = get_provider_manager()
+    configured_providers = {
+        str(entry).strip().lower()
+        for entry in getattr(provider_manager, "providers", [])
+        if str(entry).strip()
+    }
+    fallback_known_providers = {key.strip().lower() for key in PROVIDER_CAPABILITIES.keys()}
+    allowed_providers = configured_providers or fallback_known_providers
+
+    if normalized_provider:
+        provider_key = normalized_provider.lower()
+        if provider_key not in allowed_providers:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown analysis provider override: {normalized_provider}",
+            )
+    else:
+        provider_key = (
+            str(getattr(provider_manager, "primary_provider", "")).strip().lower() or None
+        )
+
+    if normalized_model:
+        if not provider_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Model override requires a configured analysis provider",
+            )
+        model_known = is_model_known_for_provider(provider_key, normalized_model)
+        if model_known is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown model override '{normalized_model}' for provider '{provider_key}'",
+            )
+
+    return normalized_provider, normalized_model
+
+
 @router.post(
     "/scenes/{scene_id}/analyze",
     response_model=list[ManuscriptAnalysisResponse],
@@ -1847,10 +1901,17 @@ async def analyze_scene(
     scene_id: str,
     payload: ManuscriptAnalysisRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
 ) -> list[ManuscriptAnalysisResponse]:
     """Run one or more LLM-powered analyses on a single scene."""
     try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
         helper = _get_helper(db)
         scene = helper.get_scene(scene_id)
         if not scene:
@@ -1866,13 +1927,13 @@ async def analyze_scene(
         results: list[ManuscriptAnalysisResponse] = []
         for analysis_type in payload.analysis_types:
             if analysis_type == "pacing":
-                result = await analyze_pacing(text, provider=payload.provider, model=payload.model)
+                result = await analyze_pacing(text, provider=provider_override, model=model_override)
                 score = result.get("pacing") if isinstance(result.get("pacing"), (int, float)) else None
             elif analysis_type == "plot_holes":
-                result = await _analyze_plot_holes(text, provider=payload.provider, model=payload.model)
+                result = await _analyze_plot_holes(text, provider=provider_override, model=model_override)
                 score = None
             elif analysis_type == "consistency":
-                result = await _analyze_consistency(text, provider=payload.provider, model=payload.model)
+                result = await _analyze_consistency(text, provider=provider_override, model=model_override)
                 score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
             else:
                 result = {"error": f"Unknown analysis type: {analysis_type}"}
@@ -1880,7 +1941,7 @@ async def analyze_scene(
 
             aid = helper.create_analysis(
                 scene["project_id"], "scene", scene_id, analysis_type,
-                result, score=score, provider=payload.provider, model=payload.model,
+                result, score=score, provider=provider_override, model=model_override,
             )
             analysis = helper.get_analysis(aid)
             if analysis:
@@ -1901,10 +1962,17 @@ async def analyze_chapter(
     chapter_id: str,
     payload: ManuscriptAnalysisRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
 ) -> list[ManuscriptAnalysisResponse]:
     """Run LLM analysis across all scenes in a chapter."""
     try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
         helper = _get_helper(db)
         chapter = helper.get_chapter(chapter_id)
         if not chapter:
@@ -1923,13 +1991,13 @@ async def analyze_chapter(
         results: list[ManuscriptAnalysisResponse] = []
         for analysis_type in payload.analysis_types:
             if analysis_type == "pacing":
-                result = await analyze_pacing(combined_text, provider=payload.provider, model=payload.model)
+                result = await analyze_pacing(combined_text, provider=provider_override, model=model_override)
                 score = result.get("pacing") if isinstance(result.get("pacing"), (int, float)) else None
             elif analysis_type == "plot_holes":
-                result = await _analyze_plot_holes(combined_text, provider=payload.provider, model=payload.model)
+                result = await _analyze_plot_holes(combined_text, provider=provider_override, model=model_override)
                 score = None
             elif analysis_type == "consistency":
-                result = await _analyze_consistency(combined_text, provider=payload.provider, model=payload.model)
+                result = await _analyze_consistency(combined_text, provider=provider_override, model=model_override)
                 score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
             else:
                 result = {"error": f"Unknown analysis type: {analysis_type}"}
@@ -1937,7 +2005,7 @@ async def analyze_chapter(
 
             aid = helper.create_analysis(
                 chapter["project_id"], "chapter", chapter_id, analysis_type,
-                result, score=score, provider=payload.provider, model=payload.model,
+                result, score=score, provider=provider_override, model=model_override,
             )
             analysis = helper.get_analysis(aid)
             if analysis:

@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import importlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -53,6 +55,10 @@ def client(tmp_path, monkeypatch):
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
+    class _NoopRateLimiter:
+        async def check_user_rate_limit(self, *_args, **_kwargs):
+            return True, {}
+
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     def override_db():
@@ -70,6 +76,7 @@ def client(tmp_path, monkeypatch):
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db
+    fastapi_app.dependency_overrides[get_rate_limiter_dep] = lambda: _NoopRateLimiter()
 
     with TestClient(fastapi_app) as c:
         yield c
@@ -201,6 +208,26 @@ def test_analyze_scene_rejects_invalid_analysis_types(
     assert expected_fragment in resp.text
 
 
+@pytest.mark.parametrize("scope", ["scene", "chapter"])
+def test_analysis_endpoints_enforce_runtime_rate_limit(client: TestClient, scope: str):
+    """Scene/chapter analysis endpoints should surface 429 when runtime limits deny the call."""
+    _project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
+
+    class _RejectingRateLimiter:
+        async def check_user_rate_limit(self, *_args, **_kwargs):
+            return False, {"retry_after": 13}
+
+    client.app.dependency_overrides[get_rate_limiter_dep] = lambda: _RejectingRateLimiter()
+    target_id = scene_id if scope == "scene" else chapter_id
+    resp = client.post(
+        f"{PREFIX}/{scope}s/{target_id}/analyze",
+        json={"analysis_types": ["pacing"]},
+    )
+
+    assert resp.status_code == 429, resp.text
+    assert resp.headers["Retry-After"] == "13"
+
+
 def test_list_analyses(client: TestClient):
     """Create multiple analyses, list them, verify count."""
     project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
@@ -293,6 +320,63 @@ def test_stale_after_update(client: TestClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 0
+
+
+def test_analyze_scene_rejects_unknown_analysis_type(client: TestClient):
+    """Invalid analysis types should be rejected at request validation time."""
+    _project_id, _chapter_id, scene_id = _create_project_chapter_scene(client)
+    resp = client.post(
+        f"{PREFIX}/scenes/{scene_id}/analyze",
+        json={"analysis_types": ["made_up_analysis"]},
+    )
+
+    assert resp.status_code == 422, resp.text
+
+
+def test_analyze_scene_rejects_unknown_provider_override(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """Provider overrides must be validated against the configured allowlist."""
+    _project_id, _chapter_id, scene_id = _create_project_chapter_scene(client)
+    import tldw_Server_API.app.api.v1.endpoints.writing_manuscripts as writing_endpoint
+
+    monkeypatch.setattr(
+        writing_endpoint,
+        "get_provider_manager",
+        lambda: SimpleNamespace(providers=["openai"], primary_provider="openai"),
+    )
+    monkeypatch.setattr(writing_endpoint, "is_model_known_for_provider", lambda *_args, **_kwargs: True)
+
+    resp = client.post(
+        f"{PREFIX}/scenes/{scene_id}/analyze",
+        json={"analysis_types": ["pacing"], "provider": "totally-invalid", "model": "gpt-4o-mini"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "provider" in resp.json()["detail"].lower()
+
+
+def test_analyze_scene_rejects_unknown_model_override(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """Model overrides must be validated for the chosen provider."""
+    _project_id, _chapter_id, scene_id = _create_project_chapter_scene(client)
+    import tldw_Server_API.app.api.v1.endpoints.writing_manuscripts as writing_endpoint
+
+    monkeypatch.setattr(
+        writing_endpoint,
+        "get_provider_manager",
+        lambda: SimpleNamespace(providers=["openai"], primary_provider="openai"),
+    )
+    monkeypatch.setattr(
+        writing_endpoint,
+        "is_model_known_for_provider",
+        lambda provider, model: False if provider == "openai" and model == "bad-model" else True,
+    )
+
+    resp = client.post(
+        f"{PREFIX}/scenes/{scene_id}/analyze",
+        json={"analysis_types": ["pacing"], "provider": "openai", "model": "bad-model"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "model" in resp.json()["detail"].lower()
 
 
 def test_analyze_plot_holes_project(client: TestClient):

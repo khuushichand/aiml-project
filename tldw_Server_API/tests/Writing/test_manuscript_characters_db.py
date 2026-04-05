@@ -24,6 +24,20 @@ def mdb(tmp_path):
     return ManuscriptDBHelper(db)
 
 
+def _sync_log_payloads(mdb: ManuscriptDBHelper, entity_id: str) -> list[tuple[str, dict[str, object]]]:
+    with mdb.db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT operation, payload
+            FROM sync_log
+            WHERE entity = 'manuscript_characters' AND entity_id = ?
+            ORDER BY rowid
+            """,
+            (entity_id,),
+        ).fetchall()
+    return [(row["operation"], json.loads(row["payload"])) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # Character CRUD
 # ---------------------------------------------------------------------------
@@ -176,40 +190,79 @@ class TestCharacterCRUD:
         assert ch["arc_summary"] == "Learns courage"
         assert ch["notes"] == "Main character"
 
-    def test_character_sync_payload_includes_extended_fields(self, mdb):
+    def test_character_sync_log_payload_includes_extended_fields_for_create_update_and_undelete(self, mdb):
         pid = mdb.create_project("Novel")
         cid = mdb.create_character(
             pid,
             "Alice",
-            full_name="Alice Wonderland",
+            role="protagonist",
+            cast_group="heroes",
+            full_name="Alice Liddell",
             age="25",
             gender="female",
-            appearance="Tall, blonde",
+            appearance="Tall",
             personality="Curious",
             backstory="Rabbit hole",
-            motivation="Go home",
+            motivation="Get home",
             arc_summary="Learns courage",
-            notes="Main character",
+            notes="Original notes",
             custom_fields={"hair": "blonde"},
         )
 
-        row = mdb.db.execute_query(
-            "SELECT payload FROM sync_log WHERE entity = ? AND entity_id = ? "
-            "ORDER BY change_id DESC LIMIT 1",
-            ("manuscript_characters", cid),
-        ).fetchone()
+        create_op, create_payload = _sync_log_payloads(mdb, cid)[-1]
+        assert create_op == "create"
+        assert create_payload["full_name"] == "Alice Liddell"
+        assert create_payload["age"] == "25"
+        assert create_payload["gender"] == "female"
+        assert create_payload["appearance"] == "Tall"
+        assert create_payload["personality"] == "Curious"
+        assert create_payload["backstory"] == "Rabbit hole"
+        assert create_payload["motivation"] == "Get home"
+        assert create_payload["arc_summary"] == "Learns courage"
+        assert create_payload["notes"] == "Original notes"
+        assert json.loads(create_payload["custom_fields_json"]) == {"hair": "blonde"}
 
-        payload = json.loads(row["payload"])
-        assert payload["full_name"] == "Alice Wonderland"
-        assert payload["age"] == "25"
-        assert payload["gender"] == "female"
-        assert payload["appearance"] == "Tall, blonde"
-        assert payload["personality"] == "Curious"
-        assert payload["backstory"] == "Rabbit hole"
-        assert payload["motivation"] == "Go home"
-        assert payload["arc_summary"] == "Learns courage"
-        assert payload["notes"] == "Main character"
-        assert payload["custom_fields_json"] == json.dumps({"hair": "blonde"})
+        mdb.update_character(
+            cid,
+            {
+                "age": "26",
+                "gender": "woman",
+                "notes": "Updated notes",
+                "custom_fields": {"hair": "auburn", "eyes": "green"},
+            },
+            expected_version=1,
+        )
+        update_op, update_payload = _sync_log_payloads(mdb, cid)[-1]
+        assert update_op == "update"
+        assert update_payload["age"] == "26"
+        assert update_payload["gender"] == "woman"
+        assert update_payload["notes"] == "Updated notes"
+        assert json.loads(update_payload["custom_fields_json"]) == {"hair": "auburn", "eyes": "green"}
+
+        mdb.soft_delete_character(cid, expected_version=2)
+        with mdb.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE manuscript_characters
+                SET deleted = 0, last_modified = CURRENT_TIMESTAMP, version = ?, client_id = ?
+                WHERE id = ?
+                """,
+                (4, mdb.db.client_id, cid),
+            )
+
+        undelete_op, undelete_payload = _sync_log_payloads(mdb, cid)[-1]
+        assert undelete_op == "update"
+        assert undelete_payload["deleted"] == 0
+        assert undelete_payload["full_name"] == "Alice Liddell"
+        assert undelete_payload["age"] == "26"
+        assert undelete_payload["gender"] == "woman"
+        assert undelete_payload["appearance"] == "Tall"
+        assert undelete_payload["personality"] == "Curious"
+        assert undelete_payload["backstory"] == "Rabbit hole"
+        assert undelete_payload["motivation"] == "Get home"
+        assert undelete_payload["arc_summary"] == "Learns courage"
+        assert undelete_payload["notes"] == "Updated notes"
+        assert json.loads(undelete_payload["custom_fields_json"]) == {"hair": "auburn", "eyes": "green"}
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +325,34 @@ class TestCharacterRelationships:
         rels = mdb.list_relationships(pid)
         assert len(rels) == 3
 
+    def test_get_relationship(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "sibling", description="Twins")
+        rel = mdb.get_relationship(rel_id)
+        assert rel is not None
+        assert rel["relationship_type"] == "sibling"
+        assert rel["from_character_id"] == c1
+        assert rel["to_character_id"] == c2
+        assert rel["description"] == "Twins"
+
+    def test_get_relationship_missing(self, mdb):
+        assert mdb.get_relationship("nonexistent") is None
+
+    def test_get_relationship_deleted(self, mdb):
+        pid = mdb.create_project("Novel")
+        c1 = mdb.create_character(pid, "Alice")
+        c2 = mdb.create_character(pid, "Bob")
+        rel_id = mdb.create_relationship(pid, c1, c2, "rival")
+        mdb.soft_delete_relationship(rel_id, expected_version=1)
+        assert mdb.get_relationship(rel_id) is None
+
+    def test_update_character_rejects_unknown_column(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(pid, "Alice")
+        with pytest.raises(ValueError, match="Unknown update column"):
+            mdb.update_character(cid, {"malicious_col": "x"}, expected_version=1)
 
 # ---------------------------------------------------------------------------
 # Scene-Character Linking

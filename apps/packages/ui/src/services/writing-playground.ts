@@ -387,6 +387,90 @@ export type WritingDefaultsResponse = {
   themes: WritingDefaultTheme[]
 }
 
+export type ManuscriptSceneResponse = {
+  id: string
+  chapter_id: string
+  project_id: string
+  title: string
+  content_json?: string | null
+  content_plain?: string | null
+  version: number
+}
+
+export type ManuscriptCharacter = {
+  id: string
+  project_id: string
+  name: string
+  role: string
+}
+
+export type ManuscriptCharacterListResponse = {
+  characters: ManuscriptCharacter[]
+  total: number
+}
+
+export type ManuscriptRelationship = {
+  id: string
+  relationship_type: string
+  from_character_id?: string
+  to_character_id?: string
+  character_a_id?: string
+  character_b_id?: string
+}
+
+export type ManuscriptRelationshipListResponse = {
+  relationships: ManuscriptRelationship[]
+  total: number
+}
+
+export type ManuscriptWorldInfoItem = {
+  id: string
+  project_id: string
+  name: string
+  kind: string
+}
+
+export type ManuscriptWorldInfoListResponse = {
+  items: ManuscriptWorldInfoItem[]
+  total: number
+}
+
+export type ManuscriptPlotLine = {
+  id: string
+  title: string
+  status: string
+}
+
+export type ManuscriptPlotLineListResponse = {
+  plot_lines: ManuscriptPlotLine[]
+  total: number
+}
+
+export type ManuscriptPlotHole = {
+  id: string
+  title: string
+  severity: string
+}
+
+export type ManuscriptPlotHoleListResponse = {
+  plot_holes: ManuscriptPlotHole[]
+  total: number
+}
+
+export type ManuscriptResearchResult = {
+  id?: string
+  title?: string
+  source_title?: string
+  source_type?: string
+  snippet?: string
+  excerpt?: string
+}
+
+export type ManuscriptResearchResponse = {
+  query: string
+  results: ManuscriptResearchResult[]
+}
+
 export type WritingSnapshotCounts = {
   sessions: number
   templates: number
@@ -825,6 +909,19 @@ export async function searchManuscriptScenes(
   })
 }
 
+export async function reorderManuscriptItems(
+  projectId: string,
+  entityType: "parts" | "chapters" | "scenes",
+  items: { id: string; sort_order: number; version: number; new_parent_id?: string | null }[],
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/reorder` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { entity_type: entityType, items },
+  })
+}
+
 // Scene-level CRUD (needs chapter context for create)
 export async function createManuscriptScene(
   chapterId: string,
@@ -838,7 +935,7 @@ export async function createManuscriptScene(
   })
 }
 
-export async function getManuscriptScene(sceneId: string) {
+export async function getManuscriptScene(sceneId: string): Promise<ManuscriptSceneResponse> {
   return await bgRequest<ManuscriptSceneResponse>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}` as AllowedPath,
     method: "GET",
@@ -866,13 +963,13 @@ export async function updateManuscriptScene(
 export async function listManuscriptCharacters(
   projectId: string,
   params?: { role?: string; cast_group?: string },
-): Promise<ManuscriptCharacterResponse[]> {
+): Promise<ManuscriptCharacterListResponse> {
   const query = new URLSearchParams()
   if (params?.role) query.set("role", params.role)
   if (params?.cast_group) query.set("cast_group", params.cast_group)
   const qs = query.toString()
   const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters${qs ? `?${qs}` : ""}`
-  return await bgRequest<ManuscriptCharacterResponse[]>({
+  return await bgRequest<ManuscriptCharacterListResponse>({
     path: path as AllowedPath,
     method: "GET",
   })
@@ -902,8 +999,8 @@ export async function deleteManuscriptCharacter(characterId: string, version: nu
 
 export async function listManuscriptRelationships(
   projectId: string,
-): Promise<ManuscriptRelationshipResponse[]> {
-  return await bgRequest<ManuscriptRelationshipResponse[]>({
+): Promise<ManuscriptRelationshipListResponse> {
+  return await bgRequest<ManuscriptRelationshipListResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters/relationships` as AllowedPath,
     method: "GET",
   })
@@ -926,12 +1023,12 @@ export async function createManuscriptRelationship(
 export async function listManuscriptWorldInfo(
   projectId: string,
   params?: { kind?: string },
-): Promise<ManuscriptWorldInfoResponse[]> {
+): Promise<ManuscriptWorldInfoListResponse> {
   const query = new URLSearchParams()
   if (params?.kind) query.set("kind", params.kind)
   const qs = query.toString()
   const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/world-info${qs ? `?${qs}` : ""}`
-  return await bgRequest<ManuscriptWorldInfoResponse[]>({
+  return await bgRequest<ManuscriptWorldInfoListResponse>({
     path: path as AllowedPath,
     method: "GET",
   })
@@ -953,8 +1050,8 @@ export async function createManuscriptWorldInfo(
 
 export async function listManuscriptPlotLines(
   projectId: string,
-): Promise<ManuscriptPlotLineResponse[]> {
-  return await bgRequest<ManuscriptPlotLineResponse[]>({
+): Promise<ManuscriptPlotLineListResponse> {
+  return await bgRequest<ManuscriptPlotLineListResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-lines` as AllowedPath,
     method: "GET",
   })
@@ -976,8 +1073,8 @@ export async function createManuscriptPlotLine(
 
 export async function listManuscriptPlotHoles(
   projectId: string,
-): Promise<ManuscriptPlotHoleResponse[]> {
-  return await bgRequest<ManuscriptPlotHoleResponse[]>({
+): Promise<ManuscriptPlotHoleListResponse> {
+  return await bgRequest<ManuscriptPlotHoleListResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-holes` as AllowedPath,
     method: "GET",
   })

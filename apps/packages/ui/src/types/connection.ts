@@ -1,3 +1,5 @@
+export type UserPersona = "family" | "researcher" | "explorer" | null
+
 export enum ConnectionPhase {
   UNCONFIGURED = "unconfigured",
   SEARCHING = "searching",

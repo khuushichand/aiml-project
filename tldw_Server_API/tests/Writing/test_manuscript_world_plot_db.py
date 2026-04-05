@@ -24,6 +24,20 @@ def mdb(tmp_path):
     return ManuscriptDBHelper(db)
 
 
+def _sync_log_payloads(mdb: ManuscriptDBHelper, entity: str, entity_id: str) -> list[tuple[str, dict[str, object]]]:
+    with mdb.db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT operation, payload
+            FROM sync_log
+            WHERE entity = ? AND entity_id = ?
+            ORDER BY rowid
+            """,
+            (entity, entity_id),
+        ).fetchall()
+    return [(row["operation"], json.loads(row["payload"])) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # World Info CRUD
 # ---------------------------------------------------------------------------
@@ -242,6 +256,48 @@ class TestWorldInfoCRUD:
         mdb.soft_delete_world_info(wid, expected_version=1)
         assert len(mdb.list_scene_world_info(scene_id)) == 0
 
+    def test_world_info_sync_log_payload_includes_properties_and_tags(self, mdb):
+        pid = mdb.create_project("Novel")
+        wid = mdb.create_world_info(
+            pid,
+            kind="item",
+            name="Ring",
+            properties={"power": "invisibility"},
+            tags=["artifact", "danger"],
+        )
+
+        create_op, create_payload = _sync_log_payloads(mdb, "manuscript_world_info", wid)[-1]
+        assert create_op == "create"
+        assert json.loads(create_payload["properties_json"]) == {"power": "invisibility"}
+        assert json.loads(create_payload["tags_json"]) == ["artifact", "danger"]
+
+        mdb.update_world_info(
+            wid,
+            {"properties": {"power": "dominion"}, "tags": ["artifact", "cursed"]},
+            expected_version=1,
+        )
+        update_op, update_payload = _sync_log_payloads(mdb, "manuscript_world_info", wid)[-1]
+        assert update_op == "update"
+        assert json.loads(update_payload["properties_json"]) == {"power": "dominion"}
+        assert json.loads(update_payload["tags_json"]) == ["artifact", "cursed"]
+
+        mdb.soft_delete_world_info(wid, expected_version=2)
+        with mdb.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE manuscript_world_info
+                SET deleted = 0, last_modified = CURRENT_TIMESTAMP, version = ?, client_id = ?
+                WHERE id = ?
+                """,
+                (4, mdb.db.client_id, wid),
+            )
+
+        undelete_op, undelete_payload = _sync_log_payloads(mdb, "manuscript_world_info", wid)[-1]
+        assert undelete_op == "update"
+        assert undelete_payload["deleted"] == 0
+        assert json.loads(undelete_payload["properties_json"]) == {"power": "dominion"}
+        assert json.loads(undelete_payload["tags_json"]) == ["artifact", "cursed"]
+
 
 # ---------------------------------------------------------------------------
 # Plot Line CRUD
@@ -442,6 +498,25 @@ class TestPlotEventCRUD:
         events = mdb.list_plot_events(pl_id)
         assert events[0]["event_type"] == "plot"
 
+    def test_get_plot_event(self, mdb):
+        pid = mdb.create_project("Novel")
+        pl_id = mdb.create_plot_line(pid, "Main Quest")
+        pe_id = mdb.create_plot_event(pid, pl_id, "Ring found", event_type="setup")
+        event = mdb.get_plot_event(pe_id)
+        assert event is not None
+        assert event["title"] == "Ring found"
+        assert event["event_type"] == "setup"
+
+    def test_get_plot_event_missing(self, mdb):
+        assert mdb.get_plot_event("nonexistent") is None
+
+    def test_get_plot_event_deleted(self, mdb):
+        pid = mdb.create_project("Novel")
+        pl_id = mdb.create_plot_line(pid, "Quest")
+        pe_id = mdb.create_plot_event(pid, pl_id, "Event")
+        mdb.soft_delete_plot_event(pe_id, expected_version=1)
+        assert mdb.get_plot_event(pe_id) is None
+
 
 # ---------------------------------------------------------------------------
 # Plot Hole CRUD
@@ -636,6 +711,31 @@ class TestCitationCRUD:
         cit_id = mdb.create_citation(pid, scene_id, source_type="note")
         with pytest.raises(ConflictError):
             mdb.soft_delete_citation(cit_id, expected_version=99)
+
+    def test_get_citation(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="S1", content_plain="text")
+        cit_id = mdb.create_citation(
+            pid, scene_id, source_type="media_db",
+            source_title="Wikipedia", excerpt="Key fact",
+        )
+        cit = mdb.get_citation(cit_id)
+        assert cit is not None
+        assert cit["source_title"] == "Wikipedia"
+        assert cit["source_type"] == "media_db"
+        assert cit["excerpt"] == "Key fact"
+
+    def test_get_citation_missing(self, mdb):
+        assert mdb.get_citation("nonexistent") is None
+
+    def test_get_citation_deleted(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="S1", content_plain="text")
+        cit_id = mdb.create_citation(pid, scene_id, source_type="note")
+        mdb.soft_delete_citation(cit_id, expected_version=1)
+        assert mdb.get_citation(cit_id) is None
 
     def test_citations_scoped_to_scene(self, mdb):
         """Citations listed for one scene should not include those from another."""

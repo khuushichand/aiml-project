@@ -116,11 +116,14 @@ export function HeaderShortcuts({
   }, [displayModePreference])
 
   /* ---------- resolved items (respecting user selection) ---------- */
-  const isFiltered = shortcutSelection.length < HEADER_SHORTCUT_IDS.length
-
   const shortcutSelectionSet = useMemo(
     () => new Set(shortcutSelection),
     [shortcutSelection]
+  )
+
+  const isFiltered = useMemo(
+    () => !HEADER_SHORTCUT_IDS.every((id) => shortcutSelectionSet.has(id)),
+    [shortcutSelectionSet]
   )
 
   const resolvedGroups = useMemo(() => {

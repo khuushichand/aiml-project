@@ -698,7 +698,7 @@ export default function DashboardPage() {
             </Alert>
           )}
 
-          <AlertsBanner alerts={alerts} onAcknowledge={handleAcknowledgeAlerts} />
+          <AlertsBanner alerts={alerts} onAcknowledgeAll={handleAcknowledgeAlerts} />
 
           <StatsGrid
             loading={loading}

@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+import json
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +41,12 @@ class ManuscriptProjectUpdate(BaseModel):
     settings: dict[str, Any] | None = Field(None, description="Project settings JSON")
 
 
+class ManuscriptProjectSettings(BaseModel):
+    """Structured manuscript project settings with forward-compatible keys."""
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ManuscriptProjectResponse(BaseModel):
     id: str
     title: str
@@ -48,7 +56,7 @@ class ManuscriptProjectResponse(BaseModel):
     status: str
     synopsis: str | None = None
     target_word_count: int | None = None
-    settings: dict[str, Any] = Field(default_factory=dict)
+    settings: ManuscriptProjectSettings = Field(default_factory=ManuscriptProjectSettings)
     word_count: int = 0
     created_at: datetime
     last_modified: datetime
@@ -175,6 +183,17 @@ class ManuscriptSceneResponse(BaseModel):
     client_id: str
     version: int
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def content(self) -> dict[str, Any] | None:
+        """Parsed TipTap JSON content (mirrors the ``content`` field on create/update)."""
+        if self.content_json is None:
+            return None
+        try:
+            return json.loads(self.content_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Structure tree
@@ -187,6 +206,7 @@ class SceneSummary(BaseModel):
     sort_order: float
     word_count: int = 0
     status: str = "draft"
+    version: int = 1
 
 
 class ChapterSummary(BaseModel):
@@ -196,6 +216,7 @@ class ChapterSummary(BaseModel):
     part_id: str | None = None
     word_count: int = 0
     status: str = "draft"
+    version: int = 1
     scenes: list[SceneSummary] = Field(default_factory=list)
 
 
@@ -204,6 +225,7 @@ class PartSummary(BaseModel):
     title: str
     sort_order: float
     word_count: int = 0
+    version: int = 1
     chapters: list[ChapterSummary] = Field(default_factory=list)
 
 
@@ -221,6 +243,7 @@ class ManuscriptStructureResponse(BaseModel):
 class ReorderItem(BaseModel):
     id: str = Field(..., description="Entity ID")
     sort_order: float = Field(..., description="New sort order")
+    version: int = Field(..., description="Expected version for optimistic locking")
     new_parent_id: str | None = Field(None, description="Optional new parent ID (for reparenting chapters)")
 
 
@@ -592,9 +615,18 @@ class ManuscriptResearchRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=50, description="Maximum number of results to return")
 
 
+class ManuscriptResearchResult(BaseModel):
+    """A single research result item."""
+    source_id: str | None = None
+    title: str
+    excerpt: str | None = None
+    source_type: str | None = None
+    relevance_score: float | None = None
+
+
 class ManuscriptResearchResponse(BaseModel):
     query: str
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[ManuscriptResearchResult] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

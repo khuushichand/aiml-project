@@ -355,7 +355,9 @@ export const GeneralSettings = () => {
           value={userPersona ?? "explorer"}
           onChange={(e) => {
             const val = e.target.value as string
-            void handlePersonaChange(val === "explorer" ? null : (val as UserPersona))
+            handlePersonaChange(val === "explorer" ? null : (val as UserPersona)).catch(
+              (err) => console.error("[GeneralSettings] Failed to change persona", err)
+            )
           }}
           className="flex flex-col gap-2"
         >

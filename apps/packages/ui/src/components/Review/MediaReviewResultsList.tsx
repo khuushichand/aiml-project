@@ -4,8 +4,10 @@ import { Upload } from "lucide-react"
 import type { MediaReviewState, MediaReviewActions } from "@/components/Review/media-review-types"
 import { includesId } from "@/components/Review/media-review-types"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
-
-const FIRST_INGEST_DISMISSED_KEY = "tldw_first_ingest_tutorial_dismissed"
+import {
+  persistFirstIngestDismissed,
+  readFirstIngestDismissed
+} from "@/utils/ftux-storage"
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState
@@ -23,17 +25,22 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
   } = state
 
   const [tutorialDismissed, setTutorialDismissed] = React.useState(() => {
-    try {
-      return localStorage.getItem(FIRST_INGEST_DISMISSED_KEY) === "true"
-    } catch {
-      return false
-    }
+    return readFirstIngestDismissed()
   })
 
   const handleDismissTutorial = React.useCallback(() => {
     setTutorialDismissed(true)
+    persistFirstIngestDismissed()
+  }, [])
+
+  const handleRequestQuickIngestOpen = React.useCallback(() => {
+    requestQuickIngestOpen()
+  }, [])
+
+  const handleShowTutorialAgain = React.useCallback(() => {
+    setTutorialDismissed(false)
     try {
-      localStorage.setItem(FIRST_INGEST_DISMISSED_KEY, "true")
+      localStorage.removeItem(FIRST_INGEST_DISMISSED_KEY)
     } catch {
       // ignore storage errors
     }
@@ -196,14 +203,14 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
             <Input
               placeholder="https://www.youtube.com/watch?v=..."
               className="text-center"
-              onPressEnter={() => requestQuickIngestOpen()}
+              onPressEnter={handleRequestQuickIngestOpen}
               aria-label={t("mediaPage.firstIngest.urlInputLabel", "Paste a URL to ingest") as string}
             />
           </div>
           <Button
             type="primary"
             className="mt-3"
-            onClick={() => requestQuickIngestOpen()}
+            onClick={handleRequestQuickIngestOpen}
           >
             {t("mediaPage.firstIngest.ingestButton", "Ingest")}
           </Button>
@@ -223,7 +230,26 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
           </Button>
         </div>
       ) : (
-        <Empty description={t("mediaPage.noResults", "No results")} />
+        <Empty description={t("mediaPage.noResults", "No results")}>
+          <div className="flex flex-col items-center gap-2">
+            <Button
+              type="primary"
+              icon={<Upload className="inline h-4 w-4 mr-1" />}
+              onClick={handleRequestQuickIngestOpen}
+            >
+              {t("mediaPage.openQuickIngest", "Open Quick Ingest")}
+            </Button>
+            {tutorialDismissed && (
+              <Button
+                type="link"
+                size="small"
+                onClick={handleShowTutorialAgain}
+              >
+                {t("mediaPage.showTutorialAgain", "Show tutorial again")}
+              </Button>
+            )}
+          </div>
+        </Empty>
       )}
     </>
   )

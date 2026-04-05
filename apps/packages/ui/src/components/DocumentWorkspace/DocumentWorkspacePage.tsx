@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useTranslation } from "react-i18next"
+import { useSearchParams } from "react-router-dom"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Alert, Drawer, Tabs, Tooltip } from "antd"
 import {
@@ -647,7 +648,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             message.error(
               t(
                 "option:documentWorkspace.missingFile",
-                "This item was ingested without keeping the original file. Re-ingest with “Keep original file” enabled."
+                "This document's original file was not preserved during ingest. To view it in the workspace, re-upload it using the Upload tab above, or re-ingest it \u2014 newer ingests automatically preserve document files."
               )
             )
             return
@@ -721,6 +722,43 @@ export const DocumentWorkspacePage: React.FC = () => {
     },
     [message, openDocument, registerBlobUrl, setLoadingDocumentId, t]
   )
+
+  // Handle ?open={mediaId} URL parameter for auto-opening documents
+  const [searchParams, setSearchParams] = useSearchParams()
+  const autoOpenId = searchParams.get("open")
+  const autoOpenHandledRef = useRef(false)
+
+  useEffect(() => {
+    if (!autoOpenId) {
+      autoOpenHandledRef.current = false
+      return
+    }
+    if (autoOpenHandledRef.current) return
+    // Wait until we are not already loading another document
+    if (loadingDocumentId !== null) return
+    const mediaId = Number(autoOpenId)
+    if (!Number.isFinite(mediaId) || mediaId <= 0) return
+
+    // Check if this document is already open
+    const alreadyOpen = openDocuments.some((d) => d.id === mediaId)
+    if (alreadyOpen) {
+      // Just clear the param
+      autoOpenHandledRef.current = true
+      setSearchParams((prev) => {
+        prev.delete("open")
+        return prev
+      }, { replace: true })
+      return
+    }
+
+    autoOpenHandledRef.current = true
+    // Remove the param from the URL first so it doesn't re-trigger
+    setSearchParams((prev) => {
+      prev.delete("open")
+      return prev
+    }, { replace: true })
+    void openDocumentById(mediaId)
+  }, [autoOpenId, loadingDocumentId, openDocuments, openDocumentById, setSearchParams])
 
   const loadingAlert =
     loadingDocumentId !== null ? (

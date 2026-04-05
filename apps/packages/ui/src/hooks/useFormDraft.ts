@@ -4,6 +4,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { checkStorageBeforeWrite, notifyStorageWrite } from '@/utils/storage-guard'
+import { estimateUtf8ByteLength } from '@/utils/storage-budget'
 
 export interface FormDraft<T = Record<string, any>> {
   formData: T
@@ -115,7 +117,14 @@ export function useFormDraft<T = Record<string, any>>(
       }
 
       try {
-        localStorage.setItem(storageKey, JSON.stringify(draft))
+        const serialized = JSON.stringify(draft)
+        const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized), storageKey)
+        if (guard.recommendation) {
+          console.warn('[useFormDraft]', guard.recommendation)
+        }
+        // Advisory only — always attempt the write
+        localStorage.setItem(storageKey, serialized)
+        notifyStorageWrite()
         setLastSaved(draft.savedAt)
       } catch (e) {
         // localStorage might be full or disabled

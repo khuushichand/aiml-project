@@ -2,16 +2,21 @@ import { useEffect, useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Button, Empty, Modal, Spin } from "antd"
 import { ZoomIn, ZoomOut, Maximize2 } from "lucide-react"
-import cytoscape, { type Core } from "cytoscape"
+import cytoscape, {
+  type Core,
+  type ElementDefinition,
+  type LayoutOptions,
+  type Stylesheet,
+} from "cytoscape"
 import dagre from "cytoscape-dagre"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import {
   listManuscriptCharacters,
   listManuscriptRelationships,
   listManuscriptWorldInfo,
-  type ManuscriptCharacterResponse,
-  type ManuscriptRelationshipResponse,
-  type ManuscriptWorldInfoResponse,
+  type ManuscriptCharacterListResponse,
+  type ManuscriptRelationshipListResponse,
+  type ManuscriptWorldInfoListResponse,
 } from "@/services/writing-playground"
 
 cytoscape.use(dagre)
@@ -33,19 +38,19 @@ export function ConnectionWebModal({ open, onClose }: ConnectionWebModalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
 
-  const { data: characters = [], isLoading: charsLoading } = useQuery<ManuscriptCharacterResponse[]>({
+  const { data: charsData, isLoading: charsLoading } = useQuery<ManuscriptCharacterListResponse>({
     queryKey: ["manuscript-characters", activeProjectId],
     queryFn: () => listManuscriptCharacters(activeProjectId!),
     enabled: open && !!activeProjectId,
   })
 
-  const { data: relationships = [], isLoading: relsLoading } = useQuery<ManuscriptRelationshipResponse[]>({
+  const { data: relsData, isLoading: relsLoading } = useQuery<ManuscriptRelationshipListResponse>({
     queryKey: ["manuscript-relationships", activeProjectId],
     queryFn: () => listManuscriptRelationships(activeProjectId!),
     enabled: open && !!activeProjectId,
   })
 
-  const { data: worldItems = [], isLoading: worldLoading } = useQuery<ManuscriptWorldInfoResponse[]>({
+  const { data: worldData, isLoading: worldLoading } = useQuery<ManuscriptWorldInfoListResponse>({
     queryKey: ["manuscript-world-info", activeProjectId],
     queryFn: () => listManuscriptWorldInfo(activeProjectId!),
     enabled: open && !!activeProjectId,
@@ -53,21 +58,18 @@ export function ConnectionWebModal({ open, onClose }: ConnectionWebModalProps) {
 
   const isLoading = charsLoading || relsLoading || worldLoading
 
+  const characters = charsData?.characters || []
+  const relationships = relsData?.relationships || []
+  const worldItems = worldData?.items || []
+
   useEffect(() => {
     if (!open || !containerRef.current || isLoading) return
     if (characters.length === 0 && worldItems.length === 0) return
 
     cyRef.current?.destroy()
 
-    const nodes: Array<{ data: { id: string; label: string; type: string } }> = []
-    const edges: Array<{
-      data: {
-        id: string
-        source: string
-        target: string
-        type: string
-      }
-    }> = []
+    const nodes: ElementDefinition[] = []
+    const edges: ElementDefinition[] = []
 
     for (const ch of characters) {
       nodes.push({
@@ -90,79 +92,88 @@ export function ConnectionWebModal({ open, onClose }: ConnectionWebModalProps) {
     }
 
     for (const rel of relationships) {
+      const sourceCharacterId = rel.from_character_id || rel.character_a_id
+      const targetCharacterId = rel.to_character_id || rel.character_b_id
+      if (!sourceCharacterId || !targetCharacterId) {
+        continue
+      }
       edges.push({
         data: {
           id: `rel-${rel.id}`,
-          source: `char-${rel.character_a_id}`,
-          target: `char-${rel.character_b_id}`,
+          source: `char-${sourceCharacterId}`,
+          target: `char-${targetCharacterId}`,
           type: rel.relationship_type || "related",
         },
       })
     }
 
+    const styles: Stylesheet[] = [
+      {
+        selector: "node",
+        style: {
+          label: "data(label)",
+          "font-size": "10px",
+          color: "#111827",
+          "text-wrap": "ellipsis",
+          "text-max-width": "120px",
+          width: 34,
+          height: 34,
+          "background-color": "#6b7280",
+        },
+      },
+      {
+        selector: 'node[type="character"]',
+        style: { "background-color": NODE_COLORS.character },
+      },
+      {
+        selector: 'node[type="location"]',
+        style: {
+          "background-color": NODE_COLORS.location,
+          shape: "round-rectangle",
+        },
+      },
+      {
+        selector: 'node[type="faction"]',
+        style: {
+          "background-color": NODE_COLORS.faction,
+          shape: "diamond",
+        },
+      },
+      {
+        selector: 'node[type="item"]',
+        style: {
+          "background-color": NODE_COLORS.item,
+          shape: "round-triangle",
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          width: 1.5,
+          "line-color": "#94a3b8",
+          "curve-style": "bezier",
+          "target-arrow-shape": "triangle",
+          "target-arrow-color": "#94a3b8",
+          label: "data(type)",
+          "font-size": "8px",
+          color: "#64748b",
+        },
+      },
+    ]
+
+    const layout: LayoutOptions = {
+      name: "dagre",
+      rankDir: "LR",
+      nodeSep: 50,
+      rankSep: 100,
+      animate: false,
+    }
+
     const cy = cytoscape({
       container: containerRef.current,
       elements: [...nodes, ...edges],
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            "font-size": "10px",
-            color: "#111827",
-            "text-wrap": "ellipsis" as any,
-            "text-max-width": "120px",
-            width: 34,
-            height: 34,
-            "background-color": "#6b7280",
-          } as any,
-        },
-        {
-          selector: 'node[type="character"]',
-          style: { "background-color": NODE_COLORS.character } as any,
-        },
-        {
-          selector: 'node[type="location"]',
-          style: {
-            "background-color": NODE_COLORS.location,
-            shape: "round-rectangle",
-          } as any,
-        },
-        {
-          selector: 'node[type="faction"]',
-          style: {
-            "background-color": NODE_COLORS.faction,
-            shape: "diamond",
-          } as any,
-        },
-        {
-          selector: 'node[type="item"]',
-          style: {
-            "background-color": NODE_COLORS.item,
-            shape: "round-triangle",
-          } as any,
-        },
-        {
-          selector: "edge",
-          style: {
-            width: 1.5,
-            "line-color": "#94a3b8",
-            "curve-style": "bezier",
-            "target-arrow-shape": "triangle",
-            "target-arrow-color": "#94a3b8",
-            label: "data(type)",
-            "font-size": "8px",
-            color: "#64748b",
-          } as any,
-        },
-      ],
-      layout: {
-        name: "dagre",
-        rankDir: "LR",
-        nodeSep: 50,
-        rankSep: 100,
-        animate: false,
-      } as any,
+      style: styles,
+      layout,
       minZoom: 0.2,
       maxZoom: 2,
       wheelSensitivity: 0.2,

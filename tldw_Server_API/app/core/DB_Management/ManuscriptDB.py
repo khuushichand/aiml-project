@@ -21,6 +21,7 @@ and follow the existing optimistic-locking / soft-delete conventions.
 """
 
 import json  # noqa: E402
+import sqlite3  # noqa: E402
 import uuid  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -46,6 +47,46 @@ _REORDER_ENTITY_TABLES = {
     "chapter": "manuscript_chapters",
     "scene": "manuscript_scenes",
 }
+
+# Column whitelists for dynamic UPDATE statements — keys are the *caller*
+# names (before any JSON-column mapping performed inside the method).
+_UPDATABLE_PROJECT_COLS = frozenset({
+    "title", "subtitle", "author", "genre", "status",
+    "synopsis", "target_word_count", "word_count",
+    "settings",  # mapped to settings_json by update_project()
+})
+_UPDATABLE_PART_COLS = frozenset({"title", "sort_order", "synopsis", "word_count"})
+_UPDATABLE_CHAPTER_COLS = frozenset({
+    "title", "status", "sort_order", "synopsis", "pov_character_id", "word_count", "part_id",
+})
+_UPDATABLE_SCENE_COLS = frozenset({
+    "title", "content_json", "content_plain", "status",
+    "sort_order", "synopsis", "word_count", "pov_character_id",
+})
+_UPDATABLE_CHARACTER_COLS = frozenset({
+    "name", "role", "cast_group", "full_name", "age", "gender",
+    "appearance", "personality", "backstory", "motivation",
+    "arc_summary", "notes", "sort_order",
+    "custom_fields",  # mapped to custom_fields_json by update_character()
+})
+_UPDATABLE_WORLD_INFO_COLS = frozenset({
+    "kind", "name", "description", "parent_id", "sort_order",
+    "properties", "tags",  # mapped to *_json by update_world_info()
+})
+_UPDATABLE_PLOT_LINE_COLS = frozenset({
+    "title", "description", "status", "color", "sort_order",
+})
+_UPDATABLE_PLOT_EVENT_COLS = frozenset({
+    "title", "description", "plot_line_id", "event_type", "sort_order",
+    "scene_id", "chapter_id",
+})
+_UPDATABLE_PLOT_HOLE_COLS = frozenset({
+    "title", "description", "severity", "status", "resolution",
+    "scene_id", "chapter_id", "plot_line_id", "detected_by",
+})
+_UPDATABLE_CITATION_COLS = frozenset({
+    "source_type", "source_id", "source_title", "excerpt", "query_used", "anchor_offset",
+})
 
 
 def _word_count(text: str | None) -> int:
@@ -144,6 +185,9 @@ class ManuscriptDBHelper:
         except (ValueError, TypeError):
             d["settings"] = {}
         return d
+
+    # Alias used by dev-branch callers (kept for compatibility).
+    _deserialize_project_row = _project_row_to_dict
 
     # Tables eligible for cross-project ownership checks.
     _PROJECT_CHECK_TABLES: frozenset[str] = frozenset({
@@ -298,6 +342,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_PROJECT_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for project: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -412,9 +460,9 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_PART_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for part: {invalid_keys}")  # noqa: TRY003
+        unknown = set(updates) - _UPDATABLE_PART_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for part: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -443,7 +491,10 @@ class ManuscriptDBHelper:
                 )
 
     def soft_delete_part(self, part_id: str, expected_version: int) -> None:
-        """Soft-delete a part with optimistic locking."""
+        """Soft-delete a part with optimistic locking.
+
+        Cascades the soft-delete to all child chapters and their scenes.
+        """
         now = self._now()
         next_version = expected_version + 1
 
@@ -460,6 +511,20 @@ class ManuscriptDBHelper:
                     entity="manuscript_parts",
                     entity_id=part_id,
                 )
+
+            # Cascade to child chapters
+            conn.execute(
+                "UPDATE manuscript_chapters SET deleted = 1, last_modified = ?, client_id = ? "
+                "WHERE part_id = ? AND deleted = 0",
+                (now, self._client_id, part_id),
+            )
+            # Cascade to scenes of those chapters (only non-deleted chapters)
+            conn.execute(
+                "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
+                "WHERE chapter_id IN (SELECT id FROM manuscript_chapters WHERE part_id = ? AND deleted = 0) "
+                "AND deleted = 0",
+                (now, self._client_id, part_id),
+            )
 
     # ------------------------------------------------------------------
     # Chapters
@@ -544,9 +609,9 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_CHAPTER_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for chapter: {invalid_keys}")  # noqa: TRY003
+        unknown = set(updates) - _UPDATABLE_CHAPTER_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for chapter: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -575,7 +640,10 @@ class ManuscriptDBHelper:
                 )
 
     def soft_delete_chapter(self, chapter_id: str, expected_version: int) -> None:
-        """Soft-delete a chapter with optimistic locking."""
+        """Soft-delete a chapter with optimistic locking.
+
+        Cascades the soft-delete to all child scenes.
+        """
         now = self._now()
         next_version = expected_version + 1
 
@@ -593,6 +661,13 @@ class ManuscriptDBHelper:
                     entity_id=chapter_id,
                 )
 
+            # Cascade to child scenes
+            conn.execute(
+                "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
+                "WHERE chapter_id = ? AND deleted = 0",
+                (now, self._client_id, chapter_id),
+            )
+
     # ------------------------------------------------------------------
     # Scenes
     # ------------------------------------------------------------------
@@ -603,7 +678,7 @@ class ManuscriptDBHelper:
         project_id: str,
         *,
         title: str = "Untitled Scene",
-        content_json: str = "{}",
+        content_json: str | None = None,
         content_plain: str = "",
         synopsis: str | None = None,
         sort_order: float = 0,
@@ -680,16 +755,16 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_SCENE_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for scene: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
         # If content_plain changed, recompute word count
         if "content_plain" in updates:
             updates["word_count"] = _word_count(updates["content_plain"])
-
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_SCENE_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for scene: {invalid_keys}")  # noqa: TRY003
 
         set_parts: list[str] = []
         params: list[Any] = []
@@ -771,10 +846,12 @@ class ManuscriptDBHelper:
     # Word-count propagation
     # ------------------------------------------------------------------
 
-    def _propagate_word_counts(self, conn: Any, chapter_id: str, project_id: str) -> None:
+    def _propagate_word_counts(self, conn: sqlite3.Connection, chapter_id: str, project_id: str) -> None:
         """Cascade word counts: scenes -> chapter -> part (if any) -> project.
 
         Must be called inside an existing transaction (receives the connection).
+        Bumps ``version`` and ``client_id`` on each parent so that optimistic
+        locking and sync triggers stay consistent with other mutations.
         """
         now = self._now()
 
@@ -787,8 +864,10 @@ class ManuscriptDBHelper:
         ch_wc = int(ch_wc_row["wc"]) if ch_wc_row else 0
 
         conn.execute(
-            "UPDATE manuscript_chapters SET word_count = ?, last_modified = ? WHERE id = ?",
-            (ch_wc, now, chapter_id),
+            "UPDATE manuscript_chapters "
+            "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE id = ?",
+            (ch_wc, now, self._client_id, chapter_id),
         )
 
         # 2. Determine if the chapter belongs to a part
@@ -808,8 +887,10 @@ class ManuscriptDBHelper:
             part_wc = int(part_wc_row["wc"]) if part_wc_row else 0
 
             conn.execute(
-                "UPDATE manuscript_parts SET word_count = ?, last_modified = ? WHERE id = ?",
-                (part_wc, now, part_id),
+                "UPDATE manuscript_parts "
+                "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE id = ?",
+                (part_wc, now, self._client_id, part_id),
             )
 
         # 3. Project word count = SUM of its non-deleted scenes
@@ -822,8 +903,10 @@ class ManuscriptDBHelper:
         proj_wc = int(proj_wc_row["wc"]) if proj_wc_row else 0
 
         conn.execute(
-            "UPDATE manuscript_projects SET word_count = ?, last_modified = ? WHERE id = ?",
-            (proj_wc, now, project_id),
+            "UPDATE manuscript_projects "
+            "SET word_count = ?, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE id = ?",
+            (proj_wc, now, self._client_id, project_id),
         )
 
     # ------------------------------------------------------------------
@@ -905,22 +988,40 @@ class ManuscriptDBHelper:
         """Full-text search across scene titles, plain content, and synopses.
 
         Returns matching scenes with FTS5 ``snippet()`` highlights.
+
+        .. note::
+            FTS5 is SQLite-only.  A ``NotImplementedError`` is raised if
+            the underlying database does not have the expected FTS table.
         """
+        # Escape FTS5 special characters by wrapping each term in double quotes
+        escaped_query = " ".join(
+            f'"{term.replace(chr(34), chr(34)*2)}"' for term in query.split() if term
+        )
+        if not escaped_query:
+            return []
+
         with self.db.transaction() as conn:
-            rows = conn.execute(
-                """
-                SELECT s.*,
-                       snippet(manuscript_scenes_fts, 1, '<b>', '</b>', '...', 32) AS snippet
-                FROM manuscript_scenes_fts AS fts
-                JOIN manuscript_scenes AS s ON s.rowid = fts.rowid
-                WHERE manuscript_scenes_fts MATCH ?
-                  AND s.project_id = ?
-                  AND s.deleted = 0
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (query, project_id, limit),
-            ).fetchall()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT s.*,
+                           snippet(manuscript_scenes_fts, 1, '<b>', '</b>', '...', 32) AS snippet
+                    FROM manuscript_scenes_fts AS fts
+                    JOIN manuscript_scenes AS s ON s.rowid = fts.rowid
+                    WHERE manuscript_scenes_fts MATCH ?
+                      AND s.project_id = ?
+                      AND s.deleted = 0
+                    ORDER BY rank
+                    LIMIT ?
+                    """,
+                    (escaped_query, project_id, limit),
+                ).fetchall()
+            except Exception as exc:
+                if "no such table" in str(exc).lower():
+                    raise NotImplementedError(
+                        "Full-text search is only supported on SQLite (FTS5)"
+                    ) from exc
+                raise
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -931,6 +1032,8 @@ class ManuscriptDBHelper:
         self,
         entity_type: str,
         items: list[dict[str, Any]],
+        *,
+        project_id: str | None = None,
     ) -> None:
         """Batch-update ``sort_order`` (and optionally ``part_id`` for chapters).
 
@@ -939,9 +1042,13 @@ class ManuscriptDBHelper:
         entity_type:
             One of ``"part"``, ``"chapter"``, ``"scene"``.
         items:
-            A list of dicts, each containing at minimum ``"id"`` and
-            ``"sort_order"``.  For chapters, an optional ``"part_id"`` can
-            be included to reparent.
+            A list of dicts, each containing at minimum ``"id"``,
+            ``"sort_order"``, and ``"version"``.  For chapters, an optional
+            ``"part_id"`` can be included to reparent.  The ``"version"``
+            field enables optimistic locking per item.
+        project_id:
+            When provided, every item is validated to belong to this project
+            before updating.
         """
         table = _REORDER_ENTITY_TABLES.get(entity_type)
         if table is None:
@@ -953,21 +1060,50 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            # Validate project_id boundary when provided
+            if project_id is not None:
+                for item in items:
+                    row = conn.execute(
+                        f"SELECT project_id FROM {table} WHERE id = ? AND deleted = 0",  # nosec B608
+                        (item["id"],),
+                    ).fetchone()
+                    if row is None:
+                        raise ValueError(f"{entity_type} {item['id']!r} not found")
+                    if row["project_id"] != project_id:
+                        raise ValueError(
+                            f"{entity_type} {item['id']!r} does not belong to project {project_id!r}"
+                        )
+
             for item in items:
                 item_id = item["id"]
                 sort_order = item["sort_order"]
+                expected_version = item.get("version")
+
+                # Build version clause when expected_version is provided
+                version_clause = " AND version = ?" if expected_version is not None else ""
+                version_params = (expected_version,) if expected_version is not None else ()
 
                 if entity_type == "chapter" and "part_id" in item:
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE {table} SET sort_order = ?, part_id = ?, "  # nosec B608
-                        "last_modified = ? WHERE id = ? AND deleted = 0",
-                        (sort_order, item["part_id"], now, item_id),
+                        "last_modified = ?, version = version + 1 "
+                        f"WHERE id = ? AND deleted = 0{version_clause}",
+                        (sort_order, item["part_id"], now, item_id) + version_params,
                     )
                 else:
-                    conn.execute(
+                    cur = conn.execute(
                         f"UPDATE {table} SET sort_order = ?, "  # nosec B608
-                        "last_modified = ? WHERE id = ? AND deleted = 0",
-                        (sort_order, now, item_id),
+                        "last_modified = ?, version = version + 1 "
+                        f"WHERE id = ? AND deleted = 0{version_clause}",
+                        (sort_order, now, item_id) + version_params,
+                    )
+
+                if expected_version is not None and cur.rowcount == 0:
+                    raise ConflictError(
+                        f"{entity_type.title()} {item_id!r} reorder failed "
+                        f"(version conflict or not found).",
+                        entity=table,
+                        entity_id=item_id,
                     )
 
     # ==================================================================
@@ -1078,15 +1214,15 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_CHARACTER_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for character: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
         if "custom_fields" in updates:
             updates["custom_fields_json"] = json.dumps(updates.pop("custom_fields"))
-
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_CHARACTER_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for character: {invalid_keys}")  # noqa: TRY003
 
         with self.db.transaction() as conn:
             current_row = conn.execute(
@@ -1218,6 +1354,15 @@ class ManuscriptDBHelper:
             )
         logger.debug("Created relationship {} in project {}", rid, project_id)
         return rid
+
+    def get_relationship(self, relationship_id: str) -> dict[str, Any] | None:
+        """Fetch a relationship by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_character_relationships WHERE id = ? AND deleted = 0",
+                (relationship_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def list_relationships(self, project_id: str) -> list[dict[str, Any]]:
         """List non-deleted relationships for a project."""
@@ -1399,6 +1544,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unknown = set(updates) - _UPDATABLE_WORLD_INFO_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for world_info: {unknown}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1406,10 +1555,6 @@ class ManuscriptDBHelper:
             updates["properties_json"] = json.dumps(updates.pop("properties"))
         if "tags" in updates:
             updates["tags_json"] = json.dumps(updates.pop("tags"))
-
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_WORLD_INFO_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for world info: {invalid_keys}")  # noqa: TRY003
 
         set_parts: list[str] = []
         params: list[Any] = []
@@ -1566,9 +1711,9 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_PLOT_LINE_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for plot line: {invalid_keys}")  # noqa: TRY003
+        unknown = set(updates) - _UPDATABLE_PLOT_LINE_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for plot_line: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -1658,6 +1803,15 @@ class ManuscriptDBHelper:
         logger.debug("Created plot event {} for plot line {}", eid, plot_line_id)
         return eid
 
+    def get_plot_event(self, event_id: str) -> dict[str, Any] | None:
+        """Fetch a plot event by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_plot_events WHERE id = ? AND deleted = 0",
+                (event_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_plot_events(self, plot_line_id: str) -> list[dict[str, Any]]:
         """List non-deleted plot events for a plot line ordered by sort_order."""
         with self.db.transaction() as conn:
@@ -1678,9 +1832,9 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_PLOT_EVENT_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for plot event: {invalid_keys}")  # noqa: TRY003
+        unknown = set(updates) - _UPDATABLE_PLOT_EVENT_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for plot_event: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -1830,9 +1984,9 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
-        invalid_keys = set(updates.keys()) - self._UPDATABLE_PLOT_HOLE_COLS
-        if invalid_keys:
-            raise ValueError(f"Invalid update columns for plot hole: {invalid_keys}")  # noqa: TRY003
+        unknown = set(updates) - _UPDATABLE_PLOT_HOLE_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for plot_hole: {unknown}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -1939,6 +2093,15 @@ class ManuscriptDBHelper:
         logger.debug("Created citation {} for scene {}", cid, scene_id)
         return cid
 
+    def get_citation(self, citation_id: str) -> dict[str, Any] | None:
+        """Fetch a citation by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_citations WHERE id = ? AND deleted = 0",
+                (citation_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_citations(self, scene_id: str) -> list[dict[str, Any]]:
         """List non-deleted citations for a scene."""
         with self.db.transaction() as conn:
@@ -1964,6 +2127,45 @@ class ManuscriptDBHelper:
             if cur.rowcount == 0:
                 raise ConflictError(
                     f"Citation {citation_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_citations",
+                    entity_id=citation_id,
+                )
+    def update_citation(
+        self,
+        citation_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a citation with optimistic locking."""
+        if not updates:
+            return
+
+        unknown = set(updates) - _UPDATABLE_CITATION_COLS
+        if unknown:
+            raise ValueError(f"Unknown update column(s) for citation: {unknown}")
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([citation_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_citations SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Citation {citation_id!r} update failed (version conflict or not found).",
                     entity="manuscript_citations",
                     entity_id=citation_id,
                 )
@@ -1995,8 +2197,20 @@ class ManuscriptDBHelper:
                    (id, project_id, scope_type, scope_id, analysis_type, provider, model,
                     result_json, score, created_at, last_modified, client_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (aid, project_id, scope_type, scope_id, analysis_type, provider, model,
-                 json.dumps(result), score, now, now, self._client_id),
+                (
+                    aid,
+                    project_id,
+                    scope_type,
+                    scope_id,
+                    analysis_type,
+                    provider,
+                    model,
+                    json.dumps(result),
+                    score,
+                    now,
+                    now,
+                    self._client_id,
+                ),
             )
         logger.debug("Created analysis {} ({}) for {} {}", aid, analysis_type, scope_type, scope_id)
         return aid
@@ -2070,9 +2284,10 @@ class ManuscriptDBHelper:
         now = self._now()
         with self.db.transaction() as conn:
             cur = conn.execute(
-                "UPDATE manuscript_ai_analyses SET stale = 1, last_modified = ? "
+                "UPDATE manuscript_ai_analyses "
+                "SET stale = 1, last_modified = ?, version = version + 1, client_id = ? "
                 "WHERE scope_type = ? AND scope_id = ? AND stale = 0 AND deleted = 0",
-                (now, scope_type, scope_id),
+                (now, self._client_id, scope_type, scope_id),
             )
             return cur.rowcount
 
@@ -2080,9 +2295,10 @@ class ManuscriptDBHelper:
         """Mark analyses stale within an existing transaction (no new txn opened)."""
         now = self._now()
         cur = conn.execute(
-            "UPDATE manuscript_ai_analyses SET stale = 1, last_modified = ? "
+            "UPDATE manuscript_ai_analyses "
+            "SET stale = 1, last_modified = ?, version = version + 1, client_id = ? "
             "WHERE scope_type = ? AND scope_id = ? AND stale = 0 AND deleted = 0",
-            (now, scope_type, scope_id),
+            (now, self._client_id, scope_type, scope_id),
         )
         return cur.rowcount
 

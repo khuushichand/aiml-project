@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useMemo } from "react"
+import { useTranslation } from "react-i18next"
 import {
   FileText,
   Globe,
@@ -121,6 +122,7 @@ export function SourceCard({
   density = "default",
   className,
 }: SourceCardProps) {
+  const { t } = useTranslation("knowledge")
   const [copiedState, setCopiedState] = React.useState<"text" | "citation" | null>(null)
   const [isExpanded, setIsExpanded] = React.useState(false)
   const [overflowOpen, setOverflowOpen] = React.useState(false)
@@ -154,6 +156,33 @@ export function SourceCard({
         (value): value is string => Boolean(value)
       )
     : []
+
+  // Determine whether this source is a document that can be opened in the
+  // Document Workspace (PDF, EPUB, or generic "document"/"ebook" media types).
+  const contentFacet = detectSourceContentFacet(result)
+  const rawMediaType = String(
+    (result.metadata as Record<string, unknown> | undefined)?.media_type ?? ""
+  ).toLowerCase()
+  const isDocumentType =
+    contentFacet === "pdf" ||
+    rawMediaType.includes("pdf") ||
+    rawMediaType.includes("ebook") ||
+    rawMediaType === "document"
+
+  // Resolve the numeric media_id from metadata for workspace navigation.
+  const resolvedMediaId = (() => {
+    const raw =
+      (result.metadata as Record<string, unknown> | undefined)?.media_id ??
+      result.metadata?.id ??
+      result.id
+    if (typeof raw === "number" && Number.isFinite(raw)) return Math.round(raw)
+    if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+      return Number.parseInt(raw.trim(), 10)
+    }
+    return null
+  })()
+
+  const canOpenInWorkspace = isDocumentType && resolvedMediaId != null
 
   const Icon = getSourceIcon(sourceType)
 
@@ -618,6 +647,28 @@ export function SourceCard({
                     <ExternalLink className="w-3.5 h-3.5" />
                     Open original
                   </button>
+                )}
+                {canOpenInWorkspace && (
+                  <>
+                    <div className="my-1 border-t border-border/50" role="separator" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-label={t("sourceCard.openInWorkspace", "Open in Document Workspace")}
+                      onClick={() => {
+                        window.open(
+                          `/document-workspace?open=${resolvedMediaId}`,
+                          "_blank",
+                          "noopener,noreferrer"
+                        )
+                        setOverflowOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      {t("sourceCard.openInWorkspace", "Open in Document Workspace")}
+                    </button>
+                  </>
                 )}
               </div>
             )}

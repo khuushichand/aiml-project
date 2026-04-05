@@ -199,6 +199,29 @@ def test_project_list_and_filter(client: TestClient):
     assert any(p["title"] == "Completed Novel B" for p in data["projects"])
 
 
+def test_project_settings_round_trip(client: TestClient):
+    """Project settings survive create/get/list responses."""
+    settings = {"theme": "dark", "editor": {"mode": "focus"}}
+    resp = client.post(
+        f"{PREFIX}/projects",
+        json={"title": "Configured Novel", "settings": settings},
+    )
+    assert resp.status_code == 201, resp.text
+    project = resp.json()
+    project_id = project["id"]
+
+    assert project["settings"] == settings
+
+    resp = client.get(f"{PREFIX}/projects/{project_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"] == settings
+
+    resp = client.get(f"{PREFIX}/projects")
+    assert resp.status_code == 200, resp.text
+    listed = next(item for item in resp.json()["projects"] if item["id"] == project_id)
+    assert listed["settings"] == settings
+
+
 def test_optimistic_locking(client: TestClient):
     """Verify that updating with a stale version returns 409."""
 

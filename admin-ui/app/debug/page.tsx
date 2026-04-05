@@ -427,7 +427,7 @@ export default function DebugPage() {
                           : String(permResult.permissions ?? '—')}
                       </div>
 
-                      {permResult.scopes && (
+                      {Boolean(permResult.scopes) && (
                         <>
                           <div className="text-muted-foreground">Scopes:</div>
                           <div className="font-medium text-xs">
@@ -487,28 +487,28 @@ export default function DebugPage() {
                         {tokenResult.valid === true ? 'Yes' : tokenResult.valid === false ? 'No' : '—'}
                       </div>
 
-                      {tokenResult.sub && (
+                      {Boolean(tokenResult.sub) && (
                         <>
                           <div className="text-muted-foreground">Subject:</div>
                           <div className="font-medium">{String(tokenResult.sub)}</div>
                         </>
                       )}
 
-                      {tokenResult.exp && (
+                      {Boolean(tokenResult.exp) && (
                         <>
                           <div className="text-muted-foreground">Expires:</div>
                           <div className="font-medium">{formatDate(String(tokenResult.exp))}</div>
                         </>
                       )}
 
-                      {tokenResult.iat && (
+                      {Boolean(tokenResult.iat) && (
                         <>
                           <div className="text-muted-foreground">Issued at:</div>
                           <div className="font-medium">{formatDate(String(tokenResult.iat))}</div>
                         </>
                       )}
 
-                      {tokenResult.scopes && (
+                      {Boolean(tokenResult.scopes) && (
                         <>
                           <div className="text-muted-foreground">Scopes:</div>
                           <div className="font-medium text-xs">
@@ -519,7 +519,7 @@ export default function DebugPage() {
                         </>
                       )}
 
-                      {tokenResult.error && (
+                      {Boolean(tokenResult.error) && (
                         <>
                           <div className="text-muted-foreground">Error:</div>
                           <div className="font-medium text-destructive">{String(tokenResult.error)}</div>
@@ -605,7 +605,7 @@ function PermissionResolverTool() {
     if (parsedUserId === null) { setError('Enter a valid positive user ID'); return; }
     setLoading(true); setError(''); setResult(null);
     try {
-      const data = await api.debugResolvePermissions(parsedUserId);
+      const data = await api.debugResolvePermissions(String(parsedUserId));
       setResult(data as unknown as Record<string, unknown>);
     } catch (err) { setError(err instanceof Error ? err.message : 'Failed'); }
     finally { setLoading(false); }

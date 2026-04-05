@@ -4,7 +4,8 @@ import {
   getProcessPathForType,
   inferIngestTypeFromUrl,
   inferUploadMediaTypeFromFile,
-  normalizeMediaType
+  normalizeMediaType,
+  shouldKeepOriginalFile
 } from "@/services/tldw/media-routing"
 import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import {
@@ -65,6 +66,7 @@ type QuickIngestBatchResult = {
   type: string
   data?: unknown
   error?: string
+  persisted?: boolean
 }
 
 type QuickIngestBatchResponse = {
@@ -382,7 +384,8 @@ const buildFields = ({
   common,
   advancedValues,
   chunkingTemplateName,
-  autoApplyTemplate
+  autoApplyTemplate,
+  persist = true
 }: {
   rawType: string
   entry?: QuickIngestEntry
@@ -391,13 +394,15 @@ const buildFields = ({
   advancedValues?: Record<string, any>
   chunkingTemplateName?: string
   autoApplyTemplate?: boolean
+  persist?: boolean
 }): Record<string, any> => {
   const mediaType = normalizeMediaType(rawType)
   const fields: Record<string, any> = {
     media_type: mediaType,
     perform_analysis: Boolean(common?.perform_analysis),
     perform_chunking: resolvePerformChunking(common?.perform_chunking),
-    overwrite_existing: Boolean(common?.overwrite_existing)
+    overwrite_existing: Boolean(common?.overwrite_existing),
+    keep_original_file: persist && shouldKeepOriginalFile(rawType)
   }
 
   const nested: Record<string, any> = {}
@@ -646,7 +651,8 @@ const runDirectQuickIngestBatch = async (
             common: input.common,
             advancedValues: input.advancedValues,
             chunkingTemplateName: input.chunkingTemplateName,
-            autoApplyTemplate: input.autoApplyTemplate
+            autoApplyTemplate: input.autoApplyTemplate,
+            persist: false
           })
           fields.urls = [url]
           data = await bgUpload<any>({
@@ -662,7 +668,8 @@ const runDirectQuickIngestBatch = async (
           status: "ok",
           url,
           type: resolvedType,
-          data
+          data,
+          persisted: false
         })
       } catch (error) {
         out.push({
@@ -693,7 +700,8 @@ const runDirectQuickIngestBatch = async (
           common: input.common,
           advancedValues: input.advancedValues,
           chunkingTemplateName: input.chunkingTemplateName,
-          autoApplyTemplate: input.autoApplyTemplate
+          autoApplyTemplate: input.autoApplyTemplate,
+          persist: shouldStoreRemote
         })
         const uploadFile = {
           name: fileName,
@@ -742,7 +750,8 @@ const runDirectQuickIngestBatch = async (
               status: "ok",
               fileName,
               type: mediaType,
-              data: pollResult.data
+              data: pollResult.data,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(rawType)
             })
           } catch (error) {
             if (!shouldFallbackToPersistentAdd(error)) {
@@ -757,7 +766,8 @@ const runDirectQuickIngestBatch = async (
               status: "ok",
               fileName,
               type: mediaType,
-              data
+              data,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(rawType)
             })
           }
           continue
@@ -776,7 +786,8 @@ const runDirectQuickIngestBatch = async (
           status: "ok",
           fileName,
           type: mediaType,
-          data
+          data,
+          persisted: false
         })
       } catch (error) {
         out.push({

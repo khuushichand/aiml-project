@@ -37,6 +37,7 @@ const mockBlocklist = {
   lintManagedLine: vi.fn().mockResolvedValue(undefined),
   lintLine: vi.fn().mockResolvedValue({ items: [], valid_count: 0, invalid_count: 0 })
 }
+const markMilestone = vi.fn()
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: null, isFetching: false, error: null, refetch: vi.fn() })
@@ -70,6 +71,10 @@ vi.mock("@/services/moderation", () => ({
   testModeration: vi.fn(),
   getUserOverride: vi.fn()
 }))
+vi.mock("@/store/milestones", () => ({
+  useMilestoneStore: (selector: (state: { markMilestone: typeof markMilestone }) => unknown) =>
+    selector({ markMilestone })
+}))
 vi.mock("../hooks/useBlocklist", () => ({
   useBlocklist: () => mockBlocklist
 }))
@@ -83,6 +88,12 @@ describe("ModerationPlaygroundShell", () => {
     connectionState.online = true
     connectionState.uxState = "connected_ok"
     mockBlocklist.isDirtyRaw = false
+  })
+
+  it("marks content rules reviewed when the playground opens", () => {
+    render(<ModerationPlaygroundShell />)
+
+    expect(markMilestone).toHaveBeenCalledWith("content_rules_reviewed")
   })
 
   it("renders 5 tab buttons", () => {
@@ -103,6 +114,16 @@ describe("ModerationPlaygroundShell", () => {
     render(<ModerationPlaygroundShell />)
     fireEvent.click(screen.getByRole("tab", { name: /blocklist/i }))
     expect(await screen.findByText(/syntax reference/i)).toBeInTheDocument()
+  })
+
+  it("marks content rules tested when the test sandbox opens", async () => {
+    render(<ModerationPlaygroundShell />)
+
+    fireEvent.click(screen.getByRole("tab", { name: /test/i }))
+
+    await waitFor(() => {
+      expect(markMilestone).toHaveBeenCalledWith("content_rules_tested")
+    })
   })
 
   it("renders context bar with scope selector", () => {

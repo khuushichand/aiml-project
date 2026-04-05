@@ -22,8 +22,6 @@ export const CitationExtension = Mark.create({
       mergeAttributes(HTMLAttributes, {
         "data-citation": "",
         class: "citation-mark",
-        style:
-          "background: rgba(59, 130, 246, 0.1); border-bottom: 1px dashed #3b82f6; cursor: pointer; padding: 0 2px;",
         title: HTMLAttributes.sourceTitle || "Citation",
       }),
       0,

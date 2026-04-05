@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  Activity,
   BrainCircuit,
   BookMarked,
   BookOpen,
@@ -39,6 +40,7 @@ import {
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
 import { HEADER_SHORTCUT_IDS } from "@/services/settings/ui-settings"
+export { HEADER_SHORTCUT_IDS }
 import type { UserPersona } from "@/types/connection"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
@@ -465,6 +467,13 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "MLX LM Admin"
       },
       {
+        id: "admin-monitoring",
+        to: "/admin/monitoring",
+        icon: Activity,
+        labelKey: "option:header.adminMonitoring",
+        labelDefault: "Monitoring"
+      },
+      {
         id: "settings",
         to: "/settings",
         icon: CogIcon,
@@ -550,13 +559,7 @@ export const PERSONA_SHORTCUT_DEFAULTS: Record<
     "family-guardrails",
     "moderation-playground",
     "guardian",
-    "settings",
-    // required items (always force-included by coercion, listed here for clarity)
-    "workflows",
-    "acp-playground",
-    "integrations",
-    "scheduled-tasks",
-    "admin-integrations"
+    "settings"
   ],
   researcher: [
     "chat",

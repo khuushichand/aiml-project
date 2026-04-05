@@ -73,7 +73,6 @@ const navigationItems = {
   resourceGovernor: { name: 'Resource Governor', href: '/resource-governor', icon: Gauge, role: ['admin', 'super_admin', 'owner'], keywords: ['limits', 'quotas', 'rate limits'] },
   compliance: { name: 'Compliance', href: '/compliance', icon: ShieldCheck, role: ['admin', 'super_admin', 'owner'], keywords: ['compliance', 'posture', 'mfa adoption', 'key rotation', 'score'] },
   security: { name: 'Security', href: '/security', icon: ShieldAlert, role: ['admin', 'super_admin', 'owner'], keywords: ['risk', 'mfa', 'sessions'] },
-  compliance: { name: 'Compliance', href: '/compliance', icon: ShieldCheck, role: ['admin', 'super_admin', 'owner'], keywords: ['posture', 'gdpr', 'audit', 'mfa adoption'] },
   auditLogs: { name: 'Audit Logs', href: '/audit', icon: FileText, permission: 'read:audit', keywords: ['audit', 'events', 'history'] },
   monitoring: { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'], keywords: ['health', 'alerts', 'metrics'] },
   dependencies: { name: 'Dependencies', href: '/dependencies', icon: PlugZap, role: ['admin', 'super_admin', 'owner'], keywords: ['providers', 'connectivity', 'health checks'] },

@@ -121,6 +121,7 @@ class TestAnalysisCRUD:
         assert count == 1
         analysis = mdb.get_analysis(aid)
         assert analysis["stale"] == 1
+        assert analysis["version"] == 2
 
     def test_mark_stale_idempotent(self, mdb):
         pid = mdb.create_project("Novel")
@@ -180,3 +181,32 @@ class TestAnalysisCRUD:
         mdb.update_scene(sid, {"title": "S1 Renamed"}, expected_version=1)
         # Analysis should still be fresh
         assert mdb.get_analysis(aid)["stale"] == 0
+
+    def test_analysis_sync_log_includes_result_json_on_create_and_update(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        sid = mdb.create_scene(ch_id, pid, title="S1", content_json="{}", content_plain="text")
+        result = {"pacing": 0.8, "assessment": "Fast"}
+        aid = mdb.create_analysis(pid, "scene", sid, "pacing", result)
+
+        with mdb.db.transaction() as conn:
+            create_row = conn.execute(
+                "SELECT operation, payload FROM sync_log WHERE entity = ? AND entity_id = ? ORDER BY change_id ASC LIMIT 1",
+                ("manuscript_ai_analyses", aid),
+            ).fetchone()
+        assert create_row is not None
+        create_payload = json.loads(create_row["payload"])
+        assert create_row["operation"] == "create"
+        assert json.loads(create_payload["result_json"]) == result
+
+        assert mdb.mark_analyses_stale("scene", sid) == 1
+
+        with mdb.db.transaction() as conn:
+            update_row = conn.execute(
+                "SELECT operation, payload FROM sync_log WHERE entity = ? AND entity_id = ? ORDER BY change_id DESC LIMIT 1",
+                ("manuscript_ai_analyses", aid),
+            ).fetchone()
+        assert update_row is not None
+        update_payload = json.loads(update_row["payload"])
+        assert update_row["operation"] == "update"
+        assert json.loads(update_payload["result_json"]) == result
