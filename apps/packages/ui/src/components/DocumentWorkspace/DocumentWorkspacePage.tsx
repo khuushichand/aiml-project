@@ -647,8 +647,8 @@ export const DocumentWorkspacePage: React.FC = () => {
           if (status === 404) {
             message.error(
               t(
-                “option:documentWorkspace.missingFile”,
-                “This document's original file was not preserved during ingest. To view it in the workspace, re-upload it using the Upload tab above, or re-ingest it \u2014 newer ingests automatically preserve document files.”
+                "option:documentWorkspace.missingFile",
+                "This document's original file was not preserved during ingest. To view it in the workspace, re-upload it using the Upload tab above, or re-ingest it \u2014 newer ingests automatically preserve document files."
               )
             )
             return
