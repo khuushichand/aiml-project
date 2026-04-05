@@ -128,6 +128,18 @@ class ManuscriptDBHelper:
     def _client_id(self) -> str:
         return self.db.client_id
 
+    def _deserialize_project_row(self, row: Any) -> dict[str, Any]:
+        """Return a project row with ``settings_json`` materialized as ``settings``."""
+        project = dict(row)
+        raw_settings = project.pop("settings_json", "{}")
+        try:
+            parsed_settings = json.loads(raw_settings) if raw_settings else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("Failed to deserialize manuscript project settings for {}", project.get("id"))
+            parsed_settings = {}
+        project["settings"] = parsed_settings if isinstance(parsed_settings, dict) else {}
+        return project
+
     # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
@@ -178,11 +190,7 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["settings"] = json.loads(d.pop("settings_json", "{}"))
-        return d
+        return self._deserialize_project_row(row) if row else None
 
     def list_projects(
         self,
@@ -216,12 +224,7 @@ class ManuscriptDBHelper:
                 [*params, limit, offset],
             ).fetchall()
 
-        results = []
-        for r in rows:
-            d = dict(r)
-            d["settings"] = json.loads(d.pop("settings_json", "{}"))
-            results.append(d)
-        return results, int(total)
+        return [self._deserialize_project_row(r) for r in rows], int(total)
 
     def update_project(
         self,
@@ -679,6 +682,7 @@ class ManuscriptDBHelper:
                 ).fetchone()
                 if row:
                     self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
+                self._mark_analyses_stale_in_txn(conn, "scene", scene_id)
 
     def soft_delete_scene(self, scene_id: str, expected_version: int) -> None:
         """Soft-delete a scene with optimistic locking; propagates word counts."""
@@ -1858,7 +1862,6 @@ class ManuscriptDBHelper:
                     entity="manuscript_citations",
                     entity_id=citation_id,
                 )
-
     def update_citation(
         self,
         citation_id: str,
@@ -1897,4 +1900,151 @@ class ManuscriptDBHelper:
                     f"Citation {citation_id!r} update failed (version conflict or not found).",
                     entity="manuscript_citations",
                     entity_id=citation_id,
+                )
+
+    # ------------------------------------------------------------------
+    # AI Analyses
+    # ------------------------------------------------------------------
+
+    def create_analysis(
+        self,
+        project_id: str,
+        scope_type: str,
+        scope_id: str,
+        analysis_type: str,
+        result: dict,
+        *,
+        score: float | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        analysis_id: str | None = None,
+    ) -> str:
+        """Insert a new AI analysis row and return its ID."""
+        aid = analysis_id or self._uuid()
+        now = self._now()
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO manuscript_ai_analyses
+                   (id, project_id, scope_type, scope_id, analysis_type, provider, model,
+                    result_json, score, created_at, last_modified, client_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    aid,
+                    project_id,
+                    scope_type,
+                    scope_id,
+                    analysis_type,
+                    provider,
+                    model,
+                    json.dumps(result),
+                    score,
+                    now,
+                    now,
+                    self._client_id,
+                ),
+            )
+        logger.debug("Created analysis {} ({}) for {} {}", aid, analysis_type, scope_type, scope_id)
+        return aid
+
+    def get_analysis(self, analysis_id: str) -> dict[str, Any] | None:
+        """Return a single analysis by ID, or None if deleted/missing.
+
+        The ``result_json`` column is deserialized into a ``result`` key.
+        """
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_ai_analyses WHERE id = ? AND deleted = 0",
+                (analysis_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["result"] = json.loads(d.pop("result_json", "{}"))
+        return d
+
+    def list_analyses(
+        self,
+        project_id: str,
+        *,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+        analysis_type: str | None = None,
+        include_stale: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List non-deleted analyses for a project with optional filters.
+
+        By default stale analyses are excluded unless *include_stale* is True.
+        """
+        clauses = ["project_id = ?", "deleted = 0"]
+        params: list[Any] = [project_id]
+
+        if not include_stale:
+            clauses.append("stale = 0")
+        if scope_type is not None:
+            clauses.append("scope_type = ?")
+            params.append(scope_type)
+        if scope_id is not None:
+            clauses.append("scope_id = ?")
+            params.append(scope_id)
+        if analysis_type is not None:
+            clauses.append("analysis_type = ?")
+            params.append(analysis_type)
+
+        # Clauses are selected from fixed SQL fragments above; all user input stays parameterized in `params`.
+        sql = "SELECT * FROM manuscript_ai_analyses WHERE " + " AND ".join(clauses) + " ORDER BY created_at DESC"  # nosec B608
+
+        with self.db.transaction() as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            d = dict(row)
+            d["result"] = json.loads(d.pop("result_json", "{}"))
+            results.append(d)
+        return results
+
+    def mark_analyses_stale(self, scope_type: str, scope_id: str) -> int:
+        """Mark all non-deleted analyses for a scope as stale.
+
+        Returns the count of rows updated.
+        """
+        now = self._now()
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_ai_analyses "
+                "SET stale = 1, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE scope_type = ? AND scope_id = ? AND stale = 0 AND deleted = 0",
+                (now, self._client_id, scope_type, scope_id),
+            )
+            return cur.rowcount
+
+    def _mark_analyses_stale_in_txn(self, conn: Any, scope_type: str, scope_id: str) -> int:
+        """Mark analyses stale within an existing transaction (no new txn opened)."""
+        now = self._now()
+        cur = conn.execute(
+            "UPDATE manuscript_ai_analyses "
+            "SET stale = 1, last_modified = ?, version = version + 1, client_id = ? "
+            "WHERE scope_type = ? AND scope_id = ? AND stale = 0 AND deleted = 0",
+            (now, self._client_id, scope_type, scope_id),
+        )
+        return cur.rowcount
+
+    def soft_delete_analysis(self, analysis_id: str, expected_version: int) -> None:
+        """Soft-delete an analysis with optimistic locking."""
+        now = self._now()
+        next_version = expected_version + 1
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE manuscript_ai_analyses "
+                "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                (now, next_version, self._client_id, analysis_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Analysis {analysis_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_ai_analyses",
+                    entity_id=analysis_id,
                 )

@@ -2,16 +2,20 @@ import { useEffect, useRef, useState } from "react"
 import { Button, Empty, Input, List, Spin, Typography } from "antd"
 import { Search, BookOpen, Plus } from "lucide-react"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
-import { searchManuscriptResearch, createManuscriptCitation } from "@/services/writing-playground"
+import {
+  createManuscriptCitation,
+  searchManuscriptResearch,
+  type ManuscriptResearchResponse,
+  type ManuscriptResearchResult,
+} from "@/services/writing-playground"
 
 type ResearchTabProps = { isOnline: boolean }
-type ResearchResult = Record<string, any>
 type SearchSnapshot = { sceneId: string; query: string; token: symbol }
 
 export function ResearchTab({ isOnline }: ResearchTabProps) {
   const { activeNodeId } = useWritingPlaygroundStore()
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<ResearchResult[]>([])
+  const [results, setResults] = useState<ManuscriptResearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [citedIds, setCitedIds] = useState<Set<string>>(new Set())
   const lastSearchSnapshotRef = useRef<SearchSnapshot | null>(null)
@@ -29,12 +33,12 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
     lastSearchSnapshotRef.current = snapshot
     setSearching(true)
     try {
-      const resp = await searchManuscriptResearch(snapshot.sceneId, snapshot.query)
+      const resp: ManuscriptResearchResponse = await searchManuscriptResearch(snapshot.sceneId, snapshot.query)
       if (
         lastSearchSnapshotRef.current?.token === snapshot.token
         && activeNodeId === snapshot.sceneId
       ) {
-        setResults((resp as any).results || [])
+        setResults(resp.results || [])
       }
     } catch {
       if (lastSearchSnapshotRef.current?.token === snapshot.token) {
@@ -47,7 +51,7 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
     }
   }
 
-  const handleCite = async (result: ResearchResult) => {
+  const handleCite = async (result: ManuscriptResearchResult) => {
     const snapshot = lastSearchSnapshotRef.current
     if (!activeNodeId || !snapshot || snapshot.sceneId !== activeNodeId) return
     try {
@@ -101,7 +105,7 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
         <List
           size="small"
           dataSource={results}
-          renderItem={(result: any, index: number) => {
+          renderItem={(result: ManuscriptResearchResult, index: number) => {
             const key = result.id || result.title || String(index)
             const isCited = citedIds.has(key)
             return (

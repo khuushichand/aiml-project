@@ -13,6 +13,8 @@ type WritingPlaygroundState = {
   setEditorMode: (mode: "plain" | "tiptap") => void
   focusMode: boolean
   setFocusMode: (enabled: boolean) => void
+  analysisModalOpen: "pulse" | "plot" | "timeline" | "web" | null
+  setAnalysisModalOpen: (modal: "pulse" | "plot" | "timeline" | "web" | null) => void
 }
 
 export const useWritingPlaygroundStore = createWithEqualityFn<WritingPlaygroundState>((set) => ({
@@ -28,4 +30,6 @@ export const useWritingPlaygroundStore = createWithEqualityFn<WritingPlaygroundS
   setEditorMode: (mode) => set({ editorMode: mode }),
   focusMode: false,
   setFocusMode: (enabled) => set({ focusMode: enabled }),
+  analysisModalOpen: null,
+  setAnalysisModalOpen: (modal) => set({ analysisModalOpen: modal }),
 }))

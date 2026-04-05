@@ -238,6 +238,90 @@ export type WritingDefaultsResponse = {
   themes: WritingDefaultTheme[]
 }
 
+export type ManuscriptSceneResponse = {
+  id: string
+  chapter_id: string
+  project_id: string
+  title: string
+  content_json?: string | null
+  content_plain?: string | null
+  version: number
+}
+
+export type ManuscriptCharacter = {
+  id: string
+  project_id: string
+  name: string
+  role: string
+}
+
+export type ManuscriptCharacterListResponse = {
+  characters: ManuscriptCharacter[]
+  total: number
+}
+
+export type ManuscriptRelationship = {
+  id: string
+  relationship_type: string
+  from_character_id?: string
+  to_character_id?: string
+  character_a_id?: string
+  character_b_id?: string
+}
+
+export type ManuscriptRelationshipListResponse = {
+  relationships: ManuscriptRelationship[]
+  total: number
+}
+
+export type ManuscriptWorldInfoItem = {
+  id: string
+  project_id: string
+  name: string
+  kind: string
+}
+
+export type ManuscriptWorldInfoListResponse = {
+  items: ManuscriptWorldInfoItem[]
+  total: number
+}
+
+export type ManuscriptPlotLine = {
+  id: string
+  title: string
+  status: string
+}
+
+export type ManuscriptPlotLineListResponse = {
+  plot_lines: ManuscriptPlotLine[]
+  total: number
+}
+
+export type ManuscriptPlotHole = {
+  id: string
+  title: string
+  severity: string
+}
+
+export type ManuscriptPlotHoleListResponse = {
+  plot_holes: ManuscriptPlotHole[]
+  total: number
+}
+
+export type ManuscriptResearchResult = {
+  id?: string
+  title?: string
+  source_title?: string
+  source_type?: string
+  snippet?: string
+  excerpt?: string
+}
+
+export type ManuscriptResearchResponse = {
+  query: string
+  results: ManuscriptResearchResult[]
+}
+
 export type WritingSnapshotCounts = {
   sessions: number
   templates: number
@@ -702,7 +786,7 @@ export async function createManuscriptScene(
   })
 }
 
-export async function getManuscriptScene(sceneId: string) {
+export async function getManuscriptScene(sceneId: string): Promise<ManuscriptSceneResponse> {
   return await bgRequest({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}` as AllowedPath,
     method: "GET",
@@ -730,7 +814,7 @@ export async function updateManuscriptScene(
 export async function listManuscriptCharacters(
   projectId: string,
   params?: { role?: string; cast_group?: string },
-) {
+): Promise<ManuscriptCharacterListResponse> {
   const query = new URLSearchParams()
   if (params?.role) query.set("role", params.role)
   if (params?.cast_group) query.set("cast_group", params.cast_group)
@@ -764,7 +848,7 @@ export async function deleteManuscriptCharacter(characterId: string, version: nu
 
 // ── Relationships ───────────────────────────────────────
 
-export async function listManuscriptRelationships(projectId: string) {
+export async function listManuscriptRelationships(projectId: string): Promise<ManuscriptRelationshipListResponse> {
   return await bgRequest({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters/relationships` as AllowedPath,
     method: "GET",
@@ -788,7 +872,7 @@ export async function createManuscriptRelationship(
 export async function listManuscriptWorldInfo(
   projectId: string,
   params?: { kind?: string },
-) {
+): Promise<ManuscriptWorldInfoListResponse> {
   const query = new URLSearchParams()
   if (params?.kind) query.set("kind", params.kind)
   const qs = query.toString()
@@ -813,7 +897,7 @@ export async function createManuscriptWorldInfo(
 
 // ── Plot Lines ──────────────────────────────────────────
 
-export async function listManuscriptPlotLines(projectId: string) {
+export async function listManuscriptPlotLines(projectId: string): Promise<ManuscriptPlotLineListResponse> {
   return await bgRequest({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-lines` as AllowedPath,
     method: "GET",
@@ -834,7 +918,7 @@ export async function createManuscriptPlotLine(
 
 // ── Plot Holes ──────────────────────────────────────────
 
-export async function listManuscriptPlotHoles(projectId: string) {
+export async function listManuscriptPlotHoles(projectId: string): Promise<ManuscriptPlotHoleListResponse> {
   return await bgRequest({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-holes` as AllowedPath,
     method: "GET",
@@ -887,13 +971,79 @@ export async function createManuscriptCitation(
   })
 }
 
+// ── Analysis ────────────────────────────────────────────
+
+export async function analyzeScene(
+  sceneId: string,
+  data?: { analysis_types?: string[]; provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/analyze` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data || { analysis_types: ["pacing"] },
+  })
+}
+
+export async function analyzeChapter(
+  chapterId: string,
+  data?: { analysis_types?: string[]; provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/chapters/${encodeURIComponent(chapterId)}/analyze` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: data || { analysis_types: ["pacing"] },
+  })
+}
+
+export async function analyzeProjectPlotHoles(
+  projectId: string,
+  data?: { provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/analyze/plot-holes` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { analysis_types: ["plot_holes"], ...data },
+  })
+}
+
+export async function analyzeProjectConsistency(
+  projectId: string,
+  data?: { provider?: string; model?: string },
+) {
+  return bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/analyze/consistency` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { analysis_types: ["consistency"], ...data },
+  })
+}
+
+export async function listManuscriptAnalyses(
+  projectId: string,
+  params?: { scope_type?: string; analysis_type?: string; include_stale?: boolean },
+) {
+  const query = new URLSearchParams()
+  if (params?.scope_type) query.set("scope_type", params.scope_type)
+  if (params?.analysis_type) query.set("analysis_type", params.analysis_type)
+  if (params?.include_stale) query.set("include_stale", "true")
+  const qs = query.toString()
+  const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/analyses${qs ? `?${qs}` : ""}`
+  return await bgRequest({
+    path: path as AllowedPath,
+    method: "GET",
+  })
+}
+
 // ── Research ────────────────────────────────────────────
 
 export async function searchManuscriptResearch(
   sceneId: string,
   query: string,
   topK = 5,
-) {
+): Promise<ManuscriptResearchResponse> {
   return await bgRequest({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/research` as AllowedPath,
     method: "POST",

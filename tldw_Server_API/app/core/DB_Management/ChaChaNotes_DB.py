@@ -531,7 +531,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 42  # Schema v42 adds characters, world info, plot, citations
+    _CURRENT_SCHEMA_VERSION = 43  # Schema v43 adds manuscript AI analyses table
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -4700,6 +4700,137 @@ UPDATE db_schema_version
    AND version < 42;
 """
 
+    # --- Migration: V42 -> V43 (AI Analyses) ---
+    _MIGRATION_SQL_V42_TO_V43 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 43 — Manuscript AI Analyses (2026-04-XX)
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_ai_analyses (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scope_type    TEXT NOT NULL CHECK(scope_type IN ('scene','chapter','part','project')),
+  scope_id      TEXT NOT NULL,
+  analysis_type TEXT NOT NULL,
+  provider      TEXT,
+  model         TEXT,
+  result_json   TEXT NOT NULL DEFAULT '{}',
+  score         REAL,
+  stale         BOOLEAN NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_maa_scope ON manuscript_ai_analyses(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_maa_project_type ON manuscript_ai_analyses(project_id, analysis_type);
+CREATE INDEX IF NOT EXISTS idx_maa_stale ON manuscript_ai_analyses(stale);
+CREATE INDEX IF NOT EXISTS idx_maa_deleted ON manuscript_ai_analyses(deleted);
+
+/* ── sync triggers: manuscript_ai_analyses ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_create;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_update;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_undelete;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_create
+AFTER INSERT ON manuscript_ai_analyses BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_update
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.analysis_type IS NOT NEW.analysis_type OR
+     OLD.result_json IS NOT NEW.result_json OR
+     OLD.score IS NOT NEW.score OR
+     OLD.stale IS NOT NEW.stale OR
+     OLD.provider IS NOT NEW.provider OR
+     OLD.model IS NOT NEW.model OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_delete
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_undelete
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 43
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 43;
+"""
+
+    _MIGRATION_SQL_V42_TO_V43_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 43 — Manuscript AI Analyses (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_ai_analyses (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scope_type    TEXT NOT NULL CHECK(scope_type IN ('scene','chapter','part','project')),
+  scope_id      TEXT NOT NULL,
+  analysis_type TEXT NOT NULL,
+  provider      TEXT,
+  model         TEXT,
+  result_json   TEXT NOT NULL DEFAULT '{}',
+  score         REAL,
+  stale         BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_maa_scope ON manuscript_ai_analyses(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_maa_project_type ON manuscript_ai_analyses(project_id, analysis_type);
+CREATE INDEX IF NOT EXISTS idx_maa_stale ON manuscript_ai_analyses(stale);
+CREATE INDEX IF NOT EXISTS idx_maa_deleted ON manuscript_ai_analyses(deleted);
+
+UPDATE db_schema_version
+   SET version = 43
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 43;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -6563,6 +6694,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V41->V42: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V42 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v42_to_v43(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V42 to V43 (manuscript AI analyses)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V42 to V43 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V42_TO_V43)
+            final_version = self._get_db_version(conn)
+            if final_version != 43:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V42->V43 failed version check. Expected 43, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V43 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V42->V43 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V42->V43 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V42->V43: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V43 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -7523,6 +7674,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 42 and current_db_version == 41:
                         self._migrate_from_v41_to_v42(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 43 and current_db_version == 42:
+                        self._migrate_from_v42_to_v43(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -7959,6 +8113,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 42 and current_db_version == 41:
                     self._migrate_from_v41_to_v42(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 43 and current_db_version == 42:
+                    self._migrate_from_v42_to_v43(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -10798,6 +10955,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 42:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V41_TO_V42_POSTGRES, conn, expected_version=42)
                 current_version = 42
+            if current_version < 43:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V42_TO_V43_POSTGRES, conn, expected_version=43)
+                current_version = 43
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
