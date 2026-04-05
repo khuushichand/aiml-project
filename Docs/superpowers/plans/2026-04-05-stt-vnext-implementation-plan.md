@@ -27,7 +27,7 @@ Keep these decisions fixed during implementation:
 ## Execution Preconditions
 
 1. Create an isolated git worktree/branch before implementation so subagents do not collide with unrelated local changes.
-2. Activate the project virtual environment before every `python`, `pytest`, or `bandit` command: `source .venv/bin/activate`
+2. Activate the project virtual environment before every `python`, `pytest`, or `bandit` command: `source .venv/bin/activate` from the repo root, or `source ../.venv/bin/activate` from a `.worktrees/<branch>` checkout.
 3. Keep one PR slice per branch or stacked branch. Do not assign overlapping write sets to concurrent workers.
 4. Treat "tenant" as `org_id` in multi-user mode. In single-user mode, there is no tenant row; STT policy resolves from global config defaults only.
 
@@ -64,7 +64,7 @@ Keep these decisions fixed during implementation:
   Purpose: new focused STT config loader for vNext flags and bounded defaults.
 - `tldw_Server_API/app/core/config_sections/__init__.py`
   Purpose: export the new STT config section.
-- `tldw_Server_API/app/core/DB_Management/migrations/023_transcript_run_history.json`
+- `tldw_Server_API/app/core/DB_Management/migrations/023_transcript_run_history.sql`
   Purpose: packaged SQLite migration script for file-backed Media DB upgrades to transcript run-history.
 - `tldw_Server_API/app/core/DB_Management/media_db/media_database_impl.py`
   Purpose: Media DB schema version bump, fresh bootstrap schema, and migration registration.
@@ -118,8 +118,8 @@ Keep these decisions fixed during implementation:
   Purpose: new bounded-label mapping helpers and one place to emit STT counters/histograms safely.
 - `tldw_Server_API/tests/DB_Management/test_media_db_legacy_transcripts.py`
   Purpose: lock legacy transcript helper compatibility.
-- `tldw_Server_API/tests/DB_Management/test_media_db_transcript_run_history.py`
-  Purpose: new tests for run allocation, dual-read, dual-write, and backfill behavior.
+- `tldw_Server_API/tests/Sharing/test_clone_service.py`
+  Purpose: protect latest-run fallback and clone behavior when run pointers are stale.
 - `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_ingestion_audio_transcripts.py`
   Purpose: update ingestion expectations from one transcript per model to multiple runs per media item.
 - `tldw_Server_API/tests/Audio/test_ws_control_protocol_v2.py`
@@ -228,7 +228,7 @@ git commit -m "feat: add canonical stt vnext config loader"
 ### Task 2: Add Run-History Schema, Backfill, and Dual-Write
 
 **Files:**
-- Create: `tldw_Server_API/app/core/DB_Management/migrations/023_transcript_run_history.json`
+- Create: `tldw_Server_API/app/core/DB_Management/migrations/023_transcript_run_history.sql`
 - Modify: `tldw_Server_API/app/core/DB_Management/media_db/media_database_impl.py`
 - Modify: `tldw_Server_API/app/core/DB_Management/media_db/legacy_reads.py`
 - Modify: `tldw_Server_API/app/core/DB_Management/media_db/legacy_transcripts.py`
@@ -238,7 +238,7 @@ git commit -m "feat: add canonical stt vnext config loader"
 - Create: `tldw_Server_API/app/core/DB_Management/media_db/schema/migration_bodies/postgres_transcript_run_history.py`
 - Modify: `tldw_Server_API/app/core/DB_Management/media_db/schema/sqlite_post_core_structures.py`
 - Modify: `tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py`
-- Test: `tldw_Server_API/tests/DB_Management/test_media_db_transcript_run_history.py`
+- Test: `tldw_Server_API/tests/Sharing/test_clone_service.py`
 - Test: `tldw_Server_API/tests/DB_Management/test_media_db_legacy_transcripts.py`
 - Test: `tldw_Server_API/tests/DB_Management/test_media_transcripts_upsert.py`
 - Test: `tldw_Server_API/tests/DB_Management/test_media_db_core_repositories.py`
@@ -270,7 +270,7 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m pytest \
-  tldw_Server_API/tests/DB_Management/test_media_db_transcript_run_history.py \
+  tldw_Server_API/tests/Sharing/test_clone_service.py \
   tldw_Server_API/tests/DB_Management/test_media_db_legacy_transcripts.py \
   tldw_Server_API/tests/DB_Management/test_media_transcripts_upsert.py \
   tldw_Server_API/tests/DB_Management/test_media_db_core_repositories.py \
@@ -332,7 +332,7 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m pytest \
-  tldw_Server_API/tests/DB_Management/test_media_db_transcript_run_history.py \
+  tldw_Server_API/tests/Sharing/test_clone_service.py \
   tldw_Server_API/tests/DB_Management/test_media_db_legacy_transcripts.py \
   tldw_Server_API/tests/DB_Management/test_media_transcripts_upsert.py \
   tldw_Server_API/tests/DB_Management/test_media_db_core_repositories.py \
@@ -359,10 +359,10 @@ Expected: no new findings in changed code.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add tldw_Server_API/app/core/DB_Management/migrations/023_transcript_run_history.json \
+git add tldw_Server_API/app/core/DB_Management/migrations/023_transcript_run_history.sql \
   tldw_Server_API/app/core/DB_Management/media_db \
   tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py \
-  tldw_Server_API/tests/DB_Management/test_media_db_transcript_run_history.py \
+  tldw_Server_API/tests/Sharing/test_clone_service.py \
   tldw_Server_API/tests/DB_Management/test_media_db_legacy_transcripts.py \
   tldw_Server_API/tests/DB_Management/test_media_transcripts_upsert.py \
   tldw_Server_API/tests/DB_Management/test_media_db_core_repositories.py \
@@ -873,7 +873,7 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m pytest \
-  tldw_Server_API/tests/DB_Management/test_media_db_transcript_run_history.py \
+  tldw_Server_API/tests/Sharing/test_clone_service.py \
   tldw_Server_API/tests/DB_Management/test_media_db_legacy_transcripts.py \
   tldw_Server_API/tests/DB_Management/test_media_transcripts_upsert.py \
   tldw_Server_API/tests/DB_Management/test_media_db_core_repositories.py \
