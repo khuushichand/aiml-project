@@ -1,5 +1,7 @@
 import React from "react"
+import { useTranslation } from "react-i18next"
 import { SearchX } from "lucide-react"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 
 type NoResultsRecoveryProps = {
   onBroadenScope: () => void
@@ -14,6 +16,10 @@ export function NoResultsRecovery({
   onShowNearestMatches,
   webEnabled,
 }: NoResultsRecoveryProps) {
+  const { t } = useTranslation("knowledge")
+  const recentlyIngestedDocs = useQuickIngestStore(s => s.recentlyIngestedDocs)
+  const hasRecentIngests = recentlyIngestedDocs.length > 0
+
   return (
     <div className="rounded-xl border border-border bg-surface p-6">
       <div className="flex items-start gap-3">
@@ -23,6 +29,13 @@ export function NoResultsRecovery({
           <p className="mt-1 text-sm text-text-muted">
             Try broader sources or enable web search for recovery.
           </p>
+          {hasRecentIngests && (
+            <div className="mb-3 mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                {t("knowledge:noResults.indexingHint", "You recently ingested documents. If they don't appear in results yet, they may still be indexing. Try searching again in a moment.")}
+              </p>
+            </div>
+          )}
           <ul className="mt-2 space-y-1 text-sm text-text-muted">
             <li>Try different keywords or fewer constraints.</li>
             <li>Broaden the question before adding details.</li>

@@ -12,6 +12,7 @@ import {
   BookOpen,
 } from "lucide-react"
 import type { WizardResultItem } from "./types"
+import { shouldKeepOriginalFile } from "@/services/tldw/quick-ingest-batch"
 import { useIngestWizard } from "./IngestWizardContext"
 import { classifyError } from "./ErrorClassification"
 import type { ErrorCategory } from "./ErrorClassification"
@@ -323,11 +324,11 @@ export const WizardResultsStep: React.FC<WizardResultsStepProps> = ({
                   {qi("wizard.results.searchKnowledge", "Search in Knowledge")}
                 </button>
               )}
-              {onOpenWorkspace && successes.some(s => ["pdf", "ebook"].includes(s.type)) && (
+              {onOpenWorkspace && successes.some(s => shouldKeepOriginalFile(s.type)) && (
                 <button
                   type="button"
                   onClick={() => {
-                    const docItem = successes.find(s => ["pdf", "ebook"].includes(s.type))
+                    const docItem = successes.find(s => shouldKeepOriginalFile(s.type))
                     if (docItem) onOpenWorkspace(docItem)
                   }}
                   className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text hover:bg-surface2 transition-colors"

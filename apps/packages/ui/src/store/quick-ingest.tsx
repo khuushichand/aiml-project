@@ -127,6 +127,14 @@ type QuickIngestStore = {
     errorMessage?: string | null
   }) => void
   resetLastRunSummary: () => void
+  /**
+   * Recently ingested documents (most recent first, max 20).
+   * Stores {id, type} tuples so DocumentPickerModal can pass type info
+   * to handleOpen and route to the correct viewer.
+   */
+  recentlyIngestedDocs: Array<{ id: number; type: string; title?: string }>
+  addRecentlyIngestedDoc: (doc: { id: number; type: string; title?: string }) => void
+  clearRecentlyIngestedDocs: () => void
 }
 
 export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) => ({
@@ -317,7 +325,13 @@ export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) 
   resetLastRunSummary: () =>
     set({
       lastRunSummary: createInitialQuickIngestLastRunSummary()
-    })
+    }),
+  recentlyIngestedDocs: [] as Array<{ id: number; type: string; title?: string }>,
+  addRecentlyIngestedDoc: (doc) =>
+    set((s) => ({
+      recentlyIngestedDocs: [doc, ...s.recentlyIngestedDocs.filter((x) => x.id !== doc.id)].slice(0, 20),
+    })),
+  clearRecentlyIngestedDocs: () => set({ recentlyIngestedDocs: [] }),
 }))
 
 if (typeof window !== "undefined") {

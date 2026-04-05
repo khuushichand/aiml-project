@@ -340,10 +340,10 @@ export const QuizPlayground: React.FC = () => {
           {
             key: "generate",
             label: <span data-testid="quiz-tab-generate">{renderTabLabel(
-              totalQuizzes === 0
+              quizCounts !== undefined && totalQuizzes === 0
                 ? t("option:quiz.generateStartHere", { defaultValue: "Generate \u2190 Start here" })
                 : t("option:quiz.generate", { defaultValue: "Generate" }),
-              totalQuizzes === 0
+              quizCounts !== undefined && totalQuizzes === 0
                 ? t("option:quiz.generateStartHereShort", { defaultValue: "Gen \u2190" })
                 : t("option:quiz.generateShort", { defaultValue: "Gen" }),
               <ThunderboltOutlined />

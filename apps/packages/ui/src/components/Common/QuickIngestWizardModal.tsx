@@ -30,6 +30,7 @@ import {
   type QuickIngestSessionRecord,
   useQuickIngestSessionStore,
 } from "@/store/quick-ingest-session"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 import type {
   DetectedMediaType,
   ItemProgress,
@@ -764,6 +765,25 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     }
   }, [session.tracking])
 
+  // Track recently ingested documents for the DocumentPickerModal
+  const addRecentlyIngestedDoc = useQuickIngestStore(s => s.addRecentlyIngestedDoc)
+  const recordedIngestRef = useRef(false)
+
+  useEffect(() => {
+    if (state.currentStep !== 5) { recordedIngestRef.current = false; return }
+    if (recordedIngestRef.current) return
+    recordedIngestRef.current = true
+    for (const item of state.results) {
+      if (
+        item.status === "ok" &&
+        item.mediaId != null &&
+        ["pdf", "ebook", "document"].includes(item.type)
+      ) {
+        addRecentlyIngestedDoc({ id: Number(item.mediaId), type: item.type, title: item.title || undefined })
+      }
+    }
+  }, [state.currentStep, state.results, addRecentlyIngestedDoc])
+
   useEffect(() => {
     if (!open || !state.isMinimized) return
     restore()
@@ -1339,10 +1359,12 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
 
   // Navigation callbacks for WizardResultsStep CTAs
   const navigate = useNavigate()
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
 
   const handleSearchKnowledge = useCallback(() => {
     onClose()
-    window.setTimeout(() => navigate("/knowledge"), 150)
+    window.setTimeout(() => { if (mountedRef.current) navigate("/knowledge") }, 150)
   }, [navigate, onClose])
 
   const handleOpenWorkspace = useCallback(
@@ -1351,11 +1373,11 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       const mediaId = item.mediaId
       if (mediaId != null) {
         window.setTimeout(
-          () => navigate(`${DOCUMENT_WORKSPACE_PATH}?open=${mediaId}`),
+          () => { if (mountedRef.current) navigate(`${DOCUMENT_WORKSPACE_PATH}?open=${mediaId}`) },
           150
         )
       } else {
-        window.setTimeout(() => navigate(DOCUMENT_WORKSPACE_PATH), 150)
+        window.setTimeout(() => { if (mountedRef.current) navigate(DOCUMENT_WORKSPACE_PATH) }, 150)
       }
     },
     [navigate, onClose]
