@@ -35,6 +35,9 @@ export type MilestoneId =
   | "first_ingest"
   | "first_chat"
   | "first_quiz_taken"
+  | "family_profiles_created"
+  | "content_rules_reviewed"
+  | "content_rules_tested"
 
 type MilestoneState = {
   completedMilestones: Partial<Record<MilestoneId, number>>

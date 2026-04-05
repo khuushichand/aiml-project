@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { useMilestoneStore } from "@/store/milestones"
 import {
   type CompanionHomeSnapshot,
@@ -45,8 +46,12 @@ export function CompanionHomePage({
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const [customizeOpen, setCustomizeOpen] = React.useState(false)
 
-  // Bootstrap milestones from existing usage evidence for returning users
+  // Bootstrap milestones from existing usage evidence for returning users.
+  // Also re-bootstrap when connection becomes ready, so mission cards appear
+  // immediately after onboarding completes without requiring a page refresh.
+  const isConnected = useIsConnected()
   const bootstrapMilestones = useMilestoneStore((s) => s.bootstrapFromExistingUsage)
+  const markMilestone = useMilestoneStore((s) => s.markMilestone)
   const milestoneBootstrapped = useRef(false)
   useEffect(() => {
     if (!milestoneBootstrapped.current) {
@@ -54,6 +59,11 @@ export function CompanionHomePage({
       bootstrapMilestones()
     }
   }, [bootstrapMilestones])
+  useEffect(() => {
+    if (isConnected) {
+      markMilestone("first_connection")
+    }
+  }, [isConnected, markMilestone])
 
   const hasPersonalization = Boolean(capabilities?.hasPersonalization)
   const { layout, updateLayout } = useCompanionHomeLayout(surface)

@@ -3,12 +3,13 @@ export const STORAGE_BUDGET_DEFAULT_MB = 5
 const STORAGE_BUDGET_VITE_ENV = "VITE_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
 const STORAGE_BUDGET_NEXT_ENV = "NEXT_PUBLIC_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
 
-/** Estimate UTF-8 byte length of a string. */
+/**
+ * Estimate localStorage storage cost of a string.
+ * localStorage uses UTF-16 internally, so str.length (UTF-16 code units)
+ * is the most accurate and performant proxy for quota consumption.
+ */
 export const estimateUtf8ByteLength = (str: string): number => {
-  if (typeof TextEncoder !== "undefined") {
-    return new TextEncoder().encode(str).length
-  }
-  return encodeURIComponent(str).replace(/%[A-F\d]{2}/g, "x").length
+  return str.length
 }
 
 const parseStorageBudgetCandidateMb = (

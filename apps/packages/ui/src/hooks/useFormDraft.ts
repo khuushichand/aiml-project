@@ -118,7 +118,7 @@ export function useFormDraft<T = Record<string, any>>(
 
       try {
         const serialized = JSON.stringify(draft)
-        const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized))
+        const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized), storageKey)
         if (guard.recommendation) {
           console.warn('[useFormDraft]', guard.recommendation)
         }

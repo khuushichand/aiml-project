@@ -13,13 +13,23 @@ export type StorageGuardResult = {
 /**
  * Advisory pre-write check. Does NOT block writes — callers decide.
  * Dispatches a refresh event so the quota hook updates.
+ * @param existingKey - If updating an existing key, pass it to subtract its current size
  */
-export function checkStorageBeforeWrite(estimatedBytes: number): StorageGuardResult {
+export function checkStorageBeforeWrite(estimatedBytes: number, existingKey?: string): StorageGuardResult {
   try {
     const totalUsedBytes = estimateLocalStorageUsageBytes(window.localStorage) // no prefix = all keys
     const browserLimit = 5 * 1024 * 1024 // ~5MB browser localStorage limit
-    const currentRatio = browserLimit > 0 ? totalUsedBytes / browserLimit : 0
-    const wouldExceed = (totalUsedBytes + estimatedBytes) >= browserLimit * EXCEEDED_THRESHOLD
+    // Subtract existing value size when overwriting a key (avoids double-counting)
+    let existingSize = 0
+    if (existingKey) {
+      const existing = window.localStorage.getItem(existingKey)
+      if (existing != null) {
+        existingSize = estimateUtf8ByteLength(existingKey) + estimateUtf8ByteLength(existing)
+      }
+    }
+    const effectiveUsed = totalUsedBytes - existingSize
+    const currentRatio = browserLimit > 0 ? effectiveUsed / browserLimit : 0
+    const wouldExceed = (effectiveUsed + estimatedBytes) >= browserLimit * EXCEEDED_THRESHOLD
 
     let recommendation: string | null = null
     if (wouldExceed) {

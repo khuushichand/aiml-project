@@ -6,6 +6,19 @@ import { includesId } from "@/components/Review/media-review-types"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 
 const FIRST_INGEST_DISMISSED_KEY = "tldw:media:first-ingest-dismissed"
+const LEGACY_FIRST_INGEST_DISMISSED_KEY = "tldw_first_ingest_tutorial_dismissed"
+
+// One-time migration: honor dismissals stored under the old key
+try {
+  if (
+    typeof localStorage !== "undefined" &&
+    !localStorage.getItem(FIRST_INGEST_DISMISSED_KEY) &&
+    localStorage.getItem(LEGACY_FIRST_INGEST_DISMISSED_KEY)
+  ) {
+    localStorage.setItem(FIRST_INGEST_DISMISSED_KEY, "true")
+    localStorage.removeItem(LEGACY_FIRST_INGEST_DISMISSED_KEY)
+  }
+} catch { /* ignore */ }
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState

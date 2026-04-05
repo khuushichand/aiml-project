@@ -28,7 +28,7 @@ export const MISSION_CARDS: MissionCard[] = [
     href: "/settings/family-guardrails",
     persona: ["family"],
     prerequisiteMilestones: ["first_connection"],
-    linkedMilestone: undefined,
+    linkedMilestone: "family_profiles_created",
     category: "getting-started",
     priority: 1
   },
@@ -40,6 +40,7 @@ export const MISSION_CARDS: MissionCard[] = [
     href: "/moderation-playground",
     persona: ["family"],
     prerequisiteMilestones: ["first_connection"],
+    linkedMilestone: "content_rules_reviewed",
     category: "getting-started",
     priority: 2
   },
@@ -51,6 +52,7 @@ export const MISSION_CARDS: MissionCard[] = [
     href: "/moderation-playground",
     persona: ["family"],
     prerequisiteMilestones: ["first_connection"],
+    linkedMilestone: "content_rules_tested",
     category: "getting-started",
     priority: 3
   },

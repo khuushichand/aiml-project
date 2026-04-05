@@ -7,10 +7,8 @@ const DISMISS_KEY = "tldw:storage-quota-banner-dismissed"
 export function StorageQuotaBanner() {
   const { level, ratio, usedBytes, budgetBytes } = useStorageQuota()
 
-  // Don't render if storage is ok
-  if (level === "ok") return null
-
   // Session-scoped dismiss (sessionStorage, not localStorage -- re-shows next session)
+  // Must be called before any early return to satisfy Rules of Hooks.
   const [dismissed, setDismissed] = useState(() => {
     try {
       return sessionStorage.getItem(DISMISS_KEY) === "true"
@@ -18,6 +16,9 @@ export function StorageQuotaBanner() {
       return false
     }
   })
+
+  // Don't render if storage is ok
+  if (level === "ok") return null
 
   if (dismissed && level !== "exceeded") return null // exceeded is never dismissible
 

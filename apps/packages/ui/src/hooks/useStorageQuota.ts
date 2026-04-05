@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { estimateLocalStorageUsageBytes, resolveStorageBudgetBytes } from "@/utils/storage-budget"
 import { STORAGE_QUOTA_REFRESH_EVENT } from "@/store/storage-quota-events"
 import { WORKSPACE_STORAGE_QUOTA_EVENT, WORKSPACE_STORAGE_KEY } from "@/store/workspace-events"
@@ -43,21 +43,26 @@ export function useStorageQuota(): StorageQuotaState {
     } catch { /* ignore */ }
   }, [])
 
+  // Debounced refresh for cross-tab storage events (fires frequently)
+  const storageDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const debouncedRefresh = useCallback(() => {
+    clearTimeout(storageDebounceRef.current)
+    storageDebounceRef.current = setTimeout(refresh, 500)
+  }, [refresh])
+
   // Listen for storage events (cross-tab), quota refresh events, and workspace quota events
   useEffect(() => {
-    const handleStorage = () => refresh()
-    const handleRefresh = () => refresh()
-
-    window.addEventListener("storage", handleStorage)
-    window.addEventListener(STORAGE_QUOTA_REFRESH_EVENT, handleRefresh)
-    window.addEventListener(WORKSPACE_STORAGE_QUOTA_EVENT, handleRefresh)
+    window.addEventListener("storage", debouncedRefresh)
+    window.addEventListener(STORAGE_QUOTA_REFRESH_EVENT, refresh)
+    window.addEventListener(WORKSPACE_STORAGE_QUOTA_EVENT, refresh)
 
     return () => {
-      window.removeEventListener("storage", handleStorage)
-      window.removeEventListener(STORAGE_QUOTA_REFRESH_EVENT, handleRefresh)
-      window.removeEventListener(WORKSPACE_STORAGE_QUOTA_EVENT, handleRefresh)
+      clearTimeout(storageDebounceRef.current)
+      window.removeEventListener("storage", debouncedRefresh)
+      window.removeEventListener(STORAGE_QUOTA_REFRESH_EVENT, refresh)
+      window.removeEventListener(WORKSPACE_STORAGE_QUOTA_EVENT, refresh)
     }
-  }, [refresh])
+  }, [refresh, debouncedRefresh])
 
   const ratio = budgetBytes > 0 ? Math.min(usedBytes / budgetBytes, 1) : 0
   const level = resolveLevel(ratio)
