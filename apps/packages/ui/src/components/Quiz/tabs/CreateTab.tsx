@@ -111,7 +111,7 @@ const writeCreateDraft = (draft: QuizCreateDraft): boolean | { saved: boolean; r
   if (typeof window === "undefined") return false
   try {
     const serialized = JSON.stringify(draft)
-    const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized))
+    const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized), CREATE_TAB_DRAFT_KEY)
     // Advisory only — always attempt the write
     window.localStorage.setItem(CREATE_TAB_DRAFT_KEY, serialized)
     notifyStorageWrite()

@@ -17,11 +17,11 @@ describe("storage-budget utilities", () => {
     expect(estimateUtf8ByteLength("")).toBe(0)
   })
 
-  it("estimates UTF-8 byte length for multi-byte characters", () => {
-    // "é" is 2 bytes in UTF-8
-    expect(estimateUtf8ByteLength("é")).toBe(2)
-    // "你" is 3 bytes in UTF-8
-    expect(estimateUtf8ByteLength("你")).toBe(3)
+  it("returns string length for localStorage quota estimation", () => {
+    // localStorage uses UTF-16 internally, so str.length is the right proxy
+    expect(estimateUtf8ByteLength("é")).toBe(1)
+    expect(estimateUtf8ByteLength("你")).toBe(1)
+    expect(estimateUtf8ByteLength("abc")).toBe(3)
   })
 
   it("estimates localStorage usage", () => {
