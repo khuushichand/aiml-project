@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,7 @@ from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_truthy
 
 from .Audio_Streaming_Parakeet import AudioBuffer, StreamingConfig
+from .ws_control_protocol import WSControlProtocolConfig, WSControlSession
 
 # Import existing implementations
 from .Audio_Transcription_Nemo import (
@@ -122,6 +124,60 @@ def _safe_temp_subdir(raw: Optional[str]) -> Optional[Path]:
         return None
     base = Path(tempfile.gettempdir()) / "tldw_diarization"
     return base / safe
+
+
+def _get_ws_control_protocol_config() -> WSControlProtocolConfig:
+    """Load bounded WS control settings from the canonical STT config surface."""
+    try:
+        from tldw_Server_API.app.core.config import get_stt_config
+
+        stt_cfg = get_stt_config() or {}
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        stt_cfg = {}
+
+    def _float_setting(key: str, default: float) -> float:
+        try:
+            value = float(stt_cfg.get(key, default))
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+            return default
+        return value if value >= 0 else default
+
+    return WSControlProtocolConfig(
+        ws_control_v2_enabled=bool(stt_cfg.get("ws_control_v2_enabled", False)),
+        paused_audio_queue_cap_seconds=_float_setting("paused_audio_queue_cap_seconds", 2.0),
+        overflow_warning_interval_seconds=_float_setting("overflow_warning_interval_seconds", 5.0),
+    )
+
+
+def _estimate_audio_seconds(audio_bytes: bytes, sample_rate: int) -> float:
+    try:
+        from tldw_Server_API.app.core.Usage.audio_quota import bytes_to_seconds as _bytes_to_seconds
+
+        return float(_bytes_to_seconds(len(audio_bytes), int(sample_rate or 16000)))
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        return float(len(audio_bytes)) / float(4 * max(1, int(sample_rate or 16000)))
+
+
+def _drop_oldest_buffered_audio(
+    paused_audio_chunks: "deque[tuple[bytes, float]]",
+    dropped_seconds: float,
+) -> None:
+    remaining = max(0.0, float(dropped_seconds))
+    while remaining > 0 and paused_audio_chunks:
+        chunk_bytes, chunk_seconds = paused_audio_chunks[0]
+        if chunk_seconds <= remaining:
+            paused_audio_chunks.popleft()
+            remaining -= chunk_seconds
+            continue
+        if chunk_seconds <= 0:
+            paused_audio_chunks.popleft()
+            continue
+        trim_ratio = min(1.0, remaining / chunk_seconds)
+        trim_bytes = int(len(chunk_bytes) * trim_ratio)
+        if trim_bytes <= 0:
+            trim_bytes = 1
+        paused_audio_chunks[0] = (chunk_bytes[trim_bytes:], chunk_seconds - remaining)
+        remaining = 0.0
 
 # Expose get_whisper_model at module scope so tests can monkeypatch it.
 # Keep this lazy: importing Audio_Transcription_Lib at module import time can
@@ -2517,6 +2573,8 @@ async def handle_unified_websocket(
     insights_engine: Optional[LiveMeetingInsights] = None
     diarizer: Optional[StreamingDiarizer] = None
     turn_detector: Optional[SileroTurnDetector] = None
+    control_session = WSControlSession(_get_ws_control_protocol_config())
+    paused_audio_chunks: deque[tuple[bytes, float]] = deque()
     vad_warning_sent = False
 
     try:
@@ -2691,6 +2749,10 @@ async def handle_unified_websocket(
                 await on_stream_config_resolved(config_payload, config)
             except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
                 logger.debug(f"on_stream_config_resolved callback failed: {cb_exc}")
+
+        protocol_decision = control_session.apply_config(config_payload if config_received else None)
+        for event in protocol_decision.events:
+            await stream.send_json(event)
 
         # Create transcriber with config
         if transcriber is None:
@@ -2990,6 +3052,70 @@ async def handle_unified_websocket(
                 except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                     logger.exception("Diarization finalize failed: {}", diar_err)
 
+        async def _process_audio_chunk(audio_bytes: bytes) -> bool:
+            if transcriber is None:
+                return True
+
+            result = await transcriber.process_audio_chunk(audio_bytes)
+            if not result:
+                return True
+
+            # Detect STT error sentinels so they do not leak as user text.
+            text_field = result.get("text")
+            if isinstance(text_field, str) and _is_transcription_error_message(text_field):
+                logger.error(f"Unified streaming STT error sentinel: {text_field}")
+                await stream.error(
+                    "provider_error",
+                    "Transcription error from STT provider",
+                    data={
+                        "model": getattr(config, "model", None),
+                        "variant": getattr(config, "model_variant", None),
+                        "language": getattr(config, "language", None),
+                        "raw_error": text_field,
+                    },
+                )
+                return False
+
+            audio_np = result.pop("_audio_chunk", None)
+            if audio_np is not None and diarizer:
+                try:
+                    speaker_info = await diarizer.label_segment(
+                        audio_np,
+                        {
+                            "segment_id": result.get("segment_id"),
+                            "segment_start": result.get("segment_start"),
+                            "segment_end": result.get("segment_end"),
+                            "chunk_start": result.get("chunk_start"),
+                            "chunk_end": result.get("chunk_end"),
+                            "text": result.get("text"),
+                        },
+                    )
+                    if speaker_info:
+                        if speaker_info.get("speaker_id") is not None:
+                            result.setdefault("speaker_id", speaker_info["speaker_id"])
+                        if speaker_info.get("speaker_label"):
+                            result.setdefault("speaker_label", speaker_info["speaker_label"])
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
+                    logger.exception("Diarization update failed: {}", diar_err)
+
+            if on_transcript_result is not None:
+                try:
+                    full_snapshot = transcriber.get_full_transcript() if transcriber else ""
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    full_snapshot = ""
+                try:
+                    await on_transcript_result(result, full_snapshot)
+                except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                    logger.debug(f"on_transcript_result callback failed: {cb_exc}")
+
+            await stream.send_json(result)
+            if insights_engine and result.get("is_final"):
+                try:
+                    await insights_engine.on_transcript(result)
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
+                    logger.exception("Live insights failed to ingest segment: {}", insight_err)
+            return True
+
         # Process messages
         while True:
             try:
@@ -3002,6 +3128,29 @@ async def handle_unified_websocket(
                     # Decode audio data
                     audio_base64 = data.get("data", "")
                     audio_bytes = base64.b64decode(audio_base64)
+                    # Optional callback to account for usage seconds before processing
+                    if on_audio_seconds is not None:
+                        # Compute seconds from byte length and configured sample rate
+                        seconds = _estimate_audio_seconds(audio_bytes, int(config.sample_rate or 16000))
+                        await on_audio_seconds(seconds, int(config.sample_rate or 16000))
+                    # Optional heartbeat to refresh stream TTL when using Redis counters
+                    if on_heartbeat is not None:
+                        with contextlib.suppress(_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS):
+                            await on_heartbeat()
+
+                    if control_session.state == "paused":
+                        buffered_seconds = _estimate_audio_seconds(audio_bytes, int(config.sample_rate or 16000))
+                        paused_audio_chunks.append((audio_bytes, buffered_seconds))
+                        paused_audio_decision = control_session.buffer_paused_audio(
+                            buffered_seconds,
+                            now=time.time(),
+                        )
+                        if paused_audio_decision.dropped_seconds > 0:
+                            _drop_oldest_buffered_audio(paused_audio_chunks, paused_audio_decision.dropped_seconds)
+                        for event in paused_audio_decision.events:
+                            await stream.send_json(event)
+                        continue
+
                     auto_commit_triggered = False
                     if turn_detector:
                         auto_commit_triggered = turn_detector.observe(audio_bytes)
@@ -3011,110 +3160,56 @@ async def handle_unified_websocket(
                                 f"Silero VAD disabled mid-stream ({turn_detector.unavailable_reason}); continuing without auto-commit"
                             )
                             turn_detector = None
-                    # Optional callback to account for usage seconds before processing
-                    if on_audio_seconds is not None:
-                        # Compute seconds from byte length and configured sample rate
-                        try:
-                            from tldw_Server_API.app.core.Usage.audio_quota import bytes_to_seconds as _bytes_to_seconds
-                            seconds = _bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
-                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
-                            seconds = float(len(audio_bytes)) / float(4 * max(1, int(config.sample_rate or 16000)))
-                        await on_audio_seconds(seconds, int(config.sample_rate or 16000))
-                    # Optional heartbeat to refresh stream TTL when using Redis counters
-                    if on_heartbeat is not None:
-                        with contextlib.suppress(_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS):
-                            await on_heartbeat()
-
-                    # Process audio chunk
-                    result = await transcriber.process_audio_chunk(audio_bytes)
-
-                    if result:
-                        # Detect STT error sentinels so they do not leak as user text.
-                        text_field = result.get("text")
-                        if isinstance(text_field, str) and _is_transcription_error_message(text_field):
-                            logger.error(f"Unified streaming STT error sentinel: {text_field}")
-                            await stream.error(
-                                "provider_error",
-                                "Transcription error from STT provider",
-                                data={
-                                    "model": getattr(config, "model", None),
-                                    "variant": getattr(config, "model_variant", None),
-                                    "language": getattr(config, "language", None),
-                                    "raw_error": text_field,
-                                },
-                            )
-                            return
-
-                        audio_np = result.pop("_audio_chunk", None)
-                        if audio_np is not None and diarizer:
-                            try:
-                                speaker_info = await diarizer.label_segment(
-                                    audio_np,
-                                    {
-                                        "segment_id": result.get("segment_id"),
-                                        "segment_start": result.get("segment_start"),
-                                        "segment_end": result.get("segment_end"),
-                                        "chunk_start": result.get("chunk_start"),
-                                        "chunk_end": result.get("chunk_end"),
-                                        "text": result.get("text"),
-                                    },
-                                )
-                                if speaker_info:
-                                    if speaker_info.get("speaker_id") is not None:
-                                        result.setdefault("speaker_id", speaker_info["speaker_id"])
-                                    if speaker_info.get("speaker_label"):
-                                        result.setdefault("speaker_label", speaker_info["speaker_label"])
-                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
-                                logger.exception("Diarization update failed: {}", diar_err)
-
-                        if on_transcript_result is not None:
-                            try:
-                                full_snapshot = transcriber.get_full_transcript() if transcriber else ""
-                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
-                                full_snapshot = ""
-                            try:
-                                await on_transcript_result(result, full_snapshot)
-                            except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
-                                logger.debug(f"on_transcript_result callback failed: {cb_exc}")
-
-                        await stream.send_json(result)
-                        if insights_engine and result.get("is_final"):
-                            try:
-                                await insights_engine.on_transcript(result)
-                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
-                                logger.exception("Live insights failed to ingest segment: {}", insight_err)
+                    if not await _process_audio_chunk(audio_bytes):
+                        return
                     if auto_commit_triggered:
                         await _emit_full_transcript(
                             commit_received_at=getattr(turn_detector, "last_trigger_at", None),
                             auto_commit=True,
                         )
 
-                elif data.get("type") == "commit":
-                    await _emit_full_transcript(time.time(), auto_commit=False)
+                elif data.get("type") in {"control", "commit", "reset", "stop"}:
+                    decision = control_session.handle_frame(data)
+                    if decision.error:
+                        await stream.send_json(decision.error)
+                        continue
 
-                elif data.get("type") == "reset":
-                    # Reset transcriber
-                    transcriber.reset()
-                    if insights_engine:
-                        try:
-                            await insights_engine.reset()
-                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
-                            logger.exception("Live insights reset failed: {}", insight_err)
-                    if diarizer:
-                        try:
-                            await diarizer.reset()
-                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
-                            logger.exception("Diarization reset failed: {}", diar_err)
-                    await stream.send_json({
-                        "type": "status",
-                        "state": "reset"
-                    })
+                    for event in decision.events:
+                        await stream.send_json(event)
 
-                elif data.get("type") == "stop":
-                    # Stop transcription with standardized done frame
-                    with contextlib.suppress(_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS):
-                        await stream.done()
-                    break
+                    if decision.intent == "resume":
+                        queued_audio = list(paused_audio_chunks)
+                        paused_audio_chunks.clear()
+                        control_session.release_paused_audio()
+                        for buffered_audio, _buffered_seconds in queued_audio:
+                            if not await _process_audio_chunk(buffered_audio):
+                                return
+
+                    if decision.should_reset:
+                        paused_audio_chunks.clear()
+                        transcriber.reset()
+                        if insights_engine:
+                            try:
+                                await insights_engine.reset()
+                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
+                                logger.exception("Live insights reset failed: {}", insight_err)
+                        if diarizer:
+                            try:
+                                await diarizer.reset()
+                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
+                                logger.exception("Diarization reset failed: {}", diar_err)
+
+                    should_emit_full_transcript = decision.should_emit_full_transcript
+                    if data.get("type") == "stop" and not control_session.negotiated_v2:
+                        should_emit_full_transcript = False
+                    if should_emit_full_transcript:
+                        await _emit_full_transcript(time.time(), auto_commit=False)
+
+                    if decision.should_close:
+                        paused_audio_chunks.clear()
+                        with contextlib.suppress(_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS):
+                            await stream.done()
+                        break
 
             except json.JSONDecodeError:
                 await stream.error("validation_error", "Invalid JSON message")

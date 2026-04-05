@@ -1523,6 +1523,24 @@ async def websocket_audio_chat_stream(
             await websocket.close(code=4400)
             return
 
+        try:
+            requested_protocol_version = int(cfg_data.get("protocol_version") or 1)
+        except (TypeError, ValueError):
+            requested_protocol_version = 1
+
+        if requested_protocol_version == 2:
+            if _outer_stream:
+                await _outer_stream.send_json(
+                    {
+                        "type": "error",
+                        "code": "unsupported_protocol_version",
+                        "message": "protocol_version=2 is not supported on /api/v1/audio/chat/stream yet",
+                        "error_type": "unsupported_protocol_version",
+                    }
+                )
+            await websocket.close(code=4400)
+            return
+
         stt_cfg = cfg_data.get("stt") or cfg_data
         llm_cfg = cfg_data.get("llm") or {}
         tts_cfg = cfg_data.get("tts") or {}

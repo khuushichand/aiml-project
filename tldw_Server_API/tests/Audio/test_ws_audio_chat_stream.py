@@ -378,6 +378,47 @@ async def test_audio_chat_ws_normalizes_parakeet_variant_before_transcriber_init
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_audio_chat_ws_rejects_protocol_version_2_until_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "protocol_version": 2,
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            }
+        ]
+    )
+    transcriber_init_count = 0
+
+    class _CapturingTranscriber(_DummyTranscriber):
+        def __init__(self, config: Any) -> None:
+            nonlocal transcriber_init_count
+            transcriber_init_count += 1
+            super().__init__(config)
+
+    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _CapturingTranscriber)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    assert transcriber_init_count == 0
+    assert ws.sent_json == [
+        {
+            "type": "error",
+            "code": "unsupported_protocol_version",
+            "message": "protocol_version=2 is not supported on /api/v1/audio/chat/stream yet",
+            "error_type": "unsupported_protocol_version",
+        }
+    ]
+    assert ws.close_code == 4400
+    assert ws.closed is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_audio_chat_ws_interrupt_without_active_turn_is_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     ws = DummyWebSocket(
         [
