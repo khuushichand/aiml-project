@@ -1,6 +1,6 @@
 [Setup]
-enable_first_time_setup = false
-setup_completed = true
+enable_first_time_setup = true
+setup_completed = false
 # When true, bypasses the local-only guard for setup API requests.
 allow_remote_setup_access = false
 # Optional: restrict which remote clients can access /setup

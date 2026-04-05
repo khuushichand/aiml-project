@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, computed_field
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +177,17 @@ class ManuscriptSceneResponse(BaseModel):
     client_id: str
     version: int
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def content(self) -> dict[str, Any] | None:
+        """Parsed TipTap JSON content (mirrors the ``content`` field on create/update)."""
+        if self.content_json is None:
+            return None
+        try:
+            return json.loads(self.content_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Structure tree
@@ -187,6 +200,7 @@ class SceneSummary(BaseModel):
     sort_order: float
     word_count: int = 0
     status: str = "draft"
+    version: int = 1
 
 
 class ChapterSummary(BaseModel):
@@ -196,6 +210,7 @@ class ChapterSummary(BaseModel):
     part_id: str | None = None
     word_count: int = 0
     status: str = "draft"
+    version: int = 1
     scenes: list[SceneSummary] = Field(default_factory=list)
 
 
@@ -204,6 +219,7 @@ class PartSummary(BaseModel):
     title: str
     sort_order: float
     word_count: int = 0
+    version: int = 1
     chapters: list[ChapterSummary] = Field(default_factory=list)
 
 
@@ -221,6 +237,7 @@ class ManuscriptStructureResponse(BaseModel):
 class ReorderItem(BaseModel):
     id: str = Field(..., description="Entity ID")
     sort_order: float = Field(..., description="New sort order")
+    version: int = Field(..., description="Expected version for optimistic locking")
     new_parent_id: str | None = Field(None, description="Optional new parent ID (for reparenting chapters)")
 
 

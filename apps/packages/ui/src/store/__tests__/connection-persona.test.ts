@@ -32,12 +32,14 @@ const setConnectionState = (overrides: Record<string, unknown>) => {
 }
 
 describe("UserPersona type and persistence", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear()
+    await useConnectionStore.getState().setUserPersona(null)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     localStorage.clear()
+    await useConnectionStore.getState().setUserPersona(null)
   })
 
   it("defaults to null in initial state", () => {
@@ -50,12 +52,15 @@ describe("UserPersona type and persistence", () => {
     expect(stored).toBeNull()
   })
 
-  it("accepts valid persona values", () => {
+  it("accepts valid persona values", async () => {
     const validPersonas: UserPersona[] = ["family", "researcher", "explorer", null]
     for (const persona of validPersonas) {
+      await useConnectionStore.getState().setUserPersona(persona)
+      expect(useConnectionStore.getState().state.userPersona).toBe(persona)
       if (persona) {
-        localStorage.setItem("__tldw_user_persona", persona)
         expect(localStorage.getItem("__tldw_user_persona")).toBe(persona)
+      } else {
+        expect(localStorage.getItem("__tldw_user_persona")).toBeNull()
       }
     }
   })

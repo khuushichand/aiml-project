@@ -106,6 +106,7 @@ describe("P0/P1 tutorial selector contracts", () => {
     expect(reviewContent).toContain('data-testid="media-search-submit"')
     expect(resultsContent).toContain('data-testid="media-results-list"')
     expect(viewerContent).toContain('data-testid="content-scroll-container"')
+    expect(viewerContent).toContain('data-testid="content-viewer-empty"')
     expect(reviewContent).toContain('data-testid="media-library-tools-toggle"')
   })
 

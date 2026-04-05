@@ -264,7 +264,6 @@ class TestCharacterRelationships:
         with pytest.raises(ValueError, match="Unknown update column"):
             mdb.update_character(cid, {"malicious_col": "x"}, expected_version=1)
 
-
 # ---------------------------------------------------------------------------
 # Scene-Character Linking
 # ---------------------------------------------------------------------------

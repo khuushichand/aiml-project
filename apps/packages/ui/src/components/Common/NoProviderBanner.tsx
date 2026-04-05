@@ -38,12 +38,12 @@ export const NoProviderBanner: React.FC<NoProviderBannerProps> = ({
           <p className="mt-1 text-xs text-text-muted">
             {t(
               "playground:noProviderBanner.body",
-              "Chat requires an LLM provider API key (OpenAI, Anthropic, etc.). Add one in your server's .env file or through the admin panel, then restart."
+              "Chat requires an LLM provider API key (OpenAI, Anthropic, etc.). Open your server's settings to add one, then restart the server."
             )}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Link
-              to="/settings/model"
+              to="/settings/tldw"
               className="inline-flex items-center rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
               {t("playground:noProviderBanner.openSettings", "Open Settings")}

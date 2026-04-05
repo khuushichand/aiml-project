@@ -22,6 +22,7 @@ import type { DocumentType } from "./types"
 import { useNavigate } from "react-router-dom"
 import { setSetting } from "@/services/settings/registry"
 import { LAST_MEDIA_ID_SETTING } from "@/services/settings/ui-settings"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 
 export type DocumentPickerTab = "library" | "upload"
 
@@ -118,6 +119,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   const { t } = useTranslation(["option", "common"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
+  const recentlyIngestedDocIds = useQuickIngestStore(s => s.recentlyIngestedDocIds)
 
   const [activeTab, setActiveTab] = React.useState<DocumentPickerTab>(initialTab)
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -331,6 +333,31 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
           size="small"
         />
       </div>
+
+      {/* Recently ingested from QuickIngest */}
+      {recentlyIngestedDocIds.length > 0 && !searchQuery && (
+        <div className="mb-3">
+          <p className="mb-1.5 text-xs font-medium text-text-muted">
+            {t("option:documentWorkspace.recentlyIngested", "Recently ingested")}
+          </p>
+          <div className="space-y-1">
+            {recentlyIngestedDocIds.slice(0, 3).map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => handleOpen({ id })}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface2 transition-colors"
+              >
+                <FileText className="h-4 w-4 flex-shrink-0 text-primary" />
+                <span className="truncate">Document #{id}</span>
+                <span className="ml-auto text-xs text-text-muted">
+                  {t("option:documentWorkspace.justIngested", "Just ingested")}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Recent documents */}
       {!searchQuery && recentDocs.length > 0 && (
