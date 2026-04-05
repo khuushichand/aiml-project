@@ -78,6 +78,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
       queryClient.invalidateQueries({ queryKey: ["manuscript-characters", activeProjectId] })
       setNewCharName("")
     },
+    onError: (err: Error) => {
+      console.debug("[CharacterWorldTab] Failed to create character", err)
+    },
   })
 
   const addWorldMutation = useMutation({
@@ -87,6 +90,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
       queryClient.invalidateQueries({ queryKey: ["manuscript-world-info", activeProjectId] })
       setNewWorldName("")
     },
+    onError: (err: Error) => {
+      console.debug("[CharacterWorldTab] Failed to create world info", err)
+    },
   })
 
   const addPlotMutation = useMutation({
@@ -94,6 +100,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["manuscript-plot-lines", activeProjectId] })
       setNewPlotTitle("")
+    },
+    onError: (err: Error) => {
+      console.debug("[CharacterWorldTab] Failed to create plot line", err)
     },
   })
 
