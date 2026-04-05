@@ -24,7 +24,7 @@ import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dia
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
-import type { WebhookItem, WebhookDeliveryItem } from '@/types/webhooks';
+import type { AdminWebhook, AdminWebhookDeliveryLogEntry } from '@/types';
 import { Activity, ChevronDown, ChevronRight, Copy, Play, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react';
 
 
@@ -35,6 +35,26 @@ const AVAILABLE_EVENTS = [
   'incident.updated',
   'incident.resolved',
 ] as const;
+
+type DeliveryHistoryItem = {
+  id: number;
+  event_type: string;
+  status_code: number | null;
+  response_time_ms: number | null;
+  success: boolean;
+  error: string | null;
+  attempted_at: string | null;
+};
+
+const toDeliveryHistoryItem = (delivery: AdminWebhookDeliveryLogEntry): DeliveryHistoryItem => ({
+  id: delivery.id,
+  event_type: delivery.event_type,
+  status_code: delivery.status_code,
+  response_time_ms: delivery.latency_ms,
+  success: typeof delivery.status_code === 'number' && delivery.status_code >= 200 && delivery.status_code < 300,
+  error: delivery.error_message,
+  attempted_at: delivery.delivered_at ?? delivery.created_at,
+});
 
 function DeliveryStatusBadge({ success }: { success: boolean }) {
   return (
@@ -49,11 +69,11 @@ function DeliveryHistory({
   visible,
   refreshKey,
 }: {
-  webhookId: string;
+  webhookId: number;
   visible: boolean;
   refreshKey?: number;
 }) {
-  const [deliveries, setDeliveries] = useState<WebhookDeliveryItem[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -61,8 +81,8 @@ function DeliveryHistory({
     setLoading(true);
     setError('');
     try {
-      const response = await api.getWebhookDeliveries(webhookId, 50);
-      setDeliveries(response.items ?? []);
+      const response = await api.getWebhookDeliveries(webhookId, { limit: 50 });
+      setDeliveries((response.items ?? []).map(toDeliveryHistoryItem));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load deliveries';
       setError(message);
@@ -144,15 +164,15 @@ function WebhooksPageContent() {
   const promptPrivileged = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
 
-  const [webhooks, setWebhooks] = useState<WebhookItem[]>([]);
+  const [webhooks, setWebhooks] = useState<AdminWebhook[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   // Track which webhook's deliveries are expanded
-  const [expandedWebhookId, setExpandedWebhookId] = useState<string | null>(null);
+  const [expandedWebhookId, setExpandedWebhookId] = useState<number | null>(null);
 
   // Track which webhooks have a test in-flight
-  const [testingWebhookIds, setTestingWebhookIds] = useState<Set<string>>(new Set());
+  const [testingWebhookIds, setTestingWebhookIds] = useState<Set<number>>(new Set());
   // Bump to refresh delivery history after a test webhook
   const [deliveryRefreshKey, setDeliveryRefreshKey] = useState(0);
 
@@ -192,17 +212,20 @@ function WebhooksPageContent() {
     try {
       const result = await api.createWebhook({
         url: createUrl.trim(),
-        events: createEvents,
-        enabled: true,
+        event_types: createEvents,
+        active: true,
       });
+      const returnedSecret =
+        'secret' in result && typeof result.secret === 'string' ? result.secret : '';
       success('Webhook created');
       setShowCreateDialog(false);
       setCreateUrl('');
       setCreateEvents([]);
-      // Show the secret once
-      setCreatedSecret(result.secret);
-      setSecretCopied(false);
-      setShowSecretDialog(true);
+      if (returnedSecret) {
+        setCreatedSecret(returnedSecret);
+        setSecretCopied(false);
+        setShowSecretDialog(true);
+      }
       await fetchWebhooks();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create webhook';
@@ -212,10 +235,10 @@ function WebhooksPageContent() {
     }
   };
 
-  const handleToggleEnabled = async (webhook: WebhookItem) => {
+  const handleToggleEnabled = async (webhook: AdminWebhook) => {
     try {
-      await api.updateWebhook(webhook.id, { enabled: !webhook.enabled });
-      success(webhook.enabled ? 'Webhook disabled' : 'Webhook enabled');
+      await api.updateWebhook(webhook.id, { active: !webhook.active });
+      success(webhook.active ? 'Webhook disabled' : 'Webhook enabled');
       await fetchWebhooks();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update webhook';
@@ -223,7 +246,7 @@ function WebhooksPageContent() {
     }
   };
 
-  const handleDelete = async (webhook: WebhookItem) => {
+  const handleDelete = async (webhook: AdminWebhook) => {
     const result = await promptPrivileged({
       title: 'Delete Webhook',
       message: `Delete the webhook for ${webhook.url}? This cannot be undone.`,
@@ -243,7 +266,7 @@ function WebhooksPageContent() {
     }
   };
 
-  const handleTestWebhook = async (webhook: WebhookItem) => {
+  const handleTestWebhook = async (webhook: AdminWebhook) => {
     setTestingWebhookIds((prev) => new Set(prev).add(webhook.id));
     try {
       const delivery = await api.testWebhook(webhook.id);
@@ -282,7 +305,7 @@ function WebhooksPageContent() {
     );
   };
 
-  const toggleDeliveries = (webhookId: string) => {
+  const toggleDeliveries = (webhookId: number) => {
     setExpandedWebhookId((prev) => (prev === webhookId ? null : webhookId));
   };
 
@@ -361,7 +384,7 @@ function WebhooksPageContent() {
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
-                            {webhook.events.map((event) => (
+                            {webhook.event_types.map((event) => (
                               <Badge key={event} variant="secondary" className="text-xs">
                                 {event}
                               </Badge>
@@ -369,8 +392,8 @@ function WebhooksPageContent() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={webhook.enabled ? 'default' : 'outline'}>
-                            {webhook.enabled ? 'Enabled' : 'Disabled'}
+                          <Badge variant={webhook.active ? 'default' : 'outline'}>
+                            {webhook.active ? 'Enabled' : 'Disabled'}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
@@ -393,7 +416,7 @@ function WebhooksPageContent() {
                               size="sm"
                               onClick={() => handleToggleEnabled(webhook)}
                             >
-                              {webhook.enabled ? 'Disable' : 'Enable'}
+                              {webhook.active ? 'Disable' : 'Enable'}
                             </Button>
                             <Button
                               variant="ghost"

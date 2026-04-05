@@ -705,7 +705,7 @@ function OrganizationsPageContent() {
                           variant="destructive"
                           size="sm"
                           onClick={async () => {
-                            const result = await privilegedAction({
+                            const result = await promptPrivilegedAction({
                               title: 'Bulk Delete Organizations',
                               message: `Delete ${selectedOrgIds.size} organization(s)? This cannot be undone.`,
                               confirmText: 'Delete All',
