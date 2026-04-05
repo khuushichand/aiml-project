@@ -1007,7 +1007,7 @@ async def create_character(
             motivation=payload.motivation,
             arc_summary=payload.arc_summary,
             notes=payload.notes,
-            custom_fields=payload.custom_fields or None,
+            custom_fields=payload.custom_fields,
             sort_order=payload.sort_order,
             character_id=payload.id,
         )
@@ -1093,8 +1093,6 @@ async def update_character(
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
-    if "custom_fields" in update_data:
-        update_data["custom_fields_json"] = json.dumps(update_data.pop("custom_fields"))
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1342,10 +1340,6 @@ async def update_world_info(
     update_data = payload.model_dump(exclude_none=True)
     if "name" in update_data:
         update_data["name"] = update_data["name"].strip()
-    if "properties" in update_data:
-        update_data["properties_json"] = json.dumps(update_data.pop("properties"))
-    if "tags" in update_data:
-        update_data["tags_json"] = json.dumps(update_data.pop("tags"))
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"

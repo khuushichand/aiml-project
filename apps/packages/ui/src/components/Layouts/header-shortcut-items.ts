@@ -39,6 +39,7 @@ import {
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
 import { HEADER_SHORTCUT_IDS } from "@/services/settings/ui-settings"
+export { HEADER_SHORTCUT_IDS }
 import type { UserPersona } from "@/types/connection"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
@@ -581,5 +582,5 @@ export const getDefaultShortcutsForPersona = (
   persona: UserPersona
 ): HeaderShortcutId[] => {
   if (!persona || persona === "explorer") return [...HEADER_SHORTCUT_IDS]
-  return PERSONA_SHORTCUT_DEFAULTS[persona] ?? [...HEADER_SHORTCUT_IDS]
+  return [...(PERSONA_SHORTCUT_DEFAULTS[persona] ?? HEADER_SHORTCUT_IDS)]
 }

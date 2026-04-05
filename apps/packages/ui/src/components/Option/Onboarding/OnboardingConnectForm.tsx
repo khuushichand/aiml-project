@@ -826,9 +826,17 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   )
 
   const handleOpenIngestFlow = useCallback(async () => {
+    await finishAndNavigate("/media", { openQuickIngestIntro: true })
+  }, [finishAndNavigate])
+
+  const handleResearchGetStarted = useCallback(async () => {
     await actions.setUserPersona("researcher")
-    const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
-    await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
+    try {
+      const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
+      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to persist researcher shortcuts", err)
+    }
     await finishAndNavigate("/media", { openQuickIngestIntro: true })
   }, [actions, finishAndNavigate])
 
@@ -852,8 +860,12 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
   const handleOpenFamilyFlow = useCallback(async () => {
     await actions.setUserPersona("family")
-    const familyShortcuts = getDefaultShortcutsForPersona("family")
-    await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, familyShortcuts)
+    try {
+      const familyShortcuts = getDefaultShortcutsForPersona("family")
+      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, familyShortcuts)
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to persist family shortcuts", err)
+    }
     await finishAndNavigate("/settings/family-guardrails")
   }, [actions, finishAndNavigate])
 
@@ -1089,7 +1101,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                 </div>
               </div>
               <div className="mt-4 flex items-center gap-2">
-                <Button type="primary" onClick={handleOpenIngestFlow}>
+                <Button type="primary" onClick={handleResearchGetStarted}>
                   {t("settings:onboarding.success.getStarted", "Get Started")}
                   <ArrowRight className="ml-1 h-4 w-4" />
                 </Button>

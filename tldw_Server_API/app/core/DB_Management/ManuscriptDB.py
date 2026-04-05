@@ -48,6 +48,54 @@ _REORDER_ENTITY_TABLES = {
 }
 
 
+_ALLOWED_PROJECT_UPDATE_COLS = frozenset({
+    "title", "subtitle", "author", "genre", "status", "synopsis",
+    "target_word_count", "settings",
+})
+
+_ALLOWED_PART_UPDATE_COLS = frozenset({
+    "title", "sort_order", "synopsis",
+})
+
+_ALLOWED_CHAPTER_UPDATE_COLS = frozenset({
+    "title", "part_id", "sort_order", "synopsis", "pov_character_id", "status",
+})
+
+_ALLOWED_SCENE_UPDATE_COLS = frozenset({
+    "title", "sort_order", "content_json", "content_plain", "synopsis",
+    "pov_character_id", "status", "word_count",
+})
+
+_ALLOWED_CHARACTER_UPDATE_COLS = frozenset({
+    "name", "role", "cast_group", "full_name", "age", "gender",
+    "appearance", "personality", "backstory", "motivation",
+    "arc_summary", "notes", "custom_fields", "custom_fields_json", "sort_order",
+})
+
+_ALLOWED_WORLD_INFO_UPDATE_COLS = frozenset({
+    "name", "description", "parent_id", "properties", "properties_json",
+    "tags", "tags_json", "sort_order",
+})
+
+_ALLOWED_PLOT_LINE_UPDATE_COLS = frozenset({
+    "title", "description", "status", "color", "sort_order",
+})
+
+_ALLOWED_PLOT_EVENT_UPDATE_COLS = frozenset({
+    "title", "description", "scene_id", "chapter_id", "event_type",
+    "plot_line_id", "sort_order",
+})
+
+_ALLOWED_PLOT_HOLE_UPDATE_COLS = frozenset({
+    "title", "description", "severity", "status", "scene_id", "chapter_id",
+    "plot_line_id", "resolution", "detected_by",
+})
+
+_ALLOWED_CITATION_UPDATE_COLS = frozenset({
+    "source_type", "source_id", "source_title", "excerpt", "query_used", "anchor_offset",
+})
+
+
 def _word_count(text: str | None) -> int:
     """Return the number of whitespace-delimited words in *text*."""
     if text and text.strip():
@@ -137,7 +185,11 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["settings"] = json.loads(d.pop("settings_json", "{}"))
+        return d
 
     def list_projects(
         self,
@@ -166,7 +218,12 @@ class ManuscriptDBHelper:
                 [*params, limit, offset],
             ).fetchall()
 
-        return [dict(r) for r in rows], int(total)
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["settings"] = json.loads(d.pop("settings_json", "{}"))
+            results.append(d)
+        return results, int(total)
 
     def update_project(
         self,
@@ -177,6 +234,10 @@ class ManuscriptDBHelper:
         """Update a project with optimistic locking."""
         if not updates:
             return
+
+        unexpected = set(updates.keys()) - _ALLOWED_PROJECT_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for project: {unexpected}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -285,6 +346,10 @@ class ManuscriptDBHelper:
         """Update a part with optimistic locking."""
         if not updates:
             return
+
+        unexpected = set(updates.keys()) - _ALLOWED_PART_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for part: {unexpected}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -414,6 +479,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unexpected = set(updates.keys()) - _ALLOWED_CHAPTER_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for chapter: {unexpected}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -542,6 +611,10 @@ class ManuscriptDBHelper:
         """
         if not updates:
             return
+
+        unexpected = set(updates.keys()) - _ALLOWED_SCENE_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for scene: {unexpected}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -917,6 +990,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unexpected = set(updates.keys()) - _ALLOWED_CHARACTER_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for character: {unexpected}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1164,6 +1241,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unexpected = set(updates.keys()) - _ALLOWED_WORLD_INFO_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for world info: {unexpected}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1313,6 +1394,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unexpected = set(updates.keys()) - _ALLOWED_PLOT_LINE_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for plot line: {unexpected}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1416,6 +1501,10 @@ class ManuscriptDBHelper:
         """Update a plot event with optimistic locking."""
         if not updates:
             return
+
+        unexpected = set(updates.keys()) - _ALLOWED_PLOT_EVENT_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for plot event: {unexpected}")
 
         now = self._now()
         next_version = expected_version + 1
@@ -1540,6 +1629,10 @@ class ManuscriptDBHelper:
         if not updates:
             return
 
+        unexpected = set(updates.keys()) - _ALLOWED_PLOT_HOLE_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for plot hole: {unexpected}")
+
         now = self._now()
         next_version = expected_version + 1
 
@@ -1649,6 +1742,55 @@ class ManuscriptDBHelper:
             if cur.rowcount == 0:
                 raise ConflictError(
                     f"Citation {citation_id!r} delete failed (version conflict or not found).",
+                    entity="manuscript_citations",
+                    entity_id=citation_id,
+                )
+
+    def get_citation(self, citation_id: str) -> dict[str, Any] | None:
+        """Fetch a citation by ID; returns *None* if missing or deleted."""
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM manuscript_citations WHERE id = ? AND deleted = 0",
+                (citation_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_citation(
+        self,
+        citation_id: str,
+        updates: dict[str, Any],
+        expected_version: int,
+    ) -> None:
+        """Update a citation with optimistic locking."""
+        if not updates:
+            return
+
+        unexpected = set(updates.keys()) - _ALLOWED_CITATION_UPDATE_COLS
+        if unexpected:
+            raise ValueError(f"Unexpected update columns for citation: {unexpected}")
+
+        now = self._now()
+        next_version = expected_version + 1
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            set_parts.append(f"{key} = ?")
+            params.append(value)
+
+        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+        params.extend([now, next_version, self._client_id])
+        params.extend([citation_id, expected_version])
+
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE manuscript_citations SET {', '.join(set_parts)} "  # nosec B608
+                "WHERE id = ? AND version = ? AND deleted = 0",
+                params,
+            )
+            if cur.rowcount == 0:
+                raise ConflictError(
+                    f"Citation {citation_id!r} update failed (version conflict or not found).",
                     entity="manuscript_citations",
                     entity_id=citation_id,
                 )

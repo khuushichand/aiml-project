@@ -4015,7 +4015,11 @@ AFTER INSERT ON manuscript_characters BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,'age',NEW.age,
+                     'gender',NEW.gender,'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,'arc_summary',NEW.arc_summary,
+                     'notes',NEW.notes,'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4027,11 +4031,14 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.role IS NOT NEW.role OR
      OLD.cast_group IS NOT NEW.cast_group OR
      OLD.full_name IS NOT NEW.full_name OR
+     OLD.age IS NOT NEW.age OR
+     OLD.gender IS NOT NEW.gender OR
      OLD.appearance IS NOT NEW.appearance OR
      OLD.personality IS NOT NEW.personality OR
      OLD.backstory IS NOT NEW.backstory OR
      OLD.motivation IS NOT NEW.motivation OR
      OLD.arc_summary IS NOT NEW.arc_summary OR
+     OLD.notes IS NOT NEW.notes OR
      OLD.custom_fields_json IS NOT NEW.custom_fields_json OR
      OLD.sort_order IS NOT NEW.sort_order OR
      OLD.last_modified IS NOT NEW.last_modified OR
@@ -4040,7 +4047,11 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,'age',NEW.age,
+                     'gender',NEW.gender,'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,'arc_summary',NEW.arc_summary,
+                     'notes',NEW.notes,'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4062,7 +4073,11 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,'age',NEW.age,
+                     'gender',NEW.gender,'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,'arc_summary',NEW.arc_summary,
+                     'notes',NEW.notes,'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4140,6 +4155,7 @@ AFTER INSERT ON manuscript_world_info BEGIN
   VALUES('manuscript_world_info', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4162,6 +4178,7 @@ BEGIN
   VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4185,6 +4202,7 @@ BEGIN
   VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -9564,6 +9582,876 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL study pack sync triggers: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_manuscript_phase2_sync_triggers_postgres(self, conn) -> None:
+        """Ensure PostgreSQL sync-log triggers for V42 manuscript tables."""
+        try:
+            # ── manuscript_characters ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_characters_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'name', NEW.name,
+                        'role', NEW.role,
+                        'cast_group', NEW.cast_group,
+                        'full_name', NEW.full_name,
+                        'age', NEW.age,
+                        'gender', NEW.gender,
+                        'appearance', NEW.appearance,
+                        'personality', NEW.personality,
+                        'backstory', NEW.backstory,
+                        'motivation', NEW.motivation,
+                        'arc_summary', NEW.arc_summary,
+                        'notes', NEW.notes,
+                        'custom_fields_json', NEW.custom_fields_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'name', NEW.name,
+                        'role', NEW.role,
+                        'cast_group', NEW.cast_group,
+                        'full_name', NEW.full_name,
+                        'age', NEW.age,
+                        'gender', NEW.gender,
+                        'appearance', NEW.appearance,
+                        'personality', NEW.personality,
+                        'backstory', NEW.backstory,
+                        'motivation', NEW.motivation,
+                        'arc_summary', NEW.arc_summary,
+                        'notes', NEW.notes,
+                        'custom_fields_json', NEW.custom_fields_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.name IS DISTINCT FROM NEW.name OR
+                    OLD.role IS DISTINCT FROM NEW.role OR
+                    OLD.cast_group IS DISTINCT FROM NEW.cast_group OR
+                    OLD.full_name IS DISTINCT FROM NEW.full_name OR
+                    OLD.age IS DISTINCT FROM NEW.age OR
+                    OLD.gender IS DISTINCT FROM NEW.gender OR
+                    OLD.appearance IS DISTINCT FROM NEW.appearance OR
+                    OLD.personality IS DISTINCT FROM NEW.personality OR
+                    OLD.backstory IS DISTINCT FROM NEW.backstory OR
+                    OLD.motivation IS DISTINCT FROM NEW.motivation OR
+                    OLD.arc_summary IS DISTINCT FROM NEW.arc_summary OR
+                    OLD.notes IS DISTINCT FROM NEW.notes OR
+                    OLD.custom_fields_json IS DISTINCT FROM NEW.custom_fields_json OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'name', NEW.name,
+                        'role', NEW.role,
+                        'cast_group', NEW.cast_group,
+                        'full_name', NEW.full_name,
+                        'age', NEW.age,
+                        'gender', NEW.gender,
+                        'appearance', NEW.appearance,
+                        'personality', NEW.personality,
+                        'backstory', NEW.backstory,
+                        'motivation', NEW.motivation,
+                        'arc_summary', NEW.arc_summary,
+                        'notes', NEW.notes,
+                        'custom_fields_json', NEW.custom_fields_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_character_relationships ─────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_character_relationships_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'from_character_id', NEW.from_character_id,
+                        'to_character_id', NEW.to_character_id,
+                        'relationship_type', NEW.relationship_type,
+                        'description', NEW.description,
+                        'bidirectional', NEW.bidirectional,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'from_character_id', NEW.from_character_id,
+                        'to_character_id', NEW.to_character_id,
+                        'relationship_type', NEW.relationship_type,
+                        'description', NEW.description,
+                        'bidirectional', NEW.bidirectional,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.relationship_type IS DISTINCT FROM NEW.relationship_type OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.bidirectional IS DISTINCT FROM NEW.bidirectional OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'from_character_id', NEW.from_character_id,
+                        'to_character_id', NEW.to_character_id,
+                        'relationship_type', NEW.relationship_type,
+                        'description', NEW.description,
+                        'bidirectional', NEW.bidirectional,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_world_info ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_world_info_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'kind', NEW.kind,
+                        'name', NEW.name,
+                        'description', NEW.description,
+                        'parent_id', NEW.parent_id,
+                        'properties_json', NEW.properties_json,
+                        'tags_json', NEW.tags_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'kind', NEW.kind,
+                        'name', NEW.name,
+                        'description', NEW.description,
+                        'parent_id', NEW.parent_id,
+                        'properties_json', NEW.properties_json,
+                        'tags_json', NEW.tags_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.kind IS DISTINCT FROM NEW.kind OR
+                    OLD.name IS DISTINCT FROM NEW.name OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.parent_id IS DISTINCT FROM NEW.parent_id OR
+                    OLD.properties_json IS DISTINCT FROM NEW.properties_json OR
+                    OLD.tags_json IS DISTINCT FROM NEW.tags_json OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'kind', NEW.kind,
+                        'name', NEW.name,
+                        'description', NEW.description,
+                        'parent_id', NEW.parent_id,
+                        'properties_json', NEW.properties_json,
+                        'tags_json', NEW.tags_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_plot_lines ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_plot_lines_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'status', NEW.status,
+                        'color', NEW.color,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'status', NEW.status,
+                        'color', NEW.color,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.color IS DISTINCT FROM NEW.color OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'status', NEW.status,
+                        'color', NEW.color,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_plot_events ─────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_plot_events_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'event_type', NEW.event_type,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'event_type', NEW.event_type,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.event_type IS DISTINCT FROM NEW.event_type OR
+                    OLD.scene_id IS DISTINCT FROM NEW.scene_id OR
+                    OLD.chapter_id IS DISTINCT FROM NEW.chapter_id OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'event_type', NEW.event_type,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_plot_holes ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_plot_holes_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'severity', NEW.severity,
+                        'status', NEW.status,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'resolution', NEW.resolution,
+                        'detected_by', NEW.detected_by,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'severity', NEW.severity,
+                        'status', NEW.status,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'resolution', NEW.resolution,
+                        'detected_by', NEW.detected_by,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.severity IS DISTINCT FROM NEW.severity OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.resolution IS DISTINCT FROM NEW.resolution OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'severity', NEW.severity,
+                        'status', NEW.status,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'resolution', NEW.resolution,
+                        'detected_by', NEW.detected_by,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_citations ───────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_citations_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'scene_id', NEW.scene_id,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'source_title', NEW.source_title,
+                        'excerpt', NEW.excerpt,
+                        'query_used', NEW.query_used,
+                        'anchor_offset', NEW.anchor_offset,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'scene_id', NEW.scene_id,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'source_title', NEW.source_title,
+                        'excerpt', NEW.excerpt,
+                        'query_used', NEW.query_used,
+                        'anchor_offset', NEW.anchor_offset,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.source_type IS DISTINCT FROM NEW.source_type OR
+                    OLD.source_id IS DISTINCT FROM NEW.source_id OR
+                    OLD.source_title IS DISTINCT FROM NEW.source_title OR
+                    OLD.excerpt IS DISTINCT FROM NEW.excerpt OR
+                    OLD.query_used IS DISTINCT FROM NEW.query_used OR
+                    OLD.anchor_offset IS DISTINCT FROM NEW.anchor_offset OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'scene_id', NEW.scene_id,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'source_title', NEW.source_title,
+                        'excerpt', NEW.excerpt,
+                        'query_used', NEW.query_used,
+                        'anchor_offset', NEW.anchor_offset,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── Create triggers (drop first to allow re-run) ──────────
+            for table in (
+                "manuscript_characters",
+                "manuscript_character_relationships",
+                "manuscript_world_info",
+                "manuscript_plot_lines",
+                "manuscript_plot_events",
+                "manuscript_plot_holes",
+                "manuscript_citations",
+            ):
+                self.backend.execute(
+                    f"DROP TRIGGER IF EXISTS {table}_sync_log ON {table}",
+                    connection=conn,
+                )
+                self.backend.execute(
+                    f"CREATE TRIGGER {table}_sync_log AFTER INSERT OR UPDATE ON {table} "
+                    f"FOR EACH ROW EXECUTE FUNCTION {table}_sync_log_fn()",
+                    connection=conn,
+                )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL manuscript phase-2 sync triggers: {exc}") from exc  # noqa: TRY003
+
     def _ensure_quiz_remediation_conversion_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure quiz remediation conversion storage exists for SQLite."""
         try:
@@ -9867,6 +10755,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_note_folder_schema_postgres(conn)
             self._ensure_note_studio_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
+            self._ensure_manuscript_phase2_sync_triggers_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(

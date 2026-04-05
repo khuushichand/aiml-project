@@ -123,13 +123,13 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               placeholder="Character name..."
               value={newCharName}
               onChange={(e) => setNewCharName(e.target.value)}
-              onPressEnter={() => newCharName.trim() && addCharMutation.mutate(newCharName.trim())}
+              onPressEnter={() => isOnline && newCharName.trim() && addCharMutation.mutate(newCharName.trim())}
             />
             <Button
               size="small"
               type="primary"
               icon={<Plus className="h-3 w-3" />}
-              disabled={!newCharName.trim()}
+              disabled={!newCharName.trim() || !isOnline}
               loading={addCharMutation.isPending}
               onClick={() => addCharMutation.mutate(newCharName.trim())}
             />
@@ -169,14 +169,14 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               placeholder="Entry name..."
               value={newWorldName}
               onChange={(e) => setNewWorldName(e.target.value)}
-              onPressEnter={() => newWorldName.trim() && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
+              onPressEnter={() => isOnline && newWorldName.trim() && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
               className="flex-1"
             />
             <Button
               size="small"
               type="primary"
               icon={<Plus className="h-3 w-3" />}
-              disabled={!newWorldName.trim()}
+              disabled={!newWorldName.trim() || !isOnline}
               loading={addWorldMutation.isPending}
               onClick={() => addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
             />
@@ -209,13 +209,13 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 placeholder="Plot line title..."
                 value={newPlotTitle}
                 onChange={(e) => setNewPlotTitle(e.target.value)}
-                onPressEnter={() => newPlotTitle.trim() && addPlotMutation.mutate(newPlotTitle.trim())}
+                onPressEnter={() => isOnline && newPlotTitle.trim() && addPlotMutation.mutate(newPlotTitle.trim())}
               />
               <Button
                 size="small"
                 type="primary"
                 icon={<Plus className="h-3 w-3" />}
-                disabled={!newPlotTitle.trim()}
+                disabled={!newPlotTitle.trim() || !isOnline}
                 loading={addPlotMutation.isPending}
                 onClick={() => addPlotMutation.mutate(newPlotTitle.trim())}
               />

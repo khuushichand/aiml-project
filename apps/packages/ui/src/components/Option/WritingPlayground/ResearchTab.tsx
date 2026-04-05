@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button, Empty, Input, List, Spin, Tag, Typography } from "antd"
 import { Search, BookOpen, Plus } from "lucide-react"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
@@ -12,13 +12,32 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
   const [results, setResults] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
   const [citedIds, setCitedIds] = useState<Set<string>>(new Set())
+  const [searchSceneId, setSearchSceneId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+
+  const activeNodeIdRef = useRef(activeNodeId)
+  activeNodeIdRef.current = activeNodeId
+
+  useEffect(() => {
+    setResults([])
+    setCitedIds(new Set())
+    setSearchSceneId(null)
+    setSearchQuery("")
+    setSearching(false)
+  }, [activeNodeId])
 
   const handleSearch = async () => {
-    if (!query.trim() || !activeNodeId) return
+    const trimmedQuery = query.trim()
+    if (!trimmedQuery || !activeNodeId) return
     setSearching(true)
+    const sceneId = activeNodeId
     try {
-      const resp = await searchManuscriptResearch(activeNodeId, query.trim())
-      setResults((resp as any).results || [])
+      const resp = await searchManuscriptResearch(sceneId, trimmedQuery)
+      if (activeNodeIdRef.current === sceneId) {
+        setResults((resp as any).results || [])
+        setSearchSceneId(sceneId)
+        setSearchQuery(trimmedQuery)
+      }
     } catch {
       setResults([])
     } finally {
@@ -27,13 +46,13 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
   }
 
   const handleCite = async (result: any) => {
-    if (!activeNodeId) return
+    if (!searchSceneId) return
     try {
-      await createManuscriptCitation(activeNodeId, {
+      await createManuscriptCitation(searchSceneId, {
         source_type: result.source_type || "research",
         source_title: result.title || result.source_title || "Untitled",
         excerpt: result.snippet || result.excerpt || "",
-        query_used: query,
+        query_used: searchQuery,
       })
       setCitedIds((prev) => new Set(prev).add(result.id || result.title))
     } catch {
