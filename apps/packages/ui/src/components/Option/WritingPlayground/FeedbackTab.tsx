@@ -1,15 +1,6 @@
 import { Divider, Empty, List, Spin, Switch, Tag, Typography } from "antd"
 import type { UseWritingFeedbackReturn } from "./hooks/useWritingFeedback"
-
-const MOOD_COLORS: Record<string, string> = {
-  tense: "#ff4d4f",
-  romantic: "#ff85c0",
-  melancholic: "#597ef7",
-  action: "#fa8c16",
-  calm: "#52c41a",
-  mysterious: "#722ed1",
-  humorous: "#fadb14",
-}
+import { MOOD_COLORS } from "./feedback-constants"
 
 export function FeedbackTab(props: UseWritingFeedbackReturn) {
   const {

@@ -11,6 +11,10 @@ import {
   listManuscriptPlotLines,
   createManuscriptPlotLine,
   listManuscriptPlotHoles,
+  type ManuscriptCharacterResponse,
+  type ManuscriptPlotHoleResponse,
+  type ManuscriptPlotLineResponse,
+  type ManuscriptWorldInfoResponse,
 } from "@/services/writing-playground"
 
 type CharacterWorldTabProps = { isOnline: boolean }
@@ -137,9 +141,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
           {charsLoading ? <Spin size="small" /> : (
             <List
               size="small"
-              dataSource={characters as any[]}
+              dataSource={characters}
               locale={{ emptyText: "No characters yet" }}
-              renderItem={(char: any) => (
+              renderItem={(char: ManuscriptCharacterResponse) => (
                 <List.Item className="!px-0 !py-1">
                   <div className="flex items-center gap-2 w-full">
                     <Typography.Text className="text-sm flex-1">{char.name}</Typography.Text>
@@ -184,9 +188,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
           {worldLoading ? <Spin size="small" /> : (
             <List
               size="small"
-              dataSource={worldInfo as any[]}
+              dataSource={worldInfo}
               locale={{ emptyText: "No world info yet" }}
-              renderItem={(wi: any) => (
+              renderItem={(wi: ManuscriptWorldInfoResponse) => (
                 <List.Item className="!px-0 !py-1">
                   <div className="flex items-center gap-2 w-full">
                     <Typography.Text className="text-sm flex-1">{wi.name}</Typography.Text>
@@ -223,9 +227,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
             {plotLoading ? <Spin size="small" /> : (
               <List
                 size="small"
-                dataSource={plotLines as any[]}
+                dataSource={plotLines}
                 locale={{ emptyText: "No plot lines yet" }}
-                renderItem={(pl: any) => (
+                renderItem={(pl: ManuscriptPlotLineResponse) => (
                   <List.Item className="!px-0 !py-1">
                     <div className="flex items-center gap-2 w-full">
                       <Typography.Text className="text-sm flex-1">{pl.title}</Typography.Text>
@@ -238,13 +242,13 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               />
             )}
           </div>
-          {(plotHoles as any[]).length > 0 && (
+          {plotHoles.length > 0 && (
             <div>
               <Typography.Text strong className="text-xs">Plot Holes</Typography.Text>
               <List
                 size="small"
-                dataSource={plotHoles as any[]}
-                renderItem={(ph: any) => (
+                dataSource={plotHoles}
+                renderItem={(ph: ManuscriptPlotHoleResponse) => (
                   <List.Item className="!px-0 !py-1">
                     <div className="flex items-center gap-2 w-full">
                       <Typography.Text className="text-sm flex-1">{ph.title}</Typography.Text>

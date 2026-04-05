@@ -2,6 +2,155 @@ import { bgRequest } from "@/services/background-proxy"
 import { buildQuery, createResourceClient } from "@/services/resource-client"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 
+export type ManuscriptSceneResponse = {
+  id: string
+  chapter_id: string
+  project_id: string
+  title: string
+  sort_order: number
+  content: Record<string, unknown>
+  content_plain: string
+  synopsis?: string | null
+  word_count: number
+  pov_character_id?: string | null
+  status: string
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type ManuscriptCharacterResponse = {
+  id: string
+  project_id: string
+  name: string
+  role: string
+  cast_group?: string | null
+  full_name?: string | null
+  age?: string | null
+  gender?: string | null
+  appearance?: string | null
+  personality?: string | null
+  backstory?: string | null
+  motivation?: string | null
+  arc_summary?: string | null
+  notes?: string | null
+  custom_fields: Record<string, unknown>
+  sort_order: number
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type ManuscriptRelationshipResponse = {
+  id: string
+  project_id: string
+  from_character_id: string
+  to_character_id: string
+  relationship_type: string
+  description?: string | null
+  bidirectional: boolean
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type ManuscriptWorldInfoResponse = {
+  id: string
+  project_id: string
+  kind: string
+  name: string
+  description?: string | null
+  parent_id?: string | null
+  properties: Record<string, unknown>
+  tags: string[]
+  sort_order: number
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type ManuscriptPlotLineResponse = {
+  id: string
+  project_id: string
+  title: string
+  description?: string | null
+  status: string
+  color?: string | null
+  sort_order: number
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type ManuscriptPlotHoleResponse = {
+  id: string
+  project_id: string
+  title: string
+  description?: string | null
+  severity: string
+  status: string
+  resolution?: string | null
+  scene_id?: string | null
+  chapter_id?: string | null
+  plot_line_id?: string | null
+  detected_by: string
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type SceneCharacterLinkResponse = {
+  scene_id: string
+  character_id: string
+  is_pov: boolean
+  name: string
+  role: string
+}
+
+export type ManuscriptCitationResponse = {
+  id: string
+  project_id: string
+  scene_id: string
+  source_type: string
+  source_id?: string | null
+  source_title?: string | null
+  excerpt?: string | null
+  query_used?: string | null
+  anchor_offset?: number | null
+  created_at: string
+  last_modified: string
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type ManuscriptResearchResult = {
+  id?: string
+  title?: string
+  source_title?: string
+  snippet?: string
+  excerpt?: string
+  source_type?: string
+  [key: string]: unknown
+}
+
+export type ManuscriptResearchResponse = {
+  query: string
+  results: ManuscriptResearchResult[]
+}
+
 const sessionsClient = createResourceClient({
   basePath: "/api/v1/writing/sessions" as AllowedPath
 })
@@ -690,7 +839,7 @@ export async function createManuscriptScene(
 }
 
 export async function getManuscriptScene(sceneId: string) {
-  return await bgRequest({
+  return await bgRequest<ManuscriptSceneResponse>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}` as AllowedPath,
     method: "GET",
   })
@@ -717,13 +866,13 @@ export async function updateManuscriptScene(
 export async function listManuscriptCharacters(
   projectId: string,
   params?: { role?: string; cast_group?: string },
-) {
+): Promise<ManuscriptCharacterResponse[]> {
   const query = new URLSearchParams()
   if (params?.role) query.set("role", params.role)
   if (params?.cast_group) query.set("cast_group", params.cast_group)
   const qs = query.toString()
   const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters${qs ? `?${qs}` : ""}`
-  return await bgRequest({
+  return await bgRequest<ManuscriptCharacterResponse[]>({
     path: path as AllowedPath,
     method: "GET",
   })
@@ -732,8 +881,8 @@ export async function listManuscriptCharacters(
 export async function createManuscriptCharacter(
   projectId: string,
   data: Record<string, unknown>,
-) {
-  return bgRequest({
+): Promise<ManuscriptCharacterResponse> {
+  return bgRequest<ManuscriptCharacterResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -751,8 +900,10 @@ export async function deleteManuscriptCharacter(characterId: string, version: nu
 
 // ── Relationships ───────────────────────────────────────
 
-export async function listManuscriptRelationships(projectId: string) {
-  return await bgRequest({
+export async function listManuscriptRelationships(
+  projectId: string,
+): Promise<ManuscriptRelationshipResponse[]> {
+  return await bgRequest<ManuscriptRelationshipResponse[]>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters/relationships` as AllowedPath,
     method: "GET",
   })
@@ -761,8 +912,8 @@ export async function listManuscriptRelationships(projectId: string) {
 export async function createManuscriptRelationship(
   projectId: string,
   data: Record<string, unknown>,
-) {
-  return bgRequest({
+): Promise<ManuscriptRelationshipResponse> {
+  return bgRequest<ManuscriptRelationshipResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/characters/relationships` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -775,12 +926,12 @@ export async function createManuscriptRelationship(
 export async function listManuscriptWorldInfo(
   projectId: string,
   params?: { kind?: string },
-) {
+): Promise<ManuscriptWorldInfoResponse[]> {
   const query = new URLSearchParams()
   if (params?.kind) query.set("kind", params.kind)
   const qs = query.toString()
   const path = `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/world-info${qs ? `?${qs}` : ""}`
-  return await bgRequest({
+  return await bgRequest<ManuscriptWorldInfoResponse[]>({
     path: path as AllowedPath,
     method: "GET",
   })
@@ -789,8 +940,8 @@ export async function listManuscriptWorldInfo(
 export async function createManuscriptWorldInfo(
   projectId: string,
   data: Record<string, unknown>,
-) {
-  return bgRequest({
+): Promise<ManuscriptWorldInfoResponse> {
+  return bgRequest<ManuscriptWorldInfoResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/world-info` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -800,8 +951,10 @@ export async function createManuscriptWorldInfo(
 
 // ── Plot Lines ──────────────────────────────────────────
 
-export async function listManuscriptPlotLines(projectId: string) {
-  return await bgRequest({
+export async function listManuscriptPlotLines(
+  projectId: string,
+): Promise<ManuscriptPlotLineResponse[]> {
+  return await bgRequest<ManuscriptPlotLineResponse[]>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-lines` as AllowedPath,
     method: "GET",
   })
@@ -810,8 +963,8 @@ export async function listManuscriptPlotLines(projectId: string) {
 export async function createManuscriptPlotLine(
   projectId: string,
   data: Record<string, unknown>,
-) {
-  return bgRequest({
+): Promise<ManuscriptPlotLineResponse> {
+  return bgRequest<ManuscriptPlotLineResponse>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-lines` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -821,8 +974,10 @@ export async function createManuscriptPlotLine(
 
 // ── Plot Holes ──────────────────────────────────────────
 
-export async function listManuscriptPlotHoles(projectId: string) {
-  return await bgRequest({
+export async function listManuscriptPlotHoles(
+  projectId: string,
+): Promise<ManuscriptPlotHoleResponse[]> {
+  return await bgRequest<ManuscriptPlotHoleResponse[]>({
     path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/plot-holes` as AllowedPath,
     method: "GET",
   })
@@ -831,7 +986,7 @@ export async function listManuscriptPlotHoles(projectId: string) {
 // ── Scene Linking ───────────────────────────────────────
 
 export async function linkSceneCharacter(sceneId: string, characterId: string, isPov = false) {
-  return bgRequest({
+  return bgRequest<SceneCharacterLinkResponse>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/characters` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -846,8 +1001,10 @@ export async function unlinkSceneCharacter(sceneId: string, characterId: string)
   })
 }
 
-export async function listSceneCharacters(sceneId: string) {
-  return await bgRequest({
+export async function listSceneCharacters(
+  sceneId: string,
+): Promise<SceneCharacterLinkResponse[]> {
+  return await bgRequest<SceneCharacterLinkResponse[]>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/characters` as AllowedPath,
     method: "GET",
   })
@@ -855,8 +1012,10 @@ export async function listSceneCharacters(sceneId: string) {
 
 // ── Citations ───────────────────────────────────────────
 
-export async function listManuscriptCitations(sceneId: string) {
-  return await bgRequest({
+export async function listManuscriptCitations(
+  sceneId: string,
+): Promise<ManuscriptCitationResponse[]> {
+  return await bgRequest<ManuscriptCitationResponse[]>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/citations` as AllowedPath,
     method: "GET",
   })
@@ -865,8 +1024,8 @@ export async function listManuscriptCitations(sceneId: string) {
 export async function createManuscriptCitation(
   sceneId: string,
   data: Record<string, unknown>,
-) {
-  return bgRequest({
+): Promise<ManuscriptCitationResponse> {
+  return bgRequest<ManuscriptCitationResponse>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/citations` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -946,8 +1105,8 @@ export async function searchManuscriptResearch(
   sceneId: string,
   query: string,
   topK = 5,
-) {
-  return await bgRequest({
+): Promise<ManuscriptResearchResponse> {
+  return await bgRequest<ManuscriptResearchResponse>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/research` as AllowedPath,
     method: "POST",
     headers: { "Content-Type": "application/json" },

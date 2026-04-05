@@ -116,9 +116,17 @@ class TestProjectCRUD:
         mdb.update_project(pid, {"settings": {"theme": "dark"}}, expected_version=1)
 
         proj = mdb.get_project(pid)
-        import json
-        settings = json.loads(proj["settings_json"])
-        assert settings == {"theme": "dark"}
+        assert proj["settings"] == {"theme": "dark"}
+        assert "settings_json" not in proj
+
+    def test_list_projects_exposes_settings_dict(self, mdb):
+        mdb.create_project("With Settings", settings={"theme": "dark", "autosave": True})
+
+        projects, total = mdb.list_projects()
+
+        assert total == 1
+        assert projects[0]["settings"] == {"theme": "dark", "autosave": True}
+        assert "settings_json" not in projects[0]
 
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")

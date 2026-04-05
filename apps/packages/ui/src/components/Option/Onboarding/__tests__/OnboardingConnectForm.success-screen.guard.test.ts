@@ -79,4 +79,11 @@ describe("OnboardingConnectForm success screen guards", () => {
     expect(source).toContain('onClick={handleOpenChatFlow}')
     expect(source).not.toContain('setSelectedIntent("chat")')
   })
+
+  it("preserves persona when guided users skip to chat", () => {
+    const source = readOnboardingSource()
+    expect(source).toContain("const handleGoToChat = useCallback")
+    expect(source).toContain('onClick={handleGoToChat}')
+    expect(source).not.toContain('<Button onClick={handleOpenChatFlow}>')
+  })
 })

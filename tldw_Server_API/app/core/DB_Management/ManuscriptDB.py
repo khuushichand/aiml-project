@@ -134,6 +134,17 @@ class ManuscriptDBHelper:
             d["content"] = {}
         return d
 
+    @staticmethod
+    def _project_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+        """Convert a raw project DB row into API-friendly dict."""
+        d = dict(row)
+        raw = d.pop("settings_json", None) or "{}"
+        try:
+            d["settings"] = json.loads(raw)
+        except (ValueError, TypeError):
+            d["settings"] = {}
+        return d
+
     # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
@@ -184,7 +195,7 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._project_row_to_dict(row) if row else None
 
     def list_projects(
         self,
@@ -194,26 +205,31 @@ class ManuscriptDBHelper:
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return ``(projects, total_count)`` with optional status filter."""
-        where = "WHERE deleted = 0"
-        params: list[Any] = []
-        if status_filter:
-            where += " AND status = ?"
-            params.append(status_filter)
-
         with self.db.transaction() as conn:
             total_row = conn.execute(
-                f"SELECT COUNT(*) AS cnt FROM manuscript_projects {where}",  # nosec B608
-                params,
+                """
+                SELECT COUNT(*) AS cnt
+                  FROM manuscript_projects
+                 WHERE deleted = 0
+                   AND (? IS NULL OR status = ?)
+                """,
+                (status_filter, status_filter),
             ).fetchone()
             total = total_row["cnt"] if total_row else 0
 
             rows = conn.execute(
-                f"SELECT * FROM manuscript_projects {where} "  # nosec B608
-                "ORDER BY last_modified DESC LIMIT ? OFFSET ?",
-                [*params, limit, offset],
+                """
+                SELECT *
+                  FROM manuscript_projects
+                 WHERE deleted = 0
+                   AND (? IS NULL OR status = ?)
+                 ORDER BY last_modified DESC
+                 LIMIT ? OFFSET ?
+                """,
+                (status_filter, status_filter, limit, offset),
             ).fetchall()
 
-        return [dict(r) for r in rows], int(total)
+        return [self._project_row_to_dict(r) for r in rows], int(total)
 
     def update_project(
         self,
@@ -967,19 +983,24 @@ class ManuscriptDBHelper:
         cast_group_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """List non-deleted characters for a project, optionally filtered."""
-        where = "project_id = ? AND deleted = 0"
-        params: list[Any] = [project_id]
-        if role_filter:
-            where += " AND role = ?"
-            params.append(role_filter)
-        if cast_group_filter:
-            where += " AND cast_group = ?"
-            params.append(cast_group_filter)
-
         with self.db.transaction() as conn:
             cur = conn.execute(
-                f"SELECT * FROM manuscript_characters WHERE {where} ORDER BY sort_order",  # nosec B608
-                params,
+                """
+                SELECT *
+                  FROM manuscript_characters
+                 WHERE project_id = ?
+                   AND deleted = 0
+                   AND (? IS NULL OR role = ?)
+                   AND (? IS NULL OR cast_group = ?)
+                 ORDER BY sort_order
+                """,
+                (
+                    project_id,
+                    role_filter,
+                    role_filter,
+                    cast_group_filter,
+                    cast_group_filter,
+                ),
             )
             rows = cur.fetchall()
 
@@ -1010,21 +1031,67 @@ class ManuscriptDBHelper:
         if invalid_keys:
             raise ValueError(f"Invalid update columns for character: {invalid_keys}")  # noqa: TRY003
 
-        set_parts: list[str] = []
-        params: list[Any] = []
-        for key, value in updates.items():
-            set_parts.append(f"{key} = ?")
-            params.append(value)
-
-        set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
-        params.extend([now, next_version, self._client_id])
-        params.extend([character_id, expected_version])
-
         with self.db.transaction() as conn:
+            current_row = conn.execute(
+                """
+                SELECT *
+                  FROM manuscript_characters
+                 WHERE id = ? AND version = ? AND deleted = 0
+                """,
+                (character_id, expected_version),
+            ).fetchone()
+            if not current_row:
+                raise ConflictError(
+                    f"Character {character_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_characters",
+                    entity_id=character_id,
+                )
+
+            current = dict(current_row)
+            current.update(updates)
             cur = conn.execute(
-                f"UPDATE manuscript_characters SET {', '.join(set_parts)} "  # nosec B608
-                "WHERE id = ? AND version = ? AND deleted = 0",
-                params,
+                """
+                UPDATE manuscript_characters
+                   SET name = ?,
+                       role = ?,
+                       cast_group = ?,
+                       full_name = ?,
+                       age = ?,
+                       gender = ?,
+                       appearance = ?,
+                       personality = ?,
+                       backstory = ?,
+                       motivation = ?,
+                       arc_summary = ?,
+                       notes = ?,
+                       custom_fields_json = ?,
+                       sort_order = ?,
+                       last_modified = ?,
+                       version = ?,
+                       client_id = ?
+                 WHERE id = ? AND version = ? AND deleted = 0
+                """,
+                (
+                    current["name"],
+                    current["role"],
+                    current["cast_group"],
+                    current["full_name"],
+                    current["age"],
+                    current["gender"],
+                    current["appearance"],
+                    current["personality"],
+                    current["backstory"],
+                    current["motivation"],
+                    current["arc_summary"],
+                    current["notes"],
+                    current["custom_fields_json"],
+                    current["sort_order"],
+                    now,
+                    next_version,
+                    self._client_id,
+                    character_id,
+                    expected_version,
+                ),
             )
             if cur.rowcount == 0:
                 raise ConflictError(
@@ -1818,29 +1885,30 @@ class ManuscriptDBHelper:
 
         By default stale analyses are excluded unless *include_stale* is True.
         """
-        clauses = ["project_id = ?", "deleted = 0"]
-        params: list[Any] = [project_id]
-
-        if not include_stale:
-            clauses.append("stale = 0")
-        if scope_type is not None:
-            clauses.append("scope_type = ?")
-            params.append(scope_type)
-        if scope_id is not None:
-            clauses.append("scope_id = ?")
-            params.append(scope_id)
-        if analysis_type is not None:
-            clauses.append("analysis_type = ?")
-            params.append(analysis_type)
-
-        sql = (
-            "SELECT * FROM manuscript_ai_analyses WHERE "
-            + " AND ".join(clauses)
-            + " ORDER BY created_at DESC"
-        )
-
         with self.db.transaction() as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM manuscript_ai_analyses
+                 WHERE project_id = ?
+                   AND deleted = 0
+                   AND (? = 1 OR stale = 0)
+                   AND (? IS NULL OR scope_type = ?)
+                   AND (? IS NULL OR scope_id = ?)
+                   AND (? IS NULL OR analysis_type = ?)
+                 ORDER BY created_at DESC
+                """,
+                (
+                    project_id,
+                    1 if include_stale else 0,
+                    scope_type,
+                    scope_type,
+                    scope_id,
+                    scope_id,
+                    analysis_type,
+                    analysis_type,
+                ),
+            ).fetchall()
 
         results: list[dict[str, Any]] = []
         for row in rows:

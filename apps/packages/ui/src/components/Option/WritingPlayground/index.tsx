@@ -96,6 +96,7 @@ import { CharacterWorldTab } from "./CharacterWorldTab"
 import { ResearchTab } from "./ResearchTab"
 import { AIAgentTab } from "./AIAgentTab"
 import { FeedbackTab } from "./FeedbackTab"
+import { MOOD_COLORS } from "./feedback-constants"
 import { WritingAnalysisModalHost } from "./WritingAnalysisModalHost"
 import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
@@ -2372,7 +2373,7 @@ export const WritingPlayground = () => {
               {isGenerating && generationElapsed > 0 && (<span>{generationElapsed}s</span>)}
               {feedback.moodEnabled && feedback.currentMood && (
                 <Tag
-                  color={{tense:"#ff4d4f",romantic:"#ff85c0",melancholic:"#597ef7",action:"#fa8c16",calm:"#52c41a",mysterious:"#722ed1",humorous:"#fadb14"}[feedback.currentMood]}
+                  color={MOOD_COLORS[feedback.currentMood]}
                   className="!text-xs !m-0"
                 >
                   {feedback.currentMood}

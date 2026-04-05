@@ -9,6 +9,8 @@ import {
   getManuscriptScene,
   listManuscriptCharacters,
   listManuscriptWorldInfo,
+  type ManuscriptCharacterResponse,
+  type ManuscriptWorldInfoResponse,
 } from "@/services/writing-playground"
 
 type AIAgentTabProps = { isOnline: boolean }
@@ -44,27 +46,27 @@ export function AIAgentTab({ isOnline }: AIAgentTabProps) {
     const parts: string[] = []
     try {
       if (activeNodeId) {
-        const scene = await getManuscriptScene(activeNodeId) as any
-        if (scene?.content) {
-          const snippet = scene.content.length > 2000
-            ? scene.content.slice(0, 2000) + "..."
-            : scene.content
+        const scene = await getManuscriptScene(activeNodeId)
+        if (scene?.content_plain) {
+          const snippet = scene.content_plain.length > 2000
+            ? scene.content_plain.slice(0, 2000) + "..."
+            : scene.content_plain
           parts.push(`[Current Scene: ${scene.title || "Untitled"}]\n${snippet}`)
         }
       }
       if (activeProjectId) {
-        const charsResp = await listManuscriptCharacters(activeProjectId) as any
-        const chars = charsResp?.characters || []
+        const [chars, items] = await Promise.all([
+          listManuscriptCharacters(activeProjectId),
+          listManuscriptWorldInfo(activeProjectId),
+        ])
         if (chars.length > 0) {
-          const charList = chars.slice(0, 10).map((c: any) =>
+          const charList = chars.slice(0, 10).map((c: ManuscriptCharacterResponse) =>
             `- ${c.name} (${c.role || "unknown role"})`
           ).join("\n")
           parts.push(`[Characters]\n${charList}`)
         }
-        const worldResp = await listManuscriptWorldInfo(activeProjectId) as any
-        const items = worldResp?.items || []
         if (items.length > 0) {
-          const worldList = items.slice(0, 10).map((w: any) =>
+          const worldList = items.slice(0, 10).map((w: ManuscriptWorldInfoResponse) =>
             `- ${w.name} (${w.kind || "info"})`
           ).join("\n")
           parts.push(`[World Info]\n${worldList}`)

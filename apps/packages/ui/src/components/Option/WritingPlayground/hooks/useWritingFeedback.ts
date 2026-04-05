@@ -46,12 +46,26 @@ export type UseWritingFeedbackReturn = {
   charsSinceLastEcho: number
 }
 
-async function callChat(systemPrompt: string, userText: string, model?: string): Promise<string> {
+type ChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null
+    } | null
+  }>
+}
+
+async function callChat(
+  systemPrompt: string,
+  userText: string,
+  model?: string,
+  abortSignal?: AbortSignal,
+): Promise<string> {
   try {
-    const data = await bgRequest({
+    const data = await bgRequest<ChatCompletionResponse>({
       path: "/api/v1/chat/completions" as AllowedPath,
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      abortSignal,
       body: {
         model: model || "default",
         messages: [
@@ -62,7 +76,7 @@ async function callChat(systemPrompt: string, userText: string, model?: string):
         max_tokens: 100,
       },
     })
-    return (data as any)?.choices?.[0]?.message?.content?.trim() || ""
+    return data.choices?.[0]?.message?.content?.trim() || ""
   } catch {
     return ""
   }
@@ -102,19 +116,24 @@ export function useWritingFeedback({
     if (!moodEnabled || !isOnline || isGenerating || !editorText.trim()) return
 
     if (moodTimerRef.current) clearTimeout(moodTimerRef.current)
+    let cancelled = false
+    let controller: AbortController | null = null
 
     moodTimerRef.current = setTimeout(async () => {
       const now = Date.now()
       if (now - lastMoodCallRef.current < MOOD_DEBOUNCE_MS) return
       lastMoodCallRef.current = now
 
+      controller = new AbortController()
       setMoodAnalyzing(true)
       const textSlice = editorText.slice(-500)
       const result = await callChat(
         "You are a mood classifier. Respond with exactly one word.",
         MOOD_PROMPT + textSlice,
         selectedModel,
+        controller.signal,
       )
+      if (cancelled) return
       const word = result.toLowerCase().trim().replace(/[^a-z]/g, "")
       if (VALID_MOODS.has(word)) {
         setCurrentMood(word as Mood)
@@ -124,6 +143,9 @@ export function useWritingFeedback({
 
     return () => {
       if (moodTimerRef.current) clearTimeout(moodTimerRef.current)
+      cancelled = true
+      controller?.abort()
+      setMoodAnalyzing(false)
     }
   }, [editorText, moodEnabled, isOnline, isGenerating, selectedModel])
 
@@ -135,17 +157,25 @@ export function useWritingFeedback({
     if (now - lastEchoCallRef.current < ECHO_DEBOUNCE_MS) return
 
     lastEchoCallRef.current = now
-    setCharsSinceLastEcho(0)
 
     const persona = ECHO_PERSONAS[echoIndexRef.current % ECHO_PERSONAS.length]
     echoIndexRef.current += 1
 
+    let cancelled = false
+    const controller = new AbortController()
     setEchoAnalyzing(true)
     const textSlice = editorText.slice(-1000)
 
-    callChat(persona.prompt, `React to this passage:\n\n${textSlice}`, selectedModel).then(
+    void callChat(
+      persona.prompt,
+      `React to this passage:\n\n${textSlice}`,
+      selectedModel,
+      controller.signal,
+    ).then(
       (message) => {
+        if (cancelled) return
         if (message) {
+          setCharsSinceLastEcho(0)
           setEchoReactions((prev) => [
             { persona: persona.name, emoji: persona.emoji, message, timestamp: Date.now() },
             ...prev,
@@ -154,6 +184,12 @@ export function useWritingFeedback({
         setEchoAnalyzing(false)
       },
     )
+
+    return () => {
+      cancelled = true
+      controller.abort()
+      setEchoAnalyzing(false)
+    }
   }, [charsSinceLastEcho, echoEnabled, isOnline, isGenerating, editorText, selectedModel])
 
   return {

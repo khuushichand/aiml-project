@@ -836,16 +836,20 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     await finishAndNavigate("/media")
   }, [finishAndNavigate])
 
-  const handleOpenChatFlow = useCallback(async () => {
-    await actions.setUserPersona("explorer")
-    // Explorer persona sees all features — no shortcut filtering needed
+  const handleGoToChat = useCallback(async () => {
     try {
       await openSidepanelForActiveTab()
     } catch (err) {
       console.debug("[OnboardingConnectForm] Failed to open sidepanel", err)
     }
     await finishAndNavigate("/chat")
-  }, [actions, finishAndNavigate])
+  }, [finishAndNavigate])
+
+  const handleOpenChatFlow = useCallback(async () => {
+    await actions.setUserPersona("explorer")
+    // Explorer persona sees all features — no shortcut filtering needed
+    await handleGoToChat()
+  }, [actions, handleGoToChat])
 
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
@@ -1048,7 +1052,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                   {t("settings:onboarding.success.getStarted", "Get Started")}
                   <ArrowRight className="ml-1 h-4 w-4" />
                 </Button>
-                <Button onClick={handleOpenChatFlow}>
+                <Button onClick={handleGoToChat}>
                   {t("settings:onboarding.success.skipToChat", "Skip, go to chat")}
                 </Button>
                 <button
@@ -1094,7 +1098,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
                   {t("settings:onboarding.success.getStarted", "Get Started")}
                   <ArrowRight className="ml-1 h-4 w-4" />
                 </Button>
-                <Button onClick={handleOpenChatFlow}>
+                <Button onClick={handleGoToChat}>
                   {t("settings:onboarding.success.skipToChat", "Skip, go to chat")}
                 </Button>
                 <button

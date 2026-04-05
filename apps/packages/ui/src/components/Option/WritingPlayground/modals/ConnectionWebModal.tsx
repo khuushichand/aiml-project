@@ -9,6 +9,9 @@ import {
   listManuscriptCharacters,
   listManuscriptRelationships,
   listManuscriptWorldInfo,
+  type ManuscriptCharacterResponse,
+  type ManuscriptRelationshipResponse,
+  type ManuscriptWorldInfoResponse,
 } from "@/services/writing-playground"
 
 cytoscape.use(dagre)
@@ -30,19 +33,19 @@ export function ConnectionWebModal({ open, onClose }: ConnectionWebModalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
 
-  const { data: charsData, isLoading: charsLoading } = useQuery({
+  const { data: characters = [], isLoading: charsLoading } = useQuery<ManuscriptCharacterResponse[]>({
     queryKey: ["manuscript-characters", activeProjectId],
     queryFn: () => listManuscriptCharacters(activeProjectId!),
     enabled: open && !!activeProjectId,
   })
 
-  const { data: relsData, isLoading: relsLoading } = useQuery({
+  const { data: relationships = [], isLoading: relsLoading } = useQuery<ManuscriptRelationshipResponse[]>({
     queryKey: ["manuscript-relationships", activeProjectId],
     queryFn: () => listManuscriptRelationships(activeProjectId!),
     enabled: open && !!activeProjectId,
   })
 
-  const { data: worldData, isLoading: worldLoading } = useQuery({
+  const { data: worldItems = [], isLoading: worldLoading } = useQuery<ManuscriptWorldInfoResponse[]>({
     queryKey: ["manuscript-world-info", activeProjectId],
     queryFn: () => listManuscriptWorldInfo(activeProjectId!),
     enabled: open && !!activeProjectId,
@@ -50,18 +53,21 @@ export function ConnectionWebModal({ open, onClose }: ConnectionWebModalProps) {
 
   const isLoading = charsLoading || relsLoading || worldLoading
 
-  const characters = (charsData as any)?.characters || []
-  const relationships = (relsData as any)?.relationships || []
-  const worldItems = (worldData as any)?.items || []
-
   useEffect(() => {
     if (!open || !containerRef.current || isLoading) return
     if (characters.length === 0 && worldItems.length === 0) return
 
     cyRef.current?.destroy()
 
-    const nodes: any[] = []
-    const edges: any[] = []
+    const nodes: Array<{ data: { id: string; label: string; type: string } }> = []
+    const edges: Array<{
+      data: {
+        id: string
+        source: string
+        target: string
+        type: string
+      }
+    }> = []
 
     for (const ch of characters) {
       nodes.push({

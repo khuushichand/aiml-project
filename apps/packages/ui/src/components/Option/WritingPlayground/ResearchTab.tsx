@@ -2,14 +2,18 @@ import { useState } from "react"
 import { Button, Empty, Input, List, Spin, Tag, Typography } from "antd"
 import { Search, BookOpen, Plus } from "lucide-react"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
-import { searchManuscriptResearch, createManuscriptCitation } from "@/services/writing-playground"
+import {
+  searchManuscriptResearch,
+  createManuscriptCitation,
+  type ManuscriptResearchResult,
+} from "@/services/writing-playground"
 
 type ResearchTabProps = { isOnline: boolean }
 
 export function ResearchTab({ isOnline }: ResearchTabProps) {
   const { activeNodeId } = useWritingPlaygroundStore()
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<any[]>([])
+  const [results, setResults] = useState<ManuscriptResearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [citedIds, setCitedIds] = useState<Set<string>>(new Set())
 
@@ -18,7 +22,7 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
     setSearching(true)
     try {
       const resp = await searchManuscriptResearch(activeNodeId, query.trim())
-      setResults((resp as any).results || [])
+      setResults(resp.results || [])
     } catch {
       setResults([])
     } finally {
@@ -26,7 +30,7 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
     }
   }
 
-  const handleCite = async (result: any) => {
+  const handleCite = async (result: ManuscriptResearchResult) => {
     if (!activeNodeId) return
     try {
       await createManuscriptCitation(activeNodeId, {
@@ -79,7 +83,7 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
         <List
           size="small"
           dataSource={results}
-          renderItem={(result: any, index: number) => {
+          renderItem={(result: ManuscriptResearchResult, index: number) => {
             const key = result.id || result.title || String(index)
             const isCited = citedIds.has(key)
             return (
