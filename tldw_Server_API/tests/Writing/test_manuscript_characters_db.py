@@ -3,6 +3,8 @@
 #
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -174,6 +176,41 @@ class TestCharacterCRUD:
         assert ch["arc_summary"] == "Learns courage"
         assert ch["notes"] == "Main character"
 
+    def test_character_sync_payload_includes_extended_fields(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(
+            pid,
+            "Alice",
+            full_name="Alice Wonderland",
+            age="25",
+            gender="female",
+            appearance="Tall, blonde",
+            personality="Curious",
+            backstory="Rabbit hole",
+            motivation="Go home",
+            arc_summary="Learns courage",
+            notes="Main character",
+            custom_fields={"hair": "blonde"},
+        )
+
+        row = mdb.db.execute_query(
+            "SELECT payload FROM sync_log WHERE entity = ? AND entity_id = ? "
+            "ORDER BY change_id DESC LIMIT 1",
+            ("manuscript_characters", cid),
+        ).fetchone()
+
+        payload = json.loads(row["payload"])
+        assert payload["full_name"] == "Alice Wonderland"
+        assert payload["age"] == "25"
+        assert payload["gender"] == "female"
+        assert payload["appearance"] == "Tall, blonde"
+        assert payload["personality"] == "Curious"
+        assert payload["backstory"] == "Rabbit hole"
+        assert payload["motivation"] == "Go home"
+        assert payload["arc_summary"] == "Learns courage"
+        assert payload["notes"] == "Main character"
+        assert payload["custom_fields_json"] == json.dumps({"hair": "blonde"})
+
 
 # ---------------------------------------------------------------------------
 # Character Relationships
@@ -241,6 +278,16 @@ class TestCharacterRelationships:
 # ---------------------------------------------------------------------------
 
 class TestSceneCharacterLinking:
+    def test_link_table_has_sync_metadata_columns(self, mdb):
+        columns = {
+            row["name"]
+            for row in mdb.db.execute_query(
+                "PRAGMA table_info('manuscript_scene_characters')"
+            ).fetchall()
+        }
+
+        assert {"deleted", "client_id", "version", "last_modified"}.issubset(columns)
+
     def test_link_and_list(self, mdb):
         pid = mdb.create_project("Novel")
         ch_id = mdb.create_chapter(pid, "Ch1")
@@ -261,6 +308,37 @@ class TestSceneCharacterLinking:
         mdb.link_scene_character(scene_id, char_id, is_pov=True)
         linked = mdb.list_scene_characters(scene_id)
         assert linked[0]["is_pov"] == 1
+
+    def test_relink_updates_is_pov(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+
+        mdb.link_scene_character(scene_id, char_id, is_pov=False)
+        mdb.link_scene_character(scene_id, char_id, is_pov=True)
+
+        linked = mdb.list_scene_characters(scene_id)
+        assert linked[0]["is_pov"] == 1
+
+    def test_link_writes_sync_log_entry(self, mdb):
+        pid = mdb.create_project("Novel")
+        ch_id = mdb.create_chapter(pid, "Ch1")
+        scene_id = mdb.create_scene(ch_id, pid, title="Opening", content_plain="hello")
+        char_id = mdb.create_character(pid, "Alice")
+
+        before = mdb.db.execute_query(
+            "SELECT COUNT(*) AS count FROM sync_log WHERE entity = ?",
+            ("manuscript_scene_characters",),
+        ).fetchone()["count"]
+
+        mdb.link_scene_character(scene_id, char_id, is_pov=True)
+
+        after = mdb.db.execute_query(
+            "SELECT COUNT(*) AS count FROM sync_log WHERE entity = ?",
+            ("manuscript_scene_characters",),
+        ).fetchone()["count"]
+        assert after == before + 1
 
     def test_link_idempotent(self, mdb):
         """INSERT OR IGNORE should not raise on duplicate."""

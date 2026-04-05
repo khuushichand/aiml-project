@@ -95,7 +95,7 @@ class ManuscriptDBHelper:
         "title", "description", "status", "color", "sort_order",
     })
     _UPDATABLE_PLOT_EVENT_COLS = frozenset({
-        "title", "description", "scene_id", "chapter_id", "event_type", "sort_order",
+        "title", "description", "plot_line_id", "scene_id", "chapter_id", "event_type", "sort_order",
     })
     _UPDATABLE_PLOT_HOLE_COLS = frozenset({
         "title", "description", "severity", "status", "scene_id",
@@ -714,8 +714,8 @@ class ManuscriptDBHelper:
                     entity_id=scene_id,
                 )
 
-            # Propagate if word count might have changed
-            if "content_plain" in updates:
+            # Propagate if the scene body changed.
+            if "content_plain" in updates or "content_json" in updates:
                 row = conn.execute(
                     "SELECT chapter_id, project_id FROM manuscript_scenes WHERE id = ?",
                     (scene_id,),
@@ -1696,19 +1696,27 @@ class ManuscriptDBHelper:
         params.extend([event_id, expected_version])
 
         with self.db.transaction() as conn:
-            # Validate cross-project refs if updating reference columns.
-            ref_cols = {"scene_id", "chapter_id"} & updates.keys()
+            row = conn.execute(
+                "SELECT project_id, plot_line_id, scene_id, chapter_id "
+                "FROM manuscript_plot_events WHERE id = ? AND deleted = 0",
+                (event_id,),
+            ).fetchone()
+            if row is None:
+                raise ConflictError(
+                    f"PlotEvent {event_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_events",
+                    entity_id=event_id,
+                )
+
+            ref_cols = {"plot_line_id", "scene_id", "chapter_id"} & updates.keys()
             if ref_cols:
-                row = conn.execute(
-                    "SELECT project_id FROM manuscript_plot_events WHERE id = ? AND deleted = 0",
-                    (event_id,),
-                ).fetchone()
-                if row:
-                    self._validate_plot_refs(
-                        conn, row["project_id"],
-                        scene_id=updates.get("scene_id"),
-                        chapter_id=updates.get("chapter_id"),
-                    )
+                self._validate_plot_refs(
+                    conn,
+                    row["project_id"],
+                    plot_line_id=updates.get("plot_line_id", row["plot_line_id"]),
+                    scene_id=updates.get("scene_id", row["scene_id"]),
+                    chapter_id=updates.get("chapter_id", row["chapter_id"]),
+                )
             cur = conn.execute(
                 f"UPDATE manuscript_plot_events SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
@@ -1840,20 +1848,27 @@ class ManuscriptDBHelper:
         params.extend([plot_hole_id, expected_version])
 
         with self.db.transaction() as conn:
-            # Validate cross-project refs if updating reference columns.
+            row = conn.execute(
+                "SELECT project_id, plot_line_id, scene_id, chapter_id "
+                "FROM manuscript_plot_holes WHERE id = ? AND deleted = 0",
+                (plot_hole_id,),
+            ).fetchone()
+            if row is None:
+                raise ConflictError(
+                    f"PlotHole {plot_hole_id!r} update failed (version conflict or not found).",
+                    entity="manuscript_plot_holes",
+                    entity_id=plot_hole_id,
+                )
+
             ref_cols = {"scene_id", "chapter_id", "plot_line_id"} & updates.keys()
             if ref_cols:
-                row = conn.execute(
-                    "SELECT project_id FROM manuscript_plot_holes WHERE id = ? AND deleted = 0",
-                    (plot_hole_id,),
-                ).fetchone()
-                if row:
-                    self._validate_plot_refs(
-                        conn, row["project_id"],
-                        plot_line_id=updates.get("plot_line_id"),
-                        scene_id=updates.get("scene_id"),
-                        chapter_id=updates.get("chapter_id"),
-                    )
+                self._validate_plot_refs(
+                    conn,
+                    row["project_id"],
+                    plot_line_id=updates.get("plot_line_id", row["plot_line_id"]),
+                    scene_id=updates.get("scene_id", row["scene_id"]),
+                    chapter_id=updates.get("chapter_id", row["chapter_id"]),
+                )
             cur = conn.execute(
                 f"UPDATE manuscript_plot_holes SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
