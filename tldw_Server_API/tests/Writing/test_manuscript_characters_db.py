@@ -3,6 +3,8 @@
 #
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -20,6 +22,20 @@ from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelp
 def mdb(tmp_path):
     db = CharactersRAGDB(str(tmp_path / "test.db"), client_id="test_client")
     return ManuscriptDBHelper(db)
+
+
+def _sync_log_payloads(mdb: ManuscriptDBHelper, entity_id: str) -> list[tuple[str, dict[str, object]]]:
+    with mdb.db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT operation, payload
+            FROM sync_log
+            WHERE entity = 'manuscript_characters' AND entity_id = ?
+            ORDER BY rowid
+            """,
+            (entity_id,),
+        ).fetchall()
+    return [(row["operation"], json.loads(row["payload"])) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +189,80 @@ class TestCharacterCRUD:
         assert ch["motivation"] == "Find her way home"
         assert ch["arc_summary"] == "Learns courage"
         assert ch["notes"] == "Main character"
+
+    def test_character_sync_log_payload_includes_extended_fields_for_create_update_and_undelete(self, mdb):
+        pid = mdb.create_project("Novel")
+        cid = mdb.create_character(
+            pid,
+            "Alice",
+            role="protagonist",
+            cast_group="heroes",
+            full_name="Alice Liddell",
+            age="25",
+            gender="female",
+            appearance="Tall",
+            personality="Curious",
+            backstory="Rabbit hole",
+            motivation="Get home",
+            arc_summary="Learns courage",
+            notes="Original notes",
+            custom_fields={"hair": "blonde"},
+        )
+
+        create_op, create_payload = _sync_log_payloads(mdb, cid)[-1]
+        assert create_op == "create"
+        assert create_payload["full_name"] == "Alice Liddell"
+        assert create_payload["age"] == "25"
+        assert create_payload["gender"] == "female"
+        assert create_payload["appearance"] == "Tall"
+        assert create_payload["personality"] == "Curious"
+        assert create_payload["backstory"] == "Rabbit hole"
+        assert create_payload["motivation"] == "Get home"
+        assert create_payload["arc_summary"] == "Learns courage"
+        assert create_payload["notes"] == "Original notes"
+        assert json.loads(create_payload["custom_fields_json"]) == {"hair": "blonde"}
+
+        mdb.update_character(
+            cid,
+            {
+                "age": "26",
+                "gender": "woman",
+                "notes": "Updated notes",
+                "custom_fields": {"hair": "auburn", "eyes": "green"},
+            },
+            expected_version=1,
+        )
+        update_op, update_payload = _sync_log_payloads(mdb, cid)[-1]
+        assert update_op == "update"
+        assert update_payload["age"] == "26"
+        assert update_payload["gender"] == "woman"
+        assert update_payload["notes"] == "Updated notes"
+        assert json.loads(update_payload["custom_fields_json"]) == {"hair": "auburn", "eyes": "green"}
+
+        mdb.soft_delete_character(cid, expected_version=2)
+        with mdb.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE manuscript_characters
+                SET deleted = 0, last_modified = CURRENT_TIMESTAMP, version = ?, client_id = ?
+                WHERE id = ?
+                """,
+                (4, mdb.db.client_id, cid),
+            )
+
+        undelete_op, undelete_payload = _sync_log_payloads(mdb, cid)[-1]
+        assert undelete_op == "update"
+        assert undelete_payload["deleted"] == 0
+        assert undelete_payload["full_name"] == "Alice Liddell"
+        assert undelete_payload["age"] == "26"
+        assert undelete_payload["gender"] == "woman"
+        assert undelete_payload["appearance"] == "Tall"
+        assert undelete_payload["personality"] == "Curious"
+        assert undelete_payload["backstory"] == "Rabbit hole"
+        assert undelete_payload["motivation"] == "Get home"
+        assert undelete_payload["arc_summary"] == "Learns courage"
+        assert undelete_payload["notes"] == "Updated notes"
+        assert json.loads(undelete_payload["custom_fields_json"]) == {"hair": "auburn", "eyes": "green"}
 
 
 # ---------------------------------------------------------------------------
