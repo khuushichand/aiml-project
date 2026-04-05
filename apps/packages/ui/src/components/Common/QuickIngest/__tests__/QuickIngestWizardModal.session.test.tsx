@@ -89,6 +89,15 @@ vi.mock("antd", () => ({
   ),
 }))
 
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>()
+  return { ...actual, useNavigate: () => vi.fn() }
+})
+
+vi.mock("@/routes/route-paths", () => ({
+  DOCUMENT_WORKSPACE_PATH: "/document-workspace",
+}))
+
 vi.mock("lucide-react", () => {
   const icon = (name: string) => (props: any) => (
     <span data-icon={name} aria-hidden={props?.["aria-hidden"]} />

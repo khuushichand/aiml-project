@@ -676,6 +676,19 @@ export async function searchManuscriptScenes(
   })
 }
 
+export async function reorderManuscriptItems(
+  projectId: string,
+  entityType: "parts" | "chapters" | "scenes",
+  items: { id: string; sort_order: number; version: number; new_parent_id?: string | null }[],
+) {
+  return await bgRequest({
+    path: `/api/v1/writing/manuscripts/projects/${encodeURIComponent(projectId)}/reorder` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { entity_type: entityType, items },
+  })
+}
+
 // Scene-level CRUD (needs chapter context for create)
 export async function createManuscriptScene(
   chapterId: string,

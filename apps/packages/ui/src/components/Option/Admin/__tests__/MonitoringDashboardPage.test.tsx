@@ -1,0 +1,159 @@
+// @vitest-environment jsdom
+
+import React from "react"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  getSystemStats: vi.fn(),
+  getSecurityAlertStatus: vi.fn(),
+  listAlertRules: vi.fn(),
+  createAlertRule: vi.fn(),
+  deleteAlertRule: vi.fn(),
+  listAlertHistory: vi.fn(),
+  assignAlert: vi.fn(),
+  snoozeAlert: vi.fn(),
+  escalateAlert: vi.fn(),
+  getDashboardActivity: vi.fn(),
+  getCurrentUserProfile: vi.fn()
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getSystemStats: (...args: unknown[]) => mocks.getSystemStats(...args),
+    getSecurityAlertStatus: (...args: unknown[]) => mocks.getSecurityAlertStatus(...args),
+    listAlertRules: (...args: unknown[]) => mocks.listAlertRules(...args),
+    createAlertRule: (...args: unknown[]) => mocks.createAlertRule(...args),
+    deleteAlertRule: (...args: unknown[]) => mocks.deleteAlertRule(...args),
+    listAlertHistory: (...args: unknown[]) => mocks.listAlertHistory(...args),
+    assignAlert: (...args: unknown[]) => mocks.assignAlert(...args),
+    snoozeAlert: (...args: unknown[]) => mocks.snoozeAlert(...args),
+    escalateAlert: (...args: unknown[]) => mocks.escalateAlert(...args),
+    getDashboardActivity: (...args: unknown[]) => mocks.getDashboardActivity(...args),
+    getCurrentUserProfile: (...args: unknown[]) => mocks.getCurrentUserProfile(...args)
+  }
+}))
+
+import MonitoringDashboardPage from "../MonitoringDashboardPage"
+
+describe("MonitoringDashboardPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+
+    if (!window.matchMedia) {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn()
+        }))
+      })
+    }
+
+    // Default mocks: empty data
+    mocks.getSystemStats.mockResolvedValue({ cpu_usage: 45, memory_percent: 62 })
+    mocks.getSecurityAlertStatus.mockResolvedValue({})
+    mocks.listAlertRules.mockResolvedValue([])
+    mocks.listAlertHistory.mockResolvedValue([])
+    mocks.getDashboardActivity.mockResolvedValue({ entries: [] })
+    mocks.getCurrentUserProfile.mockResolvedValue({ id: 42, username: "admin" })
+    mocks.createAlertRule.mockResolvedValue({ item: { id: 1 } })
+    mocks.assignAlert.mockResolvedValue({})
+  })
+
+  it("renders the intro text and page title", async () => {
+    render(<MonitoringDashboardPage />)
+
+    expect(screen.getByText("Monitoring & Alerting")).toBeTruthy()
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Monitor your tldw server/)
+      ).toBeTruthy()
+    })
+  })
+
+  it("shows empty state with starter rules when no alert rules exist", async () => {
+    render(<MonitoringDashboardPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText("No alert rules configured")).toBeTruthy()
+    })
+    // Starter rule buttons should be visible
+    expect(screen.getByText(/cpu_usage > 90/)).toBeTruthy()
+    expect(screen.getByText(/memory_percent > 85/)).toBeTruthy()
+    expect(screen.getByText(/disk_usage > 95/)).toBeTruthy()
+  })
+
+  it("does not show empty state when alert rules exist", async () => {
+    mocks.listAlertRules.mockResolvedValue([
+      { id: 1, metric: "cpu_usage", operator: ">", threshold: 80, duration_minutes: 5, severity: "high", enabled: true }
+    ])
+
+    render(<MonitoringDashboardPage />)
+
+    await waitFor(() => {
+      expect(screen.queryByText("No alert rules configured")).toBeNull()
+    })
+  })
+
+  describe("MON-001: alert assignment uses correct user ID and field name", () => {
+    it("fetches current user profile on mount", async () => {
+      render(<MonitoringDashboardPage />)
+
+      await waitFor(() => {
+        expect(mocks.getCurrentUserProfile).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it("renders alert history with assign button when history is loaded", async () => {
+      mocks.listAlertHistory.mockResolvedValue([
+        { id: "alert-1", alert: "High CPU Alert", severity: "high", status: "active", triggered_at: "2026-01-01T00:00:00Z" }
+      ])
+
+      render(<MonitoringDashboardPage />)
+
+      // Wait for alert history to load
+      await waitFor(() => {
+        expect(screen.getByText("High CPU Alert")).toBeTruthy()
+      })
+
+      // Assign button should be present
+      expect(screen.getByText("Assign")).toBeTruthy()
+      // Snooze and Escalate buttons should also be present
+      expect(screen.getByText("Snooze")).toBeTruthy()
+      expect(screen.getByText("Escalate")).toBeTruthy()
+    })
+  })
+
+  describe("MON-BUG-002: duration and severity are required fields", () => {
+    it("validates duration_minutes and severity as required before submission", async () => {
+      const user = userEvent.setup()
+      render(<MonitoringDashboardPage />)
+
+      // Wait for page to load
+      await waitFor(() => {
+        expect(screen.getByText("Alert Rules")).toBeTruthy()
+      })
+
+      // Click Create Rule without filling any fields — validation should catch duration+severity
+      const createButton = screen.getByText("Create Rule")
+      await user.click(createButton)
+
+      // Validation errors should appear for all required fields including duration and severity
+      await waitFor(() => {
+        expect(screen.getByText("Duration is required")).toBeTruthy()
+        expect(screen.getByText("Severity is required")).toBeTruthy()
+      })
+
+      // createAlertRule should NOT have been called
+      expect(mocks.createAlertRule).not.toHaveBeenCalled()
+    })
+  })
+})

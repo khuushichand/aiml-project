@@ -171,7 +171,10 @@ export const WritingPlayground = () => {
     setEditorMode,
     focusMode,
     setFocusMode,
+    activeNodeId,
+    setActiveNodeId,
   } = useWritingPlaygroundStore()
+  // TODO Phase 2: React to activeNodeId changes to load scene content into editor
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
@@ -190,6 +193,7 @@ export const WritingPlayground = () => {
   // --- Local-only state (not managed by hooks) ---
   const [libraryView, setLibraryView] = React.useState<"sessions" | "manuscript">("sessions")
   const [tipTapContent, setTipTapContent] = React.useState<any>(null)
+  const editorTextChangedByTipTap = React.useRef(false)
   const [editorView, setEditorView] = React.useState<EditorViewMode>("edit")
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -286,6 +290,14 @@ export const WritingPlayground = () => {
     handleTemplateChange, handleThemeChange, handleChatModeChange,
     canCreateSession, canRenameSession
   } = sessionMgmt
+
+  // Sync TipTap content when editorText changes from an external source (e.g. session load, undo/redo, generate)
+  React.useEffect(() => {
+    if (editorMode === "tiptap" && !editorTextChangedByTipTap.current) {
+      setTipTapContent(plainTextToTipTapJson(editorText))
+    }
+    editorTextChangedByTipTap.current = false
+  }, [editorText])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const settingsDisabled = isGenerating || !activeSessionDetail
 
@@ -2239,6 +2251,7 @@ export const WritingPlayground = () => {
                         <LazyWritingTipTapEditor
                           content={tipTapContent}
                           onContentChange={(json, plain) => {
+                            editorTextChangedByTipTap.current = true
                             setTipTapContent(json)
                             setEditorText(plain)
                           }}

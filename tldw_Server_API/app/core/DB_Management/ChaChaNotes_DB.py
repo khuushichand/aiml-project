@@ -3479,6 +3479,7 @@ AFTER INSERT ON manuscript_projects BEGIN
          json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
                      'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
                      'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -3503,6 +3504,7 @@ BEGIN
          json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
                      'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
                      'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -3526,6 +3528,7 @@ BEGIN
          json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
                      'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
                      'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -3659,7 +3662,9 @@ AFTER INSERT ON manuscript_scenes BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_scenes', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
-                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
                      'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
                      'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -3683,7 +3688,9 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
-                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
                      'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
                      'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -3706,10 +3713,56 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
-                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
                      'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
                      'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── FK consistency triggers: parent project_id must match ─── */
+DROP TRIGGER IF EXISTS manuscript_chapters_check_project;
+DROP TRIGGER IF EXISTS manuscript_chapters_check_project_update;
+DROP TRIGGER IF EXISTS manuscript_scenes_check_project;
+DROP TRIGGER IF EXISTS manuscript_scenes_check_project_update;
+
+CREATE TRIGGER manuscript_chapters_check_project
+BEFORE INSERT ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
+    THEN RAISE(ABORT, 'chapter project_id must match its parent part project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_chapters_check_project_update
+BEFORE UPDATE ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
+    THEN RAISE(ABORT, 'chapter project_id must match its parent part project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_scenes_check_project
+BEFORE INSERT ON manuscript_scenes
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_chapters WHERE id = NEW.chapter_id) != NEW.project_id
+    THEN RAISE(ABORT, 'scene project_id must match its parent chapter project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_scenes_check_project_update
+BEFORE UPDATE ON manuscript_scenes
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_chapters WHERE id = NEW.chapter_id) != NEW.project_id
+    THEN RAISE(ABORT, 'scene project_id must match its parent chapter project_id')
+  END;
 END;
 
 UPDATE db_schema_version
@@ -3820,10 +3873,12 @@ CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
    Sync triggers also use SQLite-specific json_object(); Postgres equivalent
    would use jsonb_build_object(). Skipped for now — only tables + indexes. */
 
+-- Postgres v40→v41 adds manuscript tables only (FTS5 and sync triggers are SQLite-specific)
+-- Version stays at 40 until Postgres equivalents (tsvector search, NOTIFY-based sync) are added
 UPDATE db_schema_version
-   SET version = 41
+   SET version = 40
  WHERE schema_name = 'rag_char_chat_schema'
-   AND version < 41;
+   AND version < 40;
 """
 
     # --- Migration: V41 -> V42 (Characters, world info, plot, citations) ---

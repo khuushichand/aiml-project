@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  Activity,
   BrainCircuit,
   BookMarked,
   BookOpen,
@@ -464,6 +465,13 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Gauge,
         labelKey: "option:header.adminMlx",
         labelDefault: "MLX LM Admin"
+      },
+      {
+        id: "admin-monitoring",
+        to: "/admin/monitoring",
+        icon: Activity,
+        labelKey: "option:header.adminMonitoring",
+        labelDefault: "Monitoring"
       },
       {
         id: "settings",

@@ -140,9 +140,7 @@ function OnboardingPageContent() {
       } finally {
         if (sequence === slugCheckSequence.current) {
           setSlugChecking(false);
-          if (slugCheckPromise.current === requestPromise) {
-            slugCheckPromise.current = null;
-          }
+          slugCheckPromise.current = null;
         }
       }
     })();
