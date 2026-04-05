@@ -558,6 +558,22 @@ V1 should not allow overlapping active flashcard sessions across different scope
 
 Closing the prior session on scope change is simpler, easier to reason about, and produces cleaner history.
 
+### Same-Scope Multi-Client Rule
+
+V1 also needs deterministic behavior when the same user reviews the same scope from multiple clients or tabs.
+
+Recommended rule:
+
+- at most one active session per user per `scope_key`
+- when a review is submitted, the backend should attach it to the newest active session for that same user and scope
+- if no active session exists, create one
+- if multiple active sessions somehow exist for the same scope because of legacy rows or a race condition:
+  - pick the newest active session as authoritative
+  - mark older duplicates as `abandoned`
+  - continue writing new reviews to the authoritative session
+
+This keeps `review_session_id` assignment deterministic and avoids fragmenting one logical study run across multiple session rows.
+
 ## Topic Model
 
 ### Topic Evidence Classes
@@ -623,6 +639,29 @@ Backend orchestration rule:
 - use `Jobs` for snapshot generation and refresh execution because this is a user-visible async feature that should support reliable status, retries, and later operational visibility
 - do not introduce a separate Scheduler-based path for this v1 user-facing flow
 
+### Client Status Contract
+
+The async job path needs a concrete client contract so quiz and flashcard surfaces can render pending, ready, and failed states consistently.
+
+Recommended v1 contract:
+
+- expose suggestion status by `anchor_type` and `anchor_id`, not only by raw `job_id`
+- the status envelope should include:
+  - `anchor_type`
+  - `anchor_id`
+  - `status`
+    - `none`
+    - `pending`
+    - `ready`
+    - `failed`
+  - `job_id` when work is pending
+  - `snapshot_id` when a snapshot is ready
+  - `error` when the latest job failed
+- the client should poll or refetch by anchor until a terminal state is reached
+- once `snapshot_id` exists, the client should load the frozen snapshot through the normal snapshot read endpoint
+
+This keeps low-level job orchestration out of the UI while still giving the client a stable pending-state contract.
+
 ### Ranking Inputs
 
 Recommended ranking inputs for quiz:
@@ -639,6 +678,26 @@ Recommended ranking inputs for flashcards:
 - lapse events
 - concentration of weak reviews around source refs, tags, or topic labels
 - answer-time strain as a secondary signal
+
+### Flashcard Grounding Eligibility
+
+Flashcard sessions will not always have enough provenance to support strong source-aware adjacency.
+
+Recommended eligibility rules:
+
+- `source-aware adjacency` is allowed only when a meaningful portion of the reviewed cards can be tied to stable evidence through:
+  - provenance-backed study-pack or citation data
+  - durable source references with resolvable source metadata
+  - a session or deck with coherent source lineage
+- `weakly grounded suggestions` are allowed when only coarse tags or partial source refs exist
+- `exploratory-only follow-up` should be used when a session is mostly manual or mixed-provenance with no stable shared source bundle
+
+Implementation-plan rule:
+
+- define an explicit backend predicate such as `is_source_grounded_session`
+- when that predicate is false, the UI should still render the panel but suppress source-aware adjacency claims and use weaker explanatory copy
+
+This prevents the system from overstating provenance for manual or mixed decks.
 
 ## User Flows
 
@@ -685,6 +744,17 @@ Panel content:
 History reopen:
 
 - from persisted flashcard review session history or session-linked suggestion snapshot history
+
+Recommended v1 entry point:
+
+- add a lightweight `Recent study sessions` section inside the Flashcards review surface
+- list completed flashcard review sessions with their suggestion state
+- let users reopen the linked snapshot from that same review area
+
+Implementation-plan rule:
+
+- do not build a new global history page in the first implementation plan
+- keep flashcard history access anchored inside the existing review workspace
 
 ### Editable Topic Builder
 
@@ -737,6 +807,18 @@ This should be powered by:
 
 - `suggestion_generation_links`
 - a stable selection fingerprint
+
+Recommended v1 fingerprint inputs:
+
+- `snapshot_id`
+- `target_service`
+- `target_type`
+- normalized selected topic set
+- generator action kind
+  - for example `follow_up_quiz` versus `follow_up_flashcards`
+- generator version when prompt or ranking contracts materially change
+
+The fingerprint should not collapse outputs from different snapshots, even when topic labels happen to match.
 
 ## Refresh Behavior
 
