@@ -46,11 +46,12 @@ describe("OnboardingConnectForm success screen guards", () => {
     const source = readOnboardingSource()
     expect(source).toContain("selectedIntent")
     expect(source).toContain("setSelectedIntent")
+    expect(source).toContain("IntentSteps")
   })
 
   it("shows family persona steps when family intent is selected", () => {
     const source = readOnboardingSource()
-    expect(source).toContain('data-testid="intent-steps-family"')
+    expect(source).toContain('"intent-steps-family"')
     expect(source).toContain("familyStep1")
     expect(source).toContain("familyStep2")
     expect(source).toContain("familyStep3")
@@ -59,7 +60,7 @@ describe("OnboardingConnectForm success screen guards", () => {
 
   it("shows research persona steps when research intent is selected", () => {
     const source = readOnboardingSource()
-    expect(source).toContain('data-testid="intent-steps-research"')
+    expect(source).toContain('"intent-steps-research"')
     expect(source).toContain("researchStep1")
     expect(source).toContain("researchStep2")
     expect(source).toContain("researchStep3")

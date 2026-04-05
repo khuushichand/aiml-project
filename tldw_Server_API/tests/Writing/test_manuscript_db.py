@@ -52,13 +52,20 @@ class TestWordCount:
 
 class TestProjectCRUD:
     def test_create_and_get(self, mdb):
-        pid = mdb.create_project("My Novel", author="Alice", genre="Fantasy")
+        pid = mdb.create_project(
+            "My Novel",
+            author="Alice",
+            genre="Fantasy",
+            settings={"theme": "noir", "view": {"mode": "board"}},
+        )
         proj = mdb.get_project(pid)
         assert proj is not None
         assert proj["title"] == "My Novel"
         assert proj["author"] == "Alice"
         assert proj["genre"] == "Fantasy"
         assert proj["status"] == "draft"
+        assert proj["settings"] == {"theme": "noir", "view": {"mode": "board"}}
+        assert "settings_json" not in proj
         assert proj["word_count"] == 0
         assert proj["version"] == 1
         assert proj["deleted"] == 0
@@ -116,9 +123,16 @@ class TestProjectCRUD:
         mdb.update_project(pid, {"settings": {"theme": "dark"}}, expected_version=1)
 
         proj = mdb.get_project(pid)
-        import json
-        settings = json.loads(proj["settings_json"])
-        assert settings == {"theme": "dark"}
+        assert proj["settings"] == {"theme": "dark"}
+        assert "settings_json" not in proj
+
+    def test_list_projects_exposes_deserialized_settings(self, mdb):
+        mdb.create_project("With Settings", settings={"theme": "dark", "layout": "kanban"})
+        projects, total = mdb.list_projects()
+
+        assert total == 1
+        assert projects[0]["settings"] == {"theme": "dark", "layout": "kanban"}
+        assert "settings_json" not in projects[0]
 
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")

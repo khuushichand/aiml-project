@@ -4661,7 +4661,7 @@ AFTER INSERT ON manuscript_ai_analyses BEGIN
   VALUES('manuscript_ai_analyses', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
                      'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
-                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
                      'stale',NEW.stale,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4683,7 +4683,7 @@ BEGIN
   VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
                      'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
-                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
                      'stale',NEW.stale,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4707,7 +4707,7 @@ BEGIN
   VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
                      'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
-                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
                      'stale',NEW.stale,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));

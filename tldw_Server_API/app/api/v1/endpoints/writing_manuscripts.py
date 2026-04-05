@@ -61,6 +61,8 @@ from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chat.chat_service import is_model_known_for_provider
+from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -68,6 +70,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelper
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_CAPABILITIES
 
 router = APIRouter()
 
@@ -2033,6 +2036,60 @@ async def research_scene(
 _VALID_ANALYSIS_TYPES = {"pacing", "plot_holes", "consistency"}
 
 
+def _normalize_analysis_override(value: str | None) -> str | None:
+    """Normalize optional provider/model override strings."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _validate_analysis_overrides(
+    *,
+    provider: str | None,
+    model: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate analysis provider/model overrides against configured allowlists."""
+    normalized_provider = _normalize_analysis_override(provider)
+    normalized_model = _normalize_analysis_override(model)
+
+    provider_manager = get_provider_manager()
+    configured_providers = {
+        str(entry).strip().lower()
+        for entry in getattr(provider_manager, "providers", [])
+        if str(entry).strip()
+    }
+    fallback_known_providers = {key.strip().lower() for key in PROVIDER_CAPABILITIES.keys()}
+    allowed_providers = configured_providers or fallback_known_providers
+
+    if normalized_provider:
+        provider_key = normalized_provider.lower()
+        if provider_key not in allowed_providers:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown analysis provider override: {normalized_provider}",
+            )
+    else:
+        provider_key = (
+            str(getattr(provider_manager, "primary_provider", "")).strip().lower() or None
+        )
+
+    if normalized_model:
+        if not provider_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Model override requires a configured analysis provider",
+            )
+        model_known = is_model_known_for_provider(provider_key, normalized_model)
+        if model_known is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown model override '{normalized_model}' for provider '{provider_key}'",
+            )
+
+    return normalized_provider, normalized_model
+
+
 @router.post(
     "/scenes/{scene_id}/analyze",
     response_model=list[ManuscriptAnalysisResponse],
@@ -2043,10 +2100,17 @@ async def analyze_scene(
     scene_id: str,
     payload: ManuscriptAnalysisRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
 ) -> list[ManuscriptAnalysisResponse]:
     """Run one or more LLM-powered analyses on a single scene."""
     try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
         helper = _get_helper(db)
         scene = helper.get_scene(scene_id)
         if not scene:
@@ -2062,13 +2126,13 @@ async def analyze_scene(
         results: list[ManuscriptAnalysisResponse] = []
         for analysis_type in payload.analysis_types:
             if analysis_type == "pacing":
-                result = await analyze_pacing(text, provider=payload.provider, model=payload.model)
+                result = await analyze_pacing(text, provider=provider_override, model=model_override)
                 score = result.get("pacing") if isinstance(result.get("pacing"), (int, float)) else None
             elif analysis_type == "plot_holes":
-                result = await _analyze_plot_holes(text, provider=payload.provider, model=payload.model)
+                result = await _analyze_plot_holes(text, provider=provider_override, model=model_override)
                 score = None
             elif analysis_type == "consistency":
-                result = await _analyze_consistency(text, provider=payload.provider, model=payload.model)
+                result = await _analyze_consistency(text, provider=provider_override, model=model_override)
                 score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
             else:
                 result = {"error": f"Unknown analysis type: {analysis_type}"}
@@ -2076,7 +2140,7 @@ async def analyze_scene(
 
             aid = helper.create_analysis(
                 scene["project_id"], "scene", scene_id, analysis_type,
-                result, score=score, provider=payload.provider, model=payload.model,
+                result, score=score, provider=provider_override, model=model_override,
             )
             analysis = helper.get_analysis(aid)
             if analysis:
@@ -2097,10 +2161,17 @@ async def analyze_chapter(
     chapter_id: str,
     payload: ManuscriptAnalysisRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
 ) -> list[ManuscriptAnalysisResponse]:
     """Run LLM analysis across all scenes in a chapter."""
     try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
         helper = _get_helper(db)
         chapter = helper.get_chapter(chapter_id)
         if not chapter:
@@ -2119,13 +2190,13 @@ async def analyze_chapter(
         results: list[ManuscriptAnalysisResponse] = []
         for analysis_type in payload.analysis_types:
             if analysis_type == "pacing":
-                result = await analyze_pacing(combined_text, provider=payload.provider, model=payload.model)
+                result = await analyze_pacing(combined_text, provider=provider_override, model=model_override)
                 score = result.get("pacing") if isinstance(result.get("pacing"), (int, float)) else None
             elif analysis_type == "plot_holes":
-                result = await _analyze_plot_holes(combined_text, provider=payload.provider, model=payload.model)
+                result = await _analyze_plot_holes(combined_text, provider=provider_override, model=model_override)
                 score = None
             elif analysis_type == "consistency":
-                result = await _analyze_consistency(combined_text, provider=payload.provider, model=payload.model)
+                result = await _analyze_consistency(combined_text, provider=provider_override, model=model_override)
                 score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
             else:
                 result = {"error": f"Unknown analysis type: {analysis_type}"}
@@ -2133,7 +2204,7 @@ async def analyze_chapter(
 
             aid = helper.create_analysis(
                 chapter["project_id"], "chapter", chapter_id, analysis_type,
-                result, score=score, provider=payload.provider, model=payload.model,
+                result, score=score, provider=provider_override, model=model_override,
             )
             analysis = helper.get_analysis(aid)
             if analysis:

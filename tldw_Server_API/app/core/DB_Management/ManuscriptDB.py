@@ -87,6 +87,18 @@ class ManuscriptDBHelper:
     def _client_id(self) -> str:
         return self.db.client_id
 
+    def _deserialize_project_row(self, row: Any) -> dict[str, Any]:
+        """Return a project row with ``settings_json`` materialized as ``settings``."""
+        project = dict(row)
+        raw_settings = project.pop("settings_json", "{}")
+        try:
+            parsed_settings = json.loads(raw_settings) if raw_settings else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("Failed to deserialize manuscript project settings for {}", project.get("id"))
+            parsed_settings = {}
+        project["settings"] = parsed_settings if isinstance(parsed_settings, dict) else {}
+        return project
+
     # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
@@ -137,7 +149,7 @@ class ManuscriptDBHelper:
                 "SELECT * FROM manuscript_projects WHERE id = ? AND deleted = 0",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._deserialize_project_row(row) if row else None
 
     def list_projects(
         self,
@@ -166,7 +178,7 @@ class ManuscriptDBHelper:
                 [*params, limit, offset],
             ).fetchall()
 
-        return [dict(r) for r in rows], int(total)
+        return [self._deserialize_project_row(r) for r in rows], int(total)
 
     def update_project(
         self,
@@ -1731,11 +1743,8 @@ class ManuscriptDBHelper:
             clauses.append("analysis_type = ?")
             params.append(analysis_type)
 
-        sql = (
-            "SELECT * FROM manuscript_ai_analyses WHERE "
-            + " AND ".join(clauses)
-            + " ORDER BY created_at DESC"
-        )
+        # Clauses are selected from fixed SQL fragments above; all user input stays parameterized in `params`.
+        sql = "SELECT * FROM manuscript_ai_analyses WHERE " + " AND ".join(clauses) + " ORDER BY created_at DESC"  # nosec B608
 
         with self.db.transaction() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -1755,9 +1764,10 @@ class ManuscriptDBHelper:
         now = self._now()
         with self.db.transaction() as conn:
             cur = conn.execute(
-                "UPDATE manuscript_ai_analyses SET stale = 1, last_modified = ? "
+                "UPDATE manuscript_ai_analyses "
+                "SET stale = 1, last_modified = ?, version = version + 1, client_id = ? "
                 "WHERE scope_type = ? AND scope_id = ? AND stale = 0 AND deleted = 0",
-                (now, scope_type, scope_id),
+                (now, self._client_id, scope_type, scope_id),
             )
             return cur.rowcount
 
@@ -1765,9 +1775,10 @@ class ManuscriptDBHelper:
         """Mark analyses stale within an existing transaction (no new txn opened)."""
         now = self._now()
         cur = conn.execute(
-            "UPDATE manuscript_ai_analyses SET stale = 1, last_modified = ? "
+            "UPDATE manuscript_ai_analyses "
+            "SET stale = 1, last_modified = ?, version = version + 1, client_id = ? "
             "WHERE scope_type = ? AND scope_id = ? AND stale = 0 AND deleted = 0",
-            (now, scope_type, scope_id),
+            (now, self._client_id, scope_type, scope_id),
         )
         return cur.rowcount
 

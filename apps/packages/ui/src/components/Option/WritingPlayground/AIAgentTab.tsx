@@ -9,6 +9,11 @@ import {
   getManuscriptScene,
   listManuscriptCharacters,
   listManuscriptWorldInfo,
+  type ManuscriptCharacter,
+  type ManuscriptCharacterListResponse,
+  type ManuscriptSceneResponse,
+  type ManuscriptWorldInfoItem,
+  type ManuscriptWorldInfoListResponse,
 } from "@/services/writing-playground"
 
 type AIAgentTabProps = { isOnline: boolean }
@@ -44,27 +49,28 @@ export function AIAgentTab({ isOnline }: AIAgentTabProps) {
     const parts: string[] = []
     try {
       if (activeNodeId) {
-        const scene = await getManuscriptScene(activeNodeId) as any
-        if (scene?.content) {
-          const snippet = scene.content.length > 2000
-            ? scene.content.slice(0, 2000) + "..."
-            : scene.content
+        const scene: ManuscriptSceneResponse = await getManuscriptScene(activeNodeId)
+        const sceneContent = scene.content_plain || ""
+        if (sceneContent) {
+          const snippet = sceneContent.length > 2000
+            ? `${sceneContent.slice(0, 2000)}...`
+            : sceneContent
           parts.push(`[Current Scene: ${scene.title || "Untitled"}]\n${snippet}`)
         }
       }
       if (activeProjectId) {
-        const charsResp = await listManuscriptCharacters(activeProjectId) as any
-        const chars = charsResp?.characters || []
+        const charsResp: ManuscriptCharacterListResponse = await listManuscriptCharacters(activeProjectId)
+        const chars = charsResp.characters || []
         if (chars.length > 0) {
-          const charList = chars.slice(0, 10).map((c: any) =>
+          const charList = chars.slice(0, 10).map((c: ManuscriptCharacter) =>
             `- ${c.name} (${c.role || "unknown role"})`
           ).join("\n")
           parts.push(`[Characters]\n${charList}`)
         }
-        const worldResp = await listManuscriptWorldInfo(activeProjectId) as any
-        const items = worldResp?.items || []
+        const worldResp: ManuscriptWorldInfoListResponse = await listManuscriptWorldInfo(activeProjectId)
+        const items = worldResp.items || []
         if (items.length > 0) {
-          const worldList = items.slice(0, 10).map((w: any) =>
+          const worldList = items.slice(0, 10).map((w: ManuscriptWorldInfoItem) =>
             `- ${w.name} (${w.kind || "info"})`
           ).join("\n")
           parts.push(`[World Info]\n${worldList}`)
