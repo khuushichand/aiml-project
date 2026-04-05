@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  Activity,
   BrainCircuit,
   BookMarked,
   BookOpen,
@@ -38,6 +39,9 @@ import {
   Zap
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
+import { HEADER_SHORTCUT_IDS } from "@/services/settings/ui-settings"
+export { HEADER_SHORTCUT_IDS }
+import type { UserPersona } from "@/types/connection"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
@@ -463,6 +467,13 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "MLX LM Admin"
       },
       {
+        id: "admin-monitoring",
+        to: "/admin/monitoring",
+        icon: Activity,
+        labelKey: "option:header.adminMonitoring",
+        labelDefault: "Monitoring"
+      },
+      {
         id: "settings",
         to: "/settings",
         icon: CogIcon,
@@ -531,4 +542,53 @@ export const normalizeHeaderShortcutSelection = (
 ): HeaderShortcutItem[] => {
   const selected = new Set(selection)
   return getHeaderShortcutItems().filter((item) => selected.has(item.id))
+}
+
+// ---------------------------------------------------------------------------
+// Persona-specific shortcut defaults
+// ---------------------------------------------------------------------------
+
+/** Default shortcut selections per persona. Explorer/null = all items. */
+export const PERSONA_SHORTCUT_DEFAULTS: Record<
+  NonNullable<UserPersona> | "default",
+  HeaderShortcutId[]
+> = {
+  family: [
+    "chat",
+    "media",
+    "family-guardrails",
+    "moderation-playground",
+    "guardian",
+    "settings"
+  ],
+  researcher: [
+    "chat",
+    "prompts",
+    "deep-research",
+    "knowledge-qa",
+    "media",
+    "workspace-playground",
+    "collections",
+    "notes",
+    "evaluations",
+    "flashcards",
+    "quizzes",
+    "settings",
+    // required items
+    "workflows",
+    "acp-playground",
+    "integrations",
+    "scheduled-tasks",
+    "admin-integrations"
+  ],
+  explorer: [...HEADER_SHORTCUT_IDS],
+  default: [...HEADER_SHORTCUT_IDS]
+}
+
+/** Get default shortcut selection for a persona. */
+export const getDefaultShortcutsForPersona = (
+  persona: UserPersona
+): HeaderShortcutId[] => {
+  if (!persona || persona === "explorer") return [...HEADER_SHORTCUT_IDS]
+  return [...(PERSONA_SHORTCUT_DEFAULTS[persona] ?? HEADER_SHORTCUT_IDS)]
 }

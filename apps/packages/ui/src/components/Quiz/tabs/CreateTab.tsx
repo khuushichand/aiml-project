@@ -31,6 +31,8 @@ import { normalizeMatchingAnswerMap } from "../utils/matchingAnswer"
 import { checkStorageBeforeWrite, notifyStorageWrite } from "@/utils/storage-guard"
 import { estimateUtf8ByteLength } from "@/utils/storage-budget"
 
+const CREATE_ORIENTATION_DISMISSED_KEY = "tldw_quiz_create_orientation_dismissed"
+
 interface CreateTabProps {
   onNavigateToTake: (intent?: TakeTabNavigationIntent) => void
   onDirtyStateChange?: (dirty: boolean) => void
@@ -141,6 +143,13 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
   const [pendingDraft, setPendingDraft] = React.useState<QuizCreateDraft | null>(null)
   const [draftStorageUnavailable, setDraftStorageUnavailable] = React.useState(false)
   const [draftWarningDismissed, setDraftWarningDismissed] = React.useState(false)
+  const [orientationDismissed, setOrientationDismissed] = React.useState(() => {
+    try {
+      return window.localStorage.getItem(CREATE_ORIENTATION_DISMISSED_KEY) === "1"
+    } catch {
+      return false
+    }
+  })
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [saveProgress, setSaveProgress] = React.useState<SaveProgressState | null>(null)
   const hasLoadedDraft = React.useRef(false)
@@ -1019,6 +1028,30 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
           title={t("option:quiz.draftStorageUnavailable", {
             defaultValue:
               "Draft autosave unavailable — your progress will not be preserved if you leave."
+          })}
+        />
+      )}
+
+      {!orientationDismissed && (
+        <Alert
+          type="info"
+          showIcon
+          closable
+          data-testid="quiz-create-orientation"
+          onClose={() => {
+            setOrientationDismissed(true)
+            try {
+              window.localStorage.setItem(CREATE_ORIENTATION_DISMISSED_KEY, "1")
+            } catch {
+              // localStorage unavailable — dismiss for this session only
+            }
+          }}
+          message={t("option:quiz.createOrientationTitle", {
+            defaultValue: "Create a Quiz"
+          })}
+          description={t("option:quiz.createOrientationDescription", {
+            defaultValue:
+              "Name your quiz, add questions (multiple choice, true/false, fill-in-the-blank, matching, multi-select), set a passing score, and save. Tip: start with 5\u201310 questions."
           })}
         />
       )}

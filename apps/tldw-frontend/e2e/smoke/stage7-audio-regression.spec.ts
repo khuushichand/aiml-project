@@ -52,6 +52,21 @@ const stubDocsInfo = async (page: Page) => {
   })
 }
 
+async function openSpeechInputSourcePicker(page: Page) {
+  const inputSourcePicker = getAntdSelectTrigger(page, {
+    ariaLabel: "Speech playground input source"
+  })
+  const inputSourcePickerVisible = await inputSourcePicker.isVisible().catch(() => false)
+  if (!inputSourcePickerVisible) {
+    const roundTripMode = page.getByRole("radio", { name: /^Round-trip$/i }).first()
+    if (await roundTripMode.isVisible().catch(() => false)) {
+      await roundTripMode.check({ force: true })
+    }
+  }
+  await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
+  await inputSourcePicker.click()
+}
+
 test.describe("Stage 7 audio regression gate", () => {
   test("audio routes enforce console/error/template budgets", async ({
     page,
@@ -272,16 +287,10 @@ test.describe("Stage 7 audio regression gate", () => {
     await waitForAppShell(page, LOAD_TIMEOUT)
     await dismissConnectionModals(page)
 
-    const inputSourcePicker = getAntdSelectTrigger(page, {
-      ariaLabel: "Speech playground input source"
-    })
-    const inputSourcePickerVisible = await inputSourcePicker
-      .isVisible()
-      .catch(() => false)
-    if (!inputSourcePickerVisible) {
-      await page.getByRole("radio", { name: /^Round-trip$/i }).first().check({ force: true })
-    }
-    await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
+    await openSpeechInputSourcePicker(page)
+    await expect(page.getByRole("option", { name: /Default microphone/i })).toBeVisible()
+    await expect(page.getByRole("option", { name: /Tab audio/i })).toHaveCount(0)
+    await expect(page.getByRole("option", { name: /System audio/i })).toHaveCount(0)
   })
 
   test("stt transcription-model timeout state shows retry and recovers", async ({

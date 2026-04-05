@@ -171,6 +171,13 @@ async function openOnboardingSuccessScreen(
     success.waitFor({ state: "visible", timeout: 25_000 }),
   ])
 
+  await clearOnboardingBlockingOverlays(page)
+
+  const alreadyConnected = await success.isVisible().catch(() => false)
+  if (alreadyConnected) {
+    return "already-connected"
+  }
+
   const needsConnect = await connect.isVisible().catch(() => false)
   if (needsConnect) {
     await clearOnboardingBlockingOverlays(page)

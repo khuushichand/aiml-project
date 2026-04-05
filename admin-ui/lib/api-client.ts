@@ -1041,14 +1041,6 @@ export const api = {
     buckets: Array<{ label: string; count: number; color: string }>;
     total: number;
   }>('/admin/security/key-age-stats'),
-  debugResolvePermissions: (userId: number) =>
-    requestJson<{ user_id: number; roles: string[]; effective_permissions: string[]; error?: string }>(
-      `/admin/debug/resolve-permissions?user_id=${userId}`, { method: 'POST' }
-    ),
-  debugValidateToken: (token: string) =>
-    requestJson<{ valid: boolean; header?: Record<string, unknown>; payload?: Record<string, unknown>; expired?: boolean; error?: string }>(
-      `/admin/debug/validate-token?token=${encodeURIComponent(token)}`, { method: 'POST' }
-    ),
   debugSimulateRateLimit: (data: { user_id: number; endpoint: string }) =>
     requestJson<{
       user_id: number;
@@ -1066,15 +1058,6 @@ export const api = {
       range_days: number;
       items: Array<{ entity_id: number; request_count: number; total_tokens: number; estimated_cost_usd: number }>;
     }>(`/admin/usage/cost-attribution?group_by=${groupBy}&range_days=${rangeDays}`),
-  getBillingAnalytics: () => requestJson<{
-    analytics_available: boolean;
-    total_subscriptions?: number;
-    active_subscriptions?: number;
-    trialing?: number;
-    past_due?: number;
-    canceled?: number;
-    churn_rate_pct?: number;
-  }>('/admin/billing/analytics'),
   getRiskWeights: () => requestJson<{
     weights: Record<string, { weight: number; cap: number }>;
   }>('/admin/security/risk-weights'),

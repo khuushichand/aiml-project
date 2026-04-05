@@ -353,6 +353,7 @@ describe("ExternalServersTab", () => {
     })
 
     await user.click(screen.getByRole("button", { name: /delete read-only token/i }))
+    await user.click(screen.getByRole("button", { name: /^Delete$/i }))
     expect(mocks.deleteExternalServerCredentialSlot).toHaveBeenCalledWith("docs-managed", "token_readonly")
 
     await user.click(screen.getByRole("button", { name: /new managed server/i }))
@@ -385,6 +386,7 @@ describe("ExternalServersTab", () => {
     })
 
     await user.click(screen.getByRole("button", { name: /delete docs managed/i }))
+    await user.click(screen.getByRole("button", { name: /^Delete$/i }))
     expect(mocks.deleteExternalServer).toHaveBeenCalledWith("docs-managed")
   }, 15000)
 

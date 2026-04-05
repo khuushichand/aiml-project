@@ -22,7 +22,7 @@ import { ExportMenu } from '@/components/ui/export-menu';
 import { exportACPSessions, ExportFormat } from '@/lib/export';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
-import { formatDateTime } from '@/lib/format';
+import { formatDateTime, formatTokens } from '@/lib/format';
 import { formatDistanceToNow } from 'date-fns';
 
 type UserInfo = { id: number; username?: string; email?: string };
@@ -255,12 +255,6 @@ export default function ACPSessionsPage() {
     }
   };
 
-  const formatTokens = (count: number) => {
-    if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-    if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
-    return String(count);
-  };
-
   const formatCost = (usd: number | null | undefined): string => {
     if (usd == null) return '\u2014';
     return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
@@ -312,7 +306,6 @@ export default function ACPSessionsPage() {
       </div>
     );
   };
-
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
