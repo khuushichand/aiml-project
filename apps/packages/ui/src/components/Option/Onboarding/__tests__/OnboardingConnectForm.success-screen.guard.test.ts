@@ -41,4 +41,42 @@ describe("OnboardingConnectForm success screen guards", () => {
     expect(source).toContain("intentFamily")
     expect(source).toContain("intentResearch")
   })
+
+  it("has selectedIntent state for persona-specific guided flow", () => {
+    const source = readOnboardingSource()
+    expect(source).toContain("selectedIntent")
+    expect(source).toContain("setSelectedIntent")
+  })
+
+  it("shows family persona steps when family intent is selected", () => {
+    const source = readOnboardingSource()
+    expect(source).toContain('data-testid="intent-steps-family"')
+    expect(source).toContain("familyStep1")
+    expect(source).toContain("familyStep2")
+    expect(source).toContain("familyStep3")
+    expect(source).toContain("familyStepsTitle")
+  })
+
+  it("shows research persona steps when research intent is selected", () => {
+    const source = readOnboardingSource()
+    expect(source).toContain('data-testid="intent-steps-research"')
+    expect(source).toContain("researchStep1")
+    expect(source).toContain("researchStep2")
+    expect(source).toContain("researchStep3")
+    expect(source).toContain("researchStepsTitle")
+  })
+
+  it("provides back button and skip-to-chat in guided steps", () => {
+    const source = readOnboardingSource()
+    expect(source).toContain("backToChoices")
+    expect(source).toContain("skipToChat")
+    expect(source).toContain("getStarted")
+  })
+
+  it("chat intent navigates directly without extra steps", () => {
+    const source = readOnboardingSource()
+    // Chat card should call handleOpenChatFlow directly, not setSelectedIntent("chat")
+    expect(source).toContain('onClick={handleOpenChatFlow}')
+    expect(source).not.toContain('setSelectedIntent("chat")')
+  })
 })

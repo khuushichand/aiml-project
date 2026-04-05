@@ -8,7 +8,8 @@ import { useSetting } from "@/hooks/useSetting"
 import {
   HEADER_SHORTCUTS_EXPANDED_SETTING,
   HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING,
-  HEADER_SHORTCUT_SELECTION_SETTING
+  HEADER_SHORTCUT_SELECTION_SETTING,
+  HEADER_SHORTCUT_IDS
 } from "@/services/settings/ui-settings"
 import { Search } from "lucide-react"
 import { cn } from "@/libs/utils"
@@ -69,7 +70,7 @@ export function HeaderShortcuts({
   const [displayModePreference, setDisplayModePreference] = useSetting(
     HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING
   )
-  const [shortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
+  const [shortcutSelection, setShortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
 
   /* ---------- open state ---------- */
   const isControlled = typeof expanded === "boolean"
@@ -116,6 +117,11 @@ export function HeaderShortcuts({
   const shortcutSelectionSet = useMemo(
     () => new Set(shortcutSelection),
     [shortcutSelection]
+  )
+
+  const isFiltered = useMemo(
+    () => !HEADER_SHORTCUT_IDS.every((id) => shortcutSelectionSet.has(id)),
+    [shortcutSelectionSet]
   )
 
   const resolvedGroups = useMemo(() => {
@@ -625,6 +631,17 @@ export function HeaderShortcuts({
             </span>
           </div>
           <div className="flex items-center gap-3">
+            {isFiltered && (
+              <button
+                type="button"
+                onClick={() => {
+                  void setShortcutSelection([...HEADER_SHORTCUT_IDS])
+                }}
+                className="text-xs text-primary hover:text-primaryStrong"
+              >
+                {t("option:header.launcherShowAllFeatures", "Show all features")}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleDisplayModeToggle}
