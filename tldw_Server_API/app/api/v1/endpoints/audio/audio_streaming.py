@@ -2,6 +2,7 @@
 # Description: Audio streaming endpoints (HTTP + WebSocket) and non-streaming chat.
 import asyncio
 import base64
+from collections import deque
 import configparser
 import contextlib
 import importlib
@@ -119,6 +120,25 @@ def SileroTurnDetector(*args, **kwargs):
 
 def _new_unified_streaming_config(**kwargs):
     return _load_audio_streaming_unified_attr("UnifiedStreamingConfig")(**kwargs)
+
+
+def _new_ws_control_session():
+    config_factory = _load_audio_streaming_unified_attr("_get_ws_control_protocol_config")
+    session_cls = _load_audio_streaming_unified_attr("WSControlSession")
+    return session_cls(config_factory())
+
+
+def _estimate_stream_audio_seconds(audio_bytes: bytes, sample_rate: int) -> float:
+    estimator = _load_audio_streaming_unified_attr("_estimate_audio_seconds")
+    return float(estimator(audio_bytes, sample_rate))
+
+
+def _drop_oldest_stream_audio(
+    paused_audio_chunks: "deque[tuple[bytes, float]]",
+    dropped_seconds: float,
+) -> None:
+    dropper = _load_audio_streaming_unified_attr("_drop_oldest_buffered_audio")
+    dropper(paused_audio_chunks, dropped_seconds)
 
 
 async def _handle_unified_websocket(*args, **kwargs):
@@ -1498,6 +1518,9 @@ async def websocket_audio_chat_stream(
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as _hb_e:
                 logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
+        control_session = _new_ws_control_session()
+        paused_audio_chunks: deque[tuple[bytes, float]] = deque()
+
         # Parse initial config
         try:
             raw_cfg = await wait_for(websocket.receive_text(), timeout=15.0)
@@ -1523,30 +1546,13 @@ async def websocket_audio_chat_stream(
             await websocket.close(code=4400)
             return
 
-        try:
-            requested_protocol_version = int(cfg_data.get("protocol_version") or 1)
-        except (TypeError, ValueError):
-            requested_protocol_version = 1
-
-        if requested_protocol_version == 2:
-            if _outer_stream:
-                await _outer_stream.send_json(
-                    {
-                        "type": "error",
-                        "code": "unsupported_protocol_version",
-                        "message": "protocol_version=2 is not supported on /api/v1/audio/chat/stream yet",
-                        "error_type": "unsupported_protocol_version",
-                    }
-                )
-            await websocket.close(code=4400)
-            return
-
         stt_cfg = cfg_data.get("stt") or cfg_data
         llm_cfg = cfg_data.get("llm") or {}
         tts_cfg = cfg_data.get("tts") or {}
         raw_session_id = cfg_data.get("session_id")
         session_id = str(raw_session_id).strip() if raw_session_id else None
         metadata = cfg_data.get("metadata") if isinstance(cfg_data.get("metadata"), dict) else None
+        protocol_decision = control_session.apply_config(cfg_data)
 
         def _coerce_bool(value: Any, default: bool = False) -> bool:
             if value is None:
@@ -1896,6 +1902,12 @@ async def websocket_audio_chat_stream(
         active_turn_task: Optional[asyncio.Task] = None
         active_tts_sender_task: Optional[asyncio.Task] = None
         turn_sequence = 0
+
+        async def _send_stream_payload(payload: dict[str, Any]) -> None:
+            if _outer_stream:
+                await _outer_stream.send_json(payload)
+            else:
+                await websocket.send_json(payload)
 
         async def _iter_stream_lines(stream_obj):
             if hasattr(stream_obj, "__aiter__"):
@@ -2406,7 +2418,72 @@ async def websocket_audio_chat_stream(
             active_turn_task = task_ref
             return turn_id
 
+        async def _cancel_active_turn(*, reason: str, emit_interrupted: bool) -> None:
+            nonlocal active_turn_cancelled
+            nonlocal active_tts_sender_task
+            interrupted_turn_id = active_turn_id
+            had_active_turn = bool(interrupted_turn_id) or (
+                active_turn_task is not None and not active_turn_task.done()
+            )
+            active_turn_cancelled = True
+            if active_turn_task is not None and not active_turn_task.done():
+                active_turn_task.cancel()
+            if active_tts_sender_task is not None and not active_tts_sender_task.done():
+                active_tts_sender_task.cancel()
+                with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                    await active_tts_sender_task
+                active_tts_sender_task = None
+            if had_active_turn:
+                with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                    transcriber.reset()
+            if emit_interrupted:
+                await _send_stream_payload(
+                    {
+                        "type": "interrupted",
+                        "turn_id": interrupted_turn_id,
+                        "phase": "both",
+                        "reason": reason,
+                    }
+                )
+
+        async def _process_chat_audio(audio_bytes: bytes, *, allow_auto_commit: bool) -> None:
+            nonlocal turn_detector
+            nonlocal vad_warning_sent
+            auto_commit_triggered = False
+            commit_at = time.time()
+            if allow_auto_commit and turn_detector:
+                auto_commit_triggered = turn_detector.observe(audio_bytes)
+                if not turn_detector.available and not vad_warning_sent:
+                    vad_warning_sent = True
+                    await _send_vad_warning(
+                        "Silero VAD disabled; continuing without auto-commit",
+                        turn_detector.unavailable_reason,
+                    )
+                    turn_detector = None
+
+            result = await transcriber.process_audio_chunk(audio_bytes)
+            if result:
+                result.pop("_audio_chunk", None)
+                await _send_stream_payload(result)
+
+            if allow_auto_commit and auto_commit_triggered:
+                await _start_turn(
+                    commit_at=getattr(turn_detector, "last_trigger_at", None)
+                    if turn_detector
+                    else commit_at,
+                    auto=True,
+                )
+
+        async def _drain_paused_audio_queue() -> None:
+            queued_audio = list(paused_audio_chunks)
+            paused_audio_chunks.clear()
+            control_session.release_paused_audio()
+            for buffered_audio, _buffered_seconds in queued_audio:
+                await _process_chat_audio(buffered_audio, allow_auto_commit=False)
+
         try:
+            for event in protocol_decision.events:
+                await _send_stream_payload(event)
             while True:
                 raw_msg = await websocket.receive_text()
                 try:
@@ -2443,19 +2520,8 @@ async def websocket_audio_chat_stream(
                             )
                         continue
 
-                    auto_commit_triggered = False
-                    if turn_detector:
-                        auto_commit_triggered = turn_detector.observe(audio_bytes)
-                        if not turn_detector.available and not vad_warning_sent:
-                            vad_warning_sent = True
-                            await _send_vad_warning(
-                                "Silero VAD disabled; continuing without auto-commit",
-                                turn_detector.unavailable_reason,
-                            )
-                            turn_detector = None
-
                     try:
-                        seconds = _bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
+                        seconds = _estimate_stream_audio_seconds(audio_bytes, int(config.sample_rate or 16000))
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                         seconds = float(len(audio_bytes)) / float(
                             4 * max(1, int(config.sample_rate or 16000))
@@ -2489,57 +2555,59 @@ async def websocket_audio_chat_stream(
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as hb_exc:
                         logger.debug(f"audio.chat.stream heartbeat failed: error={hb_exc}")
 
-                    result = await transcriber.process_audio_chunk(audio_bytes)
-                    if result:
-                        # Drop audio blob if present
-                        result.pop("_audio_chunk", None)
-                        if _outer_stream:
-                            await _outer_stream.send_json(result)
-                    if auto_commit_triggered:
-                        await _start_turn(
-                            commit_at=getattr(turn_detector, "last_trigger_at", None)
-                            if turn_detector
-                            else time.time(),
-                            auto=True,
+                    if control_session.state == "paused":
+                        buffered_seconds = seconds
+                        paused_audio_chunks.append((audio_bytes, buffered_seconds))
+                        paused_audio_decision = control_session.buffer_paused_audio(
+                            buffered_seconds,
+                            now=time.time(),
                         )
+                        if paused_audio_decision.dropped_seconds > 0:
+                            _drop_oldest_stream_audio(
+                                paused_audio_chunks,
+                                paused_audio_decision.dropped_seconds,
+                            )
+                        for event in paused_audio_decision.events:
+                            await _send_stream_payload(event)
+                        continue
 
-                elif msg_type == "commit":
-                    await _start_turn(time.time(), auto=False)
+                    await _process_chat_audio(audio_bytes, allow_auto_commit=True)
+
                 elif msg_type == "interrupt":
                     reason = str(data.get("reason") or "client_cancel")
-                    interrupted_turn_id = active_turn_id
-                    active_turn_cancelled = True
-                    if active_turn_task is not None and not active_turn_task.done():
-                        active_turn_task.cancel()
-                    if active_tts_sender_task is not None and not active_tts_sender_task.done():
-                        active_tts_sender_task.cancel()
-                        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
-                            await active_tts_sender_task
-                        active_tts_sender_task = None
-                    payload = {
-                        "type": "interrupted",
-                        "turn_id": interrupted_turn_id,
-                        "phase": "both",
-                        "reason": reason,
-                    }
-                    if _outer_stream:
-                        await _outer_stream.send_json(payload)
-                    else:
-                        await websocket.send_json(payload)
-                elif msg_type == "reset":
-                    try:
-                        transcriber.reset()
-                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-                        logger.debug(f"audio.chat.stream transcriber.reset() failed on reset message: {exc}")
-                    if _outer_stream:
-                        await _outer_stream.send_json({"type": "status", "state": "reset"})
-                elif msg_type == "stop":
-                    if active_turn_task is not None and not active_turn_task.done():
-                        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
-                            await active_turn_task
-                    if _outer_stream:
-                        await _outer_stream.done()
-                    break
+                    await _cancel_active_turn(reason=reason, emit_interrupted=True)
+                elif msg_type in {"control", "commit", "reset", "stop"}:
+                    decision = control_session.handle_frame(data)
+                    if decision.error:
+                        await _send_stream_payload(decision.error)
+                        continue
+
+                    if decision.intent == "pause":
+                        await _cancel_active_turn(reason="client_pause", emit_interrupted=False)
+
+                    for event in decision.events:
+                        await _send_stream_payload(event)
+
+                    if decision.intent == "resume":
+                        await _drain_paused_audio_queue()
+                    elif decision.should_reset:
+                        paused_audio_chunks.clear()
+                        control_session.release_paused_audio()
+                        try:
+                            transcriber.reset()
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+                            logger.debug(f"audio.chat.stream transcriber.reset() failed on reset message: {exc}")
+                    elif decision.intent == "commit":
+                        await _start_turn(time.time(), auto=False)
+                    elif decision.intent == "stop":
+                        paused_audio_chunks.clear()
+                        control_session.release_paused_audio()
+                        if active_turn_task is not None and not active_turn_task.done():
+                            with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                                await active_turn_task
+                        if _outer_stream:
+                            await _outer_stream.done()
+                        break
                 else:
                     if _outer_stream:
                         await _outer_stream.send_json(

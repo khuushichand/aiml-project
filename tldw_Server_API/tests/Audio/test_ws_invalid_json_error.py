@@ -1,6 +1,4 @@
 import json
-import base64
-import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,8 +19,9 @@ def test_audio_ws_invalid_json_yields_validation_error(monkeypatch):
         except Exception:
             pytest.skip("audio WebSocket endpoint not available in this build")
         with ws_session_or_skip(ws) as ws:
-            # Send minimal config then an invalid JSON frame (as text that's not JSON)
-            ws.send_text(json.dumps({"type": "config", "sample_rate": 16000}))
+            # Disable VAD so this route test does not pull real torch-backed Silero
+            # imports into an otherwise unrelated invalid-JSON assertion.
+            ws.send_text(json.dumps({"type": "config", "sample_rate": 16000, "enable_vad": False}))
             ws.send_text("not-json")
             msg = ws.receive_json()
             assert isinstance(msg, dict)
