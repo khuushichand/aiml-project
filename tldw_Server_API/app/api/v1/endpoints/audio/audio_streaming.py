@@ -938,6 +938,7 @@ async def websocket_transcribe(
         persistence_db = None
         persistence_warning_sent = False
         last_partial_persist_ts = 0.0
+        persistence_idempotency_key = f"audio-ws:{request_id}"
 
         async def _send_persistence_warning(message: str, details: Optional[str] = None) -> None:
             nonlocal persistence_warning_sent
@@ -1014,6 +1015,7 @@ async def websocket_transcribe(
                     media_id=media_id,
                     transcription=snapshot,
                     whisper_model=persistence_model,
+                    idempotency_key=persistence_idempotency_key,
                 )
                 if not is_final:
                     last_partial_persist_ts = now

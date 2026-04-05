@@ -144,7 +144,14 @@ async def test_stream_transcribe_persists_partial_and_final(monkeypatch: pytest.
 
     monkeypatch.setattr(audio_streaming, "_resolve_media_db_for_user", lambda _user: db)
 
-    def _upsert(db_instance, media_id: int, transcription: str, whisper_model: str, created_at=None):  # noqa: ANN001
+    def _upsert(
+        db_instance,
+        media_id: int,
+        transcription: str,
+        whisper_model: str,
+        created_at=None,
+        **kwargs: Any,
+    ):  # noqa: ANN001
         calls.append(
             {
                 "db": db_instance,
@@ -152,6 +159,7 @@ async def test_stream_transcribe_persists_partial_and_final(monkeypatch: pytest.
                 "transcription": transcription,
                 "whisper_model": whisper_model,
                 "created_at": created_at,
+                **kwargs,
             }
         )
         return {"id": len(calls)}
@@ -186,6 +194,8 @@ async def test_stream_transcribe_persists_partial_and_final(monkeypatch: pytest.
     assert len(calls) >= 2
     assert all(call["media_id"] == 42 for call in calls)
     assert all(call["whisper_model"] == "stream-live-model" for call in calls)
+    assert len({call.get("idempotency_key") for call in calls}) == 1
+    assert all(str(call.get("idempotency_key", "")).startswith("audio-ws:") for call in calls)
     assert db.release_count == 1
 
 
@@ -196,7 +206,14 @@ async def test_stream_transcribe_skips_persistence_when_disabled(monkeypatch: py
 
     monkeypatch.setattr(audio_streaming, "_resolve_media_db_for_user", lambda _user: DummyMediaDB())
 
-    def _upsert(db_instance, media_id: int, transcription: str, whisper_model: str, created_at=None):  # noqa: ANN001
+    def _upsert(
+        db_instance,
+        media_id: int,
+        transcription: str,
+        whisper_model: str,
+        created_at=None,
+        **kwargs: Any,
+    ):  # noqa: ANN001
         calls.append(
             {
                 "db": db_instance,
@@ -204,6 +221,7 @@ async def test_stream_transcribe_skips_persistence_when_disabled(monkeypatch: py
                 "transcription": transcription,
                 "whisper_model": whisper_model,
                 "created_at": created_at,
+                **kwargs,
             }
         )
         return {"id": len(calls)}
@@ -248,8 +266,15 @@ async def test_stream_transcribe_persistence_fail_open(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(audio_streaming, "_resolve_media_db_for_user", lambda _user: db)
 
-    def _upsert_raises(db_instance, media_id: int, transcription: str, whisper_model: str, created_at=None):  # noqa: ANN001
-        _ = (db_instance, media_id, transcription, whisper_model, created_at)
+    def _upsert_raises(
+        db_instance,
+        media_id: int,
+        transcription: str,
+        whisper_model: str,
+        created_at=None,
+        **kwargs: Any,
+    ):  # noqa: ANN001
+        _ = (db_instance, media_id, transcription, whisper_model, created_at, kwargs)
         call_count["count"] += 1
         raise RuntimeError("simulated persistence failure")
 

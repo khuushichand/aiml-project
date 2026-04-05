@@ -438,6 +438,7 @@ async def test_persist_primary_av_item_upserts_normalized_transcript_via_extract
     assert len(transcript_calls) == 1
     assert transcript_calls[0]["media_id"] == 1
     assert transcript_calls[0]["whisper_model"] == "resolved-model"
+    assert transcript_calls[0].get("idempotency_key") is None
     assert json.loads(transcript_calls[0]["transcription"]) == {
         "text": "hello world",
         "segments": [{"text": "hello world", "start": 0.0, "end": 1.0}],
