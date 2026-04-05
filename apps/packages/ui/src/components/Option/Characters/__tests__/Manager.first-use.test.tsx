@@ -3505,11 +3505,16 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    await user.click(await screen.findByText("Gallery Quick Chat Character"))
-    // "Test in popup" is now in the overflow menu
-    const moreButton = await screen.findByRole("button", {
-      name: /More actions/i
-    })
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Click to preview Gallery Quick Chat Character"
+      })
+    )
+    // The gallery preview action menu lives inside the preview modal, so target
+    // its explicit aria-label instead of the tooltip text node from the card.
+    const moreButton = await screen.findByLabelText(
+      "More actions for Gallery Quick Chat Character"
+    )
     await user.click(moreButton)
     await user.click(
       await screen.findByRole("menuitem", {
