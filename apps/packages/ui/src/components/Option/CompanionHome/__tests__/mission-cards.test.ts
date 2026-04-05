@@ -28,7 +28,7 @@ describe("mission card registry", () => {
     }
   })
 
-  it("all cards require at least first_connection", () => {
+  it("every card has at least one prerequisite milestone", () => {
     for (const card of MISSION_CARDS) {
       expect(card.prerequisiteMilestones.length).toBeGreaterThanOrEqual(1)
     }

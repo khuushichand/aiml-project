@@ -282,17 +282,19 @@ const MediaPageContent: React.FC = () => {
   const viewPrefs = useMediaViewPreferences()
 
   // Auto-refresh media results when Quick Ingest completes
+  const searchRefetchRef = useRef(searchRefetch)
+  useEffect(() => { searchRefetchRef.current = searchRefetch }, [searchRefetch])
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>
     const handleIngestComplete = () => {
-      timeoutId = setTimeout(() => { searchRefetch() }, 1500)
+      timeoutId = setTimeout(() => { searchRefetchRef.current() }, 1500)
     }
     window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     return () => {
       clearTimeout(timeoutId)
       window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
     }
-  }, [searchRefetch])
+  }, [])
 
   // Compute display results (filtered by favorites/collections)
   // Need selection hook first for favorites/collections, but selection needs displayResults.

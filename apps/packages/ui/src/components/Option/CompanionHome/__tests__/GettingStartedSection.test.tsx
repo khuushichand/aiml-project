@@ -36,6 +36,9 @@ describe("GettingStartedSection", () => {
   })
 
   it("renders nothing when all complete", () => {
+    mockMissionCards.gettingStartedCards = [
+      { id: "test-done", title: "Completed step", description: "Already done", icon: () => null, href: "/done", isCompleted: true, category: "getting-started", priority: 1, persona: "all", prerequisiteMilestones: ["first_connection"] }
+    ]
     mockMissionCards.allComplete = true
     const { container } = render(<MemoryRouter><GettingStartedSection /></MemoryRouter>)
     expect(container.innerHTML).toBe("")

@@ -144,6 +144,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [saveProgress, setSaveProgress] = React.useState<SaveProgressState | null>(null)
   const hasLoadedDraft = React.useRef(false)
+  const lastWarningTs = React.useRef(0)
 
   const createQuizMutation = useCreateQuizMutation()
   const createQuestionMutation = useCreateQuestionMutation()
@@ -222,7 +223,11 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       if (!result) {
         setDraftStorageUnavailable(true)
       } else if (typeof result === "object" && result.recommendation) {
-        messageApi.warning(result.recommendation)
+        const now = Date.now()
+        if (now - lastWarningTs.current >= 30_000) {
+          lastWarningTs.current = now
+          messageApi.warning(result.recommendation)
+        }
       }
     }, 300)
 

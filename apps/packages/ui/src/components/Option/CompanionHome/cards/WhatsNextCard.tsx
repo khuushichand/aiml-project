@@ -1,11 +1,12 @@
 import { Card, Button } from "antd"
 import { ArrowRight } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { Link } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { useMissionCards } from "../hooks/useMissionCards"
 
 export function WhatsNextCard() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { whatsNextCard, allComplete } = useMissionCards()
 
   if (allComplete || !whatsNextCard) return null
@@ -28,11 +29,9 @@ export function WhatsNextCard() {
             {whatsNextCard.description}
           </div>
         </div>
-        <Link to={whatsNextCard.href}>
-          <Button type="primary" size="small" icon={<ArrowRight size={14} />}>
-            {t("common:go", "Go")}
-          </Button>
-        </Link>
+        <Button type="primary" size="small" icon={<ArrowRight size={14} />} onClick={() => navigate(whatsNextCard.href)}>
+          {t("common:go", "Go")}
+        </Button>
       </div>
     </Card>
   )

@@ -18,7 +18,7 @@ export type StorageGuardResult = {
 export function checkStorageBeforeWrite(estimatedBytes: number, existingKey?: string): StorageGuardResult {
   try {
     const totalUsedBytes = estimateLocalStorageUsageBytes(window.localStorage) // no prefix = all keys
-    const browserLimit = 5 * 1024 * 1024 // ~5MB browser localStorage limit
+    const browserLimit = resolveStorageBudgetBytes()
     // Subtract existing value size when overwriting a key (avoids double-counting)
     let existingSize = 0
     if (existingKey) {

@@ -108,7 +108,7 @@ export function CompanionHomeShell({
         </div>
       )}
 
-      <StorageQuotaBanner />
+      {!demoEnabled && <StorageQuotaBanner />}
 
       <CompanionHomePage
         onPersonalizationEnabled={onPersonalizationEnabled}

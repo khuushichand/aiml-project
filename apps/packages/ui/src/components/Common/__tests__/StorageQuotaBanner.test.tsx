@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, fireEvent } from "@testing-library/react"
 
 // Mock the hook to control the return value
 const mockQuota = {
@@ -54,5 +54,26 @@ describe("StorageQuotaBanner", () => {
     render(<StorageQuotaBanner />)
     // Alert with type=error and no closable prop should not have close button
     expect(screen.queryByRole("button", { name: /close/i })).not.toBeInTheDocument()
+  })
+
+  it("persists warning dismissal for the session", () => {
+    mockQuota.level = "warning"
+    mockQuota.ratio = 0.85
+    mockQuota.usedBytes = 4.25e6
+    mockQuota.budgetBytes = 5e6
+    mockQuota.availableBytes = 0.75e6
+    mockQuota.canWrite = () => true
+
+    const { unmount } = render(<StorageQuotaBanner />)
+    const closeBtn = screen.getByRole("button", { name: /close/i })
+    fireEvent.click(closeBtn)
+
+    // Banner should disappear
+    expect(screen.queryByTestId("storage-quota-banner-warning")).toBeNull()
+    unmount()
+
+    // Re-render — should still be dismissed (sessionStorage persists)
+    render(<StorageQuotaBanner />)
+    expect(screen.queryByTestId("storage-quota-banner-warning")).toBeNull()
   })
 })
