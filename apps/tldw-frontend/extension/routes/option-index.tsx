@@ -102,10 +102,10 @@ const OptionIndex = () => {
               setDemoEnabled(true)
               try {
                 await markFirstRunComplete()
+                showFtueNotification()
               } catch {
-                // ignore
+                // markFirstRunComplete failed; skip notification since state may be inconsistent
               }
-              showFtueNotification()
             }}
           />
         </OptionLayout>
@@ -118,10 +118,10 @@ const OptionIndex = () => {
           onFinish={async () => {
             try {
               await markFirstRunComplete()
+              showFtueNotification()
             } catch {
-              // ignore markFirstRunComplete failures here; connection state will self-heal on next load
+              // markFirstRunComplete failed; skip notification since state may be inconsistent
             }
-            showFtueNotification()
             void checkOnce().catch(() => undefined)
           }}
         />

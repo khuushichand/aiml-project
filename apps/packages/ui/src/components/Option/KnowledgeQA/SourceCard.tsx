@@ -166,7 +166,6 @@ export function SourceCard({
   const isDocumentType =
     contentFacet === "pdf" ||
     rawMediaType.includes("pdf") ||
-    rawMediaType.includes("epub") ||
     rawMediaType.includes("ebook") ||
     rawMediaType === "document"
 
@@ -655,7 +654,7 @@ export function SourceCard({
                     <button
                       type="button"
                       role="menuitem"
-                      aria-label={t("knowledge:sourceCard.openInWorkspace", "Open in Document Workspace")}
+                      aria-label={t("sourceCard.openInWorkspace", "Open in Document Workspace")}
                       onClick={() => {
                         window.open(
                           `/document-workspace?open=${resolvedMediaId}`,
@@ -667,7 +666,7 @@ export function SourceCard({
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
                     >
                       <BookOpen className="w-3.5 h-3.5" />
-                      {t("knowledge:sourceCard.openInWorkspace", "Open in Document Workspace")}
+                      {t("sourceCard.openInWorkspace", "Open in Document Workspace")}
                     </button>
                   </>
                 )}

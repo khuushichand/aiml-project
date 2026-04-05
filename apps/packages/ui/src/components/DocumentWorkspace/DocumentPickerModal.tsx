@@ -345,7 +345,11 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
               <button
                 key={doc.id}
                 type="button"
-                onClick={() => handleOpen({ id: doc.id, type: doc.type })}
+                onClick={() => {
+                  const normalized = doc.type?.toLowerCase()
+                  const resolvedType = normalized === "document" ? "pdf" : normalized === "ebook" ? "epub" : normalized
+                  handleOpen({ id: doc.id, type: resolvedType, title: doc.title })
+                }}
                 className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface2 transition-colors"
               >
                 <FileText className="h-4 w-4 flex-shrink-0 text-primary" />

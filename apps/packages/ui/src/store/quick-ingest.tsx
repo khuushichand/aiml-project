@@ -134,6 +134,7 @@ type QuickIngestStore = {
    */
   recentlyIngestedDocs: Array<{ id: number; type: string; title?: string }>
   addRecentlyIngestedDoc: (doc: { id: number; type: string; title?: string }) => void
+  addRecentlyIngestedDocs: (docs: Array<{ id: number; type: string; title?: string }>) => void
   clearRecentlyIngestedDocs: () => void
 }
 
@@ -331,6 +332,14 @@ export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) 
     set((s) => ({
       recentlyIngestedDocs: [doc, ...s.recentlyIngestedDocs.filter((x) => x.id !== doc.id)].slice(0, 20),
     })),
+  addRecentlyIngestedDocs: (newDocs) =>
+    set((s) => {
+      const ids = new Set(newDocs.map((d) => d.id))
+      const filteredExisting = s.recentlyIngestedDocs.filter((d) => !ids.has(d.id))
+      return {
+        recentlyIngestedDocs: [...newDocs, ...filteredExisting].slice(0, 20),
+      }
+    }),
   clearRecentlyIngestedDocs: () => set({ recentlyIngestedDocs: [] }),
 }))
 

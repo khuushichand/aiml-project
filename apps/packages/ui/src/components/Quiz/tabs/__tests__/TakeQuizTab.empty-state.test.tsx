@@ -126,6 +126,7 @@ describe("TakeQuizTab empty-state guidance", () => {
     expect(
       screen.getByText("No quizzes available to take yet")
     ).toBeInTheDocument()
-    expect(screen.getByText("media library")).toBeInTheDocument()
+    const mediaLibraryLink = screen.getByRole("link", { name: /media library/i })
+    expect(mediaLibraryLink).toHaveAttribute("href", "/media")
   })
 })

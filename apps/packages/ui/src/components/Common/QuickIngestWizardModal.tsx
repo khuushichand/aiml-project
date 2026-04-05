@@ -766,23 +766,31 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
   }, [session.tracking])
 
   // Track recently ingested documents for the DocumentPickerModal
-  const addRecentlyIngestedDoc = useQuickIngestStore(s => s.addRecentlyIngestedDoc)
+  const addRecentlyIngestedDocs = useQuickIngestStore(s => s.addRecentlyIngestedDocs)
   const recordedIngestRef = useRef(false)
 
   useEffect(() => {
     if (state.currentStep !== 5) { recordedIngestRef.current = false; return }
     if (recordedIngestRef.current) return
     recordedIngestRef.current = true
-    for (const item of state.results) {
-      if (
-        item.status === "ok" &&
-        item.mediaId != null &&
-        ["pdf", "ebook", "document"].includes(item.type)
-      ) {
-        addRecentlyIngestedDoc({ id: Number(item.mediaId), type: item.type, title: item.title || undefined })
-      }
+    const newDocs = state.results
+      .filter(
+        (item) =>
+          item.status === "ok" &&
+          item.mediaId != null &&
+          ["pdf", "ebook", "document"].includes(item.type)
+      )
+      .map((item) => {
+        const id = Number(item.mediaId)
+        return Number.isFinite(id) && id > 0
+          ? { id, type: item.type, title: item.title || undefined }
+          : null
+      })
+      .filter((d): d is NonNullable<typeof d> => d != null)
+    if (newDocs.length > 0) {
+      addRecentlyIngestedDocs(newDocs)
     }
-  }, [state.currentStep, state.results, addRecentlyIngestedDoc])
+  }, [state.currentStep, state.results, addRecentlyIngestedDocs])
 
   useEffect(() => {
     if (!open || !state.isMinimized) return
