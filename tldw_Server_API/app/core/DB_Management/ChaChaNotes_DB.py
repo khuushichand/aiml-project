@@ -531,7 +531,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 43  # Schema v43 adds manuscript AI analyses table
+    _CURRENT_SCHEMA_VERSION = 44  # Schema v44 adds sync metadata to scene-link tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3973,6 +3973,10 @@ CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
   scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
   is_pov        BOOLEAN NOT NULL DEFAULT 0,
+  last_modified TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, character_id)
 );
 
@@ -3980,6 +3984,10 @@ CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
 CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
   scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  last_modified   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, world_info_id)
 );
 
@@ -4015,7 +4023,13 @@ AFTER INSERT ON manuscript_characters BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4034,13 +4048,22 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.arc_summary IS NOT NEW.arc_summary OR
      OLD.custom_fields_json IS NOT NEW.custom_fields_json OR
      OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.age IS NOT NEW.age OR
+     OLD.gender IS NOT NEW.gender OR
+     OLD.notes IS NOT NEW.notes OR
      OLD.last_modified IS NOT NEW.last_modified OR
      OLD.version IS NOT NEW.version)
 BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'sort_order',NEW.sort_order,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
@@ -4140,6 +4163,7 @@ AFTER INSERT ON manuscript_world_info BEGIN
   VALUES('manuscript_world_info', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4162,6 +4186,7 @@ BEGIN
   VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
                      'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4276,6 +4301,7 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.event_type IS NOT NEW.event_type OR
      OLD.scene_id IS NOT NEW.scene_id OR
      OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.plot_line_id IS NOT NEW.plot_line_id OR
      OLD.sort_order IS NOT NEW.sort_order OR
      OLD.last_modified IS NOT NEW.last_modified OR
      OLD.version IS NOT NEW.version)
@@ -4340,6 +4366,10 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.severity IS NOT NEW.severity OR
      OLD.status IS NOT NEW.status OR
      OLD.resolution IS NOT NEW.resolution OR
+     OLD.scene_id IS NOT NEW.scene_id OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.plot_line_id IS NOT NEW.plot_line_id OR
+     OLD.detected_by IS NOT NEW.detected_by OR
      OLD.last_modified IS NOT NEW.last_modified OR
      OLD.version IS NOT NEW.version)
 BEGIN
@@ -4586,12 +4616,20 @@ CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
   scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
   is_pov        BOOLEAN NOT NULL DEFAULT FALSE,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, character_id)
 );
 
 CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
   scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, world_info_id)
 );
 
@@ -4661,6 +4699,7 @@ AFTER INSERT ON manuscript_ai_analyses BEGIN
   VALUES('manuscript_ai_analyses', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
                      'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'result_json',NEW.result_json,
                      'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
                      'stale',NEW.stale,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
@@ -4683,6 +4722,7 @@ BEGIN
   VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
                      'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'result_json',NEW.result_json,
                      'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
                      'stale',NEW.stale,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
@@ -4750,6 +4790,127 @@ UPDATE db_schema_version
    SET version = 43
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 43;
+"""
+
+    _MIGRATION_SQL_V43_TO_V44 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 44 — Sync metadata on scene-link tables (2026-04-XX)
+  NOTE: ALTER TABLE ADD COLUMN is handled in _migrate_from_v43_to_v44()
+  to avoid errors on fresh databases that already have the columns.
+───────────────────────────────────────────────────────────────*/
+
+-- Backfill last_modified for existing rows (no-op on fresh DBs)
+UPDATE manuscript_scene_characters SET last_modified = strftime('%Y-%m-%dT%H:%M:%f','now') WHERE last_modified = '';
+UPDATE manuscript_scene_world_info SET last_modified = strftime('%Y-%m-%dT%H:%M:%f','now') WHERE last_modified = '';
+
+/* ── sync triggers: manuscript_scene_characters ────────────── */
+DROP TRIGGER IF EXISTS msc_sync_create;
+DROP TRIGGER IF EXISTS msc_sync_update;
+DROP TRIGGER IF EXISTS msc_sync_delete;
+
+CREATE TRIGGER msc_sync_create
+AFTER INSERT ON manuscript_scene_characters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'create',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'is_pov',NEW.is_pov,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER msc_sync_update
+AFTER UPDATE ON manuscript_scene_characters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.is_pov IS NOT NEW.is_pov OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'update',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'is_pov',NEW.is_pov,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER msc_sync_delete
+AFTER UPDATE ON manuscript_scene_characters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'delete',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+/* ── sync triggers: manuscript_scene_world_info ────────────── */
+DROP TRIGGER IF EXISTS mswi_sync_create;
+DROP TRIGGER IF EXISTS mswi_sync_update;
+DROP TRIGGER IF EXISTS mswi_sync_delete;
+
+CREATE TRIGGER mswi_sync_create
+AFTER INSERT ON manuscript_scene_world_info BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'create',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER mswi_sync_update
+AFTER UPDATE ON manuscript_scene_world_info
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'update',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER mswi_sync_delete
+AFTER UPDATE ON manuscript_scene_world_info
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'delete',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+UPDATE db_schema_version
+   SET version = 44
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 44;
+"""
+
+    _MIGRATION_SQL_V43_TO_V44_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 44 — Sync metadata on scene-link tables (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+UPDATE db_schema_version
+   SET version = 44
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 44;
 """
 
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
@@ -6635,6 +6796,39 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V42->V43: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V43 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v43_to_v44(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V43 to V44 (sync metadata on scene-link tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V43 to V44 for DB: {self.db_path_str}...")
+        try:
+            # Only add columns if they don't exist (fresh DBs already have them).
+            for table in ("manuscript_scene_characters", "manuscript_scene_world_info"):
+                existing_cols = {row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+                for col, coldef in (
+                    ("last_modified", "TEXT NOT NULL DEFAULT ''"),
+                    ("deleted", "BOOLEAN NOT NULL DEFAULT 0"),
+                    ("client_id", "TEXT"),
+                    ("version", "INTEGER NOT NULL DEFAULT 1"),
+                ):
+                    if col not in existing_cols:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")  # nosec B608
+
+            # Backfill and create triggers (idempotent via IF EXISTS/IF NOT EXISTS).
+            conn.executescript(self._MIGRATION_SQL_V43_TO_V44)
+            final_version = self._get_db_version(conn)
+            if final_version != 44:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V43->V44 failed version check. Expected 44, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V44 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V43->V44 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V43->V44 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V43->V44: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V44 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -7598,6 +7792,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 43 and current_db_version == 42:
                         self._migrate_from_v42_to_v43(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 44 and current_db_version == 43:
+                        self._migrate_from_v43_to_v44(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -8037,6 +8234,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 43 and current_db_version == 42:
                     self._migrate_from_v42_to_v43(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 44 and current_db_version == 43:
+                    self._migrate_from_v43_to_v44(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -10009,6 +10209,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 43:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V42_TO_V43_POSTGRES, conn, expected_version=43)
                 current_version = 43
+            if current_version < 44:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V43_TO_V44_POSTGRES, conn, expected_version=44)
+                current_version = 44
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003

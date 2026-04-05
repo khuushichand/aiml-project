@@ -127,7 +127,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               placeholder="Character name..."
               value={newCharName}
               onChange={(e) => setNewCharName(e.target.value)}
-              onPressEnter={() => newCharName.trim() && addCharMutation.mutate(newCharName.trim())}
+              onPressEnter={() => newCharName.trim() && !addCharMutation.isPending && addCharMutation.mutate(newCharName.trim())}
             />
             <Button
               size="small"
@@ -173,7 +173,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               placeholder="Entry name..."
               value={newWorldName}
               onChange={(e) => setNewWorldName(e.target.value)}
-              onPressEnter={() => newWorldName.trim() && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
+              onPressEnter={() => newWorldName.trim() && !addWorldMutation.isPending && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
               className="flex-1"
             />
             <Button
@@ -213,7 +213,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 placeholder="Plot line title..."
                 value={newPlotTitle}
                 onChange={(e) => setNewPlotTitle(e.target.value)}
-                onPressEnter={() => newPlotTitle.trim() && addPlotMutation.mutate(newPlotTitle.trim())}
+                onPressEnter={() => newPlotTitle.trim() && !addPlotMutation.isPending && addPlotMutation.mutate(newPlotTitle.trim())}
               />
               <Button
                 size="small"

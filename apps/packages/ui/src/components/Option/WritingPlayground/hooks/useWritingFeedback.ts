@@ -96,6 +96,8 @@ export function useWritingFeedback({
   const [echoAnalyzing, setEchoAnalyzing] = useState(false)
   const [charsSinceLastEcho, setCharsSinceLastEcho] = useState(0)
 
+  const moodReqIdRef = useRef(0)
+  const echoInFlightRef = useRef(false)
   const lastMoodCallRef = useRef(0)
   const lastEchoCallRef = useRef(0)
   const echoIndexRef = useRef(0)
@@ -124,6 +126,7 @@ export function useWritingFeedback({
       if (now - lastMoodCallRef.current < MOOD_DEBOUNCE_MS) return
       lastMoodCallRef.current = now
 
+      const reqId = ++moodReqIdRef.current
       controller = new AbortController()
       setMoodAnalyzing(true)
       const textSlice = editorText.slice(-500)
@@ -134,6 +137,7 @@ export function useWritingFeedback({
         controller.signal,
       )
       if (cancelled) return
+      if (reqId !== moodReqIdRef.current) return
       const word = result.toLowerCase().trim().replace(/[^a-z]/g, "")
       if (VALID_MOODS.has(word)) {
         setCurrentMood(word as Mood)
@@ -152,11 +156,13 @@ export function useWritingFeedback({
   // Echo Chamber
   useEffect(() => {
     if (!echoEnabled || !isOnline || isGenerating || charsSinceLastEcho < ECHO_CHAR_THRESHOLD) return
+    if (echoInFlightRef.current) return
 
     const now = Date.now()
     if (now - lastEchoCallRef.current < ECHO_DEBOUNCE_MS) return
 
     lastEchoCallRef.current = now
+    echoInFlightRef.current = true
 
     const persona = ECHO_PERSONAS[echoIndexRef.current % ECHO_PERSONAS.length]
     echoIndexRef.current += 1
@@ -183,12 +189,15 @@ export function useWritingFeedback({
         }
         setEchoAnalyzing(false)
       },
-    )
+    ).finally(() => {
+      echoInFlightRef.current = false
+    })
 
     return () => {
       cancelled = true
       controller.abort()
       setEchoAnalyzing(false)
+      echoInFlightRef.current = false
     }
   }, [charsSinceLastEcho, echoEnabled, isOnline, isGenerating, editorText, selectedModel])
 

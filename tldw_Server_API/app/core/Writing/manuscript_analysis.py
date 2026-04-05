@@ -147,7 +147,7 @@ async def _run_structured_analysis(
         return {"error": "Failed to parse LLM response", "raw": content[:500] if content else ""}
     except Exception as exc:
         logger.error("Analysis LLM call failed: {}", exc)
-        return {"error": str(exc)}
+        return {"error": "Analysis failed due to an internal error. Please try again later."}
 
 
 def _extract_content(response: Any) -> str:

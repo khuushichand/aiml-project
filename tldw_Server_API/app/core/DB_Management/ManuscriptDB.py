@@ -145,6 +145,63 @@ class ManuscriptDBHelper:
             d["settings"] = {}
         return d
 
+    # Tables eligible for cross-project ownership checks.
+    _PROJECT_CHECK_TABLES: frozenset[str] = frozenset({
+        "manuscript_characters",
+        "manuscript_scenes",
+        "manuscript_chapters",
+        "manuscript_world_info",
+        "manuscript_plot_lines",
+    })
+
+    def _assert_same_project(
+        self,
+        conn: Any,
+        table: str,
+        entity_id: str,
+        expected_project_id: str,
+        label: str = "entity",
+    ) -> None:
+        """Verify an entity belongs to the expected project.
+
+        Raises :class:`ValueError` on mismatch or missing row.
+        """
+        if table not in self._PROJECT_CHECK_TABLES:
+            raise ValueError(f"Internal error: unknown table '{table}'")
+        row = conn.execute(
+            f"SELECT project_id FROM {table} WHERE id = ? AND deleted = 0",  # nosec B608
+            (entity_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"{label} '{entity_id}' not found or deleted")
+        if row["project_id"] != expected_project_id:
+            raise ValueError(f"{label} '{entity_id}' belongs to a different project")
+
+    def _validate_plot_refs(
+        self,
+        conn: Any,
+        project_id: str,
+        *,
+        plot_line_id: str | None = None,
+        scene_id: str | None = None,
+        chapter_id: str | None = None,
+    ) -> None:
+        """Validate that plot-related references share the same project
+        and that scene belongs to chapter when both are supplied."""
+        if plot_line_id:
+            self._assert_same_project(conn, "manuscript_plot_lines", plot_line_id, project_id, "plot_line")
+        if scene_id:
+            self._assert_same_project(conn, "manuscript_scenes", scene_id, project_id, "scene")
+        if chapter_id:
+            self._assert_same_project(conn, "manuscript_chapters", chapter_id, project_id, "chapter")
+        if scene_id and chapter_id:
+            row = conn.execute(
+                "SELECT chapter_id FROM manuscript_scenes WHERE id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchone()
+            if row and row["chapter_id"] != chapter_id:
+                raise ValueError(f"Scene '{scene_id}' does not belong to chapter '{chapter_id}'")
+
     # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
@@ -1139,6 +1196,12 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            self._assert_same_project(
+                conn, "manuscript_characters", from_character_id, project_id, "from_character"
+            )
+            self._assert_same_project(
+                conn, "manuscript_characters", to_character_id, project_id, "to_character"
+            )
             conn.execute(
                 """
                 INSERT INTO manuscript_character_relationships
@@ -1196,12 +1259,26 @@ class ManuscriptDBHelper:
         *,
         is_pov: bool = False,
     ) -> None:
-        """Link a character to a scene (INSERT OR IGNORE)."""
+        """Link a character to a scene (upsert — updates ``is_pov`` on conflict)."""
         with self.db.transaction() as conn:
+            # Verify both entities belong to the same project.
+            scene_row = conn.execute(
+                "SELECT project_id FROM manuscript_scenes WHERE id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchone()
+            if scene_row is None:
+                raise ValueError(f"Scene '{scene_id}' not found or deleted")
+            self._assert_same_project(
+                conn, "manuscript_characters", character_id, scene_row["project_id"], "character"
+            )
             conn.execute(
-                "INSERT OR IGNORE INTO manuscript_scene_characters "
-                "(scene_id, character_id, is_pov) VALUES (?, ?, ?)",
-                (scene_id, character_id, int(is_pov)),
+                "INSERT INTO manuscript_scene_characters "
+                "(scene_id, character_id, is_pov, last_modified, client_id, version) "
+                "VALUES (?, ?, ?, ?, ?, 1) "
+                "ON CONFLICT(scene_id, character_id) DO UPDATE SET "
+                "is_pov = excluded.is_pov, last_modified = excluded.last_modified, "
+                "client_id = excluded.client_id, version = version + 1",
+                (scene_id, character_id, int(is_pov), self._now(), self._client_id),
             )
 
     def unlink_scene_character(self, scene_id: str, character_id: str) -> None:
@@ -1250,6 +1327,10 @@ class ManuscriptDBHelper:
         tags_json = json.dumps(tags) if tags else "[]"
 
         with self.db.transaction() as conn:
+            if parent_id:
+                self._assert_same_project(
+                    conn, "manuscript_world_info", parent_id, project_id, "parent_world_info"
+                )
             conn.execute(
                 """
                 INSERT INTO manuscript_world_info
@@ -1379,10 +1460,24 @@ class ManuscriptDBHelper:
     def link_scene_world_info(self, scene_id: str, world_info_id: str) -> None:
         """Link a world-info entry to a scene (INSERT OR IGNORE)."""
         with self.db.transaction() as conn:
+            # Verify both entities belong to the same project.
+            scene_row = conn.execute(
+                "SELECT project_id FROM manuscript_scenes WHERE id = ? AND deleted = 0",
+                (scene_id,),
+            ).fetchone()
+            if scene_row is None:
+                raise ValueError(f"Scene '{scene_id}' not found or deleted")
+            self._assert_same_project(
+                conn, "manuscript_world_info", world_info_id, scene_row["project_id"], "world_info"
+            )
             conn.execute(
-                "INSERT OR IGNORE INTO manuscript_scene_world_info "
-                "(scene_id, world_info_id) VALUES (?, ?)",
-                (scene_id, world_info_id),
+                "INSERT INTO manuscript_scene_world_info "
+                "(scene_id, world_info_id, last_modified, client_id, version) "
+                "VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(scene_id, world_info_id) DO UPDATE SET "
+                "last_modified = excluded.last_modified, "
+                "client_id = excluded.client_id, version = version + 1",
+                (scene_id, world_info_id, self._now(), self._client_id),
             )
 
     def unlink_scene_world_info(self, scene_id: str, world_info_id: str) -> None:
@@ -1542,6 +1637,10 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            self._validate_plot_refs(
+                conn, project_id,
+                plot_line_id=plot_line_id, scene_id=scene_id, chapter_id=chapter_id,
+            )
             conn.execute(
                 """
                 INSERT INTO manuscript_plot_events
@@ -1597,6 +1696,19 @@ class ManuscriptDBHelper:
         params.extend([event_id, expected_version])
 
         with self.db.transaction() as conn:
+            # Validate cross-project refs if updating reference columns.
+            ref_cols = {"scene_id", "chapter_id"} & updates.keys()
+            if ref_cols:
+                row = conn.execute(
+                    "SELECT project_id FROM manuscript_plot_events WHERE id = ? AND deleted = 0",
+                    (event_id,),
+                ).fetchone()
+                if row:
+                    self._validate_plot_refs(
+                        conn, row["project_id"],
+                        scene_id=updates.get("scene_id"),
+                        chapter_id=updates.get("chapter_id"),
+                    )
             cur = conn.execute(
                 f"UPDATE manuscript_plot_events SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
@@ -1650,6 +1762,10 @@ class ManuscriptDBHelper:
         now = self._now()
 
         with self.db.transaction() as conn:
+            self._validate_plot_refs(
+                conn, project_id,
+                plot_line_id=plot_line_id, scene_id=scene_id, chapter_id=chapter_id,
+            )
             conn.execute(
                 """
                 INSERT INTO manuscript_plot_holes
@@ -1724,6 +1840,20 @@ class ManuscriptDBHelper:
         params.extend([plot_hole_id, expected_version])
 
         with self.db.transaction() as conn:
+            # Validate cross-project refs if updating reference columns.
+            ref_cols = {"scene_id", "chapter_id", "plot_line_id"} & updates.keys()
+            if ref_cols:
+                row = conn.execute(
+                    "SELECT project_id FROM manuscript_plot_holes WHERE id = ? AND deleted = 0",
+                    (plot_hole_id,),
+                ).fetchone()
+                if row:
+                    self._validate_plot_refs(
+                        conn, row["project_id"],
+                        plot_line_id=updates.get("plot_line_id"),
+                        scene_id=updates.get("scene_id"),
+                        chapter_id=updates.get("chapter_id"),
+                    )
             cur = conn.execute(
                 f"UPDATE manuscript_plot_holes SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",

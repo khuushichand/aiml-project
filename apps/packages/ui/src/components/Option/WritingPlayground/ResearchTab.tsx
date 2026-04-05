@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { Button, Empty, Input, List, Spin, Tag, Typography } from "antd"
 import { Search, BookOpen, Plus } from "lucide-react"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
@@ -16,17 +16,22 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
   const [results, setResults] = useState<ManuscriptResearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [citedIds, setCitedIds] = useState<Set<string>>(new Set())
+  const searchSeqRef = useRef(0)
+  const [lastSearchedQuery, setLastSearchedQuery] = useState("")
 
   const handleSearch = async () => {
     if (!query.trim() || !activeNodeId) return
+    const seq = ++searchSeqRef.current
     setSearching(true)
     try {
       const resp = await searchManuscriptResearch(activeNodeId, query.trim())
+      if (seq !== searchSeqRef.current) return
       setResults(resp.results || [])
+      setLastSearchedQuery(query)
     } catch {
-      setResults([])
+      if (seq === searchSeqRef.current) setResults([])
     } finally {
-      setSearching(false)
+      if (seq === searchSeqRef.current) setSearching(false)
     }
   }
 
@@ -37,7 +42,7 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
         source_type: result.source_type || "research",
         source_title: result.title || result.source_title || "Untitled",
         excerpt: result.snippet || result.excerpt || "",
-        query_used: query,
+        query_used: lastSearchedQuery,
       })
       setCitedIds((prev) => new Set(prev).add(result.id || result.title))
     } catch {

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +609,18 @@ class ManuscriptAnalysisRequest(BaseModel):
     )
     provider: str | None = Field(None, description="LLM provider override")
     model: str | None = Field(None, description="Model override")
+
+    @field_validator("analysis_types")
+    @classmethod
+    def validate_analysis_types(cls, v: list[str]) -> list[str]:
+        allowed = {"pacing", "plot_holes", "consistency"}
+        invalid = set(v) - allowed
+        if invalid:
+            raise ValueError(
+                f"Unsupported analysis types: {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(allowed))}"
+            )
+        return v
 
 
 class ManuscriptAnalysisResponse(BaseModel):

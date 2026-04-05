@@ -14,7 +14,7 @@ export function FeedbackTab(props: UseWritingFeedbackReturn) {
       <div>
         <div className="flex items-center justify-between mb-2">
           <Typography.Text strong className="text-sm">Mood Detection</Typography.Text>
-          <Switch size="small" checked={moodEnabled} onChange={setMoodEnabled} />
+          <Switch size="small" checked={moodEnabled} onChange={setMoodEnabled} aria-label="Toggle mood detection" />
         </div>
         {moodEnabled && (
           <div className="flex items-center gap-2">
@@ -39,7 +39,7 @@ export function FeedbackTab(props: UseWritingFeedbackReturn) {
       <div>
         <div className="flex items-center justify-between mb-2">
           <Typography.Text strong className="text-sm">Echo Chamber</Typography.Text>
-          <Switch size="small" checked={echoEnabled} onChange={setEchoEnabled} />
+          <Switch size="small" checked={echoEnabled} onChange={setEchoEnabled} aria-label="Toggle Echo Chamber" />
         </div>
         {echoEnabled && (
           <div className="flex flex-col gap-2">
