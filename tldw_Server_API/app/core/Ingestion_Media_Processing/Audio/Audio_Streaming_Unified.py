@@ -20,6 +20,7 @@ import base64
 import copy
 import importlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -163,6 +164,7 @@ def _drop_oldest_buffered_audio(
     dropped_seconds: float,
 ) -> None:
     remaining = max(0.0, float(dropped_seconds))
+    bytes_per_sample = 4  # float32 PCM
     while remaining > 0 and paused_audio_chunks:
         chunk_bytes, chunk_seconds = paused_audio_chunks[0]
         if chunk_seconds <= remaining:
@@ -172,12 +174,28 @@ def _drop_oldest_buffered_audio(
         if chunk_seconds <= 0:
             paused_audio_chunks.popleft()
             continue
+        chunk_len = len(chunk_bytes)
+        if chunk_len <= 0:
+            paused_audio_chunks.popleft()
+            continue
+
         trim_ratio = min(1.0, remaining / chunk_seconds)
-        trim_bytes = int(len(chunk_bytes) * trim_ratio)
-        if trim_bytes <= 0:
-            trim_bytes = 1
-        paused_audio_chunks[0] = (chunk_bytes[trim_bytes:], chunk_seconds - remaining)
-        remaining = 0.0
+        target_trim_bytes = max(float(bytes_per_sample), float(chunk_len) * trim_ratio)
+        trim_bytes = min(
+            chunk_len,
+            int(math.ceil(target_trim_bytes / float(bytes_per_sample))) * bytes_per_sample,
+        )
+        if trim_bytes >= chunk_len:
+            paused_audio_chunks.popleft()
+            remaining -= chunk_seconds
+            continue
+
+        dropped_chunk_seconds = chunk_seconds * (trim_bytes / float(chunk_len))
+        paused_audio_chunks[0] = (
+            chunk_bytes[trim_bytes:],
+            max(0.0, chunk_seconds - dropped_chunk_seconds),
+        )
+        remaining = max(0.0, remaining - dropped_chunk_seconds)
 
 # Expose get_whisper_model at module scope so tests can monkeypatch it.
 # Keep this lazy: importing Audio_Transcription_Lib at module import time can

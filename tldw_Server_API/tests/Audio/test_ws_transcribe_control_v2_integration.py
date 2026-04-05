@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 import json
 from typing import Any
 
@@ -34,6 +35,20 @@ def _audio_frame(text: str) -> dict[str, Any]:
         "type": "audio",
         "data": base64.b64encode(text.encode("utf-8")).decode("ascii"),
     }
+
+
+def test_drop_oldest_buffered_audio_rounds_up_to_preserve_frame_alignment() -> None:
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+
+    paused_audio_chunks = deque([(b"abcdefghijkl", 1.0)])
+
+    unified._drop_oldest_buffered_audio(paused_audio_chunks, 0.34)
+
+    assert len(paused_audio_chunks) == 1
+    remaining_bytes, remaining_seconds = paused_audio_chunks[0]
+    assert remaining_bytes == b"ijkl"
+    assert len(remaining_bytes) % 4 == 0
+    assert remaining_seconds == pytest.approx(4.0 / 12.0)
 
 
 @pytest.mark.asyncio
