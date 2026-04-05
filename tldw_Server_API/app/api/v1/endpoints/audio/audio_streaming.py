@@ -91,6 +91,7 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils import normalize_model_and_variant
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_policy import (
     RedactingWebSocketProxy,
+    apply_transcript_payload_policy,
     apply_transcript_text_policy,
     get_websocket_auth_principal,
     resolve_effective_stt_policy,
@@ -1441,6 +1442,12 @@ async def websocket_audio_chat_stream(
         _s = _get_settings()
         user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
+    effective_stt_policy = await resolve_effective_stt_policy(
+        principal=get_websocket_auth_principal(websocket),
+        user_id=int(user_id_for_usage) if user_id_for_usage is not None else None,
+        db=None,
+    )
+
     acquired_stream = False
 
     try:
@@ -1942,6 +1949,7 @@ async def websocket_audio_chat_stream(
         turn_sequence = 0
 
         async def _send_stream_payload(payload: dict[str, Any]) -> None:
+            payload = apply_transcript_payload_policy(payload, policy=effective_stt_policy)
             if _outer_stream:
                 await _outer_stream.send_json(payload)
             else:
@@ -2234,7 +2242,12 @@ async def websocket_audio_chat_stream(
                 return
             processing_turn = True
             try:
-                transcript_text = transcriber.get_full_transcript()
+                raw_transcript_text = transcriber.get_full_transcript()
+                transcript_text = apply_transcript_text_policy(
+                    raw_transcript_text,
+                    policy=effective_stt_policy,
+                    is_partial=False,
+                )
                 final_emit_at = time.time()
                 eos_detected_at = final_emit_at
                 try:
@@ -2257,8 +2270,7 @@ async def websocket_audio_chat_stream(
                         diarization_status="disabled",
                     )
                 )
-                if _outer_stream:
-                    await _outer_stream.send_json(payload)
+                await _send_stream_payload(payload)
 
                 # Metric for commit->final emit latency
                 try:

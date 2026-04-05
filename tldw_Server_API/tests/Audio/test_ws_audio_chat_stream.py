@@ -1058,6 +1058,100 @@ async def test_audio_chat_ws_persists_turn_when_enabled(monkeypatch: pytest.Monk
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_audio_chat_ws_applies_stt_redaction_to_turn_output_and_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+                "metadata": {"persist_history": True},
+            },
+            {"type": "audio", "data": audio_payload},
+            {"type": "commit"},
+            {"type": "stop"},
+        ]
+    )
+
+    class _PiiTranscriber(_DummyTranscriber):
+        def get_full_transcript(self) -> str:
+            return "contact alice@example.com"
+
+    class _DummyChatDB:
+        def __init__(self) -> None:
+            self.messages: List[Dict[str, Any]] = []
+            self.settings: List[tuple[str, Dict[str, Any]]] = []
+
+        def add_message(self, msg_data: Dict[str, Any]) -> str:
+            self.messages.append(dict(msg_data))
+            return "msg-id"
+
+        def upsert_conversation_settings(self, conversation_id: str, settings: Dict[str, Any]) -> bool:
+            self.settings.append((conversation_id, settings))
+            return True
+
+    persisted_db = _DummyChatDB()
+    llm_user_messages: List[str] = []
+
+    async def _get_tts_service():
+        return _DummyTTSService([b"tts"])
+
+    async def _get_db_for_user_id(_user_id: int, client_id: Optional[str] = None):  # noqa: ARG001
+        return persisted_db
+
+    async def _character_context(_db: Any, _character_id: Any, _loop: Any):
+        return {"id": 42, "name": "Helpful AI Assistant"}, 42
+
+    async def _conversation_context(
+        _db: Any,
+        _conversation_id: Optional[str],
+        _character_id: int,
+        _character_name: str,
+        _client_id: str,
+        _loop: Any,
+    ):
+        return "ws-session-002", True
+
+    async def _llm_with_capture(**kwargs: Any) -> AsyncIterator[str]:
+        messages_payload = kwargs.get("messages_payload") or []
+        if messages_payload:
+            llm_user_messages.append(str(messages_payload[-1].get("content")))
+        return await _llm_stub(**kwargs)
+
+    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _PiiTranscriber)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+    monkeypatch.setattr(audio, "get_chacha_db_for_user_id", _get_db_for_user_id, raising=False)
+    monkeypatch.setattr(audio, "get_or_create_character_context", _character_context, raising=False)
+    monkeypatch.setattr(audio, "get_or_create_conversation", _conversation_context, raising=False)
+    monkeypatch.setattr(audio, "chat_api_call_async", _llm_with_capture)
+
+    async def _resolve_policy(**kwargs: Any) -> Any:  # noqa: ARG001
+        return SimpleNamespace(
+            org_id=7,
+            delete_audio_after_success=True,
+            audio_retention_hours=0.0,
+            redact_pii=True,
+            allow_unredacted_partials=False,
+            redact_categories=["pii_email"],
+        )
+
+    monkeypatch.setattr(audio_streaming_module, "resolve_effective_stt_policy", _resolve_policy)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    full_transcripts = [msg for msg in ws.sent_json if msg.get("type") == "full_transcript"]
+    assert full_transcripts
+    assert full_transcripts[0].get("text") == "contact [PII]"
+    assert llm_user_messages == ["contact [PII]"]
+    assert persisted_db.messages[0].get("content") == "contact [PII]"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_audio_chat_ws_persistence_failure_is_fail_soft(monkeypatch: pytest.MonkeyPatch) -> None:
     audio_payload = base64.b64encode(b"abc").decode("ascii")
     ws = DummyWebSocket(

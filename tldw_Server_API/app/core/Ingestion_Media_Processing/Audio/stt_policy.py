@@ -130,6 +130,9 @@ async def _resolve_org_id(
     user_id: int | None,
 ) -> int | None:
     if isinstance(principal, AuthPrincipal):
+        active_org_id = getattr(principal, "active_org_id", None)
+        if active_org_id is not None:
+            return int(active_org_id)
         org_ids = list(getattr(principal, "org_ids", []) or [])
         if org_ids:
             return int(org_ids[0])
