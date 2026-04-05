@@ -11,6 +11,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     ChapterSummary,
+    ManuscriptAnalysisListResponse,
+    ManuscriptAnalysisRequest,
+    ManuscriptAnalysisResponse,
     ManuscriptCharacterCreate,
     ManuscriptCharacterResponse,
     ManuscriptCharacterUpdate,
@@ -56,6 +59,10 @@ from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     SceneWorldInfoLink,
     SceneWorldInfoLinkResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chat.chat_service import is_model_known_for_provider
+from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -65,6 +72,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ManuscriptDB import ManuscriptDBHelper
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_CAPABILITIES
 
 router = APIRouter()
 
@@ -839,6 +847,8 @@ async def update_scene(
     try:
         helper = _get_helper(db)
         helper.update_scene(scene_id, update_data, expected_version)
+        # Mark any cached analyses for this scene as stale
+        helper.mark_analyses_stale("scene", scene_id)
         scene = helper.get_scene(scene_id)
         if not scene:
             raise HTTPException(
@@ -1910,3 +1920,325 @@ async def research_scene(
         return ManuscriptResearchResponse(query=payload.query, results=[])
     except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "manuscript research")
+
+
+# ===================================================================
+# AI Analysis
+# ===================================================================
+
+
+_VALID_ANALYSIS_TYPES = {"pacing", "plot_holes", "consistency"}
+
+
+def _normalize_analysis_override(value: str | None) -> str | None:
+    """Normalize optional provider/model override strings."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _validate_analysis_overrides(
+    *,
+    provider: str | None,
+    model: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate analysis provider/model overrides against configured allowlists."""
+    normalized_provider = _normalize_analysis_override(provider)
+    normalized_model = _normalize_analysis_override(model)
+
+    provider_manager = get_provider_manager()
+    configured_providers = {
+        str(entry).strip().lower()
+        for entry in getattr(provider_manager, "providers", [])
+        if str(entry).strip()
+    }
+    fallback_known_providers = {key.strip().lower() for key in PROVIDER_CAPABILITIES.keys()}
+    allowed_providers = configured_providers or fallback_known_providers
+
+    if normalized_provider:
+        provider_key = normalized_provider.lower()
+        if provider_key not in allowed_providers:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown analysis provider override: {normalized_provider}",
+            )
+    else:
+        provider_key = (
+            str(getattr(provider_manager, "primary_provider", "")).strip().lower() or None
+        )
+
+    if normalized_model:
+        if not provider_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Model override requires a configured analysis provider",
+            )
+        model_known = is_model_known_for_provider(provider_key, normalized_model)
+        if model_known is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown model override '{normalized_model}' for provider '{provider_key}'",
+            )
+
+    return normalized_provider, normalized_model
+
+
+@router.post(
+    "/scenes/{scene_id}/analyze",
+    response_model=list[ManuscriptAnalysisResponse],
+    summary="Run AI analysis on a scene",
+    tags=["manuscripts"],
+)
+async def analyze_scene(
+    scene_id: str,
+    payload: ManuscriptAnalysisRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
+) -> list[ManuscriptAnalysisResponse]:
+    """Run one or more LLM-powered analyses on a single scene."""
+    try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
+        helper = _get_helper(db)
+        scene = helper.get_scene(scene_id)
+        if not scene:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scene not found")
+
+        from tldw_Server_API.app.core.Writing.manuscript_analysis import (
+            analyze_pacing,
+            analyze_consistency as _analyze_consistency,
+            analyze_plot_holes as _analyze_plot_holes,
+        )
+
+        text = scene.get("content_plain", "") or ""
+        results: list[ManuscriptAnalysisResponse] = []
+        for analysis_type in payload.analysis_types:
+            if analysis_type == "pacing":
+                result = await analyze_pacing(text, provider=provider_override, model=model_override)
+                score = result.get("pacing") if isinstance(result.get("pacing"), (int, float)) else None
+            elif analysis_type == "plot_holes":
+                result = await _analyze_plot_holes(text, provider=provider_override, model=model_override)
+                score = None
+            elif analysis_type == "consistency":
+                result = await _analyze_consistency(text, provider=provider_override, model=model_override)
+                score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
+            else:
+                result = {"error": f"Unknown analysis type: {analysis_type}"}
+                score = None
+
+            aid = helper.create_analysis(
+                scene["project_id"], "scene", scene_id, analysis_type,
+                result, score=score, provider=provider_override, model=model_override,
+            )
+            analysis = helper.get_analysis(aid)
+            if analysis:
+                results.append(ManuscriptAnalysisResponse(**analysis))
+
+        return results
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "scene analysis")
+
+
+@router.post(
+    "/chapters/{chapter_id}/analyze",
+    response_model=list[ManuscriptAnalysisResponse],
+    summary="Run AI analysis on a chapter",
+    tags=["manuscripts"],
+)
+async def analyze_chapter(
+    chapter_id: str,
+    payload: ManuscriptAnalysisRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
+) -> list[ManuscriptAnalysisResponse]:
+    """Run LLM analysis across all scenes in a chapter."""
+    try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
+        helper = _get_helper(db)
+        chapter = helper.get_chapter(chapter_id)
+        if not chapter:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chapter not found")
+
+        # Gather all scene text
+        scenes = helper.list_scenes(chapter_id)
+        combined_text = "\n\n".join(s.get("content_plain", "") or "" for s in scenes)
+
+        from tldw_Server_API.app.core.Writing.manuscript_analysis import (
+            analyze_pacing,
+            analyze_consistency as _analyze_consistency,
+            analyze_plot_holes as _analyze_plot_holes,
+        )
+
+        results: list[ManuscriptAnalysisResponse] = []
+        for analysis_type in payload.analysis_types:
+            if analysis_type == "pacing":
+                result = await analyze_pacing(combined_text, provider=provider_override, model=model_override)
+                score = result.get("pacing") if isinstance(result.get("pacing"), (int, float)) else None
+            elif analysis_type == "plot_holes":
+                result = await _analyze_plot_holes(combined_text, provider=provider_override, model=model_override)
+                score = None
+            elif analysis_type == "consistency":
+                result = await _analyze_consistency(combined_text, provider=provider_override, model=model_override)
+                score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
+            else:
+                result = {"error": f"Unknown analysis type: {analysis_type}"}
+                score = None
+
+            aid = helper.create_analysis(
+                chapter["project_id"], "chapter", chapter_id, analysis_type,
+                result, score=score, provider=provider_override, model=model_override,
+            )
+            analysis = helper.get_analysis(aid)
+            if analysis:
+                results.append(ManuscriptAnalysisResponse(**analysis))
+
+        return results
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "chapter analysis")
+
+
+def _gather_project_text(helper: ManuscriptDBHelper, project_id: str) -> str:
+    """Collect all scene text across the whole project."""
+    structure = helper.get_project_structure(project_id)
+    all_text_parts: list[str] = []
+    for part in structure.get("parts", []):
+        for ch in part.get("chapters", []):
+            for sc in ch.get("scenes", []):
+                scene = helper.get_scene(sc["id"])
+                if scene:
+                    all_text_parts.append(scene.get("content_plain", "") or "")
+    for ch in structure.get("unassigned_chapters", []):
+        for sc in ch.get("scenes", []):
+            scene = helper.get_scene(sc["id"])
+            if scene:
+                all_text_parts.append(scene.get("content_plain", "") or "")
+    return "\n\n".join(all_text_parts)
+
+
+def _gather_character_and_world_summaries(
+    helper: ManuscriptDBHelper, project_id: str,
+) -> tuple[str, str]:
+    """Build short summaries of characters and world info for analysis prompts."""
+    characters = helper.list_characters(project_id)
+    char_summary = ", ".join(f"{c['name']} ({c['role']})" for c in characters)
+    world_info = helper.list_world_info(project_id)
+    world_summary = ", ".join(f"{w['name']} ({w['kind']})" for w in world_info)
+    return char_summary, world_summary
+
+
+@router.post(
+    "/projects/{project_id}/analyze/plot-holes",
+    response_model=list[ManuscriptAnalysisResponse],
+    summary="AI plot hole detection",
+    tags=["manuscripts"],
+)
+async def analyze_plot_holes_endpoint(
+    project_id: str,
+    payload: ManuscriptAnalysisRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
+) -> list[ManuscriptAnalysisResponse]:
+    """Detect plot holes and inconsistencies across an entire project."""
+    try:
+        helper = _get_helper(db)
+        proj = helper.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+        combined_text = _gather_project_text(helper, project_id)
+        char_summary, world_summary = _gather_character_and_world_summaries(helper, project_id)
+
+        from tldw_Server_API.app.core.Writing.manuscript_analysis import analyze_plot_holes as _analyze_plot_holes
+
+        result = await _analyze_plot_holes(
+            combined_text, char_summary, world_summary,
+            provider=payload.provider, model=payload.model,
+        )
+
+        aid = helper.create_analysis(
+            project_id, "project", project_id, "plot_holes",
+            result, provider=payload.provider, model=payload.model,
+        )
+        analysis = helper.get_analysis(aid)
+        return [ManuscriptAnalysisResponse(**analysis)] if analysis else []
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "plot hole analysis")
+
+
+@router.post(
+    "/projects/{project_id}/analyze/consistency",
+    response_model=list[ManuscriptAnalysisResponse],
+    summary="Check character/world consistency",
+    tags=["manuscripts"],
+)
+async def analyze_consistency_endpoint(
+    project_id: str,
+    payload: ManuscriptAnalysisRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
+) -> list[ManuscriptAnalysisResponse]:
+    """Check character and world-building consistency across an entire project."""
+    try:
+        helper = _get_helper(db)
+        proj = helper.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+        combined_text = _gather_project_text(helper, project_id)
+        char_summary, world_summary = _gather_character_and_world_summaries(helper, project_id)
+
+        from tldw_Server_API.app.core.Writing.manuscript_analysis import analyze_consistency as _analyze_consistency
+
+        result = await _analyze_consistency(
+            combined_text, char_summary, world_summary,
+            provider=payload.provider, model=payload.model,
+        )
+        score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
+
+        aid = helper.create_analysis(
+            project_id, "project", project_id, "consistency",
+            result, score=score, provider=payload.provider, model=payload.model,
+        )
+        analysis = helper.get_analysis(aid)
+        return [ManuscriptAnalysisResponse(**analysis)] if analysis else []
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "consistency analysis")
+
+
+@router.get(
+    "/projects/{project_id}/analyses",
+    response_model=ManuscriptAnalysisListResponse,
+    summary="List cached analyses",
+    tags=["manuscripts"],
+)
+async def list_analyses(
+    project_id: str,
+    scope_type: str | None = Query(None),
+    analysis_type: str | None = Query(None),
+    include_stale: bool = Query(False),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
+) -> ManuscriptAnalysisListResponse:
+    """List cached AI analyses for a project, with optional filters."""
+    try:
+        helper = _get_helper(db)
+        analyses = helper.list_analyses(
+            project_id, scope_type=scope_type, analysis_type=analysis_type,
+            include_stale=include_stale,
+        )
+        items = [ManuscriptAnalysisResponse(**a) for a in analyses]
+        return ManuscriptAnalysisListResponse(analyses=items, total=len(items))
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "analyses")

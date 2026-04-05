@@ -627,3 +627,38 @@ class ManuscriptResearchResult(BaseModel):
 class ManuscriptResearchResponse(BaseModel):
     query: str
     results: list[ManuscriptResearchResult] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# AI Analysis
+# ---------------------------------------------------------------------------
+
+
+class ManuscriptAnalysisRequest(BaseModel):
+    analysis_types: list[Literal["pacing", "plot_holes", "consistency"]] = Field(
+        default_factory=lambda: ["pacing"],
+        description="Analysis types to run: pacing, plot_holes, consistency",
+    )
+    provider: str | None = Field(None, description="LLM provider override")
+    model: str | None = Field(None, description="Model override")
+
+
+class ManuscriptAnalysisResponse(BaseModel):
+    id: str
+    project_id: str
+    scope_type: str
+    scope_id: str
+    analysis_type: str
+    result: dict[str, Any]
+    score: float | None = None
+    stale: bool = False
+    provider: str | None = None
+    model: str | None = None
+    created_at: datetime
+    last_modified: datetime
+    version: int
+
+
+class ManuscriptAnalysisListResponse(BaseModel):
+    analyses: list[ManuscriptAnalysisResponse]
+    total: int
