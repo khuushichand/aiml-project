@@ -603,8 +603,9 @@ class ManuscriptResearchResponse(BaseModel):
 
 
 class ManuscriptAnalysisRequest(BaseModel):
-    analysis_types: list[str] = Field(
-        default=["pacing"],
+    analysis_types: list[Literal["pacing", "plot_holes", "consistency"]] = Field(
+        default_factory=lambda: ["pacing"],
+        min_length=1,
         description="Analysis types to run: pacing, plot_holes, consistency",
     )
     provider: str | None = Field(None, description="LLM provider override")

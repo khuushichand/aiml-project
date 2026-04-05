@@ -145,9 +145,12 @@ async def _run_structured_analysis(
     except json.JSONDecodeError:
         logger.warning("Failed to parse analysis JSON response")
         return {"error": "Failed to parse LLM response", "raw": content[:500] if content else ""}
-    except Exception as exc:
-        logger.error("Analysis LLM call failed: {}", exc)
-        return {"error": "Analysis failed due to an internal error. Please try again later."}
+    except Exception:
+        logger.exception("Analysis LLM call failed")
+        return {
+            "error": "analysis_failed",
+            "message": "Analysis service unavailable",
+        }
 
 
 def _extract_content(response: Any) -> str:

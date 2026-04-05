@@ -180,6 +180,27 @@ def test_analyze_scene_not_found(client: TestClient):
     assert resp.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_fragment"),
+    [
+        ({"analysis_types": []}, "analysis_types"),
+        ({"analysis_types": ["invalid"]}, "analysis_types"),
+    ],
+)
+def test_analyze_scene_rejects_invalid_analysis_types(
+    client: TestClient,
+    payload: dict[str, object],
+    expected_fragment: str,
+):
+    """Invalid or empty analysis types should fail request validation."""
+    _, _, scene_id = _create_project_chapter_scene(client)
+
+    resp = client.post(f"{PREFIX}/scenes/{scene_id}/analyze", json=payload)
+
+    assert resp.status_code == 422, resp.text
+    assert expected_fragment in resp.text
+
+
 def test_list_analyses(client: TestClient):
     """Create multiple analyses, list them, verify count."""
     project_id, chapter_id, scene_id = _create_project_chapter_scene(client)

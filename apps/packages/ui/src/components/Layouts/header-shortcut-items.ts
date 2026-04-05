@@ -587,5 +587,6 @@ export const getDefaultShortcutsForPersona = (
   persona: UserPersona
 ): HeaderShortcutId[] => {
   if (!persona || persona === "explorer") return [...HEADER_SHORTCUT_IDS]
-  return PERSONA_SHORTCUT_DEFAULTS[persona] ?? [...HEADER_SHORTCUT_IDS]
+  const defaults = PERSONA_SHORTCUT_DEFAULTS[persona] ?? HEADER_SHORTCUT_IDS
+  return [...defaults]
 }

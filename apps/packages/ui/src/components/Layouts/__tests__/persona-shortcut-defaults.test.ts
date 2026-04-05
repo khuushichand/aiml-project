@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { HEADER_SHORTCUT_IDS } from "@/services/settings/ui-settings"
 import {
   getDefaultShortcutsForPersona,
   PERSONA_SHORTCUT_DEFAULTS
@@ -24,12 +25,22 @@ describe("persona shortcut defaults", () => {
 
   it("explorer persona returns all shortcuts", () => {
     const shortcuts = getDefaultShortcutsForPersona("explorer")
-    expect(shortcuts.length).toBeGreaterThan(30) // all items
+    expect(shortcuts).toEqual(HEADER_SHORTCUT_IDS)
   })
 
   it("null persona returns all shortcuts", () => {
     const shortcuts = getDefaultShortcutsForPersona(null)
-    expect(shortcuts.length).toBeGreaterThan(30)
+    expect(shortcuts).toEqual(HEADER_SHORTCUT_IDS)
+  })
+
+  it("returns a cloned array for persona defaults", () => {
+    const expected = [...PERSONA_SHORTCUT_DEFAULTS.family]
+    const shortcuts = getDefaultShortcutsForPersona("family")
+    shortcuts.pop()
+
+    expect(getDefaultShortcutsForPersona("family")).toEqual(
+      expected
+    )
   })
 
   it("family persona has fewer items than researcher", () => {
