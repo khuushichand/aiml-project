@@ -1,7 +1,9 @@
-import React from "react"
+import React, { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useIsConnected } from "@/hooks/useConnectionState"
+import { useMilestoneStore } from "@/store/milestones"
 import {
   type CompanionHomeSnapshot,
   type CompanionHomeSurface
@@ -13,12 +15,14 @@ import {
 
 import { createEmptySnapshot, useCompanionHomeData, useCompanionHomeLayout } from "./hooks"
 import { CustomizeHomeDrawer } from "./CustomizeHomeDrawer"
+import { GettingStartedSection } from "./GettingStartedSection"
 import { GoalsFocusCard } from "./cards/GoalsFocusCard"
 import { InboxPreviewCard } from "./cards/InboxPreviewCard"
 import { NeedsAttentionCard } from "./cards/NeedsAttentionCard"
 import { ReadingQueueCard } from "./cards/ReadingQueueCard"
 import { RecentActivityCard } from "./cards/RecentActivityCard"
 import { ResumeWorkCard } from "./cards/ResumeWorkCard"
+import { WhatsNextCard } from "./cards/WhatsNextCard"
 import type { CompanionHomeCardState } from "./cards/CardShell"
 
 type CompanionHomePageProps = {
@@ -41,6 +45,25 @@ export function CompanionHomePage({
 }: CompanionHomePageProps) {
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const [customizeOpen, setCustomizeOpen] = React.useState(false)
+
+  // Bootstrap milestones from existing usage evidence for returning users.
+  // Also re-bootstrap when connection becomes ready, so mission cards appear
+  // immediately after onboarding completes without requiring a page refresh.
+  const isConnected = useIsConnected()
+  const bootstrapMilestones = useMilestoneStore((s) => s.bootstrapFromExistingUsage)
+  const markMilestone = useMilestoneStore((s) => s.markMilestone)
+  const milestoneBootstrapped = useRef(false)
+  useEffect(() => {
+    if (!milestoneBootstrapped.current) {
+      milestoneBootstrapped.current = true
+      bootstrapMilestones()
+    }
+  }, [bootstrapMilestones])
+  useEffect(() => {
+    if (isConnected) {
+      markMilestone("first_connection")
+    }
+  }, [isConnected, markMilestone])
 
   const hasPersonalization = Boolean(capabilities?.hasPersonalization)
   const { layout, updateLayout } = useCompanionHomeLayout(surface)
@@ -353,7 +376,10 @@ export function CompanionHomePage({
         ) : null}
       </header>
 
+      <GettingStartedSection />
+
       <div className="grid gap-4 xl:grid-cols-2">
+        <WhatsNextCard />
         <InboxPreviewCard items={resolvedSnapshot.inbox} state={inboxState} />
         <NeedsAttentionCard
           items={resolvedSnapshot.needsAttention}

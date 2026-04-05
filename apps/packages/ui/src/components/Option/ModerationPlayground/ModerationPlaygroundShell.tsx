@@ -12,6 +12,7 @@ import { useBlocklist } from "./hooks/useBlocklist"
 import { useUserOverrides } from "./hooks/useUserOverrides"
 import { useModerationTest } from "./hooks/useModerationTest"
 import { ONBOARDING_KEY, getErrorStatus } from "./moderation-utils"
+import { useMilestoneStore } from "@/store/milestones"
 import { useTutorialStore } from "@/store/tutorials"
 
 // Lazy panel imports — replace with real components in Tasks 5-9
@@ -51,6 +52,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
   const { uxState } = useConnectionUxState()
   const [messageApi, contextHolder] = message.useMessage()
   const [activeTab, setActiveTab] = React.useState<TabKey>("policy")
+  const markMilestone = useMilestoneStore((s) => s.markMilestone)
   const startTutorial = useTutorialStore((s) => s.startTutorial)
   const isTutorialCompleted = useTutorialStore((s) => s.isCompleted)
   const tutorialInitializedRef = React.useRef(false)
@@ -77,6 +79,16 @@ export const ModerationPlaygroundShell: React.FC = () => {
     setShowOnboarding(false)
     if (typeof window !== "undefined") localStorage.setItem(ONBOARDING_KEY, "true")
   }
+
+  React.useEffect(() => {
+    markMilestone("content_rules_reviewed")
+  }, [markMilestone])
+
+  React.useEffect(() => {
+    if (activeTab === "test") {
+      markMilestone("content_rules_tested")
+    }
+  }, [activeTab, markMilestone])
 
   // Ctrl+S save shortcut
   React.useEffect(() => {

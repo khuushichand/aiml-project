@@ -28,6 +28,8 @@ import { useCreateQuizMutation, useCreateQuestionMutation } from "../hooks"
 import type { QuestionType, QuestionCreate } from "@/services/quizzes"
 import type { TakeTabNavigationIntent } from "../navigation"
 import { normalizeMatchingAnswerMap } from "../utils/matchingAnswer"
+import { checkStorageBeforeWrite, notifyStorageWrite } from "@/utils/storage-guard"
+import { estimateUtf8ByteLength } from "@/utils/storage-budget"
 
 const CREATE_ORIENTATION_DISMISSED_KEY = "tldw_quiz_create_orientation_dismissed"
 
@@ -107,10 +109,17 @@ const readCreateDraft = (): QuizCreateDraft | null => {
   }
 }
 
-const writeCreateDraft = (draft: QuizCreateDraft): boolean => {
+const writeCreateDraft = (draft: QuizCreateDraft): boolean | { saved: boolean; recommendation: string | null } => {
   if (typeof window === "undefined") return false
   try {
-    window.localStorage.setItem(CREATE_TAB_DRAFT_KEY, JSON.stringify(draft))
+    const serialized = JSON.stringify(draft)
+    const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized), CREATE_TAB_DRAFT_KEY)
+    // Advisory only — always attempt the write
+    window.localStorage.setItem(CREATE_TAB_DRAFT_KEY, serialized)
+    notifyStorageWrite()
+    if (guard.recommendation) {
+      return { saved: true, recommendation: guard.recommendation }
+    }
     return true
   } catch {
     return false
@@ -144,6 +153,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [saveProgress, setSaveProgress] = React.useState<SaveProgressState | null>(null)
   const hasLoadedDraft = React.useRef(false)
+  const lastRecommendationRef = React.useRef<string | null>(null)
 
   const createQuizMutation = useCreateQuizMutation()
   const createQuestionMutation = useCreateQuestionMutation()
@@ -218,16 +228,24 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
     }
 
     const timeoutId = window.setTimeout(() => {
-      const saved = writeCreateDraft(currentDraft)
-      if (!saved) {
+      const result = writeCreateDraft(currentDraft)
+      if (!result) {
         setDraftStorageUnavailable(true)
+        lastRecommendationRef.current = null
+      } else if (typeof result === "object" && result.recommendation) {
+        if (lastRecommendationRef.current !== result.recommendation) {
+          lastRecommendationRef.current = result.recommendation
+          messageApi.warning(result.recommendation)
+        }
+      } else {
+        lastRecommendationRef.current = null
       }
     }, 300)
 
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [currentDraft, isDirty, pendingDraft])
+  }, [currentDraft, isDirty, messageApi, pendingDraft])
 
   React.useEffect(() => {
     if (!isDirty) return

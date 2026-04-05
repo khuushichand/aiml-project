@@ -4,6 +4,10 @@ import { Tooltip, Button, Input } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '@/utils/dateFormatters'
 import { highlightMatches } from '@/components/Media/highlightMatches'
+import {
+  persistFirstIngestDismissed,
+  readFirstIngestDismissed
+} from '@/utils/ftux-storage'
 
 export type ResultsViewMode = 'standard' | 'compact'
 
@@ -106,15 +110,14 @@ export function ResultsList({
   const hasSearchQuery = searchQuery.trim().length > 0
   const isCompact = viewMode === 'compact'
 
-  const DISMISS_KEY = 'tldw_first_ingest_tutorial_dismissed'
   const [tutorialDismissed, setTutorialDismissed] = useState(() => {
-    try { return localStorage.getItem(DISMISS_KEY) === 'true' } catch { return false }
+    return readFirstIngestDismissed()
   })
   const [ingestUrl, setIngestUrl] = useState('')
 
   const handleDismissTutorial = useCallback(() => {
     setTutorialDismissed(true)
-    try { localStorage.setItem(DISMISS_KEY, 'true') } catch { /* noop */ }
+    persistFirstIngestDismissed()
   }, [])
 
   const handleIngestClick = useCallback(() => {
