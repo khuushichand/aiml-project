@@ -1,3 +1,4 @@
+import tldw_Server_API.app.core.Metrics.metrics_manager as metrics_manager
 from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_reads
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
@@ -208,6 +209,54 @@ def test_get_latest_transcription_bounds_fallback_telemetry(monkeypatch) -> None
         assert len(warning_calls) == 1
     finally:
         db.close_connection()
+
+
+def test_get_latest_transcription_emits_bounded_read_path_metrics() -> None:
+    metrics_manager._metrics_registry = None
+    registry = metrics_manager.get_metrics_registry()
+    db = MediaDatabase(db_path=":memory:", client_id="legacy-transcript-read-path")
+    media_repo = MediaRepository.from_legacy_db(db)
+    try:
+        media_id, _media_uuid, _msg = media_repo.add_text_media(
+            title="Transcript read path doc",
+            content="spoken words",
+            media_type="audio",
+        )
+        latest = upsert_transcript(
+            db,
+            media_id=media_id,
+            transcription='{"text": "latest"}',
+            whisper_model="base",
+        )
+
+        assert get_latest_transcription(db, media_id) == "latest"
+        assert registry.get_cumulative_counter(
+            "audio_stt_transcript_read_path_total",
+            {"path": "latest_run"},
+        ) == 1
+
+        db.execute_query(
+            """
+            UPDATE Media
+            SET latest_transcription_run_id = ?, version = version + 1, client_id = ?, last_modified = ?
+            WHERE id = ?
+            """,
+            (
+                int(latest["transcription_run_id"]) + 99,
+                db.client_id,
+                db._get_current_utc_timestamp_str(),
+                media_id,
+            ),
+        )
+
+        assert get_latest_transcription(db, media_id) == "latest"
+        assert registry.get_cumulative_counter(
+            "audio_stt_transcript_read_path_total",
+            {"path": "legacy_fallback"},
+        ) == 1
+    finally:
+        db.close_connection()
+        metrics_manager._metrics_registry = None
 
 
 def test_soft_deleted_idempotent_transcript_is_not_resurrected() -> None:

@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 from .telemetry import OTEL_AVAILABLE, get_telemetry_manager
+from .stt_metrics import iter_stt_metric_definitions
 
 if OTEL_AVAILABLE:
     from opentelemetry.metrics import CallbackOptions, Observation
@@ -397,6 +398,8 @@ class MetricsRegistry:
                 labels=["component", "provider"],
             )
         )
+        for definition in iter_stt_metric_definitions(MetricDefinition, MetricType):
+            self.register_metric(definition)
         self.register_metric(
             MetricDefinition(
                 name="llm_cost_dollars_by_operation",

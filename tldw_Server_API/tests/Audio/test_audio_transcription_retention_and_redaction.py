@@ -15,6 +15,7 @@ import soundfile as sf
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import tldw_Server_API.app.core.Metrics.metrics_manager as metrics_manager
 from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
@@ -244,6 +245,63 @@ def test_audio_transcriptions_redacts_text_and_segments_when_stt_redaction_enabl
         body = resp.json()
         assert body["text"] == "contact [PII]"
         assert body["segments"][0]["text"] == "contact [PII]"
+
+
+def test_audio_transcriptions_emit_bounded_stt_metrics_when_redaction_applies(
+    monkeypatch: pytest.MonkeyPatch,
+    bypass_api_limits,
+) -> None:
+    monkeypatch.setenv("STT_REDACT_PII", "1")
+    monkeypatch.setenv("STT_REDACT_CATEGORIES", "pii_email")
+    monkeypatch.setenv("STT_ALLOW_UNREDACTED_PARTIALS", "0")
+
+    metrics_manager._metrics_registry = None
+    registry = metrics_manager.get_metrics_registry()
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = _setup_stubbed_audio_app(
+                monkeypatch,
+                transcript_text="contact alice@example.com",
+                temp_outputs_dir=Path(tmpdir),
+            )
+
+            with bypass_api_limits(app), TestClient(app) as client:
+                wav_bytes = _make_wav_bytes()
+                files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}
+                data = {"model": "external:stub", "response_format": "json"}
+                resp = client.post(
+                    "/api/v1/audio/transcriptions",
+                    headers={"X-API-KEY": TEST_API_KEY},
+                    files=files,
+                    data=data,
+                )
+
+            assert resp.status_code == 200, resp.text
+            assert registry.get_cumulative_counter_total("audio_stt_requests_total") == 1
+            assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "endpoint") == {
+                "audio.transcriptions": 1.0
+            }
+            assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "provider") == {
+                "external": 1.0
+            }
+            assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "model") == {
+                "other": 1.0
+            }
+            assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "status") == {
+                "ok": 1.0
+            }
+            assert registry.get_cumulative_counter(
+                "audio_stt_redaction_total",
+                {"endpoint": "audio.transcriptions", "redaction_outcome": "applied"},
+            ) == 1
+            latency_stats = registry.get_metric_stats(
+                "audio_stt_latency_seconds",
+                labels={"endpoint": "audio.transcriptions", "provider": "external", "model": "other"},
+            )
+            assert latency_stats.get("count", 0) == 1
+    finally:
+        metrics_manager._metrics_registry = None
 
 
 def test_audio_transcriptions_registers_retained_audio_when_retention_enabled(

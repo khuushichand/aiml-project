@@ -225,6 +225,7 @@ def _upsert_transcript_once(
                 "whisper_model": whisper_model,
                 "transcription_run_id": current_run_id,
                 "idempotency_key": existing.get("idempotency_key"),
+                "write_result": "deduped",
                 "last_modified": now,
             }
             db_instance._log_sync_event(
@@ -309,6 +310,11 @@ def _upsert_transcript_once(
             "whisper_model": whisper_model,
             "transcription_run_id": chosen_run_id,
             "idempotency_key": idempotency_key,
+            "write_result": (
+                "superseded"
+                if set_as_latest and media_latest_run_id is not None and chosen_run_id != media_latest_run_id
+                else "created"
+            ),
             "last_modified": now,
         }
         db_instance._log_sync_event(

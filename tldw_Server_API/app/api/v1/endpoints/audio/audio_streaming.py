@@ -80,6 +80,15 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, increment_counter
+from tldw_Server_API.app.core.Metrics.stt_metrics import (
+    emit_stt_error_total,
+    emit_stt_redaction_total,
+    emit_stt_request_total,
+    emit_stt_run_write_total,
+    emit_stt_session_end_total,
+    emit_stt_session_start_total,
+    observe_stt_final_latency_seconds,
+)
 from tldw_Server_API.app.core.Streaming.phrase_chunker import PhraseChunker
 from tldw_Server_API.app.core.Streaming import speech_chat_service
 from tldw_Server_API.app.core.testing import is_truthy
@@ -449,6 +458,28 @@ def _stream_model_label(config: "_UnifiedStreamingConfig") -> str:
     model = str(getattr(config, "model", "parakeet") or "parakeet").strip().lower()
     variant = str(getattr(config, "model_variant", "standard") or "standard").strip().lower()
     return f"stream:{model}:{variant}"
+
+
+def _stt_redaction_outcome_for_text(
+    *,
+    original_text: str,
+    redacted_text: str,
+    policy: Any,
+) -> str:
+    if not getattr(policy, "redact_pii", False):
+        return "not_requested"
+    return "applied" if redacted_text != original_text else "skipped"
+
+
+def _stt_redaction_outcome_for_payload(
+    *,
+    original_payload: dict[str, Any],
+    redacted_payload: dict[str, Any],
+    policy: Any,
+) -> str:
+    if not getattr(policy, "redact_pii", False):
+        return "not_requested"
+    return "applied" if redacted_payload != original_payload else "skipped"
 
 
 def _resolve_default_streaming_model() -> tuple[str, str, str]:
@@ -917,6 +948,12 @@ async def websocket_transcribe(
     ):
         return
 
+    stt_metrics_provider = "other"
+    stt_metrics_model = "other"
+    stt_request_status = "ok"
+    stt_session_close_reason = "client_disconnect"
+    stt_session_started = False
+
     try:
         # Default configuration prefers explicit streaming model selection from
         # [STT-Settings].default_streaming_transcription_model.
@@ -933,6 +970,8 @@ async def websocket_transcribe(
             language="en",  # Default language for Canary
             whisper_model_size=default_whisper_model_size,
         )
+        stt_metrics_provider = getattr(config, "model", stt_metrics_provider)
+        stt_metrics_model = _stream_model_label(config)
 
         logger.info(
             f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}"
@@ -964,6 +1003,8 @@ async def websocket_transcribe(
             await websocket.close()
             return
         acquired_stream = True
+        emit_stt_session_start_total(provider=stt_metrics_provider)
+        stt_session_started = True
 
         query_params = getattr(websocket, "query_params", {}) or {}
         persistence_enabled = _coerce_bool(
@@ -1049,10 +1090,19 @@ async def websocket_transcribe(
             snapshot = str(text or "").strip()
             if not snapshot or not persistence_enabled:
                 return
+            original_snapshot = snapshot
             snapshot = apply_transcript_text_policy(
                 snapshot,
                 policy=effective_stt_policy,
                 is_partial=not is_final,
+            )
+            emit_stt_redaction_total(
+                endpoint="audio.stream.transcribe",
+                redaction_outcome=_stt_redaction_outcome_for_text(
+                    original_text=original_snapshot,
+                    redacted_text=snapshot,
+                    policy=effective_stt_policy,
+                ),
             )
             now = time.time()
             if not is_final:
@@ -1065,16 +1115,24 @@ async def websocket_transcribe(
                 return
             db_instance, media_id = context
             try:
-                upsert_transcript(
+                write_payload = upsert_transcript(
                     db_instance,
                     media_id=media_id,
                     transcription=snapshot,
                     whisper_model=persistence_model,
                     idempotency_key=persistence_idempotency_key,
                 )
+                emit_stt_run_write_total(
+                    provider=persistence_model,
+                    write_result=(write_payload or {}).get("write_result", "created"),
+                )
                 if not is_final:
                     last_partial_persist_ts = now
             except Exception as exc:  # noqa: BLE001 - persistence is fail-open
+                emit_stt_run_write_total(
+                    provider=persistence_model,
+                    write_result="failed",
+                )
                 logger.warning(
                     "Audio WS transcript persistence write failed; continuing without persistence. "
                     f"media_id={media_id}, model={persistence_model}, error={exc}"
@@ -1093,6 +1151,8 @@ async def websocket_transcribe(
             nonlocal persistence_partial_enabled
             nonlocal persistence_media_id
             nonlocal persistence_model
+            nonlocal stt_metrics_provider
+            nonlocal stt_metrics_model
             metadata = config_payload.get("metadata") if isinstance(config_payload, dict) else None
             if not isinstance(metadata, dict):
                 metadata = {}
@@ -1124,6 +1184,8 @@ async def websocket_transcribe(
                 persistence_model = model_hint.strip()
             else:
                 persistence_model = _stream_model_label(resolved_config)
+            stt_metrics_provider = getattr(resolved_config, "model", stt_metrics_provider)
+            stt_metrics_model = _stream_model_label(resolved_config)
 
         async def _on_transcript_result(result: dict[str, Any], full_transcript: str) -> None:
             if not persistence_enabled:
@@ -1264,7 +1326,15 @@ async def websocket_transcribe(
                 on_transcript_result=_on_transcript_result,
                 on_full_transcript=_on_full_transcript,
             )
+            stt_session_close_reason = "client_stop"
         except _QuotaExceeded as qe:
+            stt_request_status = "quota_exceeded"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.stream.transcribe",
+                provider=stt_metrics_provider,
+                reason="quota",
+            )
             try:
                 if _outer_stream:
                     await _outer_stream.send_json(
@@ -1280,7 +1350,27 @@ async def websocket_transcribe(
                 await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as close_exc:
                 logger.debug(f"WebSocket close (quota case) failed: error={close_exc}")
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+            stt_request_status = "internal_error"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.stream.transcribe",
+                provider=stt_metrics_provider,
+                reason="internal",
+            )
+            raise
         finally:
+            if stt_session_started:
+                emit_stt_session_end_total(
+                    provider=stt_metrics_provider,
+                    session_close_reason=stt_session_close_reason,
+                )
+                emit_stt_request_total(
+                    endpoint="audio.stream.transcribe",
+                    provider=stt_metrics_provider,
+                    model=stt_metrics_model,
+                    status=stt_request_status,
+                )
             if acquired_stream:
                 try:
                     await _finish_stream(user_id_for_usage)
@@ -1297,6 +1387,14 @@ async def websocket_transcribe(
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
+        if stt_session_started and stt_request_status == "ok":
+            stt_request_status = "internal_error"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.stream.transcribe",
+                provider=stt_metrics_provider,
+                reason="internal",
+            )
         logger.error(f"WebSocket error: {e}")
         # Best-effort: map quota exception variants to structured error
         try:
@@ -1411,6 +1509,11 @@ async def websocket_audio_chat_stream(
         logger.debug(f"Audio chat WS connection logging failed: {exc}")
 
     reg = _shim_get_metrics_registry()
+    stt_metrics_provider = "other"
+    stt_metrics_model = "other"
+    stt_request_status = "ok"
+    stt_session_close_reason = "client_disconnect"
+    stt_session_started = False
 
     def _policy_close_code() -> int:
         flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
@@ -1567,6 +1670,13 @@ async def websocket_audio_chat_stream(
             raw_cfg = await wait_for(websocket.receive_text(), timeout=15.0)
             cfg_data = json.loads(raw_cfg)
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+            stt_request_status = "bad_request"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.chat.stream",
+                provider=stt_metrics_provider,
+                reason="validation_error",
+            )
             if _outer_stream:
                 await _outer_stream.send_json(
                     _audio_ws_error_payload(
@@ -1580,6 +1690,13 @@ async def websocket_audio_chat_stream(
             return
 
         if cfg_data.get("type") != "config":
+            stt_request_status = "bad_request"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.chat.stream",
+                provider=stt_metrics_provider,
+                reason="validation_error",
+            )
             if _outer_stream:
                 await _outer_stream.send_json(
                     {"type": "error", "message": "First frame must be type=config"}
@@ -1653,6 +1770,10 @@ async def websocket_audio_chat_stream(
                 config.language = stt_cfg.get("language")
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as cfg_exc:
             logger.debug(f"Failed to parse streaming STT config: {cfg_exc}")
+        stt_metrics_provider = getattr(config, "model", stt_metrics_provider)
+        stt_metrics_model = _stream_model_label(config)
+        emit_stt_session_start_total(provider=stt_metrics_provider)
+        stt_session_started = True
 
         llm_provider = (llm_cfg.get("provider") or llm_cfg.get("api_provider") or DEFAULT_LLM_PROVIDER).lower()
         llm_model = llm_cfg.get("model") or os.getenv("AUDIO_CHAT_DEFAULT_LLM_MODEL") or "gpt-3.5-turbo"
@@ -1683,6 +1804,13 @@ async def websocket_audio_chat_stream(
             transcriber = TranscriberCls(config)
             transcriber.initialize()
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+            stt_request_status = "model_unavailable"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.chat.stream",
+                provider=stt_metrics_provider,
+                reason="model_unavailable",
+            )
             logger.error(f"Streaming transcriber init failed: {exc}", exc_info=True)
             if _outer_stream:
                 data_payload = {
@@ -1949,11 +2077,20 @@ async def websocket_audio_chat_stream(
         turn_sequence = 0
 
         async def _send_stream_payload(payload: dict[str, Any]) -> None:
-            payload = apply_transcript_payload_policy(payload, policy=effective_stt_policy)
+            redacted_payload = apply_transcript_payload_policy(payload, policy=effective_stt_policy)
+            if str(redacted_payload.get("type", "")).strip().lower() in {"partial", "transcription", "full_transcript"}:
+                emit_stt_redaction_total(
+                    endpoint="audio.chat.stream",
+                    redaction_outcome=_stt_redaction_outcome_for_payload(
+                        original_payload=payload,
+                        redacted_payload=redacted_payload,
+                        policy=effective_stt_policy,
+                    ),
+                )
             if _outer_stream:
-                await _outer_stream.send_json(payload)
+                await _outer_stream.send_json(redacted_payload)
             else:
-                await websocket.send_json(payload)
+                await websocket.send_json(redacted_payload)
 
         async def _iter_stream_lines(stream_obj):
             if hasattr(stream_obj, "__aiter__"):
@@ -2274,14 +2411,11 @@ async def websocket_audio_chat_stream(
 
                 # Metric for commit->final emit latency
                 try:
-                    reg.observe(
-                        "stt_final_latency_seconds",
-                        max(0.0, final_emit_at - eos_detected_at),
-                        labels={
-                            "model": getattr(config, "model", "parakeet"),
-                            "variant": getattr(config, "model_variant", "standard"),
-                            "endpoint": "audio.chat.stream",
-                        },
+                    observe_stt_final_latency_seconds(
+                        endpoint="audio.chat.stream",
+                        model=getattr(config, "model", "parakeet"),
+                        variant=getattr(config, "model_variant", "standard"),
+                        value=max(0.0, final_emit_at - eos_detected_at),
                     )
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(
@@ -2551,6 +2685,11 @@ async def websocket_audio_chat_stream(
                 try:
                     data = json.loads(raw_msg)
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                    emit_stt_error_total(
+                        endpoint="audio.chat.stream",
+                        provider=stt_metrics_provider,
+                        reason="validation_error",
+                    )
                     if _outer_stream:
                         await _outer_stream.send_json(
                             _audio_ws_error_payload(
@@ -2567,6 +2706,11 @@ async def websocket_audio_chat_stream(
                     try:
                         audio_bytes = base64.b64decode(audio_base64)
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                        emit_stt_error_total(
+                            endpoint="audio.chat.stream",
+                            provider=stt_metrics_provider,
+                            reason="validation_error",
+                        )
                         if _outer_stream:
                             await _outer_stream.send_json(
                                 _audio_ws_error_payload(
@@ -2586,6 +2730,13 @@ async def websocket_audio_chat_stream(
                     try:
                         await _on_audio_quota(seconds, int(config.sample_rate or 16000))
                     except QuotaExceeded as qe:
+                        stt_request_status = "quota_exceeded"
+                        stt_session_close_reason = "error"
+                        emit_stt_error_total(
+                            endpoint="audio.chat.stream",
+                            provider=stt_metrics_provider,
+                            reason="quota",
+                        )
                         if _outer_stream:
                             try:
                                 await _outer_stream.send_json(
@@ -2636,6 +2787,11 @@ async def websocket_audio_chat_stream(
                 elif msg_type in {"control", "commit", "reset", "stop"}:
                     decision = control_session.handle_frame(data)
                     if decision.error:
+                        emit_stt_error_total(
+                            endpoint="audio.chat.stream",
+                            provider=stt_metrics_provider,
+                            reason=decision.error.get("code") or "invalid_control",
+                        )
                         await _send_stream_payload(decision.error)
                         continue
 
@@ -2657,6 +2813,7 @@ async def websocket_audio_chat_stream(
                     elif decision.intent == "commit":
                         await _start_turn(time.time(), auto=False)
                     elif decision.intent == "stop":
+                        stt_session_close_reason = "client_stop"
                         paused_audio_chunks.clear()
                         control_session.release_paused_audio()
                         if active_turn_task is not None and not active_turn_task.done():
@@ -2672,8 +2829,16 @@ async def websocket_audio_chat_stream(
                         )
 
         except WebSocketDisconnect:
+            stt_session_close_reason = "client_disconnect"
             logger.info("Audio chat WS disconnected")
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+            stt_request_status = "internal_error"
+            stt_session_close_reason = "error"
+            emit_stt_error_total(
+                endpoint="audio.chat.stream",
+                provider=stt_metrics_provider,
+                reason="internal",
+            )
             logger.error(f"Audio chat WS error: {exc}", exc_info=True)
             try:
                 if _outer_stream:
@@ -2688,6 +2853,17 @@ async def websocket_audio_chat_stream(
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:  # noqa: BLE001
                 logger.debug(f"audio.chat.stream failed to send internal_error frame: {send_exc}")
     finally:
+        if stt_session_started:
+            emit_stt_session_end_total(
+                provider=stt_metrics_provider,
+                session_close_reason=stt_session_close_reason,
+            )
+            emit_stt_request_total(
+                endpoint="audio.chat.stream",
+                provider=stt_metrics_provider,
+                model=stt_metrics_model,
+                status=stt_request_status,
+            )
         if acquired_stream:
             try:
                 await _finish_stream(user_id_for_usage)

@@ -10,6 +10,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Metrics.stt_metrics import emit_stt_transcript_read_path_total
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
@@ -133,6 +134,7 @@ def _resolve_latest_transcript_row(
             (media_id, latest_run_id),
         )
         if latest_row:
+            emit_stt_transcript_read_path_total(path="latest_run")
             return latest_row
 
     fallback_row = db_instance._fetchone_with_connection(
@@ -141,6 +143,7 @@ def _resolve_latest_transcript_row(
         (media_id,),
     )
     if fallback_row is not None:
+        emit_stt_transcript_read_path_total(path="legacy_fallback")
         _emit_latest_run_fallback_telemetry(
             db_instance,
             media_id=media_id,

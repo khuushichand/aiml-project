@@ -365,6 +365,63 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_audio_chat_ws_emits_bounded_stt_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tldw_Server_API.app.core.Metrics.metrics_manager as metrics_manager
+
+    metrics_manager._metrics_registry = None
+    registry = metrics_manager.get_metrics_registry()
+
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    messages = [
+        {
+            "type": "config",
+            "stt": {"model": "parakeet-ctc-0.6b"},
+            "llm": {"provider": "stub", "model": "stub-model"},
+            "tts": {"voice": "af_heart", "format": "pcm"},
+        },
+        {"type": "audio", "data": audio_payload},
+        {"type": "commit"},
+        {"type": "stop"},
+    ]
+    ws = DummyWebSocket(messages)
+
+    async def _get_tts_service():
+        return _DummyTTSService([b"tts1"])
+
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+
+    try:
+        await audio.websocket_audio_chat_stream(ws, token=None)
+
+        assert registry.get_cumulative_counter_total("audio_stt_streaming_sessions_started_total") == 1
+        assert registry.get_cumulative_counter_totals_by_label(
+            "audio_stt_streaming_sessions_started_total",
+            "provider",
+        ) == {"nemo": 1.0}
+        assert registry.get_cumulative_counter_total("audio_stt_streaming_sessions_ended_total") == 1
+        assert registry.get_cumulative_counter_total("audio_stt_requests_total") == 1
+        assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "endpoint") == {
+            "audio.chat.stream": 1.0
+        }
+        assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "provider") == {
+            "nemo": 1.0
+        }
+        assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "status") == {
+            "ok": 1.0
+        }
+        assert registry.get_cumulative_counter(
+            "audio_stt_redaction_total",
+            {"endpoint": "audio.chat.stream", "redaction_outcome": "not_requested"},
+        ) >= 1
+        metrics_text = registry.export_prometheus_format()
+        assert 'stt_final_latency_seconds_count{endpoint="audio.chat.stream",model="parakeet"' in metrics_text
+        assert "parakeet-ctc-0.6b" not in metrics_text
+    finally:
+        metrics_manager._metrics_registry = None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_audio_chat_ws_normalizes_whisper_alias_before_transcriber_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

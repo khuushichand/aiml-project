@@ -54,6 +54,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Metrics.stt_metrics import emit_stt_run_write_total
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled,
     is_explicit_pytest_runtime,
@@ -3258,8 +3259,8 @@ async def persist_primary_av_item(
                 )
                 serialized_artifact = json.dumps(artifact, default=str)
 
-                def _upsert_worker() -> None:
-                    _with_media_db_session(
+                def _upsert_worker() -> dict[str, Any]:
+                    return _with_media_db_session(
                         db_path=db_path,
                         client_id=client_id,
                         operation=lambda db: upsert_transcript(
@@ -3270,10 +3271,19 @@ async def persist_primary_av_item(
                         ),
                     )
 
-                await loop.run_in_executor(None, _upsert_worker)
+                write_payload = await loop.run_in_executor(None, _upsert_worker)
+                emit_stt_run_write_total(
+                    provider=provider_name,
+                    write_result=(write_payload or {}).get("write_result", "created"),
+                )
                 # Attach normalized artifact to the process_result for callers
                 process_result["normalized_stt"] = artifact
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as stt_err:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                emit_stt_run_write_total(
+                    provider=locals().get("provider_name"),
+                    write_result="failed",
+                )
             logger.debug(
                 "STT transcript upsert skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
