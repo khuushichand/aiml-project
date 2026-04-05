@@ -2116,6 +2116,25 @@ _CREATE_GENERATED_FILES_TABLES = [
     ),
 ]
 
+_CREATE_ORG_STT_SETTINGS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_stt_settings (
+            org_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+            delete_audio_after_success BOOLEAN NOT NULL DEFAULT TRUE,
+            audio_retention_hours DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+            redact_pii BOOLEAN NOT NULL DEFAULT FALSE,
+            allow_unredacted_partials BOOLEAN NOT NULL DEFAULT FALSE,
+            redact_categories_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+            updated_by INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_stt_settings_updated_by ON org_stt_settings(updated_by)", ()),
+]
+
 _CREATE_DATA_SUBJECT_REQUESTS_TABLES = [
     (
         """
@@ -2880,6 +2899,33 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
+        return False
+
+
+async def ensure_org_stt_settings_pg(pool: Any | None = None) -> bool:
+    """Ensure org_stt_settings table exists for PostgreSQL backends."""
+    try:
+        db_target = pool or await get_db_pool()
+        if not callable(getattr(db_target, "execute", None)):
+            return False
+
+        if isinstance(db_target, DatabasePool) or getattr(db_target, "pool", None) is not None:
+            try:
+                await ensure_authnz_core_tables_pg(db_target)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"ensure_org_stt_settings_pg: core table ensure skipped/failed: {exc}")
+
+        for sql, params in _CREATE_ORG_STT_SETTINGS:
+            try:
+                await db_target.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure org_stt_settings DDL failed: {exc}")
+                return False
+
+        logger.info("Ensured PostgreSQL org_stt_settings table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL org_stt_settings table: {exc}")
         return False
 
 

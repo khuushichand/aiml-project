@@ -20,6 +20,8 @@ def _clear_stt_env(monkeypatch) -> None:
         "STT_DELETE_AUDIO_AFTER",
         "STT_AUDIO_RETENTION_HOURS",
         "STT_REDACT_PII",
+        "STT_ALLOW_UNREDACTED_PARTIALS",
+        "STT_REDACT_CATEGORIES",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -37,6 +39,8 @@ def test_stt_vnext_defaults_are_bounded() -> None:
     assert cfg.delete_audio_after_success is True
     assert cfg.audio_retention_hours == 0.0
     assert cfg.redact_pii is False
+    assert cfg.allow_unredacted_partials is False
+    assert cfg.redact_categories == []
 
 
 def test_stt_vnext_env_overrides_config_parser() -> None:
@@ -49,6 +53,8 @@ def test_stt_vnext_env_overrides_config_parser() -> None:
     parser.set("STT-Settings", "delete_audio_after_success", "true")
     parser.set("STT-Settings", "audio_retention_hours", "0")
     parser.set("STT-Settings", "redact_pii", "false")
+    parser.set("STT-Settings", "allow_unredacted_partials", "false")
+    parser.set("STT-Settings", "redact_categories", "email")
 
     cfg = load_stt_config(
         parser,
@@ -60,6 +66,8 @@ def test_stt_vnext_env_overrides_config_parser() -> None:
             "STT_DELETE_AUDIO_AFTER_SUCCESS": "0",
             "STT_AUDIO_RETENTION_HOURS": "24",
             "STT_REDACT_PII": "1",
+            "STT_ALLOW_UNREDACTED_PARTIALS": "true",
+            "STT_REDACT_CATEGORIES": " phone, EMAIL ,phone ",
         },
     )
 
@@ -70,6 +78,8 @@ def test_stt_vnext_env_overrides_config_parser() -> None:
     assert cfg.delete_audio_after_success is False
     assert cfg.audio_retention_hours == 24.0
     assert cfg.redact_pii is True
+    assert cfg.allow_unredacted_partials is True
+    assert cfg.redact_categories == ["phone", "email"]
 
 
 def test_stt_vnext_accepts_prd_delete_audio_after_config_alias() -> None:
@@ -92,6 +102,8 @@ def test_stt_vnext_invalid_values_fall_back_or_clamp() -> None:
     parser.set("STT-Settings", "delete_audio_after_success", "???")
     parser.set("STT-Settings", "audio_retention_hours", "-1")
     parser.set("STT-Settings", "redact_pii", "not-really")
+    parser.set("STT-Settings", "allow_unredacted_partials", "hmm")
+    parser.set("STT-Settings", "redact_categories", "[]")
 
     cfg = load_stt_config(parser, env={})
 
@@ -102,6 +114,8 @@ def test_stt_vnext_invalid_values_fall_back_or_clamp() -> None:
     assert cfg.delete_audio_after_success is True
     assert cfg.audio_retention_hours == 0.0
     assert cfg.redact_pii is False
+    assert cfg.allow_unredacted_partials is False
+    assert cfg.redact_categories == []
 
 
 def test_config_sections_expose_stt_section() -> None:
@@ -124,6 +138,8 @@ def test_config_py_exports_canonical_stt_vnext_section(monkeypatch) -> None:
     parser.set("STT-Settings", "delete_audio_after_success", "false")
     parser.set("STT-Settings", "audio_retention_hours", "24")
     parser.set("STT-Settings", "redact_pii", "true")
+    parser.set("STT-Settings", "allow_unredacted_partials", "true")
+    parser.set("STT-Settings", "redact_categories", "email, ssn")
 
     def _fake_load_comprehensive_config():
         return parser
@@ -146,9 +162,15 @@ def test_config_py_exports_canonical_stt_vnext_section(monkeypatch) -> None:
     assert stt_settings["delete_audio_after_success"] is False
     assert stt_settings["audio_retention_hours"] == 24.0
     assert stt_settings["redact_pii"] is True
+    assert stt_settings["allow_unredacted_partials"] is True
+    assert stt_settings["redact_categories"] == ["email", "ssn"]
 
     assert legacy_stt_settings["ws_control_v2_enabled"] is True
     assert legacy_stt_settings["delete_audio_after_success"] is False
+    assert legacy_stt_settings["allow_unredacted_partials"] is True
+    assert legacy_stt_settings["redact_categories"] == ["email", "ssn"]
 
     assert exported_stt["ws_control_v2_enabled"] is True
     assert exported_stt["delete_audio_after_success"] is False
+    assert exported_stt["allow_unredacted_partials"] is True
+    assert exported_stt["redact_categories"] == ["email", "ssn"]

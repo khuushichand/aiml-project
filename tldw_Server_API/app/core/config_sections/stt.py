@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Mapping
@@ -19,6 +20,8 @@ class STTConfig:
     delete_audio_after_success: bool
     audio_retention_hours: float
     redact_pii: bool
+    allow_unredacted_partials: bool
+    redact_categories: list[str]
 
 
 def _get_raw(
@@ -62,6 +65,41 @@ def _parse_nonnegative_float(raw: object, default: float) -> float:
     if value < 0.0:
         return default
     return value
+
+
+def _parse_string_list(raw: object, default: list[str] | None = None) -> list[str]:
+    default_items = list(default or [])
+    if raw is None:
+        return default_items
+
+    items: list[str]
+    if isinstance(raw, (list, tuple, set)):
+        items = [str(item) for item in raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return default_items
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, list):
+                items = [str(item) for item in parsed]
+            else:
+                items = [text]
+        else:
+            items = text.split(",")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = str(item).strip().lower()
+        if not value or value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    return normalized
 
 
 def load_stt_config(
@@ -140,6 +178,26 @@ def load_stt_config(
         ),
         False,
     )
+    allow_unredacted_partials = _parse_bool(
+        _get_raw(
+            config_parser,
+            env_map,
+            ("STT_ALLOW_UNREDACTED_PARTIALS",),
+            ("allow_unredacted_partials",),
+            "false",
+        ),
+        False,
+    )
+    redact_categories = _parse_string_list(
+        _get_raw(
+            config_parser,
+            env_map,
+            ("STT_REDACT_CATEGORIES",),
+            ("redact_categories",),
+            "",
+        ),
+        [],
+    )
 
     return STTConfig(
         ws_control_v2_enabled=ws_control_v2_enabled,
@@ -149,4 +207,6 @@ def load_stt_config(
         delete_audio_after_success=delete_audio_after_success,
         audio_retention_hours=audio_retention_hours,
         redact_pii=redact_pii,
+        allow_unredacted_partials=allow_unredacted_partials,
+        redact_categories=redact_categories,
     )
