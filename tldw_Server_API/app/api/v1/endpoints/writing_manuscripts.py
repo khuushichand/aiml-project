@@ -7,7 +7,10 @@ from typing import Any, NoReturn
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_rate_limiter_dep,
+    rbac_rate_limit,
+)
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     ChapterSummary,
@@ -101,6 +104,28 @@ _MANUSCRIPT_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
+    """Enforce a rate limit for the given user and scope."""
+    try:
+        allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        retry_after = 60
+        logger.exception(
+            "Rate limiter check failed for user_id={} scope={}",
+            user_id,
+            scope,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable",
+            headers={"Retry-After": str(retry_after)},
+        ) from exc
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded for {scope}",
+            headers={"Retry-After": str(meta.get("retry_after", 60))},
+        )
 def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
     """Translate database exceptions into HTTP errors."""
     if isinstance(exc, HTTPException):
