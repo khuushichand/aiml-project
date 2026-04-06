@@ -402,6 +402,53 @@ async def test_stream_transcribe_emits_redaction_metric_for_outbound_payload(
 
 
 @pytest.mark.asyncio
+async def test_stream_transcribe_emits_started_metric_with_resolved_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = DummyWebSocket()
+
+    metrics_manager._metrics_registry = None
+    registry = metrics_manager.get_metrics_registry()
+    monkeypatch.setattr(
+        audio_streaming,
+        "_resolve_default_streaming_model",
+        lambda: ("mystery-provider", "standard", "distil-large-v3"),
+    )
+
+    async def _mock_handle(
+        _websocket,
+        config,
+        *,
+        on_audio_seconds=None,  # noqa: ARG001
+        on_heartbeat=None,  # noqa: ARG001
+        on_stream_config_resolved=None,
+        on_transcript_result=None,  # noqa: ARG001
+        on_full_transcript=None,  # noqa: ARG001
+    ):
+        config.model = "parakeet-ctc-0.6b"
+        config.model_variant = "onnx"
+        if on_stream_config_resolved is not None:
+            await on_stream_config_resolved({"type": "config", "transcription_model": "parakeet-ctc-0.6b"}, config)
+
+    monkeypatch.setattr(audio_streaming, "handle_unified_websocket", _mock_handle)
+
+    try:
+        await audio_streaming.websocket_transcribe(ws, token=None)
+
+        assert registry.get_cumulative_counter_total("audio_stt_streaming_sessions_started_total") == 1
+        assert registry.get_cumulative_counter(
+            "audio_stt_streaming_sessions_started_total",
+            {"provider": "nemo"},
+        ) == 1
+        assert registry.get_cumulative_counter(
+            "audio_stt_streaming_sessions_started_total",
+            {"provider": "other"},
+        ) == 0
+    finally:
+        metrics_manager._metrics_registry = None
+
+
+@pytest.mark.asyncio
 async def test_stream_transcribe_redacts_partial_and_final_payloads_when_partials_must_be_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

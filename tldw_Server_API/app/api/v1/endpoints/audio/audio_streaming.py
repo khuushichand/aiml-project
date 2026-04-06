@@ -1015,6 +1015,13 @@ async def websocket_transcribe(
 
         acquired_stream = False
 
+        def _ensure_stt_session_started() -> None:
+            nonlocal stt_session_started
+            if stt_session_started:
+                return
+            emit_stt_session_start_total(provider=stt_metrics_provider)
+            stt_session_started = True
+
         ok_stream, msg_stream = await _can_start_stream(user_id_for_usage)
         if not ok_stream:
             if _outer_stream:
@@ -1022,8 +1029,6 @@ async def websocket_transcribe(
             await websocket.close()
             return
         acquired_stream = True
-        emit_stt_session_start_total(provider=stt_metrics_provider)
-        stt_session_started = True
 
         query_params = getattr(websocket, "query_params", {}) or {}
         persistence_enabled = _coerce_bool(
@@ -1205,6 +1210,7 @@ async def websocket_transcribe(
                 persistence_model = _stream_model_label(resolved_config)
             stt_metrics_provider = getattr(resolved_config, "model", stt_metrics_provider)
             stt_metrics_model = _stream_model_label(resolved_config)
+            _ensure_stt_session_started()
 
         async def _on_transcript_result(result: dict[str, Any], full_transcript: str) -> None:
             if not persistence_enabled:
@@ -1379,6 +1385,8 @@ async def websocket_transcribe(
             )
             raise
         finally:
+            if acquired_stream and not stt_session_started:
+                _ensure_stt_session_started()
             if stt_session_started:
                 emit_stt_session_end_total(
                     provider=stt_metrics_provider,
