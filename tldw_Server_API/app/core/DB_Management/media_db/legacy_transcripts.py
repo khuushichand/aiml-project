@@ -127,7 +127,7 @@ def _load_existing_transcript(
         row = db_instance._fetchone_with_connection(
             conn,
             """
-            SELECT id, uuid, version, transcription_run_id, created_at, idempotency_key
+            SELECT id, uuid, version, transcription_run_id, supersedes_run_id, created_at, idempotency_key
             FROM Transcripts
             WHERE media_id = ? AND idempotency_key = ? AND deleted = 0
             """,
@@ -142,7 +142,7 @@ def _load_existing_transcript(
     return db_instance._fetchone_with_connection(
         conn,
         """
-        SELECT id, uuid, version, transcription_run_id, created_at, idempotency_key
+        SELECT id, uuid, version, transcription_run_id, supersedes_run_id, created_at, idempotency_key
         FROM Transcripts
         WHERE media_id = ? AND transcription_run_id = ? AND deleted = 0
         """,
@@ -224,6 +224,7 @@ def _upsert_transcript_once(
                 "media_id": media_id,
                 "whisper_model": whisper_model,
                 "transcription_run_id": current_run_id,
+                "supersedes_run_id": existing.get("supersedes_run_id"),
                 "idempotency_key": existing.get("idempotency_key"),
                 "write_result": "deduped",
                 "last_modified": now,
@@ -247,6 +248,10 @@ def _upsert_transcript_once(
         else:
             chosen_run_id = media_next_run_id
             chosen_next_run_id = media_next_run_id + 1
+
+        supersedes_run_id = None
+        if set_as_latest and media_latest_run_id is not None and chosen_run_id != media_latest_run_id:
+            supersedes_run_id = int(media_latest_run_id)
 
         target_latest_run_id = chosen_run_id if set_as_latest else media_latest_run_id
         if (
@@ -273,6 +278,7 @@ def _upsert_transcript_once(
                 transcription,
                 created_at,
                 transcription_run_id,
+                supersedes_run_id,
                 idempotency_key,
                 uuid,
                 last_modified,
@@ -280,7 +286,7 @@ def _upsert_transcript_once(
                 client_id,
                 deleted
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
             """,
             (
                 media_id,
@@ -288,6 +294,7 @@ def _upsert_transcript_once(
                 transcription,
                 created_val,
                 chosen_run_id,
+                supersedes_run_id,
                 idempotency_key,
                 new_uuid,
                 now,
@@ -309,10 +316,11 @@ def _upsert_transcript_once(
             "media_id": media_id,
             "whisper_model": whisper_model,
             "transcription_run_id": chosen_run_id,
+            "supersedes_run_id": supersedes_run_id,
             "idempotency_key": idempotency_key,
             "write_result": (
                 "superseded"
-                if set_as_latest and media_latest_run_id is not None and chosen_run_id != media_latest_run_id
+                if supersedes_run_id is not None
                 else "created"
             ),
             "last_modified": now,

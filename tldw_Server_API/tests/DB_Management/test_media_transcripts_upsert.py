@@ -71,6 +71,38 @@ def test_sqlite_upsert_transcript_roundtrip(tmp_path):
     latest = get_latest_transcription(db, media_id)
     assert latest == "updated text"
 
+@pytest.mark.unit
+def test_sqlite_upsert_transcript_records_superseded_run_id(tmp_path):
+
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="unit-sqlite-supersedes")
+    media_id = _insert_minimal_media(db)
+
+    p1 = upsert_transcript(db, media_id, transcription="hello world", whisper_model="base")
+    p2 = upsert_transcript(db, media_id, transcription="updated text", whisper_model="base")
+
+    rows = list(
+        db.execute_query(
+            """
+            SELECT transcription_run_id, supersedes_run_id
+            FROM Transcripts
+            WHERE media_id = ?
+            ORDER BY transcription_run_id ASC
+            """,
+            (media_id,),
+        )
+        or []
+    )
+
+    assert p1["transcription_run_id"] == 1
+    assert p1["supersedes_run_id"] is None
+    assert p2["transcription_run_id"] == 2
+    assert p2["supersedes_run_id"] == 1
+    assert len(rows) == 2
+    assert rows[0]["transcription_run_id"] == 1
+    assert rows[0]["supersedes_run_id"] is None
+    assert rows[1]["transcription_run_id"] == 2
+    assert rows[1]["supersedes_run_id"] == 1
+
 
 @pytest.mark.integration
 def test_postgres_upsert_transcript_roundtrip_if_available(tmp_path, pg_eval_params):
