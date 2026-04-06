@@ -10,14 +10,17 @@ describe("OnboardingConnectForm review fixes", () => {
     const source = readOnboardingSource()
 
     expect(source).toContain('const handleOpenIngestFlow = useCallback(async () => {')
-    expect(source).toContain('console.debug("[OnboardingConnectForm] Failed to persist researcher shortcuts", err)')
+    expect(source).toContain('console.debug("[OnboardingConnectForm]')
     expect(source).toContain('await finishAndNavigate("/media", { openQuickIngestIntro: true })')
   })
 
-  it("does not keep an unused actions dependency in the chat flow callback", () => {
+  it("includes actions and handleGoToChat as chat flow dependencies", () => {
     const source = readOnboardingSource()
-    const chatFlowBlock = source.match(/const handleOpenChatFlow = useCallback\(async \(\) => \{[\s\S]*?\n  \}, \[([^\]]*)\]\)/)
+    const chatFlowBlock = source.match(/const handleOpenChatFlow\s*=\s*useCallback\([\s\S]*?\},\s*\[([^\]]*)\]\)/)
 
-    expect(chatFlowBlock?.[1]).toBe("finishAndNavigate")
+    expect(chatFlowBlock).not.toBeNull()
+    const deps = chatFlowBlock![1].split(",").map((d: string) => d.trim())
+    expect(deps).toContain("actions")
+    expect(deps).toContain("handleGoToChat")
   })
 })

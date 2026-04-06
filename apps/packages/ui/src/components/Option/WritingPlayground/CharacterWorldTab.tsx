@@ -51,28 +51,28 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
   const [newPlotTitle, setNewPlotTitle] = useState("")
 
   // ── Queries ──
-  const { data: charactersResponse, isLoading: charsLoading } = useQuery<ManuscriptCharacterListResponse>({
+  const { data: charactersResponse, isLoading: charsLoading, isError: charsError } = useQuery<ManuscriptCharacterListResponse>({
     queryKey: ["manuscript-characters", activeProjectId],
     queryFn: () => listManuscriptCharacters(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "characters",
     staleTime: 30_000,
   })
 
-  const { data: worldInfoResponse, isLoading: worldLoading } = useQuery<ManuscriptWorldInfoListResponse>({
+  const { data: worldInfoResponse, isLoading: worldLoading, isError: worldError } = useQuery<ManuscriptWorldInfoListResponse>({
     queryKey: ["manuscript-world-info", activeProjectId],
     queryFn: () => listManuscriptWorldInfo(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "world",
     staleTime: 30_000,
   })
 
-  const { data: plotLinesResponse, isLoading: plotLoading } = useQuery<ManuscriptPlotLineListResponse>({
+  const { data: plotLinesResponse, isLoading: plotLoading, isError: plotError } = useQuery<ManuscriptPlotLineListResponse>({
     queryKey: ["manuscript-plot-lines", activeProjectId],
     queryFn: () => listManuscriptPlotLines(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "plot",
     staleTime: 30_000,
   })
 
-  const { data: plotHolesResponse } = useQuery<ManuscriptPlotHoleListResponse>({
+  const { data: plotHolesResponse, isError: plotHolesError } = useQuery<ManuscriptPlotHoleListResponse>({
     queryKey: ["manuscript-plot-holes", activeProjectId],
     queryFn: () => listManuscriptPlotHoles(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "plot",
@@ -156,7 +156,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               onClick={() => isOnline && addCharMutation.mutate(newCharName.trim())}
             />
           </div>
-          {charsLoading ? <Spin size="small" /> : (
+          {charsLoading ? <Spin size="small" /> : charsError ? (
+            <Typography.Text type="danger" className="text-xs">Failed to load characters</Typography.Text>
+          ) : (
             <List
               size="small"
               dataSource={characters}
@@ -203,7 +205,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               onClick={() => isOnline && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
             />
           </div>
-          {worldLoading ? <Spin size="small" /> : (
+          {worldLoading ? <Spin size="small" /> : worldError ? (
+            <Typography.Text type="danger" className="text-xs">Failed to load world info</Typography.Text>
+          ) : (
             <List
               size="small"
               dataSource={worldInfo}
@@ -242,7 +246,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 onClick={() => isOnline && addPlotMutation.mutate(newPlotTitle.trim())}
               />
             </div>
-            {plotLoading ? <Spin size="small" /> : (
+            {plotLoading ? <Spin size="small" /> : plotError ? (
+              <Typography.Text type="danger" className="text-xs">Failed to load plot lines</Typography.Text>
+            ) : (
               <List
                 size="small"
                 dataSource={plotLines}
@@ -260,7 +266,9 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               />
             )}
           </div>
-          {plotHoles.length > 0 && (
+          {plotHolesError ? (
+            <Typography.Text type="danger" className="text-xs">Failed to load plot holes</Typography.Text>
+          ) : plotHoles.length > 0 ? (
             <div>
               <Typography.Text strong className="text-xs">Plot Holes</Typography.Text>
               <List
@@ -278,7 +286,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 )}
               />
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

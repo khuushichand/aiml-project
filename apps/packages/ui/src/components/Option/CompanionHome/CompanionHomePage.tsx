@@ -59,6 +59,12 @@ export function CompanionHomePage({
       bootstrapMilestones()
     }
   }, [bootstrapMilestones])
+  // Re-bootstrap when connection becomes ready so post-onboarding milestones appear
+  useEffect(() => {
+    if (isConnected && milestoneBootstrapped.current) {
+      bootstrapMilestones()
+    }
+  }, [isConnected, bootstrapMilestones])
   useEffect(() => {
     if (isConnected) {
       markMilestone("first_connection")
