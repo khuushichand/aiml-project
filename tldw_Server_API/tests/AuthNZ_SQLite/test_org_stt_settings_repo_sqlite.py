@@ -94,4 +94,3 @@ async def test_org_stt_settings_repo_sqlite(tmp_path, monkeypatch) -> None:
     assert updated["redact_pii"] is False
     assert updated["allow_unredacted_partials"] is True
     assert updated["redact_categories"] == ["ssn"]
-

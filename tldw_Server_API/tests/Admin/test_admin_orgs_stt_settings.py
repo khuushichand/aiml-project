@@ -143,4 +143,3 @@ def test_admin_org_stt_settings_404(monkeypatch, tmp_path, authnz_schema_ready_s
         assert response.status_code == 404, response.text
 
     app.dependency_overrides.pop(get_auth_principal, None)
-

@@ -27,7 +27,7 @@ Keep these decisions fixed during implementation:
 ## Execution Preconditions
 
 1. Create an isolated git worktree/branch before implementation so subagents do not collide with unrelated local changes.
-2. Activate the project virtual environment before every `python`, `pytest`, or `bandit` command: `source .venv/bin/activate` from the repo root, or `source ../.venv/bin/activate` from a `.worktrees/<branch>` checkout.
+2. Activate the project virtual environment before every `python`, `pytest`, or `bandit` command: `source .venv/bin/activate` from the repo root, or `source ../../.venv/bin/activate` from a `.worktrees/<branch>` checkout.
 3. Keep one PR slice per branch or stacked branch. Do not assign overlapping write sets to concurrent workers.
 4. Treat "tenant" as `org_id` in multi-user mode. In single-user mode, there is no tenant row; STT policy resolves from global config defaults only.
 

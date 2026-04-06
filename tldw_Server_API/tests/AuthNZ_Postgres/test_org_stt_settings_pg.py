@@ -57,4 +57,3 @@ async def test_org_stt_settings_postgres(test_db_pool):
     assert fetched["redact_pii"] is True
     assert fetched["allow_unredacted_partials"] is False
     assert fetched["redact_categories"] == ["email", "phone"]
-
