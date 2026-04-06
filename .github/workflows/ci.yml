@@ -1571,7 +1571,7 @@ jobs:
 
       - name: Upload coverage to Codecov (Ubuntu 3.12)
         if: matrix.python == '3.12'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
           flags: fullsuite
