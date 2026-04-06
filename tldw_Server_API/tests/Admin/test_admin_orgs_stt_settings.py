@@ -55,49 +55,56 @@ def test_admin_update_org_stt_settings(monkeypatch, tmp_path, authnz_schema_read
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override
+    try:
+        with TestClient(app) as client:
+            create_response = client.post("/api/v1/admin/orgs", json={"name": "STT Org"})
+            assert create_response.status_code == 200, create_response.text
+            org_id = create_response.json()["id"]
 
-    with TestClient(app) as client:
-        create_response = client.post("/api/v1/admin/orgs", json={"name": "STT Org"})
-        assert create_response.status_code == 200, create_response.text
-        org_id = create_response.json()["id"]
+            initial = client.get(f"/api/v1/admin/orgs/{org_id}/stt/settings")
+            assert initial.status_code == 200, initial.text
+            initial_payload = initial.json()
+            assert initial_payload == {
+                "org_id": org_id,
+                "delete_audio_after_success": True,
+                "audio_retention_hours": 0.0,
+                "redact_pii": False,
+                "allow_unredacted_partials": False,
+                "redact_categories": [],
+            }
 
-        initial = client.get(f"/api/v1/admin/orgs/{org_id}/stt/settings")
-        assert initial.status_code == 200, initial.text
-        initial_payload = initial.json()
-        assert initial_payload == {
-            "org_id": org_id,
-            "delete_audio_after_success": True,
-            "audio_retention_hours": 0.0,
-            "redact_pii": False,
-            "allow_unredacted_partials": False,
-            "redact_categories": [],
-        }
-
-        update_response = client.patch(
-            f"/api/v1/admin/orgs/{org_id}/stt/settings",
-            json={
+            update_response = client.patch(
+                f"/api/v1/admin/orgs/{org_id}/stt/settings",
+                json={
+                    "delete_audio_after_success": False,
+                    "audio_retention_hours": 24.0,
+                    "redact_pii": True,
+                    "allow_unredacted_partials": False,
+                    "redact_categories": ["email", "phone"],
+                },
+            )
+            assert update_response.status_code == 200, update_response.text
+            assert update_response.json() == {
+                "org_id": org_id,
                 "delete_audio_after_success": False,
                 "audio_retention_hours": 24.0,
                 "redact_pii": True,
                 "allow_unredacted_partials": False,
                 "redact_categories": ["email", "phone"],
-            },
-        )
-        assert update_response.status_code == 200, update_response.text
-        assert update_response.json() == {
-            "org_id": org_id,
-            "delete_audio_after_success": False,
-            "audio_retention_hours": 24.0,
-            "redact_pii": True,
-            "allow_unredacted_partials": False,
-            "redact_categories": ["email", "phone"],
-        }
+            }
 
-        fetched = client.get(f"/api/v1/admin/orgs/{org_id}/stt/settings")
-        assert fetched.status_code == 200, fetched.text
-        assert fetched.json()["redact_categories"] == ["email", "phone"]
-
-    app.dependency_overrides.pop(get_auth_principal, None)
+            fetched = client.get(f"/api/v1/admin/orgs/{org_id}/stt/settings")
+            assert fetched.status_code == 200, fetched.text
+            assert fetched.json() == {
+                "org_id": org_id,
+                "delete_audio_after_success": False,
+                "audio_retention_hours": 24.0,
+                "redact_pii": True,
+                "allow_unredacted_partials": False,
+                "redact_categories": ["email", "phone"],
+            }
+    finally:
+        app.dependency_overrides.pop(get_auth_principal, None)
 
 
 def test_admin_org_stt_settings_404(monkeypatch, tmp_path, authnz_schema_ready_sync):
@@ -137,9 +144,9 @@ def test_admin_org_stt_settings_404(monkeypatch, tmp_path, authnz_schema_ready_s
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override
-
-    with TestClient(app) as client:
-        response = client.get("/api/v1/admin/orgs/999/stt/settings")
-        assert response.status_code == 404, response.text
-
-    app.dependency_overrides.pop(get_auth_principal, None)
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/v1/admin/orgs/999/stt/settings")
+            assert response.status_code == 404, response.text
+    finally:
+        app.dependency_overrides.pop(get_auth_principal, None)

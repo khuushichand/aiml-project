@@ -56,6 +56,17 @@ class AuthnzOrgSttSettingsRepo:
                         "SQLite org_stt_settings table is missing. "
                         "Run the AuthNZ migrations/bootstrap."
                     )
+            else:
+                # Direct SQLite connection handle
+                cursor = await self.db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='org_stt_settings'"
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    raise RuntimeError(
+                        "SQLite org_stt_settings table is missing. "
+                        "Run the AuthNZ migrations/bootstrap."
+                    )
         except Exception as exc:
             logger.error(f"AuthnzOrgSttSettingsRepo.ensure_tables failed: {exc}")
             raise

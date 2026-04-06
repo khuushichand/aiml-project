@@ -461,7 +461,10 @@ def upsert_transcript(
         if not normalized_idempotency_key:
             normalized_idempotency_key = None
     if transcription_run_id is not None:
-        transcription_run_id = int(transcription_run_id)
+        try:
+            transcription_run_id = int(transcription_run_id)
+        except (TypeError, ValueError) as exc:
+            raise InputError(f"Invalid transcription_run_id: {transcription_run_id!r}") from exc
 
     last_conflict: ConflictError | None = None
     try:

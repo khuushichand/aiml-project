@@ -2348,9 +2348,8 @@ def test_on_disk_sqlite_migration_to_v23_backfills_transcript_run_history(tmp_pa
         db.close_connection()
         db.backend.get_pool().close_all()
         verification_db_path = tmp_path / "media_v23_verification.sqlite"
-        with sqlite3.connect(db_path) as source_conn:
-            with sqlite3.connect(verification_db_path) as dest_conn:
-                source_conn.backup(dest_conn)
+        with sqlite3.connect(db_path) as source_conn, sqlite3.connect(verification_db_path) as dest_conn:
+            source_conn.backup(dest_conn)
 
         with sqlite3.connect(verification_db_path) as raw_conn:
             raw_conn.row_factory = sqlite3.Row

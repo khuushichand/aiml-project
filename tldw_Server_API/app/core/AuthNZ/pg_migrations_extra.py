@@ -2902,6 +2902,16 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         return False
 
 
+def _looks_like_postgres(obj: Any) -> bool:
+    """Detect Postgres-compatible DB handles including raw asyncpg connections."""
+    if isinstance(obj, DatabasePool):
+        return True
+    if getattr(obj, "pool", None) is not None:
+        return True
+    module = getattr(type(obj), "__module__", "")
+    return isinstance(module, str) and module.startswith("asyncpg")
+
+
 async def ensure_org_stt_settings_pg(pool: Any | None = None) -> bool:
     """Ensure org_stt_settings table exists for PostgreSQL backends."""
     try:
@@ -2909,7 +2919,7 @@ async def ensure_org_stt_settings_pg(pool: Any | None = None) -> bool:
         if not callable(getattr(db_target, "execute", None)):
             return False
 
-        if isinstance(db_target, DatabasePool) or getattr(db_target, "pool", None) is not None:
+        if _looks_like_postgres(db_target):
             try:
                 await ensure_authnz_core_tables_pg(db_target)
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:

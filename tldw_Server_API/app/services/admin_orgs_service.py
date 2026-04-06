@@ -28,6 +28,7 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     TeamResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.config_sections.stt import _parse_bool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateOrganizationError,
     DuplicateTeamError,
@@ -369,16 +370,16 @@ async def _ensure_org_exists(db: Any, org_id: int) -> None:
 def _default_org_stt_settings_payload(org_id: int) -> OrganizationSTTSettingsResponse:
     config = get_stt_config()
     if isinstance(config, dict):
-        delete_audio_after_success = bool(config.get("delete_audio_after_success", True))
+        delete_audio_after_success = _parse_bool(config.get("delete_audio_after_success", True), True)
         audio_retention_hours = float(config.get("audio_retention_hours", 0.0))
-        redact_pii = bool(config.get("redact_pii", False))
-        allow_unredacted_partials = bool(config.get("allow_unredacted_partials", False))
+        redact_pii = _parse_bool(config.get("redact_pii", False), False)
+        allow_unredacted_partials = _parse_bool(config.get("allow_unredacted_partials", False), False)
         raw_categories = config.get("redact_categories", [])
     else:
-        delete_audio_after_success = bool(getattr(config, "delete_audio_after_success", True))
+        delete_audio_after_success = _parse_bool(getattr(config, "delete_audio_after_success", True), True)
         audio_retention_hours = float(getattr(config, "audio_retention_hours", 0.0))
-        redact_pii = bool(getattr(config, "redact_pii", False))
-        allow_unredacted_partials = bool(getattr(config, "allow_unredacted_partials", False))
+        redact_pii = _parse_bool(getattr(config, "redact_pii", False), False)
+        allow_unredacted_partials = _parse_bool(getattr(config, "allow_unredacted_partials", False), False)
         raw_categories = getattr(config, "redact_categories", [])
 
     if isinstance(raw_categories, str):

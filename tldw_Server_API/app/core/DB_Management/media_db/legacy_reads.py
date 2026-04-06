@@ -129,6 +129,7 @@ def _resolve_latest_transcript_row(
             FROM Transcripts t
             JOIN Media m ON t.media_id = m.id
             WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 AND t.transcription_run_id = ?
+            ORDER BY t.created_at DESC
             LIMIT 1
             """,
             (media_id, latest_run_id),

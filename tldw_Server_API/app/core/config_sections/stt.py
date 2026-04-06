@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Mapping
+from collections.abc import Mapping
 
 from .types import ConfigParserLike
 
@@ -36,10 +36,11 @@ def _get_raw(
         if env_value is not None and str(env_value).strip() != "":
             return str(env_value)
 
-    for option in options:
-        raw = config_parser.get("STT-Settings", option, fallback=None)
-        if raw is not None and str(raw).strip() != "":
-            return str(raw)
+    if config_parser is not None:
+        for option in options:
+            raw = config_parser.get("STT-Settings", option, fallback=None)
+            if raw is not None and str(raw).strip() != "":
+                return str(raw)
     return default
 
 

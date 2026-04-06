@@ -7,8 +7,12 @@ from typing import Any
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    FILE_CATEGORY_STT_AUDIO,
     FILE_CATEGORY_TTS_AUDIO,
+    SOURCE_FEATURE_STT,
     SOURCE_FEATURE_TTS,
+    VALID_FILE_CATEGORIES,
+    VALID_SOURCE_FEATURES,
     AuthnzGeneratedFilesRepo,
 )
 
@@ -154,14 +158,7 @@ async def test_create_file_postgres_backend_selection_uses_fetchrow():
 
 
 def test_generated_files_repo_exposes_stt_audio_constants() -> None:
-    repo_module = importlib.import_module(
-        "tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo"
-    )
-
-    file_category = getattr(repo_module, "FILE_CATEGORY_STT_AUDIO", None)
-    source_feature = getattr(repo_module, "SOURCE_FEATURE_STT", None)
-
-    assert file_category == "stt_audio"
-    assert source_feature == "stt"
-    assert file_category in repo_module.VALID_FILE_CATEGORIES
-    assert source_feature in repo_module.VALID_SOURCE_FEATURES
+    assert FILE_CATEGORY_STT_AUDIO == "stt_audio"
+    assert SOURCE_FEATURE_STT == "stt"
+    assert FILE_CATEGORY_STT_AUDIO in VALID_FILE_CATEGORIES
+    assert SOURCE_FEATURE_STT in VALID_SOURCE_FEATURES

@@ -3257,11 +3257,6 @@ async def handle_unified_websocket(
                     # Decode audio data
                     audio_base64 = data.get("data", "")
                     audio_bytes = base64.b64decode(audio_base64)
-                    # Optional callback to account for usage seconds before processing
-                    if on_audio_seconds is not None:
-                        # Compute seconds from byte length and configured sample rate
-                        seconds = _estimate_audio_seconds(audio_bytes, int(config.sample_rate or 16000))
-                        await on_audio_seconds(seconds, int(config.sample_rate or 16000))
                     # Optional heartbeat to refresh stream TTL when using Redis counters
                     if on_heartbeat is not None:
                         with contextlib.suppress(_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS):
@@ -3279,6 +3274,11 @@ async def handle_unified_websocket(
                         for event in paused_audio_decision.events:
                             await stream.send_json(event)
                         continue
+
+                    # Bill usage seconds only for audio that will be processed (not paused/dropped)
+                    if on_audio_seconds is not None:
+                        seconds = _estimate_audio_seconds(audio_bytes, int(config.sample_rate or 16000))
+                        await on_audio_seconds(seconds, int(config.sample_rate or 16000))
 
                     auto_commit_triggered = False
                     if turn_detector:

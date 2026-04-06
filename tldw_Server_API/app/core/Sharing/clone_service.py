@@ -225,7 +225,10 @@ class CloneService:
                     run_id = t.get("transcription_run_id")
                     is_latest_run = False
                     if source_latest_run_id_int is not None and run_id is not None:
-                        is_latest_run = int(run_id) == source_latest_run_id_int
+                        try:
+                            is_latest_run = int(run_id) == source_latest_run_id_int
+                        except (TypeError, ValueError):
+                            is_latest_run = False
                     if (
                         not is_latest_run
                         and fallback_to_last_transcript

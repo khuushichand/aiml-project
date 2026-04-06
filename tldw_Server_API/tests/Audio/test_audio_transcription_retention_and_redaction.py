@@ -205,7 +205,7 @@ def test_stt_policy_rejects_weaker_request_overrides() -> None:
         redact_categories=["pii_email", "pii_phone"],
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         stt_policy.merge_request_overrides(
             base,
             delete_audio_after_success=False,

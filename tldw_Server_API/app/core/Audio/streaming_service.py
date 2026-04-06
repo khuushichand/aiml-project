@@ -305,7 +305,7 @@ async def _audio_ws_authenticate(
                     org_id_int = int(org_id)
                     if org_id_int not in resolved_org_ids:
                         resolved_org_ids.append(org_id_int)
-                if resolved_active_org_id is None and resolved_org_ids:
+                if resolved_active_org_id is None and len(resolved_org_ids) == 1:
                     resolved_active_org_id = resolved_org_ids[0]
 
         principal = AuthPrincipal(

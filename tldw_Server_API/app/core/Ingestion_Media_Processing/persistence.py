@@ -3272,10 +3272,11 @@ async def persist_primary_av_item(
                     )
 
                 write_payload = await loop.run_in_executor(None, _upsert_worker)
-                emit_stt_run_write_total(
-                    provider=provider_name,
-                    write_result=(write_payload or {}).get("write_result", "created"),
-                )
+                with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                    emit_stt_run_write_total(
+                        provider=provider_name,
+                        write_result=(write_payload or {}).get("write_result", "created"),
+                    )
                 # Attach normalized artifact to the process_result for callers
                 process_result["normalized_stt"] = artifact
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as stt_err:

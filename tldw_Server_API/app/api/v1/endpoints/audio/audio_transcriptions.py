@@ -631,11 +631,15 @@ async def create_transcription(
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
     canonical_path = None
-    effective_stt_policy = await resolve_effective_stt_policy(
-        principal=principal,
-        user_id=int(current_user.id) if getattr(current_user, "id", None) is not None else None,
-        db=db,
-    )
+    try:
+        effective_stt_policy = await resolve_effective_stt_policy(
+            principal=principal,
+            user_id=int(current_user.id) if getattr(current_user, "id", None) is not None else None,
+            db=db,
+        )
+    except Exception:
+        _emit_error_metrics(status_label="internal_error", reason="policy_resolution_failed")
+        raise
     try:
         first_chunk = await file.read(upload_chunk_size)
         file_extension = _resolve_audio_upload_suffix(
@@ -1229,9 +1233,11 @@ async def create_transcription(
         ).strip().lower()
         if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
             _emit_error_metrics(status_label="quota_exceeded", reason="quota")
+        elif exc.status_code == status.HTTP_402_PAYMENT_REQUIRED:
+            _emit_error_metrics(status_label="quota_exceeded", reason="quota")
         elif exc.status_code in {
             status.HTTP_400_BAD_REQUEST,
-            HTTP_413_TOO_LARGE,
+            status.HTTP_413_CONTENT_TOO_LARGE,
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         }:
@@ -1299,6 +1305,8 @@ async def create_translation(
         description="Sampling temperature (currently ignored by all providers).",
     ),
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
@@ -1339,6 +1347,8 @@ async def create_translation(
         seg_embeddings_provider=None,
         seg_embeddings_model=None,
         current_user=current_user,
+        principal=principal,
+        db=db,
     )
 
 

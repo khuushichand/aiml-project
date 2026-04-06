@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import mimetypes
@@ -134,7 +135,7 @@ async def _resolve_org_id(
         if active_org_id is not None:
             return int(active_org_id)
         org_ids = list(getattr(principal, "org_ids", []) or [])
-        if org_ids:
+        if len(org_ids) == 1:
             return int(org_ids[0])
         if getattr(principal, "subject", None) == "single_user":
             return None
@@ -305,8 +306,8 @@ def apply_transcript_text_policy(
     try:
         return moderation.redact_text(text, moderation_policy)
     except _STT_POLICY_EXCEPTIONS as exc:
-        logger.debug("STT transcript redaction failed; returning original text: {}", exc)
-        return text
+        logger.warning("STT transcript redaction failed; suppressing text for safety: {}", exc)
+        return "[redaction-unavailable]"
 
 
 def apply_transcript_payload_policy(payload: dict[str, Any], *, policy: STTPolicy) -> dict[str, Any]:
@@ -324,6 +325,9 @@ def apply_transcript_payload_policy(payload: dict[str, Any], *, policy: STTPolic
         policy=policy,
         is_partial=(payload_type == "partial" and not bool(payload.get("is_final"))),
     )
+    segments = updated.get("segments")
+    if isinstance(segments, list):
+        updated["segments"] = redact_timed_segments(segments, policy=policy)
     return updated
 
 
@@ -420,10 +424,12 @@ async def retain_stt_audio_artifact(
         return None
 
     target_path = _get_stt_audio_storage_path(user_id, source.suffix or ".wav")
-    shutil.copy2(source, target_path)
+    await asyncio.to_thread(shutil.copy2, source, target_path)
     outputs_dir = DatabasePaths.get_user_outputs_dir(user_id)
     relative_path = str(target_path.relative_to(outputs_dir))
     mime_type = mimetypes.guess_type(target_path.name)[0] or "audio/wav"
+    file_size = await asyncio.to_thread(lambda: int(target_path.stat().st_size))
+    checksum = await asyncio.to_thread(_compute_file_checksum, target_path)
     service = await get_storage_service()
 
     try:
@@ -433,11 +439,11 @@ async def retain_stt_audio_artifact(
             storage_path=relative_path,
             file_category=FILE_CATEGORY_STT_AUDIO,
             source_feature=SOURCE_FEATURE_STT,
-            file_size_bytes=int(target_path.stat().st_size),
+            file_size_bytes=file_size,
             org_id=org_id,
             original_filename=original_filename,
             mime_type=mime_type,
-            checksum=_compute_file_checksum(target_path),
+            checksum=checksum,
             expires_at=decision.expires_at,
             check_quota=True,
         )
