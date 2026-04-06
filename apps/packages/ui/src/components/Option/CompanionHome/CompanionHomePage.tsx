@@ -284,7 +284,7 @@ export function CompanionHomePage({
 
   return (
     <div className="flex flex-col gap-6" data-testid="companion-home-page">
-      <header className="rounded-3xl border border-border/80 bg-[linear-gradient(135deg,rgba(255,248,235,0.96),rgba(245,248,255,0.92))] p-6 shadow-sm">
+      <header className="rounded-3xl border border-border/80 bg-surface/90 p-6 shadow-sm backdrop-blur-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-muted">
@@ -322,8 +322,8 @@ export function CompanionHomePage({
         </div>
 
         {topBand ? (
-          <div className="mt-5 rounded-2xl border border-amber-300/70 bg-amber-50/80 px-4 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">
+          <div className="mt-5 rounded-2xl border border-warn/30 bg-warn/10 px-4 py-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-warn">
               {topBand.eyebrow}
             </p>
             <div className="mt-2 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -376,7 +376,7 @@ export function CompanionHomePage({
         </div>
 
         {error ? (
-          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-4 rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
             {error}
           </div>
         ) : null}
