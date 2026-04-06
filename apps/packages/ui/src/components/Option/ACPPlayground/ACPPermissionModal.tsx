@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { Modal, Button, Checkbox, Tag, Progress } from "antd"
 import {
@@ -63,10 +63,22 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
     }
   }
 
-  // Calculate time remaining
-  const timeElapsed = Date.now() - currentPermission.requestedAt.getTime()
-  const timeRemaining = Math.max(0, currentPermission.timeout_seconds * 1000 - timeElapsed)
-  const progressPercent = (timeRemaining / (currentPermission.timeout_seconds * 1000)) * 100
+  // Live countdown timer
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    setNow(Date.now())
+  }, [currentPermission.request_id])
+
+  const timeElapsed = now - currentPermission.requestedAt.getTime()
+  const totalMs = currentPermission.timeout_seconds * 1000
+  const timeRemaining = Math.max(0, totalMs - timeElapsed)
+  const progressPercent = (timeRemaining / totalMs) * 100
   const hasPolicyMetadata = Boolean(
     currentPermission.approval_requirement
     || currentPermission.governance_reason
