@@ -58,6 +58,8 @@ from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     SceneSummary,
     SceneWorldInfoLink,
     SceneWorldInfoLinkResponse,
+    CHARACTER_ROLES,
+    WORLD_INFO_KINDS,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -942,7 +944,7 @@ async def create_character(
 )
 async def list_characters(
     project_id: str,
-    role: str | None = Query(None, description="Filter by role"),
+    role: CHARACTER_ROLES | None = Query(None, description="Filter by role"),
     cast_group: str | None = Query(None, description="Filter by cast group"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
@@ -1166,7 +1168,7 @@ async def create_world_info(
 )
 async def list_world_info(
     project_id: str,
-    kind: str | None = Query(None, description="Filter by kind"),
+    kind: WORLD_INFO_KINDS | None = Query(None, description="Filter by kind"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptWorldInfoResponse]:
