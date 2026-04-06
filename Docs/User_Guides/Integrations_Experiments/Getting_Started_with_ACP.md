@@ -330,6 +330,48 @@ agent:
 
 ## Troubleshooting
 
+### Quick Troubleshooting Checklist
+
+Work through these steps in order. Stop at the first failure and apply the fix.
+
+**1. Can you reach the server?**
+
+- Test: `curl http://127.0.0.1:8000/docs`
+- If no: Start tldw_server (`python -m uvicorn tldw_Server_API.app.main:app --reload`) and check for startup errors in the console.
+
+**2. Are ACP routes enabled?**
+
+- Test: `curl -s http://127.0.0.1:8000/api/v1/acp/health -H "X-API-KEY: your-key"`
+- If no (404): Set `stable_only = false` in `[API-Routes]` in `config.txt` and restart the server.
+
+**3. Is the runner configured?**
+
+- Test: Check the health response from step 2 — it should show runner status.
+- If no: Verify `[ACP] runner_command` and `runner_cwd` are set correctly in `config.txt`. See the config examples above.
+
+**4. Is the downstream agent installed?**
+
+- Test: `claude --version` (or `codex --version`, `opencode --version`)
+- If no: Install your chosen agent. For Claude Code see [claude.ai/download](https://claude.ai/download).
+
+**5. Is the API key set?**
+
+- Test: `echo $ANTHROPIC_API_KEY`
+- If no: `export ANTHROPIC_API_KEY=sk-ant-...` and add it to `~/.tldw-agent/config.yaml` under `agent.env`.
+
+**6. Can you create a session?**
+
+- Test:
+  ```bash
+  curl -X POST http://127.0.0.1:8000/api/v1/acp/sessions/new \
+    -H "X-API-KEY: your-key" \
+    -H "Content-Type: application/json" \
+    -d '{"agent_type": "claude_code", "cwd": "/tmp"}'
+  ```
+- If no: Check server logs for the specific error. Common causes include incorrect `runner_command` path or missing Go installation.
+
+---
+
 ### "ACP endpoints not found" (404)
 
 **Cause:** ACP routes are not enabled.
