@@ -306,7 +306,7 @@ def test_reorder(client: TestClient):
     assert scenes[2]["id"] == scene_ids[0]
 
 
-def test_reorder_rejects_explicit_null_version(client: TestClient):
+def test_reorder_rejects_explicit_null_version(client: TestClient) -> None:
     """Backward compatibility allows omitting version, but explicit null should still fail."""
 
     resp = client.post(
