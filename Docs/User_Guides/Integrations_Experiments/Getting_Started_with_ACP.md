@@ -150,6 +150,57 @@ runner_args = []
 runner_cwd = /opt/tldw-agent
 ```
 
+### Docker Networking for ACP
+
+If you run tldw_server or tldw-agent inside Docker, the two processes need to reach each other over the network. Below are the two most common setups.
+
+**Scenario 1: Server in Docker, Runner on Host**
+
+The runner (tldw-agent) runs on the host and listens on a local port. Add `extra_hosts` so the container can reach the host network:
+
+```yaml
+# docker-compose.yml
+services:
+  tldw-server:
+    image: tldw/server:latest
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ACP_RUNNER_COMMAND: "http://host.docker.internal:9090"
+```
+
+Then start tldw-agent on the host normally. The server container will reach it via `host.docker.internal`.
+
+**Scenario 2: Both in Docker**
+
+Run tldw-agent as a sibling service in the same Compose project so they share a Docker network:
+
+```yaml
+# docker-compose.yml
+services:
+  tldw-server:
+    image: tldw/server:latest
+    ports:
+      - "8000:8000"
+    environment:
+      ACP_RUNNER_COMMAND: "http://tldw-agent:9090"
+    depends_on:
+      - tldw-agent
+
+  tldw-agent:
+    build:
+      context: ../tldw-agent
+      dockerfile: Dockerfile
+    environment:
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+    expose:
+      - "9090"
+```
+
+Both services join the default Compose network, so the server can reach the runner at `http://tldw-agent:9090`.
+
 ### Step 2: Set Up tldw-agent (the Runner)
 
 Clone and build the tldw-agent repository:
