@@ -1224,6 +1224,13 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        _HAS_WEB_CLIPPER = True
+    except _IMPORT_EXCEPTIONS as _wc_err:
+        logger.warning(f"Web clipper endpoints unavailable; skipping import: {_wc_err}")
+        _HAS_WEB_CLIPPER = False
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -6310,6 +6317,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except _IMPORT_EXCEPTIONS as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        app.include_router(web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
+    except _IMPORT_EXCEPTIONS as _web_clipper_min_err:
+        logger.debug(f"Skipping web clipper router in minimal test app: {_web_clipper_min_err}")
     # Skills endpoints (SKILL.md management)
     try:
         from tldw_Server_API.app.api.v1.endpoints.skills import router as skills_router
@@ -6968,6 +6981,8 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    if _HAS_WEB_CLIPPER:
+        _include_if_enabled("web-clipper", web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
     _include_if_enabled("translation", translate_router, prefix=f"{API_V1_PREFIX}", tags=["translation"])
     _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])

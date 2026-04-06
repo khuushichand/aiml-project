@@ -22,6 +22,7 @@ export type ServerCapabilities = {
   hasChatbooks: boolean
   hasChatQueue: boolean
   hasChatSaveToDb: boolean
+  hasWebClipper: boolean
   hasStt: boolean
   hasTts: boolean
   hasVoiceChat: boolean
@@ -65,6 +66,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasChatbooks: false,
   hasChatQueue: false,
   hasChatSaveToDb: false,
+  hasWebClipper: false,
   hasStt: false,
   hasTts: false,
   hasVoiceChat: false,
@@ -184,7 +186,7 @@ type DocsInfoResponse = {
 }
 
 const CAPABILITIES_CACHE_TTL_MS = 5 * 60 * 1000
-const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV2"
+const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV3"
 
 type CapabilitiesCachePayload = {
   key: string
@@ -483,6 +485,7 @@ const computeCapabilities = (
     hasChatbooks: has("/api/v1/chatbooks/export") || has("/api/v1/chatbooks/health"),
     hasChatQueue: has("/api/v1/chat/queue/status") || has("/api/v1/chat/queue/activity"),
     hasChatSaveToDb,
+    hasWebClipper: has("/api/v1/web-clipper/save"),
     hasStt,
     hasTts,
     hasVoiceChat,
@@ -636,7 +639,13 @@ const readPersistedCapabilities = async (
       capabilitiesDiagnostics.stalePersistedMisses += 1
       return null
     }
-    return raw
+    return {
+      ...raw,
+      capabilities: {
+        ...defaultCapabilities,
+        ...raw.capabilities
+      }
+    }
   } catch {
     return null
   }

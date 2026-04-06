@@ -1,6 +1,7 @@
 import type { Storage } from "@plasmohq/storage"
 import { browser } from "wxt/browser"
 import { getInitialConfig } from "@/services/action"
+import { getServerCapabilities } from "@/services/tldw/server-capabilities"
 
 export type BackgroundCapabilities = {
   sendToTldw: boolean
@@ -12,6 +13,7 @@ export type BackgroundCapabilities = {
 export type BackgroundInitOptions = {
   storage: Storage
   contextMenuId: { webui: string; sidePanel: string }
+  saveToClipperMenuId: string
   saveToCompanionMenuId: string
   saveToNotesMenuId: string
   narrateSelectionMenuId: string
@@ -58,6 +60,32 @@ const scheduleModelWarmAlarm = async (enabled: boolean) => {
       (error as any)?.message || error
     )
   }
+}
+
+const syncWebClipperContextMenu = async (menuId: string) => {
+  try {
+    await browser.contextMenus.remove(menuId)
+  } catch {
+    // best effort removal before re-creating the menu item
+  }
+
+  let hasWebClipper = false
+  try {
+    const capabilities = await getServerCapabilities({ forceRefresh: true })
+    hasWebClipper = Boolean(capabilities.hasWebClipper)
+  } catch {
+    hasWebClipper = false
+  }
+
+  if (!hasWebClipper) {
+    return
+  }
+
+  browser.contextMenus.create({
+    id: menuId,
+    title: browser.i18n.getMessage("contextSaveToClipper"),
+    contexts: ["page", "selection"]
+  })
 }
 
 const shouldSkipOpenApiDriftCheck = async (
@@ -148,7 +176,8 @@ const checkOpenApiDrift = async (storage: Storage) => {
       "/api/v1/flashcards",
       "/api/v1/flashcards/decks",
       "/api/v1/characters/world-books",
-      "/api/v1/chat/dictionaries"
+      "/api/v1/chat/dictionaries",
+      "/api/v1/web-clipper/save"
     ]
     const missing = required.filter((path) => !(path in paths))
     if (missing.length > 0) {
@@ -178,6 +207,7 @@ export const initBackground = async (
   const {
     storage,
     contextMenuId,
+    saveToClipperMenuId,
     saveToCompanionMenuId,
     saveToNotesMenuId,
     narrateSelectionMenuId,
@@ -228,6 +258,7 @@ export const initBackground = async (
       const prevUrl = getServerUrl(value?.oldValue)
       const hasServer = nextUrl.length > 0
       void scheduleModelWarmAlarm(hasServer)
+      void syncWebClipperContextMenu(saveToClipperMenuId)
       if (hasServer && nextUrl !== prevUrl) {
         void warmModels(true)
       }
@@ -300,6 +331,7 @@ export const initBackground = async (
     title: browser.i18n.getMessage("contextSaveToNotes") || "Save to Notes",
     contexts: ["selection"]
   })
+  await syncWebClipperContextMenu(saveToClipperMenuId)
   browser.contextMenus.create({
     id: saveToCompanionMenuId,
     parentId: "tldw-save",
