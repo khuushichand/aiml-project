@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +171,8 @@ class ManuscriptSceneResponse(BaseModel):
     project_id: str
     title: str
     sort_order: float
-    content: dict[str, Any] = Field(default_factory=dict)
-    content_plain: str = ""
+    content_json: str | None = None
+    content_plain: str | None = None
     synopsis: str | None = None
     word_count: int = 0
     pov_character_id: str | None = None
@@ -243,8 +243,19 @@ class ManuscriptStructureResponse(BaseModel):
 class ReorderItem(BaseModel):
     id: str = Field(..., description="Entity ID")
     sort_order: float = Field(..., description="New sort order")
-    version: int = Field(..., description="Expected version for optimistic locking")
+    version: int | None = Field(
+        None,
+        description="Expected version for optimistic locking; optional for backward-compatible reorders",
+    )
     new_parent_id: str | None = Field(None, description="Optional new parent ID (for reparenting chapters)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_null_version(cls, data: Any) -> Any:
+        """Permit omitted versions for legacy clients, but reject explicit null values."""
+        if isinstance(data, dict) and "version" in data and data["version"] is None:
+            raise ValueError("version may be omitted, but explicit null is invalid")
+        return data
 
 
 class ReorderRequest(BaseModel):
