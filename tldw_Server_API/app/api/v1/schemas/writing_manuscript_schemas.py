@@ -534,6 +534,7 @@ class ManuscriptPlotHoleUpdate(BaseModel):
     scene_id: str | None = Field(None, description="Associated scene ID")
     chapter_id: str | None = Field(None, description="Associated chapter ID")
     plot_line_id: str | None = Field(None, description="Associated plot line ID")
+    detected_by: _PLOT_HOLE_DETECTED_BY | None = Field(None, description="Detection method")
 
 
 class ManuscriptPlotHoleResponse(BaseModel):

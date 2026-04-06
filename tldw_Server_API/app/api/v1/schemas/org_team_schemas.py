@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OrganizationCreateRequest(BaseModel):
@@ -149,6 +149,38 @@ class OrganizationWatchlistsSettingsUpdate(BaseModel):
 class OrganizationWatchlistsSettingsResponse(BaseModel):
     org_id: int
     require_include_default: bool | None = None
+
+
+class OrganizationSTTSettingsUpdate(BaseModel):
+    delete_audio_after_success: bool | None = None
+    audio_retention_hours: float | None = Field(default=None, ge=0.0)
+    redact_pii: bool | None = None
+    allow_unredacted_partials: bool | None = None
+    redact_categories: list[str] | None = None
+
+    @field_validator("redact_categories")
+    @classmethod
+    def _normalize_redact_categories(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = str(raw).strip().lower()
+            if not item or item in seen:
+                continue
+            normalized.append(item)
+            seen.add(item)
+        return normalized
+
+
+class OrganizationSTTSettingsResponse(BaseModel):
+    org_id: int
+    delete_audio_after_success: bool
+    audio_retention_hours: float
+    redact_pii: bool
+    allow_unredacted_partials: bool
+    redact_categories: list[str] = Field(default_factory=list)
 
 
 # ============================

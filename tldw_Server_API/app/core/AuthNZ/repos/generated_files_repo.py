@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 # File categories (used for file_category field)
 FILE_CATEGORY_TTS_AUDIO = "tts_audio"
+FILE_CATEGORY_STT_AUDIO = "stt_audio"
 FILE_CATEGORY_IMAGE = "image"
 FILE_CATEGORY_VOICE_CLONE = "voice_clone"
 FILE_CATEGORY_MINDMAP = "mindmap"
@@ -26,6 +27,7 @@ FILE_CATEGORY_SPREADSHEET = "spreadsheet"
 
 VALID_FILE_CATEGORIES = {
     FILE_CATEGORY_TTS_AUDIO,
+    FILE_CATEGORY_STT_AUDIO,
     FILE_CATEGORY_IMAGE,
     FILE_CATEGORY_VOICE_CLONE,
     FILE_CATEGORY_MINDMAP,
@@ -34,6 +36,7 @@ VALID_FILE_CATEGORIES = {
 
 # Source features (used for source_feature field)
 SOURCE_FEATURE_TTS = "tts"
+SOURCE_FEATURE_STT = "stt"
 SOURCE_FEATURE_IMAGE_GEN = "image_gen"
 SOURCE_FEATURE_VOICE_STUDIO = "voice_studio"
 SOURCE_FEATURE_MINDMAP = "mindmap"
@@ -42,6 +45,7 @@ SOURCE_FEATURE_EXPORT = "export"
 
 VALID_SOURCE_FEATURES = {
     SOURCE_FEATURE_TTS,
+    SOURCE_FEATURE_STT,
     SOURCE_FEATURE_IMAGE_GEN,
     SOURCE_FEATURE_VOICE_STUDIO,
     SOURCE_FEATURE_MINDMAP,

@@ -80,7 +80,7 @@
     "remark-math": "^6.0.0",
     "turndown": "^7.0.0",
     "wxt": "^0.20.0",
-    "xlsx": "^0.18.0",
+    "exceljs": "^4.4.0",
     "zustand": ">=4.0.0",
     "react-joyride": "^2.9.0",
     "react-pdf": "^9.0.0",

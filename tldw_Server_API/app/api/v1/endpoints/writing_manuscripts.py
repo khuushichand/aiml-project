@@ -1469,6 +1469,62 @@ async def list_plot_events(
         _handle_db_errors(exc, "manuscript plot events")
 
 
+@router.patch(
+    "/plot-events/{plot_event_id}",
+    response_model=ManuscriptPlotEventResponse,
+    summary="Update a plot event",
+    tags=["manuscripts"],
+)
+async def update_plot_event(
+    plot_event_id: str,
+    payload: ManuscriptPlotEventUpdate,
+    expected_version: int = Header(..., description="Expected version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
+) -> ManuscriptPlotEventResponse:
+    """Update a plot event with optimistic locking."""
+    update_data = payload.model_dump(exclude_none=True)
+    if "title" in update_data:
+        update_data["title"] = update_data["title"].strip()
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
+        )
+    try:
+        helper = _get_helper(db)
+        helper.update_plot_event(plot_event_id, update_data, expected_version)
+        event = helper.get_plot_event(plot_event_id)
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Plot event not found"
+            )
+        return ManuscriptPlotEventResponse(**event)
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "manuscript plot event")
+
+
+@router.delete(
+    "/plot-events/{plot_event_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete a plot event",
+    tags=["manuscripts"],
+)
+async def delete_plot_event(
+    plot_event_id: str,
+    expected_version: int = Header(..., description="Expected version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
+) -> Response:
+    """Soft-delete a plot event."""
+    try:
+        helper = _get_helper(db)
+        helper.soft_delete_plot_event(plot_event_id, expected_version)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "manuscript plot event")
+
+
 # ===================================================================
 # Plot Holes
 # ===================================================================

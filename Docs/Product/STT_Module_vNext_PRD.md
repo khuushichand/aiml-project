@@ -1,28 +1,38 @@
-**STT Module vNext / TODO PRD (Draft)**
+**STT Module vNext / Design Ledger**
 
 - **Relationship to Existing Docs**
-  - This document captures *future* STT work that was intentionally trimmed out of `Docs/Product/STT_Module_PRD.md` to keep that PRD aligned with the current implementation.
+  - This document started as a *future-work* STT backlog. The major contract items in it are now implemented on `codex/stt-vnext-slice-1-config` and published in `Docs/Product/STT_Module_PRD.md`, `Docs/API-related/Audio_Transcription_API.md`, and the operator docs.
+  - It now serves as design history plus a place to track any remaining rollout/tuning follow-ons.
   - It should be read alongside:
     - `Docs/Product/STT_Module_PRD.md` (current STT behavior and near-term goals).
     - `Docs/Product/Realtime_Voice_Latency_PRD.md` (end-to-end voice latency, WS TTS, and metrics).
 
 - **Status**
   - Owner: Core Voice & API Team
-  - Status: Draft / backlog (not yet scheduled)
+  - Status: Partially implemented; canonical shipped behavior has moved into current-state product/API/operator docs.
+
+- **Implementation Snapshot (2026-04-05)**
+  - Shipped on the current branch:
+    - WS control v2 with explicit `protocol_version=2` negotiation and bounded pause-queue handling.
+    - Transcript run history in Media DB v2 with `latest_transcription_run_id`, `next_transcription_run_id`, `transcription_run_id`, and `idempotency_key`.
+    - Deterministic final/full transcript diagnostics (`auto_commit`, `vad_status`, `diarization_status`, optional bounded `diarization_details`).
+    - Tenant/global STT retention and redaction policy enforcement across REST, WS, and persistence.
+    - Bounded `audio_stt_*` metrics families and read-path/write-result telemetry.
+  - Remaining work is limited to rollout tuning, ops thresholds, and any new follow-on capabilities beyond these shipped contracts.
 
 - **Product Decisions (Locked: 2026-02-09)**
   - WS protocol versioning is **mandatory** once control frames ship.
   - `latest_run_id` is global per `media_id` (not per provider/model).
   - PII redaction policy precedence is **tenant-level**.
 
-- **vNext Themes**
+- **Historical vNext Themes**
   - Richer WebSocket control/status protocol for STT.
   - Transcript versioning and run history in Media DB v2.
   - Enhanced streaming diagnostics (auto-commit / VAD / diarization flags).
   - Explicit retention/PII controls for audio and transcripts.
   - Finer-grained STT metrics series for dashboards.
 
-- **1. Rich WS Control & Status Protocol (Future)**
+- **1. Rich WS Control & Status Protocol**
   - Goal: allow clients to explicitly pause, resume, and stop streaming, with clear server acknowledgments and bounded backpressure behavior.
   - Versioning:
     - `v1` (legacy): existing top-level `auth` / `config` / `audio` / `commit` / `reset` / `stop` behavior.
@@ -64,7 +74,7 @@
     - Rollback:
       - Feature flag disables v2 control handling and reverts all clients to v1 semantics.
 
-- **2. Transcript Versioning & Run History (Future)**
+- **2. Transcript Versioning & Run History**
   - Goal: make transcript history explicit and append-only, with a clear notion of runs and which run is effective/default per media item.
   - Proposed schema evolution for `Transcripts` (Media DB v2):
     - Introduce `transcription_run_id` and use `(media_id, transcription_run_id)` as logical run key (append-only).
@@ -95,7 +105,7 @@
     - Rollback:
       - Read path can be switched back to legacy `(media_id, whisper_model)` selector via feature flag.
 
-- **3. Enhanced Streaming Diagnostics (Future)**
+- **3. Enhanced Streaming Diagnostics**
   - Goal: give clients/operators more insight into why/when a final transcript was emitted and which features were active.
   - Final transcript diagnostics (v2 and v1 additive-safe):
     - `auto_commit`: `true` when final emitted by server-side VAD/turn detection; else `false`.
@@ -116,7 +126,7 @@
     - Rollback:
       - Feature flag removes extra diagnostic fields while preserving existing final-frame shape.
 
-- **4. Retention & PII Controls (Future)**
+- **4. Retention & PII Controls**
   - Goal: provide first-class configuration for raw audio retention and optional transcript PII redaction.
   - Proposed environment/config flags (names subject to final design review):
     - `STT_DELETE_AUDIO_AFTER` (bool):
@@ -153,7 +163,7 @@
     - Rollback:
       - Disable STT-specific redaction/retention feature flags and fall back to existing persistence behavior.
 
-- **5. Fine-Grained STT Metrics (Future)**
+- **5. Fine-Grained STT Metrics**
   - Goal: complement existing latency metrics with request/session counters and queue/streaming latency histograms.
   - Proposed metrics (Prometheus-safe snake_case names; labels finalized via metrics policy below):
     - Counters:

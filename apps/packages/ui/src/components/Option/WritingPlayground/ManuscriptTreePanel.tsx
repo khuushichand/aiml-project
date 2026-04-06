@@ -19,6 +19,7 @@ export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
   const setActiveProjectId = useWritingPlaygroundStore((s) => s.setActiveProjectId)
   const activeNodeId = useWritingPlaygroundStore((s) => s.activeNodeId)
   const setActiveNodeId = useWritingPlaygroundStore((s) => s.setActiveNodeId)
+  const setActiveNodeType = useWritingPlaygroundStore((s) => s.setActiveNodeType)
   const queryClient = useQueryClient()
 
   // Fetch project list
@@ -170,7 +171,11 @@ export function ManuscriptTreePanel({ isOnline }: ManuscriptTreePanelProps) {
         <Tree
           treeData={treeData}
           selectedKeys={activeNodeId ? [activeNodeId] : []}
-          onSelect={(keys) => setActiveNodeId((keys[0] as string) || null)}
+          onSelect={(keys) => {
+            const key = (keys[0] as string) || null
+            setActiveNodeId(key)
+            setActiveNodeType(key ? nodeVersionMap.get(key)?.entityType ?? null : null)
+          }}
           draggable
           onDrop={handleDrop}
           showIcon

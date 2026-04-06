@@ -13,7 +13,7 @@ type ResearchTabProps = { isOnline: boolean }
 type SearchSnapshot = { sceneId: string; query: string; token: symbol }
 
 export function ResearchTab({ isOnline }: ResearchTabProps) {
-  const { activeNodeId } = useWritingPlaygroundStore()
+  const { activeNodeId, activeNodeType } = useWritingPlaygroundStore()
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<ManuscriptResearchResult[]>([])
   const [searching, setSearching] = useState(false)
@@ -62,12 +62,12 @@ export function ResearchTab({ isOnline }: ResearchTabProps) {
         query_used: snapshot.query,
       })
       setCitedIds((prev) => new Set(prev).add(result.id || result.title))
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error("[ResearchTab] Failed to create manuscript citation", err)
     }
   }
 
-  if (!activeNodeId) {
+  if (!activeNodeId || activeNodeType !== "scene") {
     return (
       <Empty
         image={<BookOpen className="mx-auto h-8 w-8 text-gray-300" />}

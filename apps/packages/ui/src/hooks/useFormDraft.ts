@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { checkStorageBeforeWrite, notifyStorageWrite } from '@/utils/storage-guard'
-import { estimateUtf8ByteLength } from '@/utils/storage-budget'
+import { estimateStorageCost } from '@/utils/storage-budget'
 
 export interface FormDraft<T = Record<string, any>> {
   formData: T
@@ -44,6 +44,8 @@ interface UseFormDraftReturn<T> {
   dismissDraft: () => void
   /** Last save timestamp */
   lastSaved: number | null
+  /** Advisory storage warning from the last save attempt (null if OK) */
+  storageWarning: string | null
 }
 
 export function useFormDraft<T = Record<string, any>>(
@@ -60,6 +62,7 @@ export function useFormDraft<T = Record<string, any>>(
   const [hasDraft, setHasDraft] = useState(false)
   const [draftData, setDraftData] = useState<FormDraft<T> | null>(null)
   const [lastSaved, setLastSaved] = useState<number | null>(null)
+  const [storageWarning, setStorageWarning] = useState<string | null>(null)
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pendingDataRef = useRef<T | null>(null)
   const onDraftFoundRef = useRef(onDraftFound)
@@ -118,7 +121,8 @@ export function useFormDraft<T = Record<string, any>>(
 
       try {
         const serialized = JSON.stringify(draft)
-        const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized), storageKey)
+        const guard = checkStorageBeforeWrite(estimateStorageCost(serialized), storageKey)
+        setStorageWarning(guard.recommendation)
         if (guard.recommendation) {
           console.warn('[useFormDraft]', guard.recommendation)
         }
@@ -176,7 +180,8 @@ export function useFormDraft<T = Record<string, any>>(
     clearDraft,
     applyDraft,
     dismissDraft,
-    lastSaved
+    lastSaved,
+    storageWarning
   }
 }
 

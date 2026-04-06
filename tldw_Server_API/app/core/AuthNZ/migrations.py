@@ -4241,6 +4241,37 @@ def migration_082_harden_admin_webhooks_and_create_admin_settings(conn: sqlite3.
     logger.info("Migration 082: Hardened admin_webhooks schema and created admin_settings")
 
 
+def migration_083_create_org_stt_settings(conn: sqlite3.Connection) -> None:
+    """Create org_stt_settings table for org-scoped STT policy."""
+    logger.info("Migration 083: START org_stt_settings table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_stt_settings (
+            org_id INTEGER PRIMARY KEY,
+            delete_audio_after_success INTEGER NOT NULL DEFAULT 1,
+            audio_retention_hours REAL NOT NULL DEFAULT 0.0,
+            redact_pii INTEGER NOT NULL DEFAULT 0,
+            allow_unredacted_partials INTEGER NOT NULL DEFAULT 0,
+            redact_categories_json TEXT NOT NULL DEFAULT '[]',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_stt_settings_updated_by ON org_stt_settings(updated_by)")
+    conn.commit()
+    logger.info("Migration 083: Created org_stt_settings table")
+
+
+def rollback_083_drop_org_stt_settings(conn: sqlite3.Connection) -> None:
+    """Rollback migration 083 by dropping org_stt_settings."""
+    conn.execute("DROP TABLE IF EXISTS org_stt_settings")
+    conn.commit()
+    logger.info("Rollback 083: Dropped org_stt_settings table")
+
+
 def rollback_081_drop_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
     """Rollback migration 081."""
     conn.execute("DROP TABLE IF EXISTS admin_dependency_health_history")
@@ -4611,6 +4642,12 @@ def get_authnz_migrations() -> list[Migration]:
             82,
             "Harden admin webhooks schema and create admin settings table",
             migration_082_harden_admin_webhooks_and_create_admin_settings,
+        ),
+        Migration(
+            83,
+            "Create org STT settings table",
+            migration_083_create_org_stt_settings,
+            rollback_083_drop_org_stt_settings,
         ),
     ]
 

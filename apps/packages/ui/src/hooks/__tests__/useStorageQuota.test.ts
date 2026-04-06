@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest"
 import {
-  estimateUtf8ByteLength,
+  estimateStorageCost,
   estimateLocalStorageUsageBytes,
   resolveStorageBudgetBytes,
   STORAGE_BUDGET_DEFAULT_MB
@@ -13,15 +13,16 @@ describe("storage-budget utilities", () => {
   })
 
   it("estimates UTF-8 byte length correctly for ASCII", () => {
-    expect(estimateUtf8ByteLength("hello")).toBe(5)
-    expect(estimateUtf8ByteLength("")).toBe(0)
+    expect(estimateStorageCost("hello")).toBe(5)
+    expect(estimateStorageCost("")).toBe(0)
   })
 
-  it("returns string length for localStorage quota estimation", () => {
-    // localStorage uses UTF-16 internally, so str.length is the right proxy
-    expect(estimateUtf8ByteLength("é")).toBe(1)
-    expect(estimateUtf8ByteLength("你")).toBe(1)
-    expect(estimateUtf8ByteLength("abc")).toBe(3)
+  it("returns string length (UTF-16 code units) for localStorage quota estimation", () => {
+    // localStorage uses UTF-16 internally, so str.length (UTF-16 code units)
+    // is the correct proxy — "é" and "你" are each 1 UTF-16 code unit
+    expect(estimateStorageCost("é")).toBe(1)
+    expect(estimateStorageCost("你")).toBe(1)
+    expect(estimateStorageCost("abc")).toBe(3)
   })
 
   it("estimates localStorage usage", () => {

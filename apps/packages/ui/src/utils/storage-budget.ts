@@ -1,5 +1,7 @@
 export const STORAGE_BUDGET_DEFAULT_MB = 5
 
+export const STORAGE_THRESHOLDS = { warning: 0.80, exceeded: 0.95 } as const
+
 const STORAGE_BUDGET_VITE_ENV = "VITE_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
 const STORAGE_BUDGET_NEXT_ENV = "NEXT_PUBLIC_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
 
@@ -8,7 +10,7 @@ const STORAGE_BUDGET_NEXT_ENV = "NEXT_PUBLIC_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB
  * localStorage uses UTF-16 internally, so str.length (UTF-16 code units)
  * is the most accurate and performant proxy for quota consumption.
  */
-export const estimateUtf8ByteLength = (str: string): number => {
+export const estimateStorageCost = (str: string): number => {
   return str.length
 }
 
@@ -36,7 +38,7 @@ export const estimateLocalStorageUsageBytes = (
     if (prefix && !key.startsWith(prefix)) continue
     const value = storage.getItem(key)
     if (value == null) continue
-    totalBytes += estimateUtf8ByteLength(key) + estimateUtf8ByteLength(value)
+    totalBytes += estimateStorageCost(key) + estimateStorageCost(value)
   }
   return totalBytes
 }
