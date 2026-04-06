@@ -5277,9 +5277,9 @@ def get_stt_config() -> dict[str, Any]:
     if not isinstance(cfg, MutableMapping):
         return {}
 
-    stt_section = cfg.get("STT_Settings", {})
+    stt_section = cfg.get("STT_Settings")
     if not isinstance(stt_section, MutableMapping):
-        stt_section = cfg.get("STT-Settings", {})
+        stt_section = cfg.get("STT-Settings")
     return dict(stt_section) if isinstance(stt_section, MutableMapping) else {}
 
 _LOGGER_READY = True

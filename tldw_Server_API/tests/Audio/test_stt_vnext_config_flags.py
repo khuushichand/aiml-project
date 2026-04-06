@@ -174,3 +174,26 @@ def test_config_py_exports_canonical_stt_vnext_section(monkeypatch) -> None:
     assert exported_stt["delete_audio_after_success"] is False
     assert exported_stt["allow_unredacted_partials"] is True
     assert exported_stt["redact_categories"] == ["email", "ssn"]
+
+
+def test_get_stt_config_falls_back_to_legacy_section_name(monkeypatch) -> None:
+    legacy_stt = {
+        "ws_control_v2_enabled": True,
+        "delete_audio_after_success": False,
+        "paused_audio_queue_cap_seconds": 6.5,
+        "overflow_warning_interval_seconds": 8.0,
+        "redact_pii": True,
+    }
+
+    config.clear_config_cache()
+    monkeypatch.setattr(config.loaded_config_data, "_data", {"STT-Settings": legacy_stt}, raising=False)
+    try:
+        exported_stt = config.get_stt_config()
+    finally:
+        config.clear_config_cache()
+
+    assert exported_stt["ws_control_v2_enabled"] is True
+    assert exported_stt["delete_audio_after_success"] is False
+    assert exported_stt["paused_audio_queue_cap_seconds"] == 6.5
+    assert exported_stt["overflow_warning_interval_seconds"] == 8.0
+    assert exported_stt["redact_pii"] is True
