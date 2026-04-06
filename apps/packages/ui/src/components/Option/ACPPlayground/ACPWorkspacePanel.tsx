@@ -200,13 +200,25 @@ export const ACPWorkspacePanel: React.FC = () => {
 
   if (!activeSession?.sshWsUrl) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex h-full items-center justify-center p-4">
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={t(
-            "playground:acp.workspace.unavailable",
-            "Workspace terminal is unavailable for this session."
-          )}
+          description={
+            <div className="space-y-2 text-center">
+              <p>
+                {t(
+                  "playground:acp.workspace.unavailable",
+                  "Workspace terminal is not available for this session."
+                )}
+              </p>
+              <p className="text-xs text-text-muted">
+                {t(
+                  "playground:acp.workspace.sandboxRequired",
+                  "The workspace terminal requires sandbox mode, which runs the agent inside a Docker container with SSH access. To enable it, set [ACP-SANDBOX] enabled = true in config.txt."
+                )}
+              </p>
+            </div>
+          }
         />
       </div>
     )
