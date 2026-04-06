@@ -1,11 +1,137 @@
 import React, { useState, useRef, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Input, Empty, Spin } from "antd"
-import { Send, Square, Bot, User, Wrench, AlertCircle } from "lucide-react"
+import { Send, Square, Bot, User, Wrench, AlertCircle, Copy, Check } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { useACPSessionsStore } from "@/store/acp-sessions"
-import type { ACPUpdate, ACPSessionState } from "@/services/acp/types"
+import type { ACPUpdate, ACPSessionState, ParsedUpdateMessage } from "@/services/acp/types"
 
 const { TextArea } = Input
+
+// ---------------------------------------------------------------------------
+// CopyButton - hover-visible clipboard copy for messages
+// ---------------------------------------------------------------------------
+const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, className }) => {
+  const [copied, setCopied] = React.useState(false)
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`rounded p-1 text-text-muted transition-colors hover:bg-surface2 hover:text-text ${className || ""}`}
+      title="Copy"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ToolArgumentsDisplay - smart rendering of tool call arguments
+// ---------------------------------------------------------------------------
+const ToolArgumentsDisplay: React.FC<{ args: Record<string, unknown> }> = ({ args }) => {
+  const entries = Object.entries(args)
+  const isSimple =
+    entries.length > 0 &&
+    entries.length <= 10 &&
+    entries.every(([, v]) => v === null || typeof v !== "object")
+
+  if (isSimple) {
+    return (
+      <div className="rounded bg-surface2 p-2">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          {entries.map(([key, value]) => (
+            <React.Fragment key={key}>
+              <dt className="font-medium text-text-muted">{key}</dt>
+              <dd className="truncate font-mono text-text">{String(value ?? "")}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative group/tool rounded-lg bg-surface2 p-2">
+      <pre className="overflow-x-auto text-xs text-text-muted">
+        {JSON.stringify(args, null, 2)}
+      </pre>
+      <CopyButton
+        text={JSON.stringify(args, null, 2)}
+        className="absolute right-2 top-2 opacity-0 group-hover/tool:opacity-100"
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// parseUpdateMessage - type-safe message parsing from raw ACP updates
+// ---------------------------------------------------------------------------
+export function parseUpdateMessage(
+  update: ACPUpdate,
+  cancelledLabel: string,
+): ParsedUpdateMessage {
+  const data = update.data as Record<string, unknown>
+
+  switch (update.type) {
+    case "text":
+    case "assistant_text":
+      return {
+        role: "assistant",
+        content: String(data.text || data.content || ""),
+      }
+
+    case "user_text":
+      return {
+        role: "user",
+        content: String(data.text || data.content || ""),
+      }
+
+    case "tool_call":
+      return {
+        role: "tool",
+        toolName: String(data.name || data.tool || "unknown"),
+        toolArgs: (data.arguments || data.input || {}) as Record<string, unknown>,
+      }
+
+    case "tool_result":
+      return {
+        role: "tool_result",
+        toolName: String(data.name || data.tool || ""),
+        result: data.result || data.output || "",
+      }
+
+    case "error":
+      return {
+        role: "error",
+        content: String(data.message || data.error || "Unknown error"),
+      }
+
+    case "cancelled":
+      return {
+        role: "system",
+        content: cancelledLabel,
+      }
+
+    default:
+      return {
+        role: "system",
+        content: JSON.stringify(data, null, 2),
+      }
+  }
+}
 
 interface ACPChatPanelProps {
   state: ACPSessionState
@@ -189,70 +315,23 @@ interface UpdateMessageProps {
 const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
   const { t } = useTranslation(["playground"])
 
-  // Determine the message type and content
-  const getMessageContent = () => {
-    const data = update.data as Record<string, unknown>
-
-    switch (update.type) {
-      case "text":
-      case "assistant_text":
-        return {
-          role: "assistant" as const,
-          content: String(data.text || data.content || ""),
-        }
-
-      case "user_text":
-        return {
-          role: "user" as const,
-          content: String(data.text || data.content || ""),
-        }
-
-      case "tool_call":
-        return {
-          role: "tool" as const,
-          toolName: String(data.name || data.tool || "unknown"),
-          toolArgs: data.arguments || data.input || {},
-        }
-
-      case "tool_result":
-        return {
-          role: "tool_result" as const,
-          toolName: String(data.name || data.tool || ""),
-          result: data.result || data.output || "",
-        }
-
-      case "error":
-        return {
-          role: "error" as const,
-          content: String(data.message || data.error || "Unknown error"),
-        }
-
-      case "cancelled":
-        return {
-          role: "system" as const,
-          content: t("playground:acp.operationCancelled", "Operation cancelled"),
-        }
-
-      default:
-        // Generic update
-        return {
-          role: "system" as const,
-          content: JSON.stringify(data, null, 2),
-        }
-    }
-  }
-
-  const message = getMessageContent()
+  const message = parseUpdateMessage(
+    update,
+    t("playground:acp.operationCancelled", "Operation cancelled"),
+  )
 
   // User message
   if (message.role === "user") {
     return (
-      <div className="flex gap-3">
+      <div className="group flex gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <User className="h-4 w-4 text-primary" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-text-muted">You</div>
+          <div className="flex items-center gap-1">
+            <div className="text-xs font-medium text-text-muted">You</div>
+            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
+          </div>
           <div className="mt-1 whitespace-pre-wrap text-text">
             {message.content}
           </div>
@@ -264,14 +343,19 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
   // Assistant message
   if (message.role === "assistant") {
     return (
-      <div className="flex gap-3">
+      <div className="group flex gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-success/10">
           <Bot className="h-4 w-4 text-success" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-text-muted">Agent</div>
-          <div className="mt-1 whitespace-pre-wrap text-text">
-            {message.content}
+          <div className="flex items-center gap-1">
+            <div className="text-xs font-medium text-text-muted">Agent</div>
+            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
+          </div>
+          <div className="mt-1 text-text prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-surface2 [&_pre]:p-3 [&_pre]:rounded-lg [&_code]:bg-surface2 [&_code]:px-1 [&_code]:rounded">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
           </div>
         </div>
       </div>
@@ -280,19 +364,21 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
 
   // Tool call
   if (message.role === "tool") {
+    const argsText = JSON.stringify(message.toolArgs, null, 2)
     return (
-      <div className="flex gap-3">
+      <div className="group flex gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-info/10">
           <Wrench className="h-4 w-4 text-info" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-text-muted">
-            Tool: {message.toolName}
+          <div className="flex items-center gap-1">
+            <div className="text-xs font-medium text-text-muted">
+              Tool: {message.toolName}
+            </div>
+            <CopyButton text={argsText} className="opacity-0 group-hover:opacity-100" />
           </div>
-          <div className="mt-1 rounded-lg bg-surface2 p-2">
-            <pre className="overflow-x-auto text-xs text-text-muted">
-              {JSON.stringify(message.toolArgs, null, 2)}
-            </pre>
+          <div className="mt-1">
+            <ToolArgumentsDisplay args={message.toolArgs} />
           </div>
         </div>
       </div>
@@ -301,20 +387,25 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
 
   // Tool result
   if (message.role === "tool_result") {
+    const resultText =
+      typeof message.result === "string"
+        ? message.result
+        : JSON.stringify(message.result, null, 2)
     return (
-      <div className="flex gap-3">
+      <div className="group flex gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-info/10">
           <Wrench className="h-4 w-4 text-info" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-text-muted">
-            Result: {message.toolName}
+          <div className="flex items-center gap-1">
+            <div className="text-xs font-medium text-text-muted">
+              Result: {message.toolName}
+            </div>
+            <CopyButton text={resultText} className="opacity-0 group-hover:opacity-100" />
           </div>
           <div className="mt-1 rounded-lg bg-surface2 p-2">
             <pre className="overflow-x-auto text-xs text-text-muted">
-              {typeof message.result === "string"
-                ? message.result
-                : JSON.stringify(message.result, null, 2)}
+              {resultText}
             </pre>
           </div>
         </div>
@@ -325,12 +416,15 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
   // Error message
   if (message.role === "error") {
     return (
-      <div className="flex gap-3">
+      <div className="group flex gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-error/10">
           <AlertCircle className="h-4 w-4 text-error" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-error">Error</div>
+          <div className="flex items-center gap-1">
+            <div className="text-xs font-medium text-error">Error</div>
+            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
+          </div>
           <div className="mt-1 whitespace-pre-wrap text-error">
             {message.content}
           </div>
