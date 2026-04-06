@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { Modal, Button, Checkbox, Tag, Progress } from "antd"
+import { Button, Checkbox, Tag, Progress } from "antd"
 import {
   Shield,
   CheckCircle,
@@ -88,15 +88,7 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
   )
 
   return (
-    <Modal
-      open={true}
-      closable={false}
-      maskClosable={false}
-      footer={null}
-      width={500}
-      centered
-      className="acp-permission-modal"
-    >
+    <div className="fixed bottom-4 right-4 z-50 w-[420px] max-h-[80vh] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl p-5">
       <div className="space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">
@@ -302,6 +294,6 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
           </Button>
         </div>
       </div>
-    </Modal>
+    </div>
   )
 }
