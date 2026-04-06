@@ -4,11 +4,11 @@
 
 This design defines a lightweight SaaS product for users who want to ingest video URLs, read transcripts, generate summaries, and chat against transcript content without entering the full `tldw` product surface.
 
-The product should ship as a browser extension plus a reduced hosted web experience backed by the existing `tldw_server` platform. The extension is the discovery and launch surface. The hosted web app is the primary workspace.
+The product should ship as a browser extension plus a reduced hosted web experience backed by the existing `tldw-hosted` / `tldw_server` platform. The extension is the discovery and launch surface. The hosted web app is the primary workspace.
 
-V1 should reuse the existing `tldw` backend, auth, and billing foundations where possible. It should not introduce a separate product backend or a second independent frontend shell unless later demand justifies it.
+V1 should reuse the existing hosted backend, auth, and billing foundations where possible, but the product frontend should live in a separate private project outside the open-source `tldw_server` repository.
 
-V1 should also treat trial management, anonymous identity, and lightweight upgrade flow as explicit delivery scope rather than assuming those SaaS pieces already exist in fully productized form.
+V1 should also treat trial management, anonymous identity, lightweight upgrade flow, and repo separation as explicit delivery scope rather than assuming those SaaS pieces already exist in fully productized form.
 
 ## Goals
 
@@ -19,6 +19,8 @@ V1 should also treat trial management, anonymous identity, and lightweight upgra
   - `Summary`
   - `Chat`
 - Reuse the existing `tldw` backend for ingestion, transcript retrieval, summarization, and chat.
+- Keep the store-facing extension and hosted app in a separate private project so the product is not directly packaged as part of the open-source monorepo.
+- Reuse the existing app through an upstream sync plus private patch-overlay model rather than rebuilding the frontend from scratch.
 - Support a limited anonymous trial that demonstrates value before requiring a paid subscription.
 - Keep the extension small and opinionated while allowing the hosted app to accept any URL the backend can ingest.
 
@@ -30,11 +32,13 @@ V1 should also treat trial management, anonymous identity, and lightweight upgra
 - Building a rich extension-side history manager.
 - Exposing all ingestion, RAG, or model configuration knobs in the lightweight experience.
 - Restricting the hosted product only to YouTube when the current backend can ingest broader sources.
+- Shipping the store-facing product from `apps/extension` or `apps/tldw-frontend` inside the open-source repo.
 
 ## Requirements Confirmed With User
 
 - The product should function as a SaaS-oriented frontend distributed via the extension store.
 - The backend should be the existing hosted `tldw` project.
+- The store-facing product should live in a new project folder outside `tldw_server` so it is not directly associated with the open-source repo.
 - The extension UI should stay limited to:
   - quick ingest
   - simplified chat
@@ -73,6 +77,7 @@ V1 should also treat trial management, anonymous identity, and lightweight upgra
   - chat via `/api/v1/chat/completions`
 - The repo already includes billing primitives and subscription status surfaces, but SaaS readiness docs still identify missing trial-management and metering work.
 - A recent extension design already established the pattern of using the extension as a focused workflow surface rather than a full product clone in [`/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/superpowers/specs/2026-04-03-browser-extension-web-clipper-design.md`](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/superpowers/specs/2026-04-03-browser-extension-web-clipper-design.md).
+- The existing monorepo should be treated as implementation reference only, not the delivery location for this product frontend.
 
 ## Design Constraints Discovered During Review
 
@@ -86,6 +91,23 @@ The repo contains billing primitives, but not fully finished trial-management be
 - basic trial analytics or at least durable trial state
 
 These are not optional follow-up polish items.
+
+### Repo Separation Constraint
+
+The user wants the extension and hosted app to live in a separate project outside `tldw_server`. That means the current open-source monorepo can inform implementation patterns, but it should not be the shipping home for the store-facing product.
+
+Any new product shell, extension package, and upgrade surfaces should therefore be planned as a private sibling project that consumes the hosted backend APIs.
+
+### Overlay Maintenance Constraint
+
+The user wants to reuse the existing app rather than build an unrelated private frontend. That makes an upstream-sync plus patch-overlay model preferable to a greenfield rewrite.
+
+The private product should therefore:
+
+- sync selected frontend surfaces from the existing app
+- keep product-specific changes in a clearly bounded private patch layer
+- minimize deep invasive divergence where possible
+- treat upstream sync cost as part of the architecture, not an afterthought
 
 ### Launcher State Constraint
 
@@ -135,20 +157,21 @@ Cons:
 - Requires careful UX discipline to avoid feeling like a trimmed-down admin screen
 - Branding separation is partial rather than absolute
 
-### Approach 2: Separate Branded Frontend On The Same Backend
+### Approach 2: Private Overlay Repo On Top Of The Existing App
 
-Create a dedicated hosted frontend for the extension product while still using the same backend APIs and account system.
+Create a dedicated private product repo that imports or syncs selected frontend surfaces from the existing app, then applies a private patch layer for branding, lightweight routing, extension behavior, and upgrade flow.
 
 Pros:
 
 - Cleanest product story for extension-store users
-- Full control over onboarding and page structure
+- Reuses proven frontend patterns and components instead of starting from zero
+- Keeps store-facing delivery separate from the open-source repo
 
 Cons:
 
-- Higher frontend maintenance cost
-- Duplicates app shell, routing, and product logic early
-- Slower V1
+- Requires an explicit sync strategy and patch-drift discipline
+- Still adds maintenance overhead compared with shipping directly from the existing app
+- Poor boundaries could turn the private repo into a messy long-lived fork
 
 ### Approach 3: Extension-Heavy Product
 
@@ -167,9 +190,9 @@ Cons:
 
 ## Recommendation
 
-Use **Approach 1**.
+Use **Approach 2**.
 
-Build the product as a branded lightweight mode inside the existing hosted `tldw` app. The extension stays intentionally narrow: detect supported pages, launch ingestion, surface shallow status, and hand the user into the hosted transcript workspace.
+Build the product as a separate private overlay repo that reuses selected existing app surfaces through sync plus a bounded private patch layer, while still relying on the hosted backend APIs, auth, and billing foundations. The extension stays intentionally narrow: detect supported pages, launch ingestion, surface shallow status, and hand the user into the hosted transcript workspace.
 
 ## Product Architecture
 
@@ -197,19 +220,19 @@ It should not own full transcript reading, durable chat history, or broad media-
 
 The hosted app is the primary workspace.
 
-This should live inside the existing `tldw` app shell as a dedicated branded mode with a reduced route set and reduced navigation density. The core screen is a compact video workspace with three tabs:
+This should live in a separate private hosted app repo, not inside the open-source `tldw` app shell. The core screen is a compact video workspace with three tabs:
 
 - `Transcript`
 - `Summary`
 - `Chat`
 
-This mode should hide or de-emphasize unrelated platform areas while reusing the current app infrastructure for auth, sessions, and backend communication.
+This product should keep a narrow information architecture and avoid exposing the full open-source app surface. It should reuse selected upstream UI patterns and components where they reduce implementation cost, but product-specific behavior should stay in the private patch layer.
 
 ### Backend Surface
 
 The backend remains the existing `tldw_server` platform.
 
-V1 should compose existing capabilities rather than invent a separate product backend. V1 should add one thin orchestration contract to normalize:
+V1 should compose existing capabilities rather than invent a separate open-source backend feature set. V1 should add one thin orchestration contract in the backend and consume it from the private overlay product to normalize:
 
 - submit URL for ingest
 - query existing ingest status
@@ -469,11 +492,13 @@ Implementation should verify the following flows:
 
 These do not block the design, but they must be answered in planning:
 
-- Should lightweight mode live under a dedicated route namespace, a feature flag, or both?
+- What should the new private overlay project be named and where should it live as a sibling to `tldw_server`?
+- Which frontend paths should be synced from the existing app versus replaced by private-only implementations?
+- Will the overlay use a fork, vendored sync, or scripted copy-plus-patch workflow?
 - Should anonymous trial data be claimable into a newly created account, or should it expire without migration?
 - What anti-abuse strategy is acceptable for anonymous YouTube-only trials in the hosted SaaS environment?
-- Should lightweight mode use an existing checkout surface with branding changes, or a narrower dedicated upgrade wrapper over current billing primitives?
+- Should the private hosted frontend use an existing checkout surface with branding changes, or a narrower dedicated upgrade wrapper over current billing primitives?
 
 ## Decision
 
-Ship V1 as a branded lightweight mode of the existing `tldw` hosted product, launched from a focused extension workflow and backed by the current ingestion, transcript, summary, chat, auth, and billing foundations, with explicit V1 delivery scope for trial management, launcher state handling, orchestration, and privacy/retention behavior.
+Ship V1 as a separate private overlay product repo with its own hosted frontend and extension, backed by the existing `tldw` hosted ingestion, transcript, summary, chat, auth, and billing foundations, with explicit V1 delivery scope for trial management, launcher state handling, orchestration, privacy/retention behavior, repo separation, and upstream sync/patch-overlay maintenance.
