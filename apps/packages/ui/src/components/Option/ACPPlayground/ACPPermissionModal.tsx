@@ -205,7 +205,7 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
               {currentPermission.policy_snapshot_fingerprint && (
                 <div>
                   <span className="font-medium text-text">
-                    {t("playground:acp.snapshotFingerprint", "Snapshot")}:{" "}
+                    {t("playground:acp.snapshotFingerprint", "Policy version")}:{" "}
                   </span>
                   <span className="font-mono">
                     {currentPermission.policy_snapshot_fingerprint.slice(0, 12)}
@@ -214,10 +214,29 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
               )}
             </div>
             {showPolicyDetails && currentPermission.provenance_summary && (
-              <div className="mt-3 rounded bg-surface2 p-2">
-                <pre className="overflow-auto text-xs text-text">
-                  {JSON.stringify(currentPermission.provenance_summary, null, 2)}
-                </pre>
+              <div className="mt-3 rounded bg-surface2 p-2 space-y-1">
+                {typeof currentPermission.provenance_summary === "object" ? (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                    {Object.entries(currentPermission.provenance_summary as Record<string, unknown>)
+                      .filter(([, v]) => v !== null && v !== undefined && v !== "")
+                      .map(([key, value]) => (
+                        <React.Fragment key={key}>
+                          <dt className="font-medium text-text capitalize">
+                            {key.replace(/_/g, " ")}
+                          </dt>
+                          <dd className="text-text-muted font-mono truncate">
+                            {typeof value === "string" && value.length > 40
+                              ? `${value.slice(0, 40)}...`
+                              : String(value)}
+                          </dd>
+                        </React.Fragment>
+                      ))}
+                  </dl>
+                ) : (
+                  <pre className="overflow-auto text-xs text-text">
+                    {JSON.stringify(currentPermission.provenance_summary, null, 2)}
+                  </pre>
+                )}
               </div>
             )}
           </div>
