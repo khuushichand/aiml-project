@@ -38,6 +38,19 @@ _MAX_OCR_INLINE = 1_500
 _MAX_VLM_INLINE = 1_000
 _MAX_MACHINE_INLINE = 2_500
 _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+_ALLOWED_ATTACHMENT_MEDIA_TYPES: frozenset[str] = frozenset({
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "text/plain",
+    "text/html",
+    "text/markdown",
+    "text/csv",
+    "application/pdf",
+    "application/json",
+})
 _FULL_EXTRACT_SPILLOVER_THRESHOLD = 20_000
 _TRUNCATION_MARKER = "Truncated. Full extract attached."
 _ENRICHMENT_SECTION_START = "<!-- web-clipper-enrichment:start -->"
@@ -569,6 +582,13 @@ class WebClipperService:
         except ValueError as exc:
             raise InputError("Invalid attachment path.") from exc  # noqa: TRY003
 
+        resolved_media_type = attachment.media_type or mimetypes.guess_type(safe_file_name)[0]
+        if resolved_media_type is None or resolved_media_type not in _ALLOWED_ATTACHMENT_MEDIA_TYPES:
+            raise InputError(  # noqa: TRY003
+                f"Attachment media type '{resolved_media_type}' is not allowed. "
+                f"Allowed types: {', '.join(sorted(_ALLOWED_ATTACHMENT_MEDIA_TYPES))}."
+            )
+
         if attachment.content_base64:
             try:
                 raw_bytes = base64.b64decode(attachment.content_base64, validate=True)
@@ -588,7 +608,7 @@ class WebClipperService:
             metadata = {
                 "slot": attachment.slot,
                 "original_file_name": attachment.file_name or safe_file_name,
-                "content_type": attachment.media_type or mimetypes.guess_type(safe_file_name)[0],
+                "content_type": resolved_media_type,
                 "size_bytes": len(raw_bytes),
                 "uploaded_at": uploaded_at.isoformat(),
                 "source_url": attachment.source_url,

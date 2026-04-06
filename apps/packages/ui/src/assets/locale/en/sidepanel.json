@@ -123,6 +123,8 @@
     "cancelLabel": "Cancel",
     "savingLabel": "Saving...",
     "saveFailed": "The clip could not be saved.",
+    "enrichmentFailed": "The clip was saved, but clip analysis could not be stored.",
+    "analyzeNowLabel": "Analyze now",
     "noDraftTitle": "No clip is ready to review yet.",
     "noDraftDescription": "Capture a page from the browser context menu, then return here to file it.",
     "unavailableTitle": "Web clipper unavailable",

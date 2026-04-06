@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -71,14 +72,14 @@ async def save_web_clip(
     await _check_rate_limit(rate_limiter=rate_limiter, current_user=current_user, scope="web_clipper.save")
     service = WebClipperService(db=db, user_id=current_user.id)
     try:
-        return service.save_clip(payload)
+        return await asyncio.to_thread(service.save_clip, payload)
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except _WEB_CLIPPER_ENDPOINT_EXCEPTIONS as exc:
         logger.error("Web clipper save failed for clip_id {}: {}", payload.clip_id, exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
 
 
 @router.get("/{clip_id}", response_model=WebClipperStatusResponse, summary="Get saved clip state")
@@ -93,14 +94,14 @@ async def get_web_clip_status(
     await _check_rate_limit(rate_limiter=rate_limiter, current_user=current_user, scope="web_clipper.status")
     service = WebClipperService(db=db, user_id=current_user.id)
     try:
-        return service.get_clip_status(clip_id)
+        return await asyncio.to_thread(service.get_clip_status, clip_id)
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except _WEB_CLIPPER_ENDPOINT_EXCEPTIONS as exc:
         logger.error("Web clipper status failed for clip_id {}: {}", clip_id, exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
 
 
 @router.post(
@@ -120,11 +121,11 @@ async def persist_web_clip_enrichment(
     await _check_rate_limit(rate_limiter=rate_limiter, current_user=current_user, scope="web_clipper.enrichment")
     service = WebClipperService(db=db, user_id=current_user.id)
     try:
-        return service.persist_enrichment(clip_id, payload)
+        return await asyncio.to_thread(service.persist_enrichment, clip_id, payload)
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except _WEB_CLIPPER_ENDPOINT_EXCEPTIONS as exc:
         logger.error("Web clipper enrichment failed for clip_id {}: {}", clip_id, exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
