@@ -171,8 +171,8 @@ class ManuscriptSceneResponse(BaseModel):
     project_id: str
     title: str
     sort_order: float
-    content: dict[str, Any] = Field(default_factory=dict)
-    content_plain: str = ""
+    content_json: str | None = None
+    content_plain: str | None = None
     synopsis: str | None = None
     word_count: int = 0
     pov_character_id: str | None = None
