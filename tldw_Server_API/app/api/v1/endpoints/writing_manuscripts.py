@@ -61,6 +61,8 @@ from tldw_Server_API.app.api.v1.schemas.writing_manuscript_schemas import (
     SceneSummary,
     SceneWorldInfoLink,
     SceneWorldInfoLinkResponse,
+    CHARACTER_ROLES,
+    WORLD_INFO_KINDS,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -967,7 +969,7 @@ async def create_character(
 )
 async def list_characters(
     project_id: str,
-    role: str | None = Query(None, description="Filter by role"),
+    role: CHARACTER_ROLES | None = Query(None, description="Filter by role"),
     cast_group: str | None = Query(None, description="Filter by cast group"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
@@ -1191,7 +1193,7 @@ async def create_world_info(
 )
 async def list_world_info(
     project_id: str,
-    kind: str | None = Query(None, description="Filter by kind"),
+    kind: WORLD_INFO_KINDS | None = Query(None, description="Filter by kind"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.list")),
 ) -> list[ManuscriptWorldInfoResponse]:
@@ -1467,6 +1469,62 @@ async def list_plot_events(
         return [ManuscriptPlotEventResponse(**e) for e in events]
     except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "manuscript plot events")
+
+
+@router.patch(
+    "/plot-events/{plot_event_id}",
+    response_model=ManuscriptPlotEventResponse,
+    summary="Update a plot event",
+    tags=["manuscripts"],
+)
+async def update_plot_event(
+    plot_event_id: str,
+    payload: ManuscriptPlotEventUpdate,
+    expected_version: int = Header(..., description="Expected version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
+) -> ManuscriptPlotEventResponse:
+    """Update a plot event with optimistic locking."""
+    update_data = payload.model_dump(exclude_none=True)
+    if "title" in update_data:
+        update_data["title"] = update_data["title"].strip()
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
+        )
+    try:
+        helper = _get_helper(db)
+        helper.update_plot_event(plot_event_id, update_data, expected_version)
+        event = helper.get_plot_event(plot_event_id)
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Plot event not found"
+            )
+        return ManuscriptPlotEventResponse(**event)
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "manuscript plot event")
+
+
+@router.delete(
+    "/plot-events/{plot_event_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete a plot event",
+    tags=["manuscripts"],
+)
+async def delete_plot_event(
+    plot_event_id: str,
+    expected_version: int = Header(..., description="Expected version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    _: None = Depends(rbac_rate_limit("writing.manuscripts.delete")),
+) -> Response:
+    """Soft-delete a plot event."""
+    try:
+        helper = _get_helper(db)
+        helper.soft_delete_plot_event(plot_event_id, expected_version)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
+        _handle_db_errors(exc, "manuscript plot event")
 
 
 # ===================================================================

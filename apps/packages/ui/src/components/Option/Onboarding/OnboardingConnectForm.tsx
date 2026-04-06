@@ -886,7 +886,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   )
 
   const handleOpenIngestFlow = useCallback(async () => {
-    await actions.setUserPersona("researcher")
+    try {
+      await actions.setUserPersona("researcher")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
     try {
       const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
       await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
@@ -897,7 +901,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   }, [actions, finishAndNavigate])
 
   const handleResearchGetStarted = useCallback(async () => {
-    await actions.setUserPersona("researcher")
+    try {
+      await actions.setUserPersona("researcher")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
     try {
       const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
       await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
@@ -921,7 +929,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   }, [finishAndNavigate])
 
   const handleOpenChatFlow = useCallback(async () => {
-    await actions.setUserPersona("explorer")
+    try {
+      await actions.setUserPersona("explorer")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
     // Explorer persona sees all features — no shortcut filtering needed
     await handleGoToChat()
   }, [actions, handleGoToChat])
@@ -931,7 +943,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   }, [finishAndNavigate])
 
   const handleOpenFamilyFlow = useCallback(async () => {
-    await actions.setUserPersona("family")
+    try {
+      await actions.setUserPersona("family")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
     try {
       const familyShortcuts = getDefaultShortcutsForPersona("family")
       await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, familyShortcuts)

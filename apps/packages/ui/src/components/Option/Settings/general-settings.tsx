@@ -408,7 +408,7 @@ export const GeneralSettings = () => {
             <a
               href="https://github.com/rmusser01/tldw_server"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="inline-flex items-center rounded border border-border bg-surface2 px-2 py-1 text-xs text-primary hover:bg-surface3"
             >
               {t("generalSettings.extensionPromo.cta", "Learn More")}

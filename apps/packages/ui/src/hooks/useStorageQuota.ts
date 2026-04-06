@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { estimateLocalStorageUsageBytes, resolveStorageBudgetBytes } from "@/utils/storage-budget"
+import { estimateLocalStorageUsageBytes, resolveStorageBudgetBytes, STORAGE_THRESHOLDS } from "@/utils/storage-budget"
 import { STORAGE_QUOTA_REFRESH_EVENT } from "@/store/storage-quota-events"
 import { WORKSPACE_STORAGE_QUOTA_EVENT, WORKSPACE_STORAGE_KEY } from "@/store/workspace-events"
 
@@ -15,15 +15,9 @@ export type StorageQuotaState = {
   refresh: () => void
 }
 
-/** Workspace localStorage key prefix — the 5MB budget applies to these keys only. */
-const THRESHOLDS = {
-  warning: 0.80,
-  exceeded: 0.95
-}
-
 export const resolveLevel = (ratio: number): StorageQuotaLevel => {
-  if (ratio >= THRESHOLDS.exceeded) return "exceeded"
-  if (ratio >= THRESHOLDS.warning) return "warning"
+  if (ratio >= STORAGE_THRESHOLDS.exceeded) return "exceeded"
+  if (ratio >= STORAGE_THRESHOLDS.warning) return "warning"
   return "ok"
 }
 
@@ -69,7 +63,7 @@ export function useStorageQuota(): StorageQuotaState {
   const availableBytes = Math.max(budgetBytes - usedBytes, 0)
 
   const canWrite = useCallback(
-    (estimatedBytes: number) => usedBytes + estimatedBytes < budgetBytes * THRESHOLDS.exceeded,
+    (estimatedBytes: number) => usedBytes + estimatedBytes < budgetBytes * STORAGE_THRESHOLDS.exceeded,
     [usedBytes, budgetBytes]
   )
 

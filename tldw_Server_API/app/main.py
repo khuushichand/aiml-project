@@ -1662,6 +1662,23 @@ async def lifespan(app: FastAPI):
         logger.exception(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
         raise
 
+    # Startup: Validate ACP runner configuration (non-fatal warnings)
+    try:
+        if route_enabled("acp", default_stable=False):
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import (
+                load_acp_runner_config as _load_acp_cfg,
+                validate_acp_config as _validate_acp_cfg,
+            )
+
+            _acp_cfg = _load_acp_cfg()
+            _acp_warnings = _validate_acp_cfg(_acp_cfg)
+            for _acp_w in _acp_warnings:
+                logger.warning("ACP config: {}", _acp_w)
+            if not _acp_warnings:
+                logger.info("App Startup: ACP runner configuration validated")
+    except _STARTUP_GUARD_EXCEPTIONS as _acp_val_err:
+        logger.debug("App Startup: ACP config validation skipped: {}", _acp_val_err)
+
     # Startup: Validate Postgres content backend when enabled
     try:
         from tldw_Server_API.app.core.DB_Management.DB_Manager import (

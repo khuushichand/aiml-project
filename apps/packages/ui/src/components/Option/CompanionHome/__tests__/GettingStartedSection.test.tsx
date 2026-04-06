@@ -41,12 +41,12 @@ describe("GettingStartedSection", () => {
     ]
     mockMissionCards.allComplete = true
     const { container } = render(<MemoryRouter><GettingStartedSection /></MemoryRouter>)
-    expect(container.innerHTML).toBe("")
+    expect(container).toBeEmptyDOMElement()
   })
 
   it("renders nothing when no cards", () => {
     const { container } = render(<MemoryRouter><GettingStartedSection /></MemoryRouter>)
-    expect(container.innerHTML).toBe("")
+    expect(container).toBeEmptyDOMElement()
   })
 
   it("renders cards when available", () => {

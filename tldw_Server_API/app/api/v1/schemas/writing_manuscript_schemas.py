@@ -288,7 +288,8 @@ class ManuscriptSearchResponse(BaseModel):
 # Character
 # ---------------------------------------------------------------------------
 
-_CHARACTER_ROLES = Literal["protagonist", "antagonist", "supporting", "minor", "mentioned"]
+CHARACTER_ROLES = Literal["protagonist", "antagonist", "supporting", "minor", "mentioned"]
+_CHARACTER_ROLES = CHARACTER_ROLES
 
 
 class ManuscriptCharacterCreate(BaseModel):
@@ -383,7 +384,8 @@ class ManuscriptRelationshipResponse(BaseModel):
 # World Info
 # ---------------------------------------------------------------------------
 
-_WORLD_INFO_KINDS = Literal["location", "item", "faction", "concept", "event", "custom"]
+WORLD_INFO_KINDS = Literal["location", "item", "faction", "concept", "event", "custom"]
+_WORLD_INFO_KINDS = WORLD_INFO_KINDS
 
 
 class ManuscriptWorldInfoCreate(BaseModel):
@@ -534,6 +536,7 @@ class ManuscriptPlotHoleUpdate(BaseModel):
     scene_id: str | None = Field(None, description="Associated scene ID")
     chapter_id: str | None = Field(None, description="Associated chapter ID")
     plot_line_id: str | None = Field(None, description="Associated plot line ID")
+    detected_by: _PLOT_HOLE_DETECTED_BY | None = Field(None, description="Detection method")
 
 
 class ManuscriptPlotHoleResponse(BaseModel):
