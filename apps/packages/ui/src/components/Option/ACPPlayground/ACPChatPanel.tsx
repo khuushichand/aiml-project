@@ -74,7 +74,17 @@ export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
       <div className="flex h-full items-center justify-center">
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={t("playground:acp.selectOrCreate", "Select or create a session to start")}
+          description={
+            <div className="space-y-2 text-sm text-text-muted">
+              <p>{t("playground:acp.selectOrCreate", "Select or create a session to start")}</p>
+              <p>
+                {t(
+                  "playground:acp.selectOrCreateHelp",
+                  "ACP connects you to AI coding agents like Claude Code. Create a session, point it at a project directory, and start prompting."
+                )}
+              </p>
+            </div>
+          }
         />
       </div>
     )
