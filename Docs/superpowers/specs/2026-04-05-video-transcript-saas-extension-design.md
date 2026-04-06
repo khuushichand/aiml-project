@@ -8,6 +8,8 @@ The product should ship as a browser extension plus a reduced hosted web experie
 
 V1 should reuse the existing `tldw` backend, auth, and billing foundations where possible. It should not introduce a separate product backend or a second independent frontend shell unless later demand justifies it.
 
+V1 should also treat trial management, anonymous identity, and lightweight upgrade flow as explicit delivery scope rather than assuming those SaaS pieces already exist in fully productized form.
+
 ## Goals
 
 - Offer a browser-store-distributed entry point for transcript-based video analysis.
@@ -52,6 +54,9 @@ V1 should reuse the existing `tldw` backend, auth, and billing foundations where
   - `Chat`
 - V1 ingestion scope should remain broad in the hosted app:
   - any URL the current backend can ingest
+- Anonymous trial should stay narrower than the signed-in product:
+  - anonymous trial is YouTube-only
+  - broader URL ingest is available after sign-in or in the fuller hosted app flow
 - The preferred product direction is:
   - use the existing `tldw` app/auth/billing foundations
   - apply custom branding and labeling for the lightweight mode
@@ -66,7 +71,49 @@ V1 should reuse the existing `tldw` backend, auth, and billing foundations where
   - transcript/audio APIs
   - transcript-grounded retrieval via `/api/v1/rag/search`
   - chat via `/api/v1/chat/completions`
+- The repo already includes billing primitives and subscription status surfaces, but SaaS readiness docs still identify missing trial-management and metering work.
 - A recent extension design already established the pattern of using the extension as a focused workflow surface rather than a full product clone in [`/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/superpowers/specs/2026-04-03-browser-extension-web-clipper-design.md`](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/superpowers/specs/2026-04-03-browser-extension-web-clipper-design.md).
+
+## Design Constraints Discovered During Review
+
+### Trial Management Constraint
+
+The repo contains billing primitives, but not fully finished trial-management behavior for a hosted SaaS funnel. V1 therefore must explicitly include:
+
+- anonymous trial identity
+- trial session accounting
+- upgrade conversion boundary
+- basic trial analytics or at least durable trial state
+
+These are not optional follow-up polish items.
+
+### Launcher State Constraint
+
+The extension action set only works if each action has deterministic behavior across backend states. `Ingest`, `Open transcript`, and `Quick chat` must each define behavior for:
+
+- not yet ingested
+- ingest in progress
+- transcript ready
+- transcript failed
+- trial exhausted
+
+Without that matrix, the launcher will produce dead-end or inconsistent flows.
+
+### Anonymous Scope Constraint
+
+Allowing anonymous users to submit any backend-ingestable URL expands abuse surface and weakens the store-facing product story. Anonymous trial should stay narrowly scoped to YouTube in V1, while signed-in users can access broader URL ingest.
+
+### Quota Debit Constraint
+
+The product uses a session-based trial quota rather than per-action quotas. That only works if the debit event is defined precisely. V1 must define when a trial session is consumed and when retries or reopen flows do not consume additional quota.
+
+### Orchestration Contract Constraint
+
+The launcher and lightweight workspace both need one canonical answer to: "What is the state of this source for this identity?" That makes a thin backend orchestration contract effectively required for V1, even if it is implemented as a narrow adapter over existing APIs.
+
+### Privacy And Retention Constraint
+
+A browser extension that sends video URLs and transcript-derived content to a hosted backend needs an explicit user-facing privacy and retention policy. V1 must define what is stored for anonymous users, how long it is retained, and whether trial data can be attached to a later paid account.
 
 ## Approaches Considered
 
@@ -160,12 +207,13 @@ This mode should hide or de-emphasize unrelated platform areas while reusing the
 
 The backend remains the existing `tldw_server` platform.
 
-V1 should compose existing capabilities rather than invent a separate product backend. If needed, add a thin orchestration endpoint or client workflow to normalize:
+V1 should compose existing capabilities rather than invent a separate product backend. V1 should add one thin orchestration contract to normalize:
 
 - submit URL for ingest
 - query existing ingest status
 - resolve the transcript-backed media record
 - route chat and summary calls against that record
+- return one canonical source-state answer for the launcher and hosted workspace
 
 ## User Flow
 
@@ -180,6 +228,51 @@ The primary user flow is:
 7. If the anonymous quota is exhausted, the user is pushed into account creation and paid subscription flow.
 
 The hosted experience may also accept direct pasted URLs for sources beyond YouTube, but extension auto-detection in V1 should stay focused on YouTube pages.
+
+Anonymous trial should remain YouTube-only. Broader source support belongs to signed-in users and the fuller hosted path.
+
+## Launcher Action Matrix
+
+The extension should use the following deterministic behavior.
+
+### `Ingest`
+
+- `Not ingested`
+  - start ingest and show progress
+- `Ingestion in progress`
+  - reopen status and continue polling
+- `Transcript ready`
+  - deep-link to hosted lightweight workspace
+- `Transcript failed`
+  - offer retry and fallback to hosted app
+- `Trial exhausted`
+  - route to sign-up and upgrade
+
+### `Open transcript`
+
+- `Not ingested`
+  - start ingest first, then route to transcript when ready
+- `Ingestion in progress`
+  - open hosted status or waiting screen
+- `Transcript ready`
+  - deep-link to hosted `Transcript` tab
+- `Transcript failed`
+  - show plain-language failure and retry path
+- `Trial exhausted`
+  - route to upgrade
+
+### `Quick chat`
+
+- `Not ingested`
+  - start ingest first; do not open an empty chat shell
+- `Ingestion in progress`
+  - open hosted waiting state with `Chat` as intended destination
+- `Transcript ready`
+  - deep-link to hosted `Chat` tab
+- `Transcript failed`
+  - show transcript-preparation failure, not a generic chat error
+- `Trial exhausted`
+  - route to upgrade
 
 ## Core Components
 
@@ -209,7 +302,7 @@ Owns route gating, reduced navigation, labels, onboarding copy, and upgrade mess
 
 The main data flow should be:
 
-1. Extension submits a detected or pasted URL.
+1. Extension or hosted lightweight mode submits a URL.
 2. Backend creates or reuses the media-processing record.
 3. Ingestion and transcription run to readiness.
 4. Hosted app polls or subscribes for ready state.
@@ -230,6 +323,19 @@ Anonymous users receive `3` transcript-backed sessions total. Each session inclu
 - limited follow-up conversation
 
 This is intentionally framed as a single session counter rather than separate per-action quotas.
+
+### Quota Consumption Rule
+
+One trial session is consumed only when a unique normalized source reaches transcript-ready state for the current anonymous identity.
+
+The following should not consume additional quota:
+
+- retrying a failed ingest for the same normalized source
+- reopening the same ready transcript
+- generating another summary for that same source
+- asking additional follow-up questions within that same transcript-backed session
+
+If ingest never reaches transcript-ready, the session should not be permanently consumed.
 
 ### State Model
 
@@ -254,10 +360,20 @@ Recommended user states:
   - before the last free session
   - when quota is exhausted
   - when the user attempts durable or cross-device use
+- Anonymous trial should be limited to YouTube sources.
+- Signed-in users may access broader source ingest according to product entitlement.
 
 The core conversion message should be value-based:
 
 > You have analyzed 3 videos. Subscribe to continue transcript chat and summaries.
+
+### Upgrade And Billing Boundary
+
+V1 should assume billing primitives exist, but should not assume the end-user upgrade flow is already shaped for this lightweight product. The implementation plan should therefore include:
+
+- a branded upgrade entry point from lightweight mode
+- a branded checkout or subscription handoff
+- a branded post-purchase return path into the lightweight workspace
 
 ## Error Handling And Limits
 
@@ -266,7 +382,8 @@ V1 should define explicit failure and boundary states.
 ### Supported Input Boundary
 
 - Extension auto-detects YouTube pages only.
-- Hosted lightweight mode can accept any URL the backend can ingest.
+- Hosted lightweight mode can accept any URL the backend can ingest for signed-in users.
+- Anonymous lightweight trial should remain YouTube-only.
 - Unsupported sources should fail clearly with retry and fallback paths.
 
 ### Failure States
@@ -279,6 +396,33 @@ V1 should define explicit failure and boundary states.
 - `Chat unavailable`
 
 Each state should have plain-language copy and a clear next action.
+
+## Privacy And Retention
+
+V1 should define explicit storage and retention behavior for hosted ingestion.
+
+### Anonymous Trial Data
+
+- Store only the minimum source metadata, transcript artifact references, and derived workspace state needed to support the active trial flow.
+- Retain anonymous trial data for a short, explicit retention window rather than indefinitely.
+- Disclose clearly that transcript processing and chat occur on the hosted `tldw` service.
+
+### Account Conversion
+
+The implementation plan must choose one of two clear behaviors:
+
+- anonymous trial data can be claimed into the newly created account
+- anonymous trial data expires and is not migrated
+
+V1 should not leave this ambiguous.
+
+### User-Facing Disclosure
+
+The extension and hosted lightweight mode should both disclose:
+
+- that source URLs and transcript-derived content are sent to the hosted backend
+- whether anonymous trial content is retained temporarily or attached to an account
+- where users go to manage or delete their data once signed in
 
 ### V1 Scope Discipline
 
@@ -297,20 +441,21 @@ Implementation should verify the following flows:
 - YouTube page detection and launcher actions in the extension
 - ingest handoff from extension to hosted lightweight mode
 - ingest status transitions and ready-state rendering
+- launcher action behavior across all source states
 - transcript, summary, and chat behavior on transcript-backed media
 - server-side trial enforcement across anonymous and signed-in states
 - upgrade routing and subscription gating when quota is exhausted
+- retention behavior and account-conversion behavior for anonymous trial state
 
 ## Open Implementation Questions
 
 These do not block the design, but they must be answered in planning:
 
 - Should lightweight mode live under a dedicated route namespace, a feature flag, or both?
-- Should `Quick chat` open inside the extension first and then escalate to hosted mode, or simply deep-link into the hosted `Chat` tab immediately?
-- Does the existing backend already expose enough ingest-status primitives for the extension, or is one thin orchestration endpoint needed?
-- What anti-abuse strategy is acceptable for anonymous trials in the hosted SaaS environment?
-- Is there already a billing path that can be branded for this mode, or does the product need a tailored subscription presentation layer?
+- Should anonymous trial data be claimable into a newly created account, or should it expire without migration?
+- What anti-abuse strategy is acceptable for anonymous YouTube-only trials in the hosted SaaS environment?
+- Should lightweight mode use an existing checkout surface with branding changes, or a narrower dedicated upgrade wrapper over current billing primitives?
 
 ## Decision
 
-Ship V1 as a branded lightweight mode of the existing `tldw` hosted product, launched from a focused extension workflow and backed by the current ingestion, transcript, summary, chat, auth, and billing foundations.
+Ship V1 as a branded lightweight mode of the existing `tldw` hosted product, launched from a focused extension workflow and backed by the current ingestion, transcript, summary, chat, auth, and billing foundations, with explicit V1 delivery scope for trial management, launcher state handling, orchestration, and privacy/retention behavior.
