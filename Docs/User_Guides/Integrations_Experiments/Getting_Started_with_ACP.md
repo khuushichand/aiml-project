@@ -144,8 +144,10 @@ Clone and build the tldw-agent repository:
 ```bash
 # Clone the repository (sibling to tldw_server2)
 cd ..
-git clone https://github.com/your-org/tldw-agent.git
+git clone https://github.com/rmusser01/tldw-agent.git
 cd tldw-agent
+# Note: This repository may not yet be public. If the clone fails,
+# contact the maintainer or check for build-from-source instructions below.
 
 # Build the binary
 go build -o bin/tldw-agent-acp ./cmd/tldw-agent-acp
