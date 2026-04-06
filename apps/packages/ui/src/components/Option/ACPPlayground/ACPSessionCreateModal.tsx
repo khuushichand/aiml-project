@@ -317,10 +317,24 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
       onSuccess?.(result.serverSessionId)
       onClose()
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { data?: { code?: string; message?: string; suggestions?: Array<{action: string; description?: string}> } }) => {
       setCreationStep("error")
 
-      // Parse error for structured response
+      // Prefer structured error from backend if available
+      if (error.data?.code && error.data?.message) {
+        setCreationError({
+          code: error.data.code,
+          message: error.data.message,
+          suggestions: error.data.suggestions || [],
+        })
+        notification.error({
+          message: t("common:error", "Error"),
+          description: error.data.message,
+        })
+        return
+      }
+
+      // Fall back to client-side string matching
       const structuredError: ACPStructuredError = {
         code: "creation_failed",
         message: error.message || t("acp.create.error", "Failed to create session"),
