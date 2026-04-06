@@ -71,12 +71,20 @@ export const ACPWorkspacePanel: React.FC = () => {
 
   const sshPath = activeSession?.sshWsUrl || ""
 
+  const [wsStatus, setWsStatus] = React.useState<"connecting" | "connected" | "disconnected">("disconnected")
+  const [reconnectKey, setReconnectKey] = React.useState(0)
+
+  const handleReconnect = React.useCallback(() => {
+    setReconnectKey((k) => k + 1)
+  }, [])
+
   React.useEffect(() => {
     if (!activeSessionId || !sshPath || !containerRef.current || !connectionConfig) return
 
     let cancelled = false
     let disposeTerminal: (() => void) | null = null
     const container = containerRef.current
+    setWsStatus("connecting")
 
     void (async () => {
       const [{ Terminal }, { FitAddon }] = await loadTerminalRuntime()
@@ -104,6 +112,7 @@ export const ACPWorkspacePanel: React.FC = () => {
       ws.binaryType = "arraybuffer"
 
       ws.onopen = () => {
+        setWsStatus("connected")
         term.focus()
       }
       ws.onmessage = (event) => {
@@ -115,10 +124,12 @@ export const ACPWorkspacePanel: React.FC = () => {
         term.write(data)
       }
       ws.onerror = () => {
+        setWsStatus("disconnected")
         term.write("\\r\\n[SSH connection error]\\r\\n")
       }
       ws.onclose = () => {
-        term.write("\\r\\n[SSH connection closed]\\r\\n")
+        setWsStatus("disconnected")
+        term.write("\\r\\n[SSH connection closed - click Reconnect to retry]\\r\\n")
       }
 
       const disposeInput = term.onData((data) => {
@@ -183,7 +194,7 @@ export const ACPWorkspacePanel: React.FC = () => {
         disposeTerminal = null
       }
     }
-  }, [activeSessionId, connectionConfig, sshPath])
+  }, [activeSessionId, connectionConfig, sshPath, reconnectKey])
 
   if (!activeSessionId) {
     return (
@@ -226,9 +237,25 @@ export const ACPWorkspacePanel: React.FC = () => {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-2 text-sm text-text-muted">
-        <TerminalIcon className="h-4 w-4" />
-        {t("playground:acp.workspace.title", "Workspace Terminal")}
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-2 text-sm">
+        <div className="flex items-center gap-2 text-text-muted">
+          <TerminalIcon className="h-4 w-4" />
+          {t("playground:acp.workspace.title", "Workspace Terminal")}
+          <span className={`h-2 w-2 rounded-full ${
+            wsStatus === "connected" ? "bg-success" :
+            wsStatus === "connecting" ? "bg-info animate-pulse" :
+            "bg-error"
+          }`} />
+        </div>
+        {wsStatus === "disconnected" && (
+          <button
+            type="button"
+            onClick={handleReconnect}
+            className="rounded px-2 py-1 text-xs text-primary hover:bg-surface2"
+          >
+            {t("playground:acp.workspace.reconnect", "Reconnect")}
+          </button>
+        )}
       </div>
       <div ref={containerRef} className="flex-1 bg-black" />
     </div>
