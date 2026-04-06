@@ -49,7 +49,20 @@ Before starting, ensure you have:
 
 ### Step 1: Enable ACP in tldw_server
 
-Edit `tldw_Server_API/Config_Files/config.txt` and ensure ACP is enabled:
+Edit `tldw_Server_API/Config_Files/config.txt` and ensure ACP is enabled.
+
+**Minimal config (required settings only):**
+
+```ini
+[API-Routes]
+stable_only = false
+
+[ACP]
+runner_command = /path/to/tldw-agent-acp
+runner_cwd = /path/to/tldw-agent
+```
+
+**Full config (with all options):**
 
 ```ini
 [API-Routes]
