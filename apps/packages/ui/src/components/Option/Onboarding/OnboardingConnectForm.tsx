@@ -900,20 +900,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     await finishAndNavigate("/media", { openQuickIngestIntro: true })
   }, [actions, finishAndNavigate])
 
-  const handleResearchGetStarted = useCallback(async () => {
-    try {
-      await actions.setUserPersona("researcher")
-    } catch (err) {
-      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
-    }
-    try {
-      const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
-      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
-    } catch (err) {
-      console.debug("[OnboardingConnectForm] Failed to persist researcher shortcuts", err)
-    }
-    await finishAndNavigate("/media", { openQuickIngestIntro: true })
-  }, [actions, finishAndNavigate])
+  const handleResearchGetStarted = handleOpenIngestFlow
 
   const handleOpenMediaFlow = useCallback(async () => {
     await finishAndNavigate("/media")

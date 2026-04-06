@@ -232,14 +232,16 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       if (!result) {
         setDraftStorageUnavailable(true)
         lastRecommendationRef.current = null
-      } else if (typeof result === "object" && result.recommendation) {
-        if (lastRecommendationRef.current !== result.recommendation) {
-          lastRecommendationRef.current = result.recommendation
-          messageApi.warning(result.recommendation)
-        }
       } else {
-        lastRecommendationRef.current = null
         setDraftStorageUnavailable(false)
+        if (typeof result === "object" && result.recommendation) {
+          if (lastRecommendationRef.current !== result.recommendation) {
+            lastRecommendationRef.current = result.recommendation
+            messageApi.warning(result.recommendation)
+          }
+        } else {
+          lastRecommendationRef.current = null
+        }
       }
     }, 300)
 
