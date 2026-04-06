@@ -111,6 +111,8 @@ The product uses a session-based trial quota rather than per-action quotas. That
 
 The launcher and lightweight workspace both need one canonical answer to: "What is the state of this source for this identity?" That makes a thin backend orchestration contract effectively required for V1, even if it is implemented as a narrow adapter over existing APIs.
 
+That contract must also be idempotent for repeated submissions of the same normalized source, or the product risks duplicate ingests, inconsistent launcher state, and accidental double-consumption of trial quota.
+
 ### Privacy And Retention Constraint
 
 A browser extension that sends video URLs and transcript-derived content to a hosted backend needs an explicit user-facing privacy and retention policy. V1 must define what is stored for anonymous users, how long it is retained, and whether trial data can be attached to a later paid account.
@@ -214,6 +216,8 @@ V1 should compose existing capabilities rather than invent a separate product ba
 - resolve the transcript-backed media record
 - route chat and summary calls against that record
 - return one canonical source-state answer for the launcher and hosted workspace
+- derive and persist a canonical normalized-source identity for reuse across extension and hosted lightweight mode
+- make repeated submit requests for the same normalized source idempotent
 
 ## User Flow
 
@@ -247,6 +251,8 @@ The extension should use the following deterministic behavior.
   - offer retry and fallback to hosted app
 - `Trial exhausted`
   - route to sign-up and upgrade
+- `Signed in, unsubscribed`
+  - route directly to upgrade without a redundant sign-up step
 
 ### `Open transcript`
 
@@ -260,6 +266,8 @@ The extension should use the following deterministic behavior.
   - show plain-language failure and retry path
 - `Trial exhausted`
   - route to upgrade
+- `Signed in, unsubscribed`
+  - route directly to upgrade and preserve transcript destination intent
 
 ### `Quick chat`
 
@@ -273,6 +281,8 @@ The extension should use the following deterministic behavior.
   - show transcript-preparation failure, not a generic chat error
 - `Trial exhausted`
   - route to upgrade
+- `Signed in, unsubscribed`
+  - route directly to upgrade and preserve chat destination intent
 
 ## Core Components
 
@@ -337,6 +347,8 @@ The following should not consume additional quota:
 
 If ingest never reaches transcript-ready, the session should not be permanently consumed.
 
+The normalization logic used for quota debit must be the same logic used by the orchestration contract for source reuse and idempotency.
+
 ### State Model
 
 Recommended user states:
@@ -374,6 +386,12 @@ V1 should assume billing primitives exist, but should not assume the end-user up
 - a branded upgrade entry point from lightweight mode
 - a branded checkout or subscription handoff
 - a branded post-purchase return path into the lightweight workspace
+
+The upgrade flow should preserve user intent. At minimum it should carry forward:
+
+- the normalized source or resolved media identity
+- the intended destination tab such as `Transcript` or `Chat`
+- enough context to resume the in-progress lightweight flow after purchase
 
 ## Error Handling And Limits
 
