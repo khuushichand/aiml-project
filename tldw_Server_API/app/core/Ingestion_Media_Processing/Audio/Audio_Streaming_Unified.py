@@ -3329,10 +3329,7 @@ async def handle_unified_websocket(
                             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                                 logger.exception("Diarization reset failed: {}", diar_err)
 
-                    should_emit_full_transcript = decision.should_emit_full_transcript
-                    if data.get("type") == "stop" and not control_session.negotiated_v2:
-                        should_emit_full_transcript = False
-                    if should_emit_full_transcript:
+                    if decision.should_emit_full_transcript:
                         await _emit_full_transcript(time.time(), auto_commit=False)
 
                     if decision.should_close:

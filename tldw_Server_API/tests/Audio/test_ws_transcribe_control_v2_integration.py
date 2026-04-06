@@ -135,6 +135,77 @@ async def test_transcribe_ws_v2_control_frames_pause_resume_and_stop(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_transcribe_ws_legacy_stop_still_emits_full_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.ws_control_protocol import (
+        WSControlProtocolConfig,
+    )
+
+    class _StubTranscriber:
+        def __init__(self, config: Any) -> None:  # noqa: ARG002
+            self.processed_chunks: list[str] = []
+
+        def initialize(self) -> None:
+            return None
+
+        async def process_audio_chunk(self, audio_bytes: bytes) -> dict[str, Any]:
+            text = audio_bytes.decode("utf-8")
+            self.processed_chunks.append(text)
+            return {"type": "partial", "text": text, "is_final": False}
+
+        def get_full_transcript(self) -> str:
+            return "|".join(self.processed_chunks)
+
+        def reset(self) -> None:
+            return None
+
+        def cleanup(self) -> None:
+            return None
+
+    monkeypatch.setattr(unified, "UnifiedStreamingTranscriber", _StubTranscriber)
+    monkeypatch.setattr(
+        unified,
+        "SileroTurnDetector",
+        lambda *args, **kwargs: type(
+            "_NoopTurnDetector",
+            (),
+            {"available": False, "unavailable_reason": "stubbed", "observe": lambda self, _audio: False},
+        )(),
+    )
+    monkeypatch.setattr(
+        unified,
+        "_get_ws_control_protocol_config",
+        lambda: WSControlProtocolConfig(
+            ws_control_v2_enabled=True,
+            paused_audio_queue_cap_seconds=2.0,
+            overflow_warning_interval_seconds=5.0,
+        ),
+        raising=False,
+    )
+
+    ws = _DummyWebSocket(
+        [
+            {"type": "config", "model": "parakeet", "sample_rate": 16000},
+            _audio_frame("one"),
+            _audio_frame("two"),
+            {"type": "stop"},
+        ]
+    )
+
+    await unified.handle_unified_websocket(ws, unified.UnifiedStreamingConfig())
+
+    statuses = [frame for frame in ws.sent if frame.get("type") == "status"]
+    full_transcripts = [frame for frame in ws.sent if frame.get("type") == "full_transcript"]
+
+    assert statuses == []
+    assert full_transcripts
+    assert full_transcripts[-1]["text"] == "one|two"
+    assert any(frame.get("type") == "done" for frame in ws.sent)
+
+
+@pytest.mark.asyncio
 async def test_transcribe_ws_control_frame_is_rejected_without_v2_negotiation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
