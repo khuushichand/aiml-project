@@ -992,7 +992,26 @@ async def websocket_transcribe(
             user_id=int(user_id_for_usage) if user_id_for_usage is not None else None,
             db=None,
         )
-        policy_websocket = RedactingWebSocketProxy(websocket, policy=effective_stt_policy)
+
+        class _MetricRedactingWebSocketProxy(RedactingWebSocketProxy):
+            async def send_json(self, payload: dict[str, Any]) -> None:
+                redacted_payload = apply_transcript_payload_policy(payload, policy=effective_stt_policy)
+                if str(redacted_payload.get("type", "")).strip().lower() in {
+                    "partial",
+                    "transcription",
+                    "full_transcript",
+                }:
+                    emit_stt_redaction_total(
+                        endpoint="audio.stream.transcribe",
+                        redaction_outcome=_stt_redaction_outcome_for_payload(
+                            original_payload=payload,
+                            redacted_payload=redacted_payload,
+                            policy=effective_stt_policy,
+                        ),
+                    )
+                await self._websocket.send_json(redacted_payload)
+
+        policy_websocket = _MetricRedactingWebSocketProxy(websocket, policy=effective_stt_policy)
 
         acquired_stream = False
 

@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 
+import tldw_Server_API.app.core.Metrics.metrics_manager as metrics_manager
+
 # Stub heavyweight audio deps before importing endpoint modules.
 if "torch" not in sys.modules:
     _fake_torch = types.ModuleType("torch")
@@ -347,6 +349,56 @@ async def test_stream_transcribe_uses_default_streaming_model_from_config(monkey
 
     assert captured.get("model") == "parakeet"
     assert captured.get("variant") == "onnx"
+
+
+@pytest.mark.asyncio
+async def test_stream_transcribe_emits_redaction_metric_for_outbound_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_policy import STTPolicy
+
+    ws = DummyWebSocket()
+    metrics_manager._metrics_registry = None
+    registry = metrics_manager.get_metrics_registry()
+
+    async def _resolve_policy(*_args: Any, **_kwargs: Any) -> STTPolicy:
+        return STTPolicy(
+            org_id=None,
+            delete_audio_after_success=True,
+            audio_retention_hours=0.0,
+            redact_pii=True,
+            allow_unredacted_partials=False,
+            redact_categories=["pii_email"],
+        )
+
+    async def _mock_handle(
+        _websocket,
+        _config,
+        *,
+        on_audio_seconds=None,  # noqa: ARG001
+        on_heartbeat=None,  # noqa: ARG001
+        on_stream_config_resolved=None,  # noqa: ARG001
+        on_transcript_result=None,  # noqa: ARG001
+        on_full_transcript=None,  # noqa: ARG001
+    ) -> None:
+        await _websocket.send_json(
+            {"type": "transcription", "text": "contact alice@example.com", "is_final": True}
+        )
+
+    monkeypatch.setattr(audio_streaming, "resolve_effective_stt_policy", _resolve_policy)
+    monkeypatch.setattr(audio_streaming, "handle_unified_websocket", _mock_handle)
+
+    try:
+        await audio_streaming.websocket_transcribe(ws, token=None)
+
+        assert ws.sent_json
+        assert ws.sent_json[0]["text"] == "contact [PII]"
+        assert registry.get_cumulative_counter(
+            "audio_stt_redaction_total",
+            {"endpoint": "audio.stream.transcribe", "redaction_outcome": "applied"},
+        ) == 1
+    finally:
+        metrics_manager._metrics_registry = None
 
 
 @pytest.mark.asyncio
