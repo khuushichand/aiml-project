@@ -93,7 +93,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, selected, onSelect }) => {
             <Tooltip
               title={t("acp.create.requiresApiKey", {
                 key: agent.requires_api_key,
-                defaultValue: `Requires ${agent.requires_api_key}`,
+                defaultValue: `Requires {{key}}. Set it in your shell (export {{key}}=...) or in the [ACP] runner_env in config.txt.`,
               })}
             >
               <AlertCircle className="h-4 w-4 text-warning" />
@@ -430,7 +430,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
           ]}
           extra={t(
             "acp.create.cwdHelp",
-            "The root directory the agent will work within."
+            "Absolute path on the tldw_server machine where the agent will read and write files."
           )}
         >
           <Input
