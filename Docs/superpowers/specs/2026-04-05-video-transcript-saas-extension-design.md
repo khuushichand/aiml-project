@@ -108,6 +108,7 @@ The private product should therefore:
 - keep product-specific changes in a clearly bounded private patch layer
 - minimize deep invasive divergence where possible
 - treat upstream sync cost as part of the architecture, not an afterthought
+- record exactly which upstream paths were synced and from which upstream commit
 
 ### Launcher State Constraint
 
@@ -257,6 +258,8 @@ The primary user flow is:
 The hosted experience may also accept direct pasted URLs for sources beyond YouTube, but extension auto-detection in V1 should stay focused on YouTube pages.
 
 Anonymous trial should remain YouTube-only. Broader source support belongs to signed-in users and the fuller hosted path.
+
+Signed-in users should have an explicit hosted intake surface for pasted non-YouTube URLs. That flow should not depend on the extension launcher.
 
 ## Launcher Action Matrix
 

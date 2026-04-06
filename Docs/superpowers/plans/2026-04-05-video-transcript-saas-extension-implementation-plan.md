@@ -35,10 +35,28 @@
 
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/README.md`
   - Explain repo purpose, relationship to `tldw_server`, and sync/patch workflow.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/package.json`
+  - Root workspace scripts and shared dev dependencies.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/bunfig.toml`
+  - Bun workspace configuration if used.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tsconfig.json`
+  - Shared TypeScript config.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/package.json`
+  - Hosted app package definition.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/next.config.js`
+  - Hosted app runtime config.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/package.json`
+  - Extension package definition.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/wxt.config.ts`
+  - Extension build config.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/upstream-sync.md`
   - Rules for what is synced from the existing app and what stays private-only.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json`
+  - Pinned upstream commit SHA plus exact synced path list.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh`
   - Script to copy or refresh selected upstream frontend surfaces from `tldw_server2/apps`.
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/new.tsx`
+  - Signed-in hosted intake page for pasted non-YouTube URLs.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/video/[sourceKey].tsx`
   - Hosted lightweight workspace route.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/upgrade.tsx`
@@ -160,49 +178,121 @@ git add tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py \
 git commit -m "feat: add video-lite trial ledger"
 ```
 
-## Task 3: Create The Private Overlay Repo Skeleton And Sync Workflow
+## Task 3: Bootstrap The Private Overlay Repo As A Runnable Workspace
 
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/README.md`
-- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/upstream-sync.md`
-- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/package.json`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/bunfig.toml`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tsconfig.json`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/package.json`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/next.config.js`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/package.json`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/wxt.config.ts`
 
-- [ ] **Step 1: Write the failing repo-process smoke check**
-
-```bash
-test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh
-```
-
-- [ ] **Step 2: Run the smoke check to verify it fails**
-
-Run: `test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh`
-Expected: exit code non-zero because the private repo skeleton does not exist yet.
-
-- [ ] **Step 3: Create the private repo structure and sync docs**
+- [ ] **Step 1: Write the failing bootstrap smoke checks**
 
 ```bash
-# create sibling repo skeleton, document copied paths, define patch-only zones
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/package.json
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/package.json
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/wxt.config.ts
 ```
 
-- [ ] **Step 4: Run the smoke check to verify the skeleton exists**
+- [ ] **Step 2: Run the smoke checks to verify they fail**
 
-Run: `test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh`
+Run:
+
+```bash
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/package.json
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/package.json
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/wxt.config.ts
+```
+
+Expected: non-zero exit because the private repo workspace does not exist yet.
+
+- [ ] **Step 3: Create the runnable private workspace skeleton**
+
+```bash
+# scaffold root workspace, hosted app package, and extension package
+```
+
+- [ ] **Step 4: Run the smoke checks to verify the workspace exists**
+
+Run:
+
+```bash
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/package.json
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/package.json
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/wxt.config.ts
+```
+
 Expected: success.
 
 - [ ] **Step 5: Commit in the private repo**
 
 ```bash
-git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add README.md docs/upstream-sync.md scripts/sync-from-upstream.sh
-git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: scaffold private overlay repo"
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add README.md package.json bunfig.toml tsconfig.json web/package.json web/next.config.js extension/package.json extension/wxt.config.ts
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: bootstrap private overlay workspace"
 ```
 
-## Task 4: Sync Selected Existing App Surfaces Into The Private Repo
+## Task 4: Create The Sync Workflow And Upstream Manifest
+
+**Files:**
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/upstream-sync.md`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh`
+
+- [ ] **Step 1: Write the failing sync/manifest smoke checks**
+
+```bash
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json
+```
+
+- [ ] **Step 2: Run the smoke checks to verify they fail**
+
+Run:
+
+```bash
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json
+```
+
+Expected: non-zero exit because sync assets do not exist yet.
+
+- [ ] **Step 3: Create the sync docs, script, and pinned manifest**
+
+```bash
+# create sync docs, manifest.json, and script that updates the pinned upstream commit
+```
+
+- [ ] **Step 4: Run the smoke checks to verify sync assets exist**
+
+Run:
+
+```bash
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh
+test -f /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json
+```
+
+Expected: success.
+
+- [ ] **Step 5: Commit in the private repo**
+
+```bash
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add docs/upstream-sync.md upstream/manifest.json scripts/sync-from-upstream.sh
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: add overlay sync workflow"
+```
+
+## Task 5: Sync Selected Existing App Surfaces Into The Private Repo
 
 **Files:**
 - Create or refresh via sync script:
   - `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/web/`
   - `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/extension/`
   - `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/shared-ui/`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json`
+  - Record source repo commit and exact synced path list.
 
 - [ ] **Step 1: Define the initial sync set in the sync script**
 
@@ -224,19 +314,29 @@ rsync -a /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/... \
   /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/...
 ```
 
-- [ ] **Step 4: Re-run the sync script and verify vendored sources appear**
+- [ ] **Step 4: Record the exact upstream commit and synced paths in the manifest**
+
+```json
+{
+  "source_repo": "/Users/macbook-dev/Documents/GitHub/tldw_server2",
+  "source_commit": "abc123",
+  "paths": ["apps/tldw-frontend/...", "apps/extension/...", "apps/packages/ui/src/..."]
+}
+```
+
+- [ ] **Step 5: Re-run the sync script and verify vendored sources appear**
 
 Run: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/scripts/sync-from-upstream.sh`
 Expected: success with copied upstream surfaces and no accidental writes back into `tldw_server2`.
 
-- [ ] **Step 5: Commit in the private repo**
+- [ ] **Step 6: Commit in the private repo**
 
 ```bash
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add upstream scripts/sync-from-upstream.sh docs/upstream-sync.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: import upstream app surfaces"
 ```
 
-## Task 5: Add Private Overlay Client And Intent Helpers
+## Task 6: Add Private Overlay Client And Intent Helpers
 
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
@@ -277,10 +377,11 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add web/lib/v
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: add overlay video-lite client helpers"
 ```
 
-## Task 6: Build The Private Hosted Lightweight Workspace
+## Task 7: Build The Private Hosted Lightweight Workspace And Signed-In Intake
 
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/new.tsx`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/video/[sourceKey].tsx`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/upgrade.tsx`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/login.tsx`
@@ -294,6 +395,11 @@ it("renders transcript, summary, and chat tabs for a ready source", () => {
   expect(screen.getByRole("tab", { name: /transcript/i })).toBeVisible()
   expect(screen.getByRole("tab", { name: /summary/i })).toBeVisible()
   expect(screen.getByRole("tab", { name: /chat/i })).toBeVisible()
+})
+
+it("renders a signed-in paste-url intake flow for non-youtube sources", () => {
+  render(<LiteNewPage />)
+  expect(screen.getByLabelText(/source url/i)).toBeVisible()
 })
 ```
 
@@ -310,19 +416,27 @@ export default function LiteVideoPage() {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Implement the signed-in hosted intake page**
+
+```tsx
+export default function LiteNewPage() {
+  return <SourceUrlIntakeForm />
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
-Expected: PASS for ready, processing, failure, trial-exhausted, and signed-in-unsubscribed states.
+Expected: PASS for ready, processing, failure, trial-exhausted, signed-in-unsubscribed states, and signed-in pasted-source intake.
 
-- [ ] **Step 5: Commit in the private repo**
+- [ ] **Step 6: Commit in the private repo**
 
 ```bash
-git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add web/components/VideoWorkspacePage.tsx web/pages/lite/video/[sourceKey].tsx web/pages/lite/upgrade.tsx web/pages/login.tsx tests/web/VideoWorkspacePage.test.tsx
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add web/components/VideoWorkspacePage.tsx web/pages/lite/new.tsx web/pages/lite/video/[sourceKey].tsx web/pages/lite/upgrade.tsx web/pages/login.tsx tests/web/VideoWorkspacePage.test.tsx
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: add private hosted video-lite workspace"
 ```
 
-## Task 7: Build The Private Extension Launcher Overlay
+## Task 8: Build The Private Extension Launcher Overlay
 
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/src/routes/sidepanel-video.tsx`
@@ -367,7 +481,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add extension
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: add private extension video-lite launcher"
 ```
 
-## Task 8: Verification, Security Checks, And Sync Discipline
+## Task 9: Verification, Security Checks, And Sync Discipline
 
 **Files:**
 - Modify: `Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md`
