@@ -197,23 +197,33 @@ class CloneService:
             try:
                 transcripts = get_media_transcripts(self._src_media, source_media_id)
                 source_latest_run_id = media.get("latest_transcription_run_id")
-                source_latest_run_id_int = (
-                    int(source_latest_run_id) if source_latest_run_id is not None else None
-                )
+                try:
+                    source_latest_run_id_int = (
+                        int(source_latest_run_id) if source_latest_run_id is not None else None
+                    )
+                except (TypeError, ValueError):
+                    logger.debug(f"Malformed latest_transcription_run_id={source_latest_run_id!r}, treating as None")
+                    source_latest_run_id_int = None
+                def _safe_int(val: object, default: int = 0) -> int:
+                    try:
+                        return int(val) if val is not None else default
+                    except (TypeError, ValueError):
+                        return default
+
                 ordered_transcripts = sorted(
                     transcripts,
                     key=lambda row: (
                         row.get("transcription_run_id") is None,
-                        int(row.get("transcription_run_id") or 0),
+                        _safe_int(row.get("transcription_run_id")),
                         str(row.get("created_at") or ""),
-                        int(row.get("id") or 0),
+                        _safe_int(row.get("id")),
                     ),
                 )
                 has_matching_latest_run = (
                     source_latest_run_id_int is not None
                     and any(
                         row.get("transcription_run_id") is not None
-                        and int(row.get("transcription_run_id"))
+                        and _safe_int(row.get("transcription_run_id"), -1)
                         == source_latest_run_id_int
                         for row in ordered_transcripts
                     )

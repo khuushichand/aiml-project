@@ -152,13 +152,18 @@ async def _resolve_org_id(
         logger.debug("STT policy org membership lookup failed for user_id={}: {}", user_id, exc)
         return None
 
+    resolved_org_ids: list[int] = []
     for membership in memberships or []:
         try:
             org_id = membership.get("org_id")
         except _STT_POLICY_EXCEPTIONS:
             continue
         if org_id is not None:
-            return int(org_id)
+            org_id_int = int(org_id)
+            if org_id_int not in resolved_org_ids:
+                resolved_org_ids.append(org_id_int)
+    if len(resolved_org_ids) == 1:
+        return resolved_org_ids[0]
     return None
 
 
@@ -290,20 +295,20 @@ def apply_transcript_text_policy(
     if not policy.redact_pii:
         return text
 
-    moderation = get_moderation_service()
-    pii_rules = moderation._load_builtin_pii_rules()
-    moderation_policy = ModerationPolicy(
-        enabled=True,
-        input_enabled=False,
-        output_enabled=True,
-        input_action="warn",
-        output_action="redact",
-        redact_replacement="[PII]",
-        per_user_overrides=False,
-        block_patterns=pii_rules,
-        categories_enabled=_expand_redact_categories(policy.redact_categories),
-    )
     try:
+        moderation = get_moderation_service()
+        pii_rules = moderation._load_builtin_pii_rules()
+        moderation_policy = ModerationPolicy(
+            enabled=True,
+            input_enabled=False,
+            output_enabled=True,
+            input_action="warn",
+            output_action="redact",
+            redact_replacement="[PII]",
+            per_user_overrides=False,
+            block_patterns=pii_rules,
+            categories_enabled=_expand_redact_categories(policy.redact_categories),
+        )
         return moderation.redact_text(text, moderation_policy)
     except _STT_POLICY_EXCEPTIONS as exc:
         logger.warning("STT transcript redaction failed; suppressing text for safety: {}", exc)

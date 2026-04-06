@@ -2697,7 +2697,7 @@ async def websocket_audio_chat_stream(
             paused_audio_chunks.clear()
             control_session.release_paused_audio()
             for buffered_audio, _buffered_seconds in queued_audio:
-                await _process_chat_audio(buffered_audio, allow_auto_commit=False)
+                await _process_chat_audio(buffered_audio, allow_auto_commit=True)
 
         try:
             for event in protocol_decision.events:
@@ -2754,6 +2754,29 @@ async def websocket_audio_chat_stream(
                         seconds = float(len(audio_bytes)) / float(
                             4 * max(1, int(config.sample_rate or 16000))
                         )
+
+                    try:
+                        await _on_heartbeat()
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as hb_exc:
+                        logger.debug(f"audio.chat.stream heartbeat failed: error={hb_exc}")
+
+                    if control_session.state == "paused":
+                        buffered_seconds = seconds
+                        paused_audio_chunks.append((audio_bytes, buffered_seconds))
+                        paused_audio_decision = control_session.buffer_paused_audio(
+                            buffered_seconds,
+                            now=time.time(),
+                        )
+                        if paused_audio_decision.dropped_seconds > 0:
+                            _drop_oldest_stream_audio(
+                                paused_audio_chunks,
+                                paused_audio_decision.dropped_seconds,
+                            )
+                        for event in paused_audio_decision.events:
+                            await _send_stream_payload(event)
+                        continue
+
+                    # Bill usage only for audio that will actually be processed (not paused/dropped)
                     try:
                         await _on_audio_quota(seconds, int(config.sample_rate or 16000))
                     except QuotaExceeded as qe:
@@ -2784,27 +2807,6 @@ async def websocket_audio_chat_stream(
                                 f"WebSocket close (quota case) failed (audio.chat.stream): error={close_exc}"
                             )
                         break
-
-                    try:
-                        await _on_heartbeat()
-                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as hb_exc:
-                        logger.debug(f"audio.chat.stream heartbeat failed: error={hb_exc}")
-
-                    if control_session.state == "paused":
-                        buffered_seconds = seconds
-                        paused_audio_chunks.append((audio_bytes, buffered_seconds))
-                        paused_audio_decision = control_session.buffer_paused_audio(
-                            buffered_seconds,
-                            now=time.time(),
-                        )
-                        if paused_audio_decision.dropped_seconds > 0:
-                            _drop_oldest_stream_audio(
-                                paused_audio_chunks,
-                                paused_audio_decision.dropped_seconds,
-                            )
-                        for event in paused_audio_decision.events:
-                            await _send_stream_payload(event)
-                        continue
 
                     await _process_chat_audio(audio_bytes, allow_auto_commit=True)
 

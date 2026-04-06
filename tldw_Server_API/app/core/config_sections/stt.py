@@ -37,10 +37,11 @@ def _get_raw(
             return str(env_value)
 
     if config_parser is not None:
-        for option in options:
-            raw = config_parser.get("STT-Settings", option, fallback=None)
-            if raw is not None and str(raw).strip() != "":
-                return str(raw)
+        for section in ("STT_Settings", "STT-Settings"):
+            for option in options:
+                raw = config_parser.get(section, option, fallback=None)
+                if raw is not None and str(raw).strip() != "":
+                    return str(raw)
     return default
 
 
