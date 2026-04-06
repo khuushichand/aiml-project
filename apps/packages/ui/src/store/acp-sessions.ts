@@ -868,6 +868,12 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
               pendingPermissions: [],
               // Reset state to disconnected (connection needs re-establishment)
               state: "disconnected" as const,
+              // Don't persist sensitive SSH connection details
+              sshWsUrl: null,
+              sshUser: null,
+              // Don't persist sandbox session IDs (they expire)
+              sandboxSessionId: null,
+              sandboxRunId: null,
             },
           ])
         ),
