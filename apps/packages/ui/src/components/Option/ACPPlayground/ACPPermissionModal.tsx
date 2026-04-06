@@ -253,11 +253,12 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
             onChange={(e) => setBatchApprove(e.target.checked)}
           >
             <span className="text-sm text-text">
-              {t(
-                "playground:acp.batchApprove",
-                "Auto-approve all future '{{tier}}' tier requests in this session",
-                { tier: currentPermission.tier }
-              )}
+              {currentPermission.tier === "batch"
+                ? t("playground:acp.batchApproveWrite",
+                    "Automatically approve similar file-write operations for the rest of this session")
+                : t("playground:acp.batchApproveGeneral",
+                    "Automatically approve similar operations for the rest of this session")
+              }
             </span>
           </Checkbox>
         )}
