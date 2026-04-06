@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import type { ACPUpdate, ACPSessionState, ParsedUpdateMessage } from "@/services/acp/types"
+import type { ReconnectInfo } from "@/hooks/useACPSession"
 
 const { TextArea } = Input
 
@@ -141,6 +142,7 @@ interface ACPChatPanelProps {
   cancel: () => void
   connect: () => Promise<void>
   error?: string | null
+  reconnectInfo?: ReconnectInfo | null
 }
 
 export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
@@ -151,6 +153,7 @@ export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
   cancel,
   connect,
   error,
+  reconnectInfo,
 }) => {
   const { t } = useTranslation(["playground", "option", "common"])
   const [inputValue, setInputValue] = useState("")
@@ -291,11 +294,19 @@ export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
             <div className="mt-2 flex items-center justify-between gap-2 text-xs text-warning">
               <span className="flex items-center gap-1">
                 <AlertCircle className="h-3 w-3" />
-                {t("playground:acp.notConnected", "Not connected to session")}
+                {reconnectInfo?.isReconnecting
+                  ? t(
+                      "playground:acp.reconnecting",
+                      "Reconnecting (attempt {{attempt}}/{{max}})...",
+                      { attempt: reconnectInfo.attempt, max: reconnectInfo.maxAttempts }
+                    )
+                  : t("playground:acp.notConnected", "Not connected to session")}
               </span>
-              <Button size="small" onClick={handleReconnect} loading={isReconnecting}>
-                {t("playground:acp.reconnect", "Reconnect")}
-              </Button>
+              {!reconnectInfo?.isReconnecting && (
+                <Button size="small" onClick={handleReconnect} loading={isReconnecting}>
+                  {t("playground:acp.reconnect", "Reconnect")}
+                </Button>
+              )}
             </div>
           )}
 

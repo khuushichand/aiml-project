@@ -135,6 +135,7 @@ export const ACPPlayground: React.FC = () => {
     state,
     isConnected,
     error: websocketError,
+    reconnectInfo,
     connect,
     sendPrompt,
     cancel,
@@ -374,6 +375,7 @@ export const ACPPlayground: React.FC = () => {
           error={globalError ?? websocketError}
           sendPrompt={sendPrompt}
           cancel={cancel}
+          reconnectInfo={reconnectInfo}
         />
       ),
     },
@@ -485,6 +487,7 @@ export const ACPPlayground: React.FC = () => {
             error={globalError ?? websocketError}
             sendPrompt={sendPrompt}
             cancel={cancel}
+            reconnectInfo={reconnectInfo}
           />
         </main>
 
