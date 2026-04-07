@@ -25,14 +25,19 @@ This review is centered on the backend Monitoring surface and its direct persist
 - `tldw_Server_API/app/core/Monitoring/__init__.py`
 - `tldw_Server_API/app/core/Monitoring/topic_monitoring_service.py`
 - `tldw_Server_API/app/core/Monitoring/notification_service.py`
-- `tldw_Server_API/app/core/Monitoring/self_monitoring_service.py`
 - `tldw_Server_API/app/core/DB_Management/TopicMonitoring_DB.py`
 - `tldw_Server_API/app/api/v1/endpoints/monitoring.py`
 - `tldw_Server_API/app/api/v1/endpoints/admin/admin_monitoring.py`
-- `tldw_Server_API/app/api/v1/endpoints/self_monitoring.py`
 - `tldw_Server_API/app/api/v1/schemas/monitoring_schemas.py`
+- monitoring-specific schema definitions in `tldw_Server_API/app/api/v1/schemas/admin_schemas.py`
 - `tldw_Server_API/app/core/AuthNZ/repos/admin_monitoring_repo.py`
 - `tldw_Server_API/app/services/admin_monitoring_alerts_service.py`
+
+Within that scope, the review should treat the backend as three related but distinct subdomains:
+
+- topic monitoring watchlists, scans, alerts, and notification delivery
+- admin monitoring control-plane state such as assignment, snooze, escalation, and event history
+- the seam between persisted topic alerts and admin overlay truth
 
 Direct validation targets are included where they materially exercise the module contract:
 
@@ -45,6 +50,7 @@ Direct validation targets are included where they materially exercise the module
 This review does not cover:
 
 - the admin monitoring React UI except where it exposes a backend contract smell
+- Guardian/self-monitoring rule management and APIs, which are a separate subsystem despite living under `app/core/Monitoring/`
 - a repo-wide review of every monitoring or metrics producer outside this module boundary
 - implementation of fixes during the review itself
 - unrelated observability or metrics redesign not directly tied to the Monitoring backend
@@ -112,9 +118,10 @@ This keeps the review grounded in production behavior while still surfacing the 
 
 Inspect:
 
-- `monitoring.py`, `admin/admin_monitoring.py`, and `self_monitoring.py`
+- `monitoring.py` and `admin/admin_monitoring.py`
 - permission dependencies, actor resolution, error handling, and audit emission
 - whether route semantics match the state they mutate
+- the monitoring-specific request and response schemas used by those routes
 
 Primary questions:
 
@@ -129,6 +136,7 @@ Inspect:
 - how alert identities are built and consumed
 - how runtime alert rows merge with authoritative overlay state
 - event history semantics and audit consistency
+- the helper/service code that translates persisted topic alerts into admin-facing identities and merged rows
 
 Primary questions:
 
