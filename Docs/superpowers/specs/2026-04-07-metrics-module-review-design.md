@@ -23,6 +23,7 @@ The review should prioritize findings that matter in production and pair the hig
 This review is centered on the core Metrics package and its direct edges:
 
 - `tldw_Server_API/app/core/Metrics/__init__.py`
+- `tldw_Server_API/app/core/Metrics/README.md`
 - `tldw_Server_API/app/core/Metrics/metrics_manager.py`
 - `tldw_Server_API/app/core/Metrics/telemetry.py`
 - `tldw_Server_API/app/core/Metrics/decorators.py`
@@ -31,6 +32,8 @@ This review is centered on the core Metrics package and its direct edges:
 - `tldw_Server_API/app/core/Metrics/metrics_logger.py`
 - `tldw_Server_API/app/core/Metrics/stt_metrics.py`
 - `tldw_Server_API/app/api/v1/endpoints/metrics.py`
+- `tldw_Server_API/app/main.py` for metrics-related route and middleware wiring only
+- `Docs/Design/Metrics.md` and other directly referenced Metrics docs where they materially affect operator or contributor understanding
 
 Direct integrations and validation targets are included where they materially exercise or depend on the module contract:
 
@@ -147,16 +150,19 @@ Primary questions:
 Inspect:
 
 - `/metrics/text`, `/metrics/json`, `/metrics/health`, `/metrics/chat`, and `/metrics/reset`
+- metrics-related route and middleware wiring in `app/main.py`
 - mixed export behavior between the registry and `prometheus_client`
 - scrape-time imports or side effects
 - reset authorization and expectations
 - operator-facing semantics of the JSON and health endpoints
+- directly relevant Metrics documentation where it may shape operator expectations
 
 Primary questions:
 
 - can a scrape mutate application state or trigger unnecessary work?
 - are exported metrics complete, duplicated, or inconsistent across surfaces?
 - do endpoint names and behaviors match what operators would reasonably expect?
+- do wiring and docs describe the same monitoring surface the code actually exposes?
 
 ### Pass 4: Direct-edge validation and test adequacy
 
@@ -241,6 +247,7 @@ For the highest-priority items, the plan should also call out:
 - The review is intentionally practical rather than exhaustive across the whole repository.
 - Existing docs may be stale; code and tests take precedence, but doc drift that can mislead contributors or operators is still in scope as a finding.
 - Large files are not automatically findings; size matters only where it contributes to drift, hidden behavior, or fragile contracts.
+- The next planning step should produce an audit execution plan for performing this review. Any code-fix implementation plan should be created only after review findings are confirmed and prioritized.
 
 ## Success Criteria
 
