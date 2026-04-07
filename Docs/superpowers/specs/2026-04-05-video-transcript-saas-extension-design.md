@@ -53,7 +53,8 @@ V1 should also treat trial management, anonymous identity, lightweight upgrade f
 - Trial behavior should allow a small demo quota:
   - `3` transcript-backed sessions total
   - each session includes transcript access, summary generation, and limited conversation
-- After the quota is exhausted, the user must sign up and pay for a subscription to continue.
+- After the quota is exhausted, the user must sign up and pay for a subscription to start new transcript-backed sessions.
+- Already unlocked sources remain reopenable for transcript, summary, and follow-up chat after quota exhaustion.
 - The main hosted workspace should be a compact video workspace with three tabs:
   - `Transcript`
   - `Summary`
@@ -261,7 +262,7 @@ The recommended contract shape is:
   - `transcript`
   - `summary`
   - `summary_state`
-  - `chat_preview` if seeded preview copy is still desired
+  - optional `chat_preview` only if the hosted page wants presentational empty-state copy; it is not a separate chat API surface
   - `entitlement`
 
 Because V1 now prefers eager summary generation, summary lifecycle belongs to the backend rather than the hosted page. New source flows should normally move through:
