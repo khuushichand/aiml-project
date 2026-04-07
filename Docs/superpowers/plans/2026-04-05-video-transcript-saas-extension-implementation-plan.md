@@ -14,6 +14,7 @@
 
 - Tasks `1` through `9` reflect baseline work that was already completed in earlier implementation passes and are retained as historical context.
 - Do not re-run the "expected fail because files do not exist yet" steps from Tasks `1` through `9` against the current repo state.
+- Tasks `1` through `9` are marked `[Completed Historical Baseline]` below; any remaining unchecked archival step text in those sections is not active todo state.
 - Active remaining work starts at Task `10` below.
 - Use the actual case-sensitive backend test path `tldw_Server_API/tests/Media/test_video_lite_endpoint.py` in commands and commits.
 
@@ -87,7 +88,7 @@
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/shared/video-lite-intent.test.ts`
   - Intent and overlay-client tests.
 
-## Task 1: Add The Backend `video-lite` Contract In `tldw_server`
+## Task 1 [Completed Historical Baseline]: Add The Backend `video-lite` Contract In `tldw_server`
 
 Historical baseline only. This task is already completed in the current worktree and is preserved for implementation history.
 
@@ -140,7 +141,7 @@ git add tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
 git commit -m "feat: add video-lite source-state contract"
 ```
 
-## Task 2: Add Trial Persistence And Idempotent Quota Debit
+## Task 2 [Completed Historical Baseline]: Add Trial Persistence And Idempotent Quota Debit
 
 Historical baseline only. This task is already completed in the current worktree and is preserved for implementation history.
 
@@ -189,7 +190,7 @@ git add tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py \
 git commit -m "feat: add video-lite trial ledger"
 ```
 
-## Task 3: Bootstrap The Private Overlay Repo As A Runnable Workspace
+## Task 3 [Completed Historical Baseline]: Bootstrap The Private Overlay Repo As A Runnable Workspace
 
 Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
@@ -248,7 +249,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add README.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: bootstrap private overlay workspace"
 ```
 
-## Task 4: Create The Sync Workflow And Upstream Manifest
+## Task 4 [Completed Historical Baseline]: Create The Sync Workflow And Upstream Manifest
 
 Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
@@ -299,7 +300,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add docs/upst
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: add overlay sync workflow"
 ```
 
-## Task 5: Sync Selected Existing App Surfaces Into The Private Repo
+## Task 5 [Completed Historical Baseline]: Sync Selected Existing App Surfaces Into The Private Repo
 
 Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
@@ -353,7 +354,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add upstream 
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "chore: import upstream app surfaces"
 ```
 
-## Task 6: Add Private Overlay Client And Intent Helpers
+## Task 6 [Completed Historical Baseline]: Add Private Overlay Client And Intent Helpers
 
 Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
@@ -396,7 +397,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add web/lib/v
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: add overlay video-lite client helpers"
 ```
 
-## Task 7: Build The Private Hosted Lightweight Workspace And Signed-In Intake
+## Task 7 [Completed Historical Baseline]: Build The Private Hosted Lightweight Workspace And Signed-In Intake
 
 Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
@@ -457,7 +458,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add web/compo
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: add private hosted video-lite workspace"
 ```
 
-## Task 8: Build The Private Extension Launcher Overlay
+## Task 8 [Completed Historical Baseline]: Build The Private Extension Launcher Overlay
 
 Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
@@ -505,7 +506,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add extension
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: add private extension video-lite launcher"
 ```
 
-## Task 9: Verification, Security Checks, And Sync Discipline
+## Task 9 [Completed Historical Baseline]: Verification, Security Checks, And Sync Discipline
 
 Historical baseline only. This task is already completed for the already-landed baseline work and is preserved for implementation history.
 
@@ -587,6 +588,10 @@ Document and lock:
 - anonymous retention window
 - whether anonymous trial data is claimable into an account
 - whether "limited follow-up conversation" relies on existing backend limits or needs an explicit V1 per-session cap
+- exact `launcher_access` enum values:
+  - `new_session_allowed`
+  - `reopen_allowed`
+  - `upgrade_required`
 
 - [ ] **Step 2: Commit the policy decision record**
 
@@ -620,7 +625,11 @@ def test_video_lite_workspace_returns_summary_lifecycle(client, authed_headers):
     assert payload["summary_state"] in {"not_requested", "processing", "ready", "failed"}
 ```
 
-Also cover `POST /api/v1/media/video-lite/source` returning enough identity-aware launcher access state to distinguish `reopen_allowed` from `upgrade_required`.
+Also cover `POST /api/v1/media/video-lite/source` returning:
+
+- `launcher_access` in `{"new_session_allowed", "reopen_allowed", "upgrade_required"}`
+- `entitlement`
+- normalized source identity fields
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
@@ -640,6 +649,8 @@ async def get_video_lite_workspace(...):
 - new session allowed
 - reopen already unlocked source
 - upgrade required
+
+When `launcher_access == "reopen_allowed"`, `Ingest` must still route to upgrade or render disabled; only `Open transcript` and `Quick chat` may reopen the already unlocked source.
 
 - [ ] **Step 4: Wire resource-governor mapping and coverage for the new workspace route**
 
@@ -805,6 +816,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "do
 - Treat the extension as launcher-only in V1; transcript reading and durable chat stay in the hosted workspace.
 - Allow exhausted anonymous users to reopen already unlocked sources, but block creation of new transcript-backed sessions.
 - Make launcher routing depend on identity-aware access state from the backend contract, not on source normalization alone.
+- Use the exact `launcher_access` enum values locked in Task `10`; do not invent parallel frontend-only variants.
 - Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
 - Keep workspace reads read-only; do not let polling create duplicate summarization work.
 - Do not add a client-triggered summary create, regenerate, or retry control in V1.

@@ -248,11 +248,15 @@ V1 should compose existing capabilities rather than invent a separate open-sourc
 - derive and persist a canonical normalized-source identity for reuse across extension and hosted lightweight mode
 - make repeated submit requests for the same normalized source idempotent
 
-The launcher-facing source response must include identity-aware access state, not just normalized source identity. It must tell the extension enough to distinguish:
+The launcher-facing source response must include identity-aware access state, not just normalized source identity.
 
-- new session allowed
-- reopen already unlocked source
-- upgrade required
+The contract should expose a `launcher_access` field with these exact V1 values:
+
+- `new_session_allowed`
+- `reopen_allowed`
+- `upgrade_required`
+
+`launcher_access` is the canonical extension-routing field and should be shared consistently across backend, hosted UI helpers, and extension launcher logic.
 
 ## Workspace Contract And Summary Lifecycle
 
@@ -261,7 +265,10 @@ The backend should grow from a source-state contract into a small workspace cont
 The recommended contract shape is:
 
 - keep `POST /api/v1/media/video-lite/source` for normalization, entitlement checks, and ingest kickoff
-- require that `POST /api/v1/media/video-lite/source` returns identity-aware launcher access data such as entitlement plus reopen-vs-upgrade state
+- require that `POST /api/v1/media/video-lite/source` returns:
+  - `launcher_access`
+  - `entitlement`
+  - the normalized source identity fields needed for routing
 - add a backend-backed workspace/status response that includes:
   - `source_key`
   - `source_url`
@@ -326,9 +333,11 @@ The extension should use the following deterministic behavior.
 - `Transcript failed`
   - offer retry and fallback to hosted app
 - `Trial exhausted`
-  - route to sign-up and upgrade
+  - route to sign-up and upgrade, even if this source was already unlocked
 - `Signed in, unsubscribed`
   - route directly to upgrade without a redundant sign-up step
+
+`Ingest` should never reopen an already unlocked source after trial exhaustion. Reopened access is only through `Open transcript` or `Quick chat`. The UI may replace `Ingest` with `Upgrade` or show it disabled, but it must not start or resume ingest once quota is exhausted.
 
 ### `Open transcript`
 
@@ -426,7 +435,7 @@ If ingest never reaches transcript-ready, the session should not be permanently 
 
 The normalization logic used for quota debit must be the same logic used by the orchestration contract for source reuse and idempotency.
 
-If anonymous trial quota is exhausted, the user may still reopen an already unlocked normalized source for transcript, summary, and follow-up chat. Exhaustion only blocks creation of new transcript-backed sessions.
+An "already unlocked" source means a normalized source that previously reached transcript-ready for the current identity and therefore consumed one trial session. If anonymous trial quota is exhausted, the user may still reopen an already unlocked normalized source for transcript, summary, and follow-up chat. Exhaustion only blocks creation of new transcript-backed sessions and any further ingest attempts.
 
 ### State Model
 
