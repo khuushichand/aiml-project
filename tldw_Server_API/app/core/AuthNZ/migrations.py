@@ -150,7 +150,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             key_prefix TEXT,
             name TEXT,
             description TEXT,
-            scope TEXT DEFAULT 'read',
+            scope TEXT,
             status TEXT DEFAULT 'active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,
@@ -182,7 +182,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
         add_col('key_id', "key_id TEXT")
         add_col('key_prefix', "key_prefix TEXT")
         add_col('description', "description TEXT")
-        add_col('scope', "scope TEXT DEFAULT 'read'")
+        add_col('scope', "scope TEXT")
         add_col('status', "status TEXT DEFAULT 'active'")
         add_col('last_used_at', "last_used_at TIMESTAMP")
         add_col('last_used_ip', "last_used_ip TEXT")

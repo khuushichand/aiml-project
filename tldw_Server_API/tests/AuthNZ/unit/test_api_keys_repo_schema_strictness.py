@@ -7,11 +7,9 @@ pytestmark = pytest.mark.unit
 
 
 class _StrictSqlitePool:
-    def __init__(self, *, api_keys_columns: set[str], audit_columns: set[str], sqlite_fs_path: str = "/tmp/strict.db"):
+    def __init__(self, sqlite_fs_path: str = "/tmp/strict.db"):
         self.pool = None
         self._sqlite_fs_path = sqlite_fs_path
-        self._api_keys_columns = api_keys_columns
-        self._audit_columns = audit_columns
 
     async def fetchone(self, query: str, *args):  # noqa: ANN001, ANN002
         lowered = query.lower()
@@ -21,43 +19,39 @@ class _StrictSqlitePool:
             return {"name": "api_key_audit_log"}
         return None
 
-    async def fetchall(self, query: str, *args):  # noqa: ANN001, ANN002
-        lowered = query.lower()
-        if "pragma table_info(api_keys)" in lowered:
-            return [(index, name) for index, name in enumerate(sorted(self._api_keys_columns))]
-        if "pragma table_info(api_key_audit_log)" in lowered:
-            return [(index, name) for index, name in enumerate(sorted(self._audit_columns))]
-        return []
-
 
 @pytest.mark.asyncio
-async def test_api_keys_repo_ensure_tables_raises_on_missing_scope_column_in_strict_mode(monkeypatch):
-    pool = _StrictSqlitePool(
-        api_keys_columns={"id", "user_id", "key_hash"},
-        audit_columns={"id", "api_key_id", "action", "created_at"},
-    )
+async def test_api_keys_repo_ensure_tables_calls_shared_validator_in_strict_mode(monkeypatch):
+    pool = _StrictSqlitePool()
     repo = AuthnzApiKeysRepo(pool)
+    seen_paths: list[str] = []
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo.should_enforce_sqlite_schema_strictness",
         lambda _path: True,
     )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo.validate_required_sqlite_api_key_schema",
+        lambda path: seen_paths.append(path) or (_ for _ in ()).throw(RuntimeError("scope default")),
+    )
 
-    with pytest.raises(RuntimeError, match="scope"):
+    with pytest.raises(RuntimeError, match="scope default"):
         await repo.ensure_tables()
+    assert seen_paths == ["/tmp/strict.db"]
 
 
 @pytest.mark.asyncio
-async def test_api_keys_repo_ensure_tables_allows_missing_scope_when_shared_gate_is_off(monkeypatch):
-    pool = _StrictSqlitePool(
-        api_keys_columns={"id", "user_id", "key_hash"},
-        audit_columns={"id", "api_key_id", "action", "created_at"},
-    )
+async def test_api_keys_repo_ensure_tables_skips_shared_validator_when_gate_is_off(monkeypatch):
+    pool = _StrictSqlitePool()
     repo = AuthnzApiKeysRepo(pool)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo.should_enforce_sqlite_schema_strictness",
         lambda _path: False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo.validate_required_sqlite_api_key_schema",
+        lambda _path: (_ for _ in ()).throw(AssertionError("validator should not run")),
     )
 
     await repo.ensure_tables()

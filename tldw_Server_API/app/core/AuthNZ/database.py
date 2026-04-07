@@ -60,9 +60,36 @@ SQLITE_REQUIRED_API_KEYS_COLUMNS = frozenset(
         "id",
         "user_id",
         "key_hash",
+        "key_id",
+        "key_prefix",
+        "name",
+        "description",
         "scope",
         "status",
         "created_at",
+        "expires_at",
+        "last_used_at",
+        "last_used_ip",
+        "usage_count",
+        "rate_limit",
+        "allowed_ips",
+        "metadata",
+        "rotated_from",
+        "rotated_to",
+        "revoked_at",
+        "revoked_by",
+        "revoke_reason",
+        "is_virtual",
+        "parent_key_id",
+        "org_id",
+        "team_id",
+        "llm_budget_day_tokens",
+        "llm_budget_month_tokens",
+        "llm_budget_day_usd",
+        "llm_budget_month_usd",
+        "llm_allowed_endpoints",
+        "llm_allowed_providers",
+        "llm_allowed_models",
     }
 )
 SQLITE_REQUIRED_API_KEY_AUDIT_COLUMNS = frozenset(
@@ -70,6 +97,10 @@ SQLITE_REQUIRED_API_KEY_AUDIT_COLUMNS = frozenset(
         "id",
         "api_key_id",
         "action",
+        "user_id",
+        "ip_address",
+        "user_agent",
+        "details",
         "created_at",
     }
 )
@@ -222,12 +253,18 @@ def _sqlite_missing_required_columns(
     return sorted(required_columns - present_columns)
 
 
+def _sqlite_table_info_by_name(conn: sqlite3.Connection, table_name: str) -> dict[str, tuple]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row[1]: row for row in rows}
+
+
 def validate_required_sqlite_api_key_schema(sqlite_fs_path: Optional[str]) -> None:
     """Raise when persisted SQLite API-key schema drift is detected."""
     if not sqlite_fs_path or sqlite_fs_path == ":memory:":
         return
 
     with sqlite3.connect(sqlite_fs_path) as conn:
+        api_key_table_info = _sqlite_table_info_by_name(conn, "api_keys")
         missing_api_key_cols = _sqlite_missing_required_columns(
             conn,
             table_name="api_keys",
@@ -237,6 +274,13 @@ def validate_required_sqlite_api_key_schema(sqlite_fs_path: Optional[str]) -> No
             raise RuntimeError(
                 "SQLite api_keys schema missing required columns: "
                 + ", ".join(missing_api_key_cols)
+            )
+
+        scope_default = api_key_table_info["scope"][4]
+        if scope_default is not None:
+            raise RuntimeError(
+                "SQLite api_keys.scope must not define a default; "
+                f"found {scope_default}"
             )
 
         missing_audit_cols = _sqlite_missing_required_columns(
