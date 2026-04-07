@@ -33,6 +33,7 @@ This review is centered on the core Metrics package and its direct edges:
 - `tldw_Server_API/app/core/Metrics/stt_metrics.py`
 - `tldw_Server_API/app/api/v1/endpoints/metrics.py`
 - `tldw_Server_API/app/main.py` for metrics-related route and middleware wiring only
+- direct scrape-time dependencies invoked by the metrics endpoint, especially `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`
 - `Docs/Design/Metrics.md` and other directly referenced Metrics docs where they materially affect operator or contributor understanding
 
 Direct integrations and validation targets are included where they materially exercise or depend on the module contract:
@@ -149,7 +150,7 @@ Primary questions:
 
 Inspect:
 
-- `/metrics/text`, `/metrics/json`, `/metrics/health`, `/metrics/chat`, and `/metrics/reset`
+- `/metrics`, `/api/v1/metrics`, `/metrics/text`, `/metrics/json`, `/metrics/health`, `/metrics/chat`, and `/metrics/reset`
 - metrics-related route and middleware wiring in `app/main.py`
 - mixed export behavior between the registry and `prometheus_client`
 - scrape-time imports or side effects
