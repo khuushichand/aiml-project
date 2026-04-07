@@ -32,6 +32,14 @@ The review should not stop at findings. Each finding should also carry:
 
 The review starts with the Evals backend and its direct edges, beginning from the unified entrypoint and then moving inward and outward in controlled slices.
 
+Review baseline:
+
+- the review targets the current working tree at execution start, not `HEAD` alone
+- before slice 1 begins, the cumulative review document must record:
+  - the current `HEAD` commit
+  - the list of modified and untracked Evals-related files present at review start
+- when a finding is materially affected by an in-progress local edit, the slice notes should say so explicitly instead of implying the issue necessarily exists in the last committed state
+
 Planned slice order:
 
 1. Unified API and auth surface
@@ -44,12 +52,18 @@ Planned slice order:
 3. Persistence and state management
    - `tldw_Server_API/app/core/Evaluations/evaluation_manager.py`
    - directly related DB adapters, factories, and migrations used by Evals
-4. Feature slices
-   - CRUD, RAG pipeline, recipes, benchmarks, datasets, synthetic evals, embeddings A/B testing, and webhooks
-5. Schemas, config coupling, and tests
-   - unified and feature-specific schemas
+4. CRUD and run lifecycle endpoints
+   - evaluation creation, retrieval, history, exports, and run management paths
+5. Retrieval and recipe-driven evaluation surfaces
+   - RAG pipeline endpoints, response-quality surfaces, and recipe execution or tuning paths
+6. Benchmark and dataset generation surfaces
+   - benchmarks, datasets, and synthetic evaluation flows
+7. Embeddings A/B and webhook surfaces
+   - embeddings A/B evaluation endpoints, webhook registration and delivery, and related security checks
+8. Cross-slice contract synthesis
+   - shared schemas
    - evaluation config coupling
-   - focused test coverage used to validate or challenge module assumptions
+   - residual coverage gaps and contract mismatches discovered across prior slices
 
 ### Out of Scope
 
@@ -87,7 +101,7 @@ Weaknesses:
 
 ### 3. Risk-layered hybrid
 
-Review slices in the order: unified API and auth, orchestration, persistence, feature endpoints, then schemas/config/tests.
+Review slices in the order: unified API and auth, orchestration, persistence, discrete feature surfaces, then cross-slice synthesis of shared schemas and residual gaps.
 
 Strengths:
 
@@ -110,8 +124,11 @@ Execution order:
 1. Unified API and auth surface
 2. Core orchestration and execution
 3. Persistence and state management
-4. Feature endpoint slices
-5. Schemas, config coupling, and tests
+4. CRUD and run lifecycle endpoints
+5. Retrieval and recipe-driven evaluation surfaces
+6. Benchmark and dataset generation surfaces
+7. Embeddings A/B and webhook surfaces
+8. Cross-slice contract synthesis
 
 ## 5. Review Method
 
@@ -129,6 +146,8 @@ Each slice review will follow the same workflow:
 5. Add a recommended fix, priority, and test for every finding.
 6. Append the slice section to the cumulative review document before moving to the next slice.
 
+Test review is part of every slice. The final cross-slice synthesis pass should only capture shared schema or config drift and residual coverage gaps that were not already exhausted within the earlier slice reviews.
+
 If a suspected issue cannot be confirmed from static review alone, it should be marked `needs verification` instead of being overstated as a confirmed defect.
 
 If a later slice changes the understanding of an earlier finding, the cumulative review document should be updated in place rather than duplicating the issue.
@@ -143,6 +162,7 @@ That file will be the source of truth for the entire review. It should be update
 
 Planned structure:
 
+- baseline snapshot: `HEAD` commit plus dirty-file inventory at review start
 - review scope and slice order
 - review methodology and severity model
 - one section per reviewed slice
@@ -154,11 +174,18 @@ Planned structure:
 Each slice section should include:
 
 - files reviewed
+- baseline note when in-progress local edits materially affect interpretation
 - short control-flow and data-flow notes
 - findings ordered by severity
-- why each issue matters
-- recommended fix
-- recommended tests
+- each finding must include:
+  - severity
+  - confidence
+  - priority
+  - why it matters
+  - exact file references
+  - recommended fix
+  - recommended tests
+  - verification note or reproduction condition when needed
 - open questions or assumptions
 - slice status: `reviewed`, `needs follow-up`, or `blocked`
 
@@ -203,9 +230,11 @@ A slice is complete when:
 - actionable findings have been appended to the cumulative review document
 - overlaps with earlier slices have been reconciled in the same cumulative document
 - the slice has a final status marker
+- any baseline-sensitive findings are labeled as working-tree-specific when appropriate
 
 The overall review is complete when:
 
+- the initial baseline snapshot is recorded
 - all planned slices have been reviewed
 - cross-slice issues have been synthesized
 - remediation priorities have been summarized

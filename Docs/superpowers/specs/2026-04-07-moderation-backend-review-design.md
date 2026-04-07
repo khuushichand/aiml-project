@@ -17,6 +17,7 @@ This review is centered on the backend moderation surface:
 - `tldw_Server_API/app/core/Moderation/moderation_service.py`
 - `tldw_Server_API/app/api/v1/endpoints/moderation.py`
 - `tldw_Server_API/app/api/v1/schemas/moderation_schemas.py`
+- `tldw_Server_API/app/api/v1/endpoints/chat.py` only where needed to confirm the real moderation enforcement contract
 - moderation-focused backend tests under `tldw_Server_API/tests/`
 
 This includes:
@@ -25,6 +26,8 @@ This includes:
 - blocklist parsing and validation behavior
 - per-user overrides and runtime overrides
 - effective-policy inspection and tester behavior
+- real caller behavior for input and output moderation in the chat backend
+- moderation admin authorization and permission-gating behavior
 - blocklist persistence, optimistic concurrency, and reload semantics
 - test coverage that defines or implies moderation backend contracts
 
@@ -81,6 +84,22 @@ Use the recommended risk-based backend review with five explicit review axes:
 5. `Test adequacy`
    Use unit and integration tests to determine what behavior is actually pinned down, what is only implied, and which high-risk branches appear under-tested.
 
+The review should use this initial audit seed set before expanding further:
+
+- `tldw_Server_API/tests/unit/test_moderation_blocklist_parse.py`
+- `tldw_Server_API/tests/unit/test_moderation_check_text_snippet.py`
+- `tldw_Server_API/tests/unit/test_moderation_effective_settings.py`
+- `tldw_Server_API/tests/unit/test_moderation_env_parse.py`
+- `tldw_Server_API/tests/unit/test_moderation_etag_handling.py`
+- `tldw_Server_API/tests/unit/test_moderation_redact_categories.py`
+- `tldw_Server_API/tests/unit/test_moderation_runtime_overrides_bool.py`
+- `tldw_Server_API/tests/unit/test_moderation_test_endpoint_sample.py`
+- `tldw_Server_API/tests/unit/test_moderation_user_override_contract.py`
+- `tldw_Server_API/tests/unit/test_moderation_user_override_validation.py`
+- `tldw_Server_API/tests/AuthNZ_Unit/test_moderation_permissions_claims.py`
+- `tldw_Server_API/tests/Chat_NEW/integration/test_moderation.py`
+- `tldw_Server_API/tests/Chat_NEW/integration/test_moderation_categories.py`
+
 ## Evidence Model
 
 The review will rely on:
@@ -94,11 +113,13 @@ The review is primarily static and read-first. Runtime verification may be added
 
 When certainty is limited, observations should be labeled as probable risks or open questions rather than overstated as confirmed defects.
 
+For persistence and concurrency claims, the bar should be stricter. If the review raises an issue involving atomicity, reload safety, `If-Match` or ETag conflict behavior, or file-write durability, it should perform targeted verification whenever feasible instead of relying on source inspection alone.
+
 ## Findings Model
 
-The final output should be findings-first and split into two bands.
+The final output should be findings-first and split into clear evidence bands.
 
-### Confirmed findings and high-confidence risks
+### Confirmed findings
 
 These are the primary deliverable. They include:
 
@@ -116,6 +137,10 @@ Each finding should include:
 - why it matters in runtime, safety, or operational terms
 - concrete file and line references
 
+### Probable risks
+
+These are issues that appear material but are not fully proven from the available evidence. They should still include impact and file references, but they must be labeled clearly so they are not mistaken for confirmed defects.
+
 ### Improvements
 
 These are lower-severity but still worthwhile observations, such as:
@@ -126,6 +151,10 @@ These are lower-severity but still worthwhile observations, such as:
 - test additions that materially improve confidence
 
 Minor style commentary and low-signal cleanup should be omitted.
+
+### Open questions
+
+If behavior remains ambiguous after source and test inspection, list the ambiguity explicitly instead of folding it into either confirmed findings or improvements.
 
 ## Severity and Prioritization
 
@@ -144,9 +173,10 @@ The review should bias toward these concrete questions:
 
 - Can config, runtime overrides, and per-user overrides combine into unexpected effective policies?
 - Can malformed blocklist entries or override rules be silently accepted, misparsed, or applied differently than documented?
-- Do input/output phase handling, category handling, and action handling behave consistently across service methods and admin tester surfaces?
+- Do input/output phase handling, category handling, and action handling behave consistently across service methods, admin tester surfaces, and the real `chat.py` caller path?
 - Are blocklist and override persistence paths safe under reloads, partial failures, and concurrent admin edits?
 - Do schemas and endpoint behavior align, or are there request/response edge cases where the API contract is looser or stricter than the service expects?
+- Do moderation admin endpoints enforce the intended role and permission boundaries, and do their tests actually pin that down?
 - Do the tests materially protect the highest-risk moderation semantics, or do they mostly cover happy-path behavior?
 
 ## Execution Boundaries
@@ -168,7 +198,7 @@ The review should bias toward these concrete questions:
 The final response to the user will:
 
 - list findings first, ordered by severity
-- separate confirmed findings and high-confidence risks from lower-severity improvements
+- separate confirmed findings, probable risks, improvements, and open questions
 - include file references and concrete behavioral impact
 - mention important open questions or assumptions only where needed
 
