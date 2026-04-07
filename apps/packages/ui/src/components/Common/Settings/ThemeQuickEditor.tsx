@@ -333,7 +333,7 @@ export function ThemeQuickEditor({
   // Reset all state when modal opens
   useEffect(() => {
     if (open) {
-      originalThemeRef.current = editingTheme
+      originalThemeRef.current = activeTheme
       setPresetId(initialLevers.presetId)
       setPrimaryHex(initialLevers.primaryHex)
       setAccentHex(initialLevers.accentHex)
@@ -345,7 +345,7 @@ export function ThemeQuickEditor({
       setSidebarWidth(initialLevers.sidebarWidth)
       setShadowIntensity(initialLevers.shadowIntensity)
     }
-  }, [open, initialLevers, editingTheme])
+  }, [open, initialLevers, activeTheme])
 
   // Derive the full theme from all current lever values
   const derivedTheme = useMemo(
@@ -457,9 +457,18 @@ export function ThemeQuickEditor({
 
   // --- Advanced placeholder ---
   const handleAdvanced = useCallback(() => {
+    // Restore original theme tokens before closing (undo live preview)
+    const original = originalThemeRef.current
+    const restoreTarget = original ?? activeTheme
+    if (restoreTarget) {
+      const tokens = isDark ? restoreTarget.palette.dark : restoreTarget.palette.light
+      applyThemeTokens(tokens, restoreTarget)
+    } else {
+      clearThemeTokens()
+    }
     void message.info("Advanced editor coming soon (Task 18)")
     onClose()
-  }, [onClose])
+  }, [isDark, activeTheme, onClose])
 
   const presetOptions = useMemo(
     () => getBuiltinPresets().map((p) => ({ value: p.id, label: p.name })),

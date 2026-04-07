@@ -157,7 +157,7 @@ export function ThemeAdvancedEditor({
   // Reset all state when modal opens
   useEffect(() => {
     if (open) {
-      originalThemeRef.current = editingTheme
+      originalThemeRef.current = activeTheme
       const palette = editingTheme?.palette ?? defaultPreset.palette
       setName(editingTheme?.name ?? "My Theme")
       setDescription(editingTheme?.description ?? "")
@@ -168,7 +168,7 @@ export function ThemeAdvancedEditor({
       setLayout(editingTheme?.layout ? { ...editingTheme.layout } : defaultLayout())
       setComponents(editingTheme?.components ? { ...editingTheme.components } : defaultComponents())
     }
-  }, [open, editingTheme, defaultPreset.palette])
+  }, [open, editingTheme, activeTheme, defaultPreset.palette])
 
   // ---- Build current theme for live preview ----
   const currentTheme = useMemo((): ThemeDefinition => ({
@@ -333,11 +333,20 @@ export function ThemeAdvancedEditor({
         okType: "danger",
         onOk: () => {
           onDelete(editingTheme.id)
+          // Restore the original theme (undo live preview of the deleted theme)
+          const original = originalThemeRef.current
+          const restoreTarget = original ?? activeTheme
+          if (restoreTarget) {
+            const tokens = isDark ? restoreTarget.palette.dark : restoreTarget.palette.light
+            applyThemeTokens(tokens, restoreTarget)
+          } else {
+            clearThemeTokens()
+          }
           onClose()
         },
       })
     }
-  }, [editingTheme, onDelete, onClose])
+  }, [editingTheme, onDelete, isDark, activeTheme, onClose])
 
   // ---- Reset button shared component ----
   const ResetButton = useCallback(
@@ -759,11 +768,13 @@ export function ThemeAdvancedEditor({
                   }
                 }
                 return (
-                  <div
+                  <button
                     key={value}
+                    type="button"
+                    aria-pressed={isActive}
                     onClick={() => handleInputStyleChange(value)}
                     className={`
-                      flex-1 p-3 rounded-md cursor-pointer transition-all
+                      flex-1 p-3 rounded-md cursor-pointer transition-all text-left
                       ${isActive
                         ? "ring-2 ring-primary bg-surface"
                         : "bg-surface2 hover:bg-surface"
@@ -777,7 +788,7 @@ export function ThemeAdvancedEditor({
                     >
                       Placeholder...
                     </div>
-                  </div>
+                  </button>
                 )
               })}
             </div>
@@ -819,11 +830,13 @@ export function ThemeAdvancedEditor({
                   }
                 }
                 return (
-                  <div
+                  <button
                     key={value}
+                    type="button"
+                    aria-pressed={isActive}
                     onClick={() => handleCardStyleChange(value)}
                     className={`
-                      flex-1 p-3 rounded-md cursor-pointer transition-all
+                      flex-1 p-3 rounded-md cursor-pointer transition-all text-left
                       ${isActive
                         ? "ring-2 ring-primary bg-surface"
                         : "bg-surface2 hover:bg-surface"
@@ -835,7 +848,7 @@ export function ThemeAdvancedEditor({
                       <div className="text-xs text-text">Card content</div>
                       <div className="text-[10px] text-text-muted mt-1">Description</div>
                     </div>
-                  </div>
+                  </button>
                 )
               })}
             </div>

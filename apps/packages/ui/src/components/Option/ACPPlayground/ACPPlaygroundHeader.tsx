@@ -125,7 +125,26 @@ export const ACPPlaygroundHeader: React.FC<ACPPlaygroundHeaderProps> = ({
                       acpHealthy ? "bg-success" : "bg-error"
                     }`}
                     data-testid="acp-health-indicator"
-                  />
+                    tabIndex={0}
+                    role="status"
+                    aria-label={
+                      acpHealthy
+                        ? t("playground:acp.health.healthy", "ACP backend is healthy")
+                        : t(
+                            "playground:acp.health.unhealthy",
+                            "ACP backend is not configured or unreachable"
+                          )
+                    }
+                  >
+                    <span className="sr-only">
+                      {acpHealthy
+                        ? t("playground:acp.health.healthy", "ACP backend is healthy")
+                        : t(
+                            "playground:acp.health.unhealthy",
+                            "ACP backend is not configured or unreachable"
+                          )}
+                    </span>
+                  </span>
                 </Tooltip>
               )}
             </h1>

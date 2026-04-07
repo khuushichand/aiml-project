@@ -90,7 +90,7 @@ function ThemeSwatch({
       </button>
       {/* Overlay icons on hover */}
       {(onEdit || onDelete || onExport || onDuplicateExport) && (
-        <div className="absolute -top-1.5 -right-1.5 hidden group-hover:flex gap-0.5">
+        <div className="absolute -top-1.5 -right-1.5 hidden group-hover:flex group-focus-within:flex gap-0.5">
           {onEdit && (
             <button
               type="button"

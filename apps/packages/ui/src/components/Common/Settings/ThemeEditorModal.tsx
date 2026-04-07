@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from "react"
 import { Modal, Input, Select, Button, message } from "antd"
 import { Download, Upload } from "lucide-react"
-import type { ThemeColorTokens, ThemeDefinition } from "@/themes/types"
+import type { ThemeColorTokens, ThemeDefinition, ThemeTypography, ThemeShape, ThemeLayout, ThemeComponents } from "@/themes/types"
 import { getBuiltinPresets } from "@/themes/presets"
 import { generateThemeId, validateThemeDefinition, validateLegacyThemeDefinition } from "@/themes/validation"
 import { migrateTheme } from "@/themes/migration"
@@ -52,6 +52,21 @@ export function ThemeEditorModal({
   const [description, setDescription] = useState(editingTheme?.description ?? "")
   const [lightTokens, setLightTokens] = useState<ThemeColorTokens>({ ...initialPalette.light })
   const [darkTokens, setDarkTokens] = useState<ThemeColorTokens>({ ...initialPalette.dark })
+  const [typography, setTypography] = useState<ThemeTypography>(
+    editingTheme?.typography ?? defaultTypography(),
+  )
+  const [shape, setShape] = useState<ThemeShape>(
+    editingTheme?.shape ?? defaultShape(),
+  )
+  const [layout, setLayout] = useState<ThemeLayout>(
+    editingTheme?.layout ?? defaultLayout(),
+  )
+  const [components, setComponents] = useState<ThemeComponents>(
+    editingTheme?.components ?? defaultComponents(),
+  )
+  const [basePresetId, setBasePresetId] = useState<string | undefined>(
+    editingTheme?.basePresetId,
+  )
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -92,15 +107,15 @@ export function ThemeEditorModal({
       version: 1,
       builtin: false,
       palette: { light: { ...lightTokens }, dark: { ...darkTokens } },
-      typography: editingTheme?.typography ?? defaultTypography(),
-      shape: editingTheme?.shape ?? defaultShape(),
-      layout: editingTheme?.layout ?? defaultLayout(),
-      components: editingTheme?.components ?? defaultComponents(),
-      basePresetId: editingTheme?.basePresetId,
+      typography,
+      shape,
+      layout,
+      components,
+      basePresetId,
     }
     onSave(theme)
     onClose()
-  }, [name, description, lightTokens, darkTokens, editingTheme, onSave, onClose])
+  }, [name, description, lightTokens, darkTokens, typography, shape, layout, components, basePresetId, editingTheme, onSave, onClose])
 
   const handleDelete = useCallback(() => {
     if (editingTheme && onDelete) {
@@ -125,11 +140,11 @@ export function ThemeEditorModal({
       version: 1,
       builtin: false,
       palette: { light: { ...lightTokens }, dark: { ...darkTokens } },
-      typography: editingTheme?.typography ?? defaultTypography(),
-      shape: editingTheme?.shape ?? defaultShape(),
-      layout: editingTheme?.layout ?? defaultLayout(),
-      components: editingTheme?.components ?? defaultComponents(),
-      basePresetId: editingTheme?.basePresetId,
+      typography,
+      shape,
+      layout,
+      components,
+      basePresetId,
     }
     const exportData = {
       tldw_theme: true,
@@ -144,7 +159,7 @@ export function ThemeEditorModal({
     a.download = `theme-${theme.id}.json`
     a.click()
     URL.revokeObjectURL(url)
-  }, [name, description, lightTokens, darkTokens, editingTheme])
+  }, [name, description, lightTokens, darkTokens, typography, shape, layout, components, basePresetId, editingTheme])
 
   const handleImport = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -162,7 +177,11 @@ export function ThemeEditorModal({
               theme = raw.theme
             } else {
               try {
-                theme = migrateTheme(raw.theme as Record<string, unknown>)
+                const migrated = migrateTheme(raw.theme as Record<string, unknown>)
+                if (!validateThemeDefinition(migrated)) {
+                  throw new Error("Migrated theme still fails validation")
+                }
+                theme = migrated
               } catch (err) {
                 void message.error(err instanceof Error ? err.message : "Invalid theme in wrapper")
                 return
@@ -172,9 +191,13 @@ export function ThemeEditorModal({
           // Legacy raw format (v0)
           else if (validateLegacyThemeDefinition(raw)) {
             try {
-              theme = migrateTheme(raw as Record<string, unknown>)
-            } catch {
-              void message.error("Invalid legacy theme")
+              const migrated = migrateTheme(raw as Record<string, unknown>)
+              if (!validateThemeDefinition(migrated)) {
+                throw new Error("Migrated legacy theme still fails validation")
+              }
+              theme = migrated
+            } catch (err) {
+              void message.error(err instanceof Error ? err.message : "Invalid legacy theme")
               return
             }
           }
@@ -190,6 +213,11 @@ export function ThemeEditorModal({
           setDescription(theme.description ?? "")
           setLightTokens({ ...theme.palette.light })
           setDarkTokens({ ...theme.palette.dark })
+          setTypography(theme.typography ? { ...theme.typography } : defaultTypography())
+          setShape(theme.shape ? { ...theme.shape } : defaultShape())
+          setLayout(theme.layout ? { ...theme.layout } : defaultLayout())
+          setComponents(theme.components ? { ...theme.components } : defaultComponents())
+          setBasePresetId(theme.basePresetId)
           void message.success(`Theme "${theme.name}" imported`)
         } catch {
           void message.error("Failed to parse theme file")
