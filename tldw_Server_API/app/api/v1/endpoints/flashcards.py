@@ -9,6 +9,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_owner, get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
@@ -34,7 +35,7 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     FlashcardResetSchedulingRequest,
     FlashcardReviewRequest,
     FlashcardReviewResponse,
-    FlashcardResetSchedulingRequest,
+    FlashcardReviewSessionSummary,
     FlashcardTagSuggestionsResponse,
     FlashcardsImportRequest,
     FlashcardTagsUpdate,
@@ -92,6 +93,12 @@ from tldw_Server_API.app.core.StudyPacks.jobs import (
     build_study_pack_job_payload,
     extract_study_pack_source_items,
     study_pack_jobs_queue,
+)
+from tldw_Server_API.app.core.StudySuggestions.jobs import (
+    STUDY_SUGGESTIONS_DOMAIN,
+    STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+    build_study_suggestions_job_payload,
+    study_suggestions_jobs_queue,
 )
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.image_validation import (
@@ -193,6 +200,14 @@ def _attach_scheduler_preview(card: dict[str, Any], deck: dict[str, Any] | None)
     else:
         card["next_intervals"] = build_next_interval_previews(card, raw_settings)
     return card
+
+
+def _build_review_scope_key(*, review_mode: str, deck_id: int | None, tag_filter: str | None = None) -> str:
+    scope_parts = [str(review_mode or "due").strip().lower() or "due"]
+    scope_parts.append(f"deck:{deck_id}" if deck_id is not None else "global")
+    if tag_filter:
+        scope_parts.append(f"tag:{tag_filter}")
+    return ":".join(scope_parts)
 _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     CharactersRAGDBError,
@@ -212,6 +227,10 @@ _STUDY_PACK_JOB_STATUS_MAP = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
+
+
+class ReviewSessionEndRequest(BaseModel):
+    review_session_id: int
 
 
 def _int_env(name: str, default: int) -> int:
@@ -320,6 +339,31 @@ def _public_study_pack_job_error(job: dict[str, Any]) -> str | None:
     if raw_error:
         logger.warning("Study-pack job {} failed: {}", int(job["id"]), raw_error)
     return "Study pack generation failed."
+
+
+def _enqueue_study_suggestions_refresh(
+    *,
+    jm: JobManager,
+    current_user: User,
+    anchor_type: str,
+    anchor_id: int,
+) -> None:
+    try:
+        jm.create_job(
+            domain=STUDY_SUGGESTIONS_DOMAIN,
+            queue=study_suggestions_jobs_queue(),
+            job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+            payload=build_study_suggestions_job_payload(
+                job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+                anchor_type=anchor_type,
+                anchor_id=anchor_id,
+            ),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=1,
+        )
+    except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Study-suggestions refresh enqueue skipped for {}:{}: {}", anchor_type, anchor_id, exc)
 
 
 async def _study_pack_db_for_job(
@@ -1720,7 +1764,22 @@ async def import_flashcards_apkg(
 @router.post("/review", response_model=FlashcardReviewResponse)
 def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
-        updated = db.review_flashcard(payload.card_uuid, payload.rating, payload.answer_time_ms)
+        card = db.get_flashcard(payload.card_uuid)
+        if not card:
+            raise HTTPException(status_code=404, detail=f"Flashcard not found ({payload.card_uuid})")
+        deck_id = int(card["deck_id"]) if card.get("deck_id") is not None else None
+        session = db.get_or_create_flashcard_review_session(
+            deck_id=deck_id,
+            review_mode="due",
+            tag_filter=None,
+            scope_key=_build_review_scope_key(review_mode="due", deck_id=deck_id),
+        )
+        updated = db.review_flashcard(
+            payload.card_uuid,
+            payload.rating,
+            payload.answer_time_ms,
+            review_session_id=session["id"],
+        )
         return updated
     except (SchedulerSettingsError, FsrsSettingsError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1729,6 +1788,51 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
     except CharactersRAGDBError as e:
         logger.error(f"Failed to review flashcard: {e}")
         raise HTTPException(status_code=500, detail="Failed to review flashcard") from e
+
+
+@router.get("/review-sessions", response_model=list[FlashcardReviewSessionSummary])
+def list_review_sessions(
+    deck_id: Optional[int] = Query(None, ge=1),
+    scope_key: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=200),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        return db.list_flashcard_review_sessions(
+            deck_id=deck_id,
+            scope_key=scope_key,
+            status=status,
+            limit=limit,
+        )
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to list flashcard review sessions: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list flashcard review sessions") from exc
+
+
+@router.post("/review-sessions/end", response_model=FlashcardReviewSessionSummary)
+def end_review_session(
+    payload: ReviewSessionEndRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    try:
+        session = db.mark_flashcard_review_session_completed(int(payload.review_session_id))
+        _enqueue_study_suggestions_refresh(
+            jm=jm,
+            current_user=current_user,
+            anchor_type="flashcard_review_session",
+            anchor_id=int(session["id"]),
+        )
+        return session
+    except ConflictError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to complete flashcard review session: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to complete flashcard review session") from exc
 
 
 @router.get("/review/next", response_model=FlashcardNextReviewResponse)

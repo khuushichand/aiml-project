@@ -1415,6 +1415,9 @@ else:
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+    from tldw_Server_API.app.api.v1.endpoints.study_suggestions import (
+        router as study_suggestions_router,
+    )
     from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
         public_router as llamacpp_public_router,
     )
@@ -2476,6 +2479,7 @@ async def lifespan(app: FastAPI):
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
     study_pack_jobs_task = None
+    study_suggestions_jobs_task = None
     reminder_jobs_task = None
     admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
@@ -2489,6 +2493,7 @@ async def lifespan(app: FastAPI):
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
     study_pack_jobs_stop_event = None
+    study_suggestions_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reminders_sched_task = None
@@ -2720,6 +2725,26 @@ async def lifespan(app: FastAPI):
             logger.info("Study-pack Jobs worker disabled by flag (STUDY_PACK_JOBS_WORKER_ENABLED)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Study-pack Jobs worker: {e}")
+
+    # Study-suggestions Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_SUGGESTIONS_JOBS_WORKER_ENABLED", "study-suggestions")
+        if _enabled:
+            from tldw_Server_API.app.services.study_suggestions_jobs_worker import (
+                run_study_suggestions_jobs_worker as _run_study_suggestions_jobs,
+            )
+
+            study_suggestions_jobs_stop_event = _asyncio.Event()
+            study_suggestions_jobs_task = _asyncio.create_task(
+                _run_study_suggestions_jobs(study_suggestions_jobs_stop_event)
+            )
+            logger.info("Study-suggestions Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-suggestions Jobs worker disabled by flag (STUDY_SUGGESTIONS_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-suggestions Jobs worker: {e}")
 
     # Privilege snapshot worker
     try:
@@ -4072,6 +4097,16 @@ async def lifespan(app: FastAPI):
                     study_pack_jobs_task.cancel()
             else:
                 study_pack_jobs_task.cancel()
+        if "study_suggestions_jobs_task" in locals() and study_suggestions_jobs_task:
+            if "study_suggestions_jobs_stop_event" in locals() and study_suggestions_jobs_stop_event:
+                try:
+                    study_suggestions_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_suggestions_jobs_task, timeout=5.0)
+                    logger.info("Study-suggestions Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_suggestions_jobs_task.cancel()
+            else:
+                study_suggestions_jobs_task.cancel()
         if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
             if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
                 try:
@@ -6441,6 +6476,14 @@ elif _MINIMAL_TEST_APP:
         app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
     except _IMPORT_EXCEPTIONS as _quiz_min_err:
         logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.study_suggestions import (
+            router as study_suggestions_router,
+        )
+
+        app.include_router(study_suggestions_router, prefix=f"{API_V1_PREFIX}", tags=["study-suggestions"])
+    except _IMPORT_EXCEPTIONS as _study_suggestions_min_err:
+        logger.debug(f"Skipping study_suggestions router in minimal test app: {_study_suggestions_min_err}")
     # Writing Playground endpoints (ChaChaNotes-backed) for integration tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
@@ -7139,6 +7182,13 @@ else:
     )
     _include_if_enabled(
         "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
+    )
+    _include_if_enabled(
+        "study-suggestions",
+        study_suggestions_router,
+        prefix=f"{API_V1_PREFIX}",
+        tags=["study-suggestions"],
+        default_stable=True,
     )
     if "writing_router" in locals() and writing_router is not None:
         _include_if_enabled(

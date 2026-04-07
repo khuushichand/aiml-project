@@ -357,11 +357,25 @@ export type FlashcardReviewResponse = {
   step_index?: number | null
   suspended_reason?: Flashcard["suspended_reason"]
   next_intervals: FlashcardIntervalPreviews
+  review_session_id?: number | null
 }
 
 export type FlashcardNextReviewResponse = {
   card?: Flashcard | null
   selection_reason?: "learning_due" | "review_due" | "new" | "none" | null
+}
+
+export type FlashcardReviewSessionSummary = {
+  id: number
+  deck_id?: number | null
+  review_mode: string
+  tag_filter?: string | null
+  scope_key: string
+  status: string
+  started_at?: string | null
+  last_activity_at?: string | null
+  completed_at?: string | null
+  client_id: string
 }
 
 export type FlashcardTagSuggestionItem = {
@@ -641,6 +655,41 @@ export async function getNextReviewCard(
   return await bgRequest<FlashcardNextReviewResponse, AllowedPath, "GET">({
     path: `/api/v1/flashcards/review/next${query}` as AllowedPath,
     method: "GET"
+  })
+}
+
+export async function listRecentFlashcardReviewSessions(params?: {
+  deck_id?: number | null
+  scope_key?: string | null
+  status?: string | null
+  limit?: number | null
+  signal?: AbortSignal
+}): Promise<FlashcardReviewSessionSummary[]> {
+  const query = buildQuery({
+    deck_id: params?.deck_id,
+    scope_key: params?.scope_key,
+    status: params?.status,
+    limit: params?.limit ?? 20
+  })
+  return await bgRequest<FlashcardReviewSessionSummary[], AllowedPath, "GET">({
+    path: `/api/v1/flashcards/review-sessions${query}` as any,
+    method: "GET",
+    abortSignal: params?.signal
+  })
+}
+
+export async function endFlashcardReviewSession(
+  reviewSessionId: number,
+  options?: { signal?: AbortSignal }
+): Promise<FlashcardReviewSessionSummary> {
+  return await bgRequest<FlashcardReviewSessionSummary, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/review-sessions/end" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      review_session_id: reviewSessionId
+    },
+    abortSignal: options?.signal
   })
 }
 
