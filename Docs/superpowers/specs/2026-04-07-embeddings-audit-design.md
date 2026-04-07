@@ -30,6 +30,12 @@ This design intentionally excludes implementation changes. The deliverable is a 
   - `tldw_Server_API/app/core/LLM_Calls/providers/huggingface_embeddings_adapter.py`
 - Critical tests that validate correctness invariants.
 
+### Scope Boundary Rules
+
+- Include a support module only if it is on an active call path from in-scope endpoints/core files and can alter embedding correctness or persistence semantics.
+- Exclude cross-domain modules that only consume embeddings downstream unless they mutate embeddings, metadata coupling, or storage invariants.
+- Keep ABTest/Evaluations excluded even when shared utilities exist; shared utility review is limited to interface contract checks required by in-scope paths.
+
 ### Out of Scope
 
 - Embeddings ABTest/Evaluations subsystem and related evaluation workflow files.
@@ -66,6 +72,12 @@ To reduce false positives and over-claiming:
 - Use minimal runtime spot checks for disputed behavior.
 - If certainty is limited, record as an open question instead of asserting defect.
 
+### Test Selection Rules
+
+- Prioritize tests that cover vector shape/dimension integrity, ordering stability, adapter normalization, fallback behavior, and persistence round-trips.
+- Avoid full-suite expansion unless a suspected defect requires broader integration evidence.
+- For each finding tied to tests, record the exact test file(s) used as evidence.
+
 ## 5. Output Format
 
 The review report will be findings-first and ordered by severity:
@@ -74,6 +86,13 @@ The review report will be findings-first and ordered by severity:
 2. High
 3. Medium
 4. Low
+
+### Severity Rubric
+
+- Critical: Demonstrable path to silent data corruption, persisted integrity break, or incorrect embeddings returned without reliable detection.
+- High: High-probability correctness failure with user-visible wrong results or durable inconsistency under realistic conditions.
+- Medium: Correctness risk exists but requires narrower conditions, feature flags, or uncommon failure timing.
+- Low: Defensive hardening gaps with limited immediate correctness impact.
 
 Each finding will include:
 
@@ -103,3 +122,4 @@ The design is successful when:
 - Findings are evidence-backed and reproducible at the code-path level.
 - Report is actionable without requiring additional interpretation.
 - No implementation action is taken before explicit user request.
+- The report includes explicit severity rationale and traceable evidence sources for each finding.
