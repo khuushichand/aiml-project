@@ -81,7 +81,13 @@ The repository already has a dedicated Audit subsystem and supporting documentat
 - dedicated guide in `Docs/Code_Documentation/Guides/Audit_Module_Code_Guide.md`
 - dedicated tests in `tldw_Server_API/tests/Audit/`
 
-The module also has a broad integration footprint in backend callers, including AuthNZ, Chat, Embeddings, Evaluations, Sharing, Jobs, and MCP-related components.
+The module also has a broad integration footprint in backend callers, including AuthNZ, Chat, Embeddings, Evaluations, Sharing, Jobs, MCP-related components, RAG-adjacent surfaces, and Workflow paths.
+
+Because the current workspace may contain uncommitted changes in Audit-related files, the execution plan must declare its review baseline explicitly:
+
+- review the current working tree by default
+- note when a finding depends on uncommitted local changes
+- avoid presenting worktree-only behavior as repository-wide history without saying so
 
 ## Review Architecture
 
@@ -99,9 +105,9 @@ This approach is preferred because it is most likely to surface production-impac
 
 ## Inspection Slices
 
-### 1. Core Service Reliability
+### 1. Core Service and Migration Reliability
 
-Inspect the audit core for:
+Inspect the audit core and migration path for:
 
 - buffer and flush semantics
 - high-risk immediate flush logic
@@ -112,10 +118,12 @@ Inspect the audit core for:
 - fallback queue append behavior
 - shared/per-user storage mode handling
 - query and export helper safety assumptions
+- shared-db migration correctness, resumability, and partial-failure behavior
 
-Primary file:
+Primary files:
 
 - `tldw_Server_API/app/core/Audit/unified_audit_service.py`
+- `tldw_Server_API/app/core/Audit/audit_shared_migration.py`
 
 ### 2. Service Lifecycle and Tenancy
 
@@ -129,11 +137,13 @@ Inspect the dependency layer and DB path resolution for:
 - shared storage enablement rules
 - rollback precedence
 - potential tenant scoping mistakes
+- audit-related configuration resolution and precedence
 
 Primary files:
 
 - `tldw_Server_API/app/api/v1/API_Deps/Audit_DB_Deps.py`
 - `tldw_Server_API/app/core/DB_Management/db_path_utils.py`
+- `tldw_Server_API/app/core/config.py`
 
 ### 3. Export, Filtering, and Admin Access
 
@@ -172,6 +182,8 @@ Priority integration areas:
 - Jobs
 - Sharing
 - MCP
+- RAG
+- Workflows
 
 ### 5. Coverage and Drift
 
@@ -247,6 +259,12 @@ Then sample related audit-focused tests in:
 
 Selection should be driven by audit integration coverage rather than blanket execution of unrelated suites.
 
+Selection rule:
+
+- identify candidate tests by searching for direct Audit module references or explicit audit-side-effect assertions
+- choose at least one representative audit-focused test module for each priority integration area that appears to have meaningful coverage
+- expand beyond representative tests only when a finding requires deeper verification
+
 ## Deliverable Format
 
 The final review output should present:
@@ -258,6 +276,7 @@ The final review output should present:
 5. open questions or assumptions
 6. improvement suggestions separated from bug findings
 7. a short verification note listing what tests were run and what remains unverified
+8. a baseline note stating whether each major finding is based on the current worktree, committed behavior, static inspection, test execution, or a combination
 
 The report should be readable as a review document first, not a changelog.
 
@@ -270,4 +289,6 @@ This design is ready to hand off to implementation planning if the resulting pla
 - targeted pytest commands
 - a method for recording evidence against each finding
 - a structure for separating findings from improvements
+- a declared review baseline for handling dirty-worktree conditions
+- explicit config and migration inspection steps
 - a final verification step before presenting conclusions
