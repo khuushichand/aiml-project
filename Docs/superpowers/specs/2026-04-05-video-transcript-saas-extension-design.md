@@ -86,7 +86,7 @@ V1 should also treat auth and subscription gating, lightweight upgrade flow, and
 The repo contains billing primitives, but the lightweight product still needs explicit sign-in and subscription gating behavior. V1 therefore must explicitly include:
 
 - signed-out routing into login
-- signed-in but unsubscribed routing into upgrade or checkout
+- signed-in but unsubscribed routing into a branded lightweight upgrade wrapper
 - subscribed access to ingest and workspace entry
 - deterministic launcher behavior across those access states
 
@@ -302,7 +302,7 @@ The primary user flow is:
 1. User opens a supported YouTube page.
 2. Extension detects the current video and offers `Ingest`, `Open transcript`, and `Quick chat`.
 3. If the user is signed out, the extension routes them into login.
-4. If the user is signed in but unsubscribed, the extension routes them into upgrade or checkout.
+4. If the user is signed in but unsubscribed, the extension routes them into the branded lightweight upgrade wrapper.
 5. If the user is signed in and subscribed, the extension triggers ingest when needed and shows shallow progress feedback.
 6. Once transcript-ready, the user is routed into the hosted lightweight workspace.
 7. The backend generates the default summary as part of the same workspace lifecycle.
@@ -432,7 +432,7 @@ Recommended user states:
 - Auth and subscription enforcement must be server-side.
 - `launcher_access` must be the canonical launcher-routing field.
 - Signed-out users should be routed into login.
-- Signed-in but unsubscribed users should be routed into upgrade or checkout.
+- Signed-in but unsubscribed users should be routed into a branded lightweight upgrade wrapper, not directly into a generic app shell.
 - Signed-in subscribed users may access broader source ingest according to product entitlement.
 
 The core conversion message should be value-based and direct:
@@ -444,7 +444,7 @@ The core conversion message should be value-based and direct:
 V1 should assume billing primitives exist, but should not assume the end-user upgrade flow is already shaped for this lightweight product. The implementation plan should therefore include:
 
 - a branded upgrade entry point from lightweight mode
-- a branded checkout or subscription handoff
+- a dedicated branded wrapper that hands off into the existing checkout or subscription primitives
 - a branded post-purchase return path into the lightweight workspace
 
 The upgrade flow should preserve user intent. At minimum it should carry forward:
@@ -524,8 +524,7 @@ These do not block the design, but they must be answered in planning:
 - What should the new private overlay project be named and where should it live as a sibling to `tldw_server`?
 - Which frontend paths should be synced from the existing app versus replaced by private-only implementations?
 - Will the overlay use a fork, vendored sync, or scripted copy-plus-patch workflow?
-- Should the private hosted frontend use an existing checkout surface with branding changes, or a narrower dedicated upgrade wrapper over current billing primitives?
 
 ## Decision
 
-Ship V1 as a separate private overlay product repo with its own hosted frontend and extension, backed by the existing `tldw` hosted ingestion, transcript, summary, chat, auth, and billing foundations, with explicit V1 delivery scope for subscription gating, launcher state handling, orchestration, privacy/retention behavior, repo separation, and upstream sync/patch-overlay maintenance.
+Ship V1 as a separate private overlay product repo with its own hosted frontend and extension, backed by the existing `tldw` hosted ingestion, transcript, summary, chat, auth, and billing foundations, with explicit V1 delivery scope for subscription gating, launcher state handling, orchestration, privacy/retention behavior, repo separation, upstream sync/patch-overlay maintenance, and a branded lightweight upgrade wrapper over existing billing primitives.

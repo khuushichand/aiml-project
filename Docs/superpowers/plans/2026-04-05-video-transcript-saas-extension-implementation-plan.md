@@ -66,7 +66,7 @@ Historical baseline note:
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/video/[sourceKey].tsx`
   - Hosted lightweight workspace route.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/upgrade.tsx`
-  - Upgrade wrapper that preserves source and target-tab intent.
+  - Dedicated branded upgrade wrapper that preserves source and target-tab intent, then hands off into the existing billing primitives.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/login.tsx`
   - Product login entry that preserves lightweight return intent.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
@@ -834,6 +834,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "do
 - Treat the extension as launcher-only in V1; transcript reading and durable chat stay in the hosted workspace.
 - Make launcher routing depend on identity-aware access state from the backend contract, not on source normalization alone.
 - Use the exact `launcher_access` enum values locked in Task `10`; do not invent parallel frontend-only variants.
+- Keep `/lite/upgrade` as a branded wrapper over the existing checkout or subscription primitives rather than sending users straight into a generic billing surface.
 - Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
 - Keep workspace reads read-only; do not let polling create duplicate summarization work.
 - Do not add a client-triggered summary create, regenerate, or retry control in V1.
