@@ -1,4 +1,5 @@
 import type { ThemeDefinition } from "./types"
+import { validateThemeDefinition } from "./validation"
 import {
   CURRENT_THEME_VERSION,
   defaultTypography,
@@ -11,7 +12,7 @@ import {
 
 /**
  * Migrate a theme from any older version to the current schema.
- * Throws if the version is newer than supported.
+ * Throws if the version is newer than supported or if the result is invalid.
  */
 export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
   const version = typeof raw.version === "number" ? raw.version : 0
@@ -22,11 +23,13 @@ export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
     )
   }
 
-  if (version < 1) {
-    return migrateV0ToV1(raw)
+  const result = version < 1 ? migrateV0ToV1(raw) : raw
+
+  if (!validateThemeDefinition(result)) {
+    throw new Error("Theme failed validation after migration.")
   }
 
-  return raw as unknown as ThemeDefinition
+  return result
 }
 
 function migrateV0ToV1(raw: Record<string, unknown>): ThemeDefinition {

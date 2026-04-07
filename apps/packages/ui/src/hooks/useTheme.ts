@@ -36,7 +36,7 @@ export function useTheme() {
     [isDark, themeDefinition]
   )
 
-  // Apply CSS custom properties when tokens change
+  // Apply CSS custom properties when tokens or any theme section changes
   useEffect(() => {
     if (themeDefinition.id === "default") {
       // For the default theme, remove inline overrides so the stylesheet values apply.
@@ -45,7 +45,7 @@ export function useTheme() {
     } else {
       applyThemeTokens(tokens, themeDefinition)
     }
-  }, [tokens, themeDefinition.id])
+  }, [tokens, themeDefinition])
 
   // Clean up inline styles if component unmounts (e.g., during HMR)
   useEffect(() => {

@@ -1,4 +1,4 @@
-export type { RGBTriple, ThemeColorTokens, ThemePalette, ThemeDefinition, ThemeTypography, ThemeShape, ThemeLayout, ThemeComponents } from "./types"
+export type { RGBTriple, ThemeColorTokens, ThemeRgbTokenKey, ThemePalette, ThemeDefinition, ThemeTypography, ThemeShape, ThemeLayout, ThemeComponents } from "./types"
 export { getBuiltinPresets, getAllPresets, getThemeById, getDefaultTheme } from "./presets"
 export { applyThemeTokens, clearThemeTokens } from "./apply-theme"
 export { buildAntdThemeConfig, rgbTripleToHex } from "./antd-theme"
