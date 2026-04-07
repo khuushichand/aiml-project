@@ -51,6 +51,7 @@ There is no strong evidence in the current code or docs that Sharing requires pe
 - Replacing `/api/v1/sharing/admin/audit` with the generic `/api/v1/audit/*` model.
 - Removing all legacy Sharing audit structures in the same tranche.
 - Broad audit taxonomy cleanup outside the touched domains.
+- Expanding generic audit surfaces to aggregate Sharing events under `per_user` mode in this tranche.
 
 ## Confirmed Problems Being Addressed
 
@@ -171,6 +172,24 @@ Changes:
 - Preserve the Sharing domain-facing service so call sites stay semantically clear.
 - Preserve `/api/v1/sharing/admin/audit` by projecting unified audit rows back into the existing Sharing response schema.
 
+### D. Dedicated Sharing Audit Boundary
+
+Touched areas:
+
+- `tldw_Server_API/app/core/Sharing/share_audit_service.py`
+- Supporting DI or factory helpers near the Audit and Sharing boundary
+
+Changes:
+
+- Introduce a dedicated Sharing audit service or factory boundary that always resolves the correct unified-audit backend for Sharing events.
+- Do not expose the shared-storage exception as a generic option that unrelated callers can accidentally reuse.
+- Keep the exception local to Sharing audit orchestration.
+
+Constraints:
+
+- General audit callers must continue to follow normal `per_user` or `shared` storage rules.
+- Sharing-specific storage resolution must be explicit and isolated.
+
 ## Storage Decision For Sharing Audit
 
 Sharing audit uses unified audit persistence, but it does not follow the general per-user storage split.
@@ -186,11 +205,35 @@ Reason:
 - Reconstructing it from per-user DB fan-out would be operationally fragile and much more expensive.
 - Sharing is already a cross-user domain, so a shared audit backing is the pragmatic long-term choice.
 
+Implementation boundary:
+
+- This shared-storage exception must be hidden behind a dedicated Sharing audit resolver or factory.
+- No unrelated audit caller should opt into it accidentally.
+
 ## Sharing Event Mapping
 
 ### Source Of Truth
 
 All new Sharing audit persistence will use unified audit.
+
+### Owner And Actor Semantics
+
+Sharing audit has two distinct user identities:
+
+- owner: the user who owns the shared resource
+- actor: the user or system principal that performed the action
+
+This tranche makes those roles explicit instead of overloading one field.
+
+Rules:
+
+- `tenant_user_id` in shared unified-audit storage represents `owner_user_id` for Sharing events.
+- `context.user_id` represents the actor or request user when present.
+- If no actor exists for a system-generated event, `context.user_id` may be omitted or set to a system identity according to the surrounding code path.
+- `metadata.owner_user_id` is retained for compatibility and migration clarity.
+- `metadata.actor_user_id` is retained for compatibility projection.
+
+This preserves owner-based queryability without changing the general meaning of `context.user_id` for the rest of unified audit.
 
 ### Event Representation
 
@@ -200,7 +243,8 @@ For Sharing events:
 - `resource_type`: unchanged
 - `resource_id`: unchanged
 - `action`: by default mirror the Sharing event string unless a stronger existing normalized action is already required
-- `context.user_id`: store `owner_user_id` so owner-based filtering remains queryable
+- `tenant_user_id`: owner user for shared-storage queryability
+- `context.user_id`: actor user when present
 - `metadata.actor_user_id`: preserve actor when present
 - `metadata.share_id`: preserve share identifier when present
 - `metadata.token_id`: preserve token identifier when present
@@ -220,6 +264,20 @@ This design will preserve one explicitly:
 - `/api/v1/sharing/admin/audit` will return that stable compatibility id in the existing `id` field.
 
 This id must not be synthesized at read time from ordering or pagination position.
+
+### Compatibility Id Transaction Rules
+
+The compatibility-id mechanism must be transactional.
+
+Rules:
+
+- Compatibility-id allocation and unified audit event insertion must occur in the same database transaction.
+- A transaction that allocates an id but fails before the event is committed must not produce a visible partial event.
+- If migration is rerun after new Sharing writes already exist, the effective sequence floor becomes the maximum of:
+  - the highest migrated legacy compatibility id
+  - the current stored sequence value
+  - the highest compatibility id already present in unified audit
+- Sequence advancement must be monotonic and non-destructive.
 
 ## Sharing Admin Audit Compatibility
 
@@ -247,10 +305,10 @@ Mapped fields:
 
 - `id`: stable compatibility id
 - `event_type`: original Sharing event string
-- `actor_user_id`: from metadata
+- `actor_user_id`: from metadata and compatibility projection
 - `resource_type`: from unified audit
 - `resource_id`: from unified audit
-- `owner_user_id`: from queryable owner mapping and compatibility metadata
+- `owner_user_id`: from `tenant_user_id`, with metadata retained only for compatibility verification
 - `share_id`: from metadata
 - `token_id`: from metadata
 - `metadata`: compatibility-safe metadata payload
@@ -268,7 +326,7 @@ The endpoint must preserve current practical filtering semantics for:
 - `limit`
 - `offset`
 
-`owner_user_id` must remain first-class and queryable; it must not rely on opaque metadata scanning.
+`owner_user_id` remains first-class and queryable through `tenant_user_id`; it must not rely on opaque metadata scanning.
 
 ## Historical Sharing Audit Migration
 
@@ -295,13 +353,14 @@ Migration must also initialize the shared unified-audit compatibility-id sequenc
 
 - all migrated legacy ids are reserved
 - new Sharing events allocate ids strictly above the migrated maximum
+- reruns after fresh unified Sharing writes do not regress the stored sequence floor
 
 ### Cutover Sequence
 
 1. Add unified Sharing writer and compatibility reader.
 2. Add idempotent Sharing history migration.
 3. Run migration and verify counts and sample reads.
-4. Advance the compatibility-id sequence ceiling.
+4. Advance the compatibility-id sequence ceiling transactionally.
 5. Retire legacy writes to `share_audit_log`.
 6. Treat unified audit as authoritative for `/sharing/admin/audit`.
 
@@ -350,6 +409,22 @@ The mapping must be explicit.
 
 If an existing Sharing behavior clearly depends on a different severity for a specific event, the implementation may specialize that event, but the above becomes the default contract.
 
+## Generic Audit Visibility Decision
+
+This tranche makes the source-of-truth decision explicit but keeps generic audit visibility bounded.
+
+Decision:
+
+- `/api/v1/sharing/admin/audit` is the required operator-facing compatibility surface for Sharing audit in all modes.
+- When the global audit mode is `shared`, Sharing events may naturally be visible through generic unified audit surfaces.
+- When the global audit mode is `per_user`, this tranche does not require `/api/v1/audit/*` to aggregate or expose Sharing events from the shared Sharing-audit path.
+
+Reason:
+
+- The primary compatibility obligation is the Sharing admin audit API.
+- Expanding generic audit aggregation under `per_user` mode would increase scope and create a second cross-surface compatibility contract.
+- The source-of-truth decision still holds because Sharing persistence lives in unified audit, even if generic audit surfaces do not expose it in every mode yet.
+
 ## Error Handling
 
 ### Audit Core
@@ -381,7 +456,7 @@ Add or keep tests covering:
 - Fresh writes after migration with valid `chain_hash`
 - Failed flush does not advance chain head
 - Fallback replay restores valid chain hashes
-- Buffered count/export flush semantics
+- Buffered count and export flush semantics
 
 ### Lifecycle Tests
 
@@ -397,11 +472,13 @@ Add tests covering:
 
 - New Sharing events write only to unified audit
 - Sharing writes use the shared unified-audit path regardless of global per-user mode
+- Owner and actor identities remain distinct in stored Sharing events
 - Legacy `share_audit_log` rows migrate into unified audit
 - Migration is idempotent
 - `/sharing/admin/audit` preserves the current response contract using unified-backed data
 - `owner_user_id` filtering remains correct after unification
 - Compatibility id remains stable for both migrated and new rows
+- Compatibility-id allocation is atomic with event insertion
 
 ### Verification Commands
 
