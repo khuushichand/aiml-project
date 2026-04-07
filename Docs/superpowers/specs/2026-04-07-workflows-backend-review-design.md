@@ -18,18 +18,22 @@ The deliverable is a prioritized findings report with evidence, not a patch set.
 - Backend Workflows API surfaces:
   - `tldw_Server_API/app/api/v1/endpoints/workflows.py`
   - `tldw_Server_API/app/api/v1/endpoints/scheduler_workflows.py`
+  - `tldw_Server_API/app/api/v1/schemas/workflows.py`
 - Core execution and orchestration:
   - `tldw_Server_API/app/core/Workflows/engine.py`
   - `tldw_Server_API/app/core/Workflows/registry.py`
   - `tldw_Server_API/app/core/Workflows/capabilities.py`
   - `tldw_Server_API/app/core/Workflows/investigation.py`
+  - `tldw_Server_API/app/core/Workflows/daily_ledger.py`
+  - `tldw_Server_API/app/core/Workflows/subprocess_utils.py`
   - high-risk adapter boundaries under `tldw_Server_API/app/core/Workflows/adapters/`
 - Persistence and scheduling layers:
   - `tldw_Server_API/app/core/DB_Management/Workflows_DB.py`
   - `tldw_Server_API/app/core/DB_Management/Workflows_Scheduler_DB.py`
+  - `tldw_Server_API/app/core/Scheduler/handlers/workflows.py`
   - `tldw_Server_API/app/services/workflows_scheduler.py`
   - related support services for artifact GC, DB maintenance, and webhook DLQ handling
-- Tests under `tldw_Server_API/tests/Workflows/` and closely related backend workflow tests when they define or imply core contracts
+- Tests under `tldw_Server_API/tests/Workflows/` and closely related backend workflow tests when they define or imply core contracts, especially AuthNZ, Resource_Governance, and DB-management tests tied to workflow permissions, quota, and persistence behavior
 
 ### Out of Scope
 
@@ -61,6 +65,21 @@ These guarantees will be checked in two directions:
 - Use the existing tests to infer claimed behavior and supported invariants
 - Identify weak assertions, missing edge cases, and uncovered control-flow branches
 - Treat gaps in test coverage as risk signals, not defects by themselves
+
+The audit will run in four focused passes:
+
+1. Contract and authorization pass
+- Trace API request/response contracts, schema normalization, permission checks, ownership checks, and scheduler handoff expectations
+
+2. Lifecycle and persistence pass
+- Trace run creation, step execution, status transitions, retry/idempotency behavior, event sequencing, artifact persistence, and quota/ledger side effects
+
+3. Boundary and operations pass
+- Inspect adapters and helpers that touch network egress, subprocesses, filesystem paths, webhook delivery, or long-running scheduler behavior
+
+4. Evidence and verification pass
+- Convert suspected issues into evidence-backed findings
+- Use targeted, minimal test execution only where static trace review is insufficient to confirm or reject a suspected invariant break
 
 ## 4. Review Areas
 
@@ -121,6 +140,7 @@ After findings, include:
 - No implementation or patching in this phase
 - No expansion into frontend workflow surfaces
 - No unrelated refactoring recommendations
+- Keep adapter review selective: prioritize adapters and helpers that materially affect safety, control flow, or operational risk rather than attempting an exhaustive read of every adapter file
 - Keep the review focused on issues that would matter to operators, maintainers, or users of the backend workflows system
 
 ## 8. Success Criteria
