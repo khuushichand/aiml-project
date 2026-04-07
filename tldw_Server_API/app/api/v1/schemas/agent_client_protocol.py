@@ -632,12 +632,23 @@ class ACPSessionBudgetResponse(BaseModel):
     budget_remaining: int | None = Field(default=None, description="Tokens remaining in budget")
 
 
+class ACPHealthRouteStatus(BaseModel):
+    """Route-gating status for ACP endpoints."""
+    stable_only: bool = Field(..., description="Whether the server is in stable-only route mode")
+    acp_enabled: bool = Field(..., description="Whether ACP routes are currently enabled")
+    note: str | None = Field(
+        default=None,
+        description="Helpful note when ACP might be hidden by route gating",
+    )
+
+
 class ACPHealthResponse(BaseModel):
     """ACP dependency chain health check response."""
     timestamp: str = Field(..., description="ISO 8601 timestamp")
     runner: dict[str, Any] = Field(default_factory=dict, description="Runner binary status")
     agents: list[dict[str, Any]] = Field(default_factory=list, description="Downstream agent statuses")
     runner_probe: dict[str, Any] = Field(default_factory=dict, description="Runner process probe result")
+    routes: ACPHealthRouteStatus | None = Field(default=None, description="Route-gating status")
     overall: str = Field(default="unknown", description="ok | degraded | unavailable")
     message: str | None = Field(default=None, description="Human-readable status message")
 

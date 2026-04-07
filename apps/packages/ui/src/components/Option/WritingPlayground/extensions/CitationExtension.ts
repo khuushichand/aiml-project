@@ -2,6 +2,7 @@ import { Mark, mergeAttributes } from "@tiptap/core"
 
 export const CitationExtension = Mark.create({
   name: "citation",
+  inclusive: false,
 
   addAttributes() {
     return {

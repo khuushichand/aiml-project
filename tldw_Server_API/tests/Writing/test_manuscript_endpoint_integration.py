@@ -199,6 +199,29 @@ def test_project_list_and_filter(client: TestClient):
     assert any(p["title"] == "Completed Novel B" for p in data["projects"])
 
 
+def test_project_settings_round_trip(client: TestClient):
+    """Project settings survive create/get/list responses."""
+    settings = {"theme": "dark", "editor": {"mode": "focus"}}
+    resp = client.post(
+        f"{PREFIX}/projects",
+        json={"title": "Configured Novel", "settings": settings},
+    )
+    assert resp.status_code == 201, resp.text
+    project = resp.json()
+    project_id = project["id"]
+
+    assert project["settings"] == settings
+
+    resp = client.get(f"{PREFIX}/projects/{project_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"] == settings
+
+    resp = client.get(f"{PREFIX}/projects")
+    assert resp.status_code == 200, resp.text
+    listed = next(item for item in resp.json()["projects"] if item["id"] == project_id)
+    assert listed["settings"] == settings
+
+
 def test_optimistic_locking(client: TestClient):
     """Verify that updating with a stale version returns 409."""
 
@@ -281,6 +304,40 @@ def test_reorder(client: TestClient):
     assert scenes[0]["id"] == scene_ids[2]
     assert scenes[1]["id"] == scene_ids[1]
     assert scenes[2]["id"] == scene_ids[0]
+
+
+def test_reorder_rejects_explicit_null_version(client: TestClient) -> None:
+    """Backward compatibility allows omitting version, but explicit null should still fail."""
+
+    resp = client.post(
+        f"{PREFIX}/projects",
+        json={"title": "Reorder Null Version"},
+    )
+    assert resp.status_code == 201
+    project_id = resp.json()["id"]
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/chapters",
+        json={"title": "Chapter R"},
+    )
+    assert resp.status_code == 201
+    chapter_id = resp.json()["id"]
+
+    resp = client.post(
+        f"{PREFIX}/chapters/{chapter_id}/scenes",
+        json={"title": "Scene 0", "sort_order": 0.0},
+    )
+    assert resp.status_code == 201
+    scene_id = resp.json()["id"]
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/reorder",
+        json={
+            "entity_type": "scenes",
+            "items": [{"id": scene_id, "sort_order": 1.0, "version": None}],
+        },
+    )
+    assert resp.status_code == 422
 
 
 def test_not_found(client: TestClient):

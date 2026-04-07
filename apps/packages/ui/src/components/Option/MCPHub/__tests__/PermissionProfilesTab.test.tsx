@@ -239,8 +239,6 @@ describe("PermissionProfilesTab", () => {
       expect.objectContaining({ title: "Delete Profile" })
     )
     expect(mocks.deletePermissionProfile).toHaveBeenCalledWith(5)
-
-    confirmSpy.mockRestore()
   })
 
   it("does not delete a profile when the user cancels the modal", async () => {
@@ -257,7 +255,5 @@ describe("PermissionProfilesTab", () => {
       expect.objectContaining({ title: "Delete Profile" })
     )
     expect(mocks.deletePermissionProfile).not.toHaveBeenCalled()
-
-    confirmSpy.mockRestore()
   })
 })

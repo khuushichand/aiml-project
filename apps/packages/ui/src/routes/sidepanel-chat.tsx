@@ -58,6 +58,15 @@ import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { restoreQueuedRequests } from "@/utils/chat-request-queue"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
 import { buildStudyPackRoute } from "@/services/tldw/study-pack-handoff"
+import {
+  clearPendingWebClipAnalyzeRequest,
+  readPendingWebClipAnalyzeRequest
+} from "@/services/web-clipper/enrichment"
+import {
+  collectWebClipAnalyzeMessageIds,
+  hasSubmittedWebClipAnalyzeMessage,
+  WEB_CLIPPER_ANALYZE_MESSAGE_TYPE
+} from "@/services/web-clipper/analyze-handoff"
 import { CommandPaletteHost } from "@/components/Common/CommandPaletteHost"
 import type { ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import {
@@ -881,6 +890,12 @@ const SidepanelChat = () => {
   })
   const bgMsg = useBackgroundMessage()
   const lastBgMsgRef = React.useRef<typeof bgMsg | null>(null)
+  const pendingWebClipAnalyzeRef = React.useRef<string | null>(null)
+  const messagesRef = React.useRef(messages)
+
+  React.useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   const restoreSidepanelState = async () => {
     // Wait until we've attempted to resolve tab id so we don't
@@ -1855,6 +1870,54 @@ const SidepanelChat = () => {
       return { ...prev, starterQuestions: [] }
     })
   }, [userMessageCount])
+
+  React.useEffect(() => {
+    if (streaming || !selectedModel) return
+
+    const pendingAnalyze = readPendingWebClipAnalyzeRequest()
+    if (!pendingAnalyze) return
+    if (pendingWebClipAnalyzeRef.current === pendingAnalyze.id) return
+
+    const baselineMessageIds = collectWebClipAnalyzeMessageIds(messagesRef.current)
+    pendingWebClipAnalyzeRef.current = pendingAnalyze.id
+
+    void (async () => {
+      try {
+        await onSubmit({
+          message: pendingAnalyze.message,
+          messageType: WEB_CLIPPER_ANALYZE_MESSAGE_TYPE,
+          image: pendingAnalyze.image || "",
+          requestOverrides: pendingAnalyze.requestOverrides
+        })
+
+        if (
+          hasSubmittedWebClipAnalyzeMessage(
+            messagesRef.current,
+            baselineMessageIds
+          )
+        ) {
+          clearPendingWebClipAnalyzeRequest(pendingAnalyze.id)
+        } else {
+          pendingWebClipAnalyzeRef.current = null
+        }
+      } catch (error) {
+        pendingWebClipAnalyzeRef.current = null
+        notification.error({
+          message: t(
+            "sidepanel:notification.webClipAnalyzeFailedTitle",
+            "Clip handoff failed"
+          ),
+          description:
+            error instanceof Error && error.message.trim()
+              ? error.message
+              : t(
+                  "sidepanel:notification.webClipAnalyzeFailedBody",
+                  "The saved clip could not be sent to chat."
+                )
+        })
+      }
+    })()
+  }, [notification, onSubmit, selectedModel, streaming, t])
 
   React.useEffect(() => {
     if (!bgMsg) return

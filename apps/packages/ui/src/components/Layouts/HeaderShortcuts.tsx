@@ -17,6 +17,7 @@ import {
   getHeaderShortcutGroups,
   type HeaderShortcutItem
 } from "./header-shortcut-items"
+import { useConnectionActions } from "@/hooks/useConnectionState"
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -71,6 +72,7 @@ export function HeaderShortcuts({
     HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING
   )
   const [shortcutSelection, setShortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
+  const { setUserPersona } = useConnectionActions()
 
   /* ---------- open state ---------- */
   const isControlled = typeof expanded === "boolean"
@@ -635,7 +637,8 @@ export function HeaderShortcuts({
               <button
                 type="button"
                 onClick={() => {
-                  void setShortcutSelection([...HEADER_SHORTCUT_IDS])
+                  void setUserPersona("explorer")
+                  void setShortcutSelection([...HEADER_SHORTCUT_IDS]).catch(() => {})
                 }}
                 className="text-xs text-primary hover:text-primaryStrong"
               >

@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { Alert, Modal, Radio, Select, Switch } from "antd"
 import { useNavigate } from "react-router-dom"
 import { SearchModeSettings } from "./search-mode"
@@ -57,9 +58,12 @@ export const GeneralSettings = () => {
   const { restartOnboarding, setUserPersona } = useConnectionActions()
   const { completedTutorials, resetProgress: resetTutorialProgress } = useTutorialCompletion()
   const [, setShortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
+  const personaSeqRef = useRef(0)
 
   const handlePersonaChange = async (nextPersona: UserPersona) => {
+    const seq = ++personaSeqRef.current
     await setUserPersona(nextPersona)
+    if (seq !== personaSeqRef.current) return // stale
     const shortcuts = getDefaultShortcutsForPersona(nextPersona)
     await setShortcutSelection(shortcuts)
   }
@@ -404,7 +408,7 @@ export const GeneralSettings = () => {
             <a
               href="https://github.com/rmusser01/tldw_server"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="inline-flex items-center rounded border border-border bg-surface2 px-2 py-1 text-xs text-primary hover:bg-surface3"
             >
               {t("generalSettings.extensionPromo.cta", "Learn More")}

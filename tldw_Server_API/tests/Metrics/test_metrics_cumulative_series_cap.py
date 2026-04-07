@@ -61,3 +61,30 @@ def test_cumulative_histogram_series_cap_drops_new_label_sets(monkeypatch):
         assert 'cap_hist_seconds_count{series="b"}' not in text
     finally:
         metrics_manager._metrics_registry = None
+
+
+def test_audio_stt_requests_bucket_unknown_models_into_single_series(monkeypatch):
+    monkeypatch.setenv("METRICS_CUMULATIVE_SERIES_MAX_PER_METRIC", "300")
+    metrics_manager._metrics_registry = None
+
+    from tldw_Server_API.app.core.Metrics.stt_metrics import emit_stt_request_total
+
+    registry = metrics_manager.get_metrics_registry()
+
+    try:
+        for idx in range(400):
+            emit_stt_request_total(
+                endpoint="audio.transcriptions",
+                provider="custom-provider",
+                model=f"custom-model-{idx}",
+                status="ok",
+            )
+
+        assert registry.get_cumulative_counter_total("audio_stt_requests_total") == 400
+        assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "model") == {"other": 400.0}
+        assert registry.get_cumulative_counter_totals_by_label("audio_stt_requests_total", "provider") == {
+            "other": 400.0
+        }
+        assert registry._cumulative_series_dropped.get("audio_stt_requests_total", 0) == 0  # nosec B101
+    finally:
+        metrics_manager._metrics_registry = None

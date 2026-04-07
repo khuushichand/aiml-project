@@ -158,11 +158,11 @@ const SETTING_ENUM_OPTIONS: Partial<Record<RagKey, string[]>> = {
 }
 
 const SOURCE_OPTIONS = [
-  { value: "media_db", label: "Documents & Media" },
-  { value: "notes", label: "Notes" },
-  { value: "characters", label: "Character Cards" },
-  { value: "chats", label: "Chat History" },
-  { value: "kanban", label: "Kanban" },
+  { value: "media_db", label: "Your Documents" },
+  { value: "notes", label: "Your Notes" },
+  { value: "characters", label: "Characters & Profiles" },
+  { value: "chats", label: "Conversations" },
+  { value: "kanban", label: "Boards" },
 ] as const
 
 const AUTO_OPTION_EXCLUDED_KEYS = new Set<RagKey>(["query"])

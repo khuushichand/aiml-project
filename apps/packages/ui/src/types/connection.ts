@@ -1,3 +1,5 @@
+export type UserPersona = "family" | "researcher" | "explorer" | null
+
 export enum ConnectionPhase {
   UNCONFIGURED = "unconfigured",
   SEARCHING = "searching",
@@ -11,8 +13,6 @@ export type KnowledgeStatus =
   | "indexing"
   | "offline"
   | "empty"
-
-export type UserPersona = "family" | "researcher" | "explorer" | null
 
 export type ConnectionState = {
   phase: ConnectionPhase

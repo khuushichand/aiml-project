@@ -21,6 +21,12 @@ import {
   clampText,
   notify
 } from "@/services/background-helpers"
+import { buildClipDraft } from "@/services/web-clipper/draft-builder"
+import {
+  CLIPPER_CAPTURE_MESSAGE_TYPE,
+  normalizePendingClipDraft
+} from "@/services/web-clipper/pending-draft"
+import { isRestrictedClipperPage } from "@/services/web-clipper/content-extract"
 import { ModelDb } from "@/db/models"
 import { generateID } from "@/db"
 import {
@@ -88,6 +94,135 @@ const backgroundDiagnostics: BackgroundDiagnostics = {
 
 const logBackgroundError = (label: string, error: unknown) => {
   console.debug(`[tldw] background ${label} failed`, error)
+}
+
+const waitFor = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
+
+const sendBackgroundRuntimeMessage = async (
+  message: {
+    from: "background"
+    type: string
+    text?: string
+    payload?: unknown
+  },
+  options?: {
+    retryDelayMs?: number
+    maxAttempts?: number
+    requireHandled?: boolean
+  }
+): Promise<void> => {
+  const retryDelayMs = options?.retryDelayMs ?? 500
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? 4)
+  const requireHandled = options?.requireHandled ?? false
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await browser.runtime.sendMessage(message)
+      if (!requireHandled || (response as { handled?: boolean } | undefined)?.handled) {
+        return
+      }
+      lastError = new Error(`No receiver acknowledged ${message.type}`)
+    } catch (error) {
+      lastError = error
+      logBackgroundError(`send ${message.type}`, error)
+    }
+
+    if (attempt < maxAttempts) {
+      await waitFor(retryDelayMs)
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Failed to deliver ${message.type}`)
+}
+
+type WebClipperContextMenuClickInfo = {
+  pageUrl?: string | null
+  selectionText?: string | null
+}
+
+type WebClipperContextMenuTab = {
+  id?: number | null
+  url?: string | null
+  title?: string | null
+} | null | undefined
+
+export const launchWebClipperFromContextMenu = async (
+  info: WebClipperContextMenuClickInfo,
+  tab?: WebClipperContextMenuTab
+): Promise<void> => {
+  const pageUrl = String(info?.pageUrl || tab?.url || "").trim()
+  const pageTitle = String(tab?.title || "").trim()
+  const selectionText = String(info?.selectionText || "").trim()
+
+  if (isRestrictedClipperPage(pageUrl)) {
+    notify(
+      browser.i18n.getMessage("contextSaveToClipper") || "Save to Clipper",
+      browser.i18n.getMessage("contextSaveToClipperRestrictedPage") ||
+        "This page is restricted, so the clipper cannot capture it."
+    )
+    return
+  }
+
+  const requestedType = selectionText ? "selection" : "article"
+  const fallbackDraft = buildClipDraft({
+    requestedType,
+    pageUrl,
+    pageTitle: pageTitle || pageUrl,
+    extracted: {
+      selectionText: selectionText || undefined,
+      articleText: selectionText || undefined,
+      fullPageText: selectionText || undefined
+    }
+  })
+  const tabsApi = (browser as any)?.tabs
+  let clipDraft = fallbackDraft
+
+  if (tab?.id != null && typeof tabsApi?.sendMessage === "function") {
+    try {
+      const response = await tabsApi.sendMessage(tab.id, {
+        type: "capture-web-clipper",
+        requestedType,
+        pageUrl,
+        pageTitle: pageTitle || pageUrl,
+        selectionText: selectionText || undefined
+      })
+      const normalized = normalizePendingClipDraft(response)
+      if (normalized) {
+        clipDraft = normalized
+      }
+    } catch (error) {
+      logBackgroundError("request web clipper capture", error)
+    }
+  }
+
+  const title =
+    browser.i18n.getMessage("contextSaveToClipper") || "Save to Clipper"
+  try {
+    await ensureSidepanelOpen(tab?.id ?? undefined)
+    await sendBackgroundRuntimeMessage({
+      from: "background",
+      type: CLIPPER_CAPTURE_MESSAGE_TYPE,
+      text: clipDraft.visibleBody,
+      payload: clipDraft
+    }, {
+      retryDelayMs: 500,
+      maxAttempts: 4,
+      requireHandled: true
+    })
+  } catch (error) {
+    logBackgroundError("launch web clipper", error)
+    notify(
+      title,
+      browser.i18n.getMessage("contextSaveToClipperDeliveryFailed") ||
+        "Could not open the sidebar to save this clip. Check that the tldw Assistant sidebar is allowed on this site and try again."
+    )
+  }
 }
 
 type IngestLifecycleStatus =
@@ -201,6 +336,7 @@ export default defineBackground({
       transcribe: "transcribe-media-pa",
       transcribeAndSummarize: "transcribe-and-summarize-media-pa"
     }
+    const saveToClipperMenuId = "save-to-clipper-pa"
     const saveToCompanionMenuId = "save-to-companion-pa"
     const saveToNotesMenuId = "save-to-notes-pa"
     const narrateSelectionMenuId = "narrate-selection-pa"
@@ -221,6 +357,7 @@ export default defineBackground({
           storage,
           contextMenuId,
           saveToCompanionMenuId,
+          saveToClipperMenuId,
           saveToNotesMenuId,
           narrateSelectionMenuId,
           transcribeMenuId,
@@ -2214,6 +2351,8 @@ export default defineBackground({
         await handleTranscribeClick(info, tab, 'transcribe')
       } else if (info.menuItemId === transcribeMenuId.transcribeAndSummarize) {
         await handleTranscribeClick(info, tab, 'transcribe+summary')
+      } else if (info.menuItemId === saveToClipperMenuId) {
+        await launchWebClipperFromContextMenu(info, tab)
       } else if (info.menuItemId === saveToNotesMenuId) {
         const selection = String(info.selectionText || '').trim()
         if (!selection) {

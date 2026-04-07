@@ -1224,6 +1224,13 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        _HAS_WEB_CLIPPER = True
+    except _IMPORT_EXCEPTIONS as _wc_err:
+        logger.warning(f"Web clipper endpoints unavailable; skipping import: {_wc_err}")
+        _HAS_WEB_CLIPPER = False
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -1657,6 +1664,23 @@ async def lifespan(app: FastAPI):
         # Abort startup on validation errors
         logger.exception(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
         raise
+
+    # Startup: Validate ACP runner configuration (non-fatal warnings)
+    try:
+        if route_enabled("acp", default_stable=False):
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import (
+                load_acp_runner_config as _load_acp_cfg,
+                validate_acp_config as _validate_acp_cfg,
+            )
+
+            _acp_cfg = _load_acp_cfg()
+            _acp_warnings = _validate_acp_cfg(_acp_cfg)
+            for _acp_w in _acp_warnings:
+                logger.warning("ACP config: {}", _acp_w)
+            if not _acp_warnings:
+                logger.info("App Startup: ACP runner configuration validated")
+    except _STARTUP_GUARD_EXCEPTIONS as _acp_val_err:
+        logger.debug("App Startup: ACP config validation skipped: {}", _acp_val_err)
 
     # Startup: Validate Postgres content backend when enabled
     try:
@@ -6345,6 +6369,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except _IMPORT_EXCEPTIONS as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        app.include_router(web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
+    except _IMPORT_EXCEPTIONS as _web_clipper_min_err:
+        logger.debug(f"Skipping web clipper router in minimal test app: {_web_clipper_min_err}")
     # Skills endpoints (SKILL.md management)
     try:
         from tldw_Server_API.app.api.v1.endpoints.skills import router as skills_router
@@ -7011,6 +7041,8 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    if _HAS_WEB_CLIPPER:
+        _include_if_enabled("web-clipper", web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
     _include_if_enabled("translation", translate_router, prefix=f"{API_V1_PREFIX}", tags=["translation"])
     _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])

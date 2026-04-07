@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import json
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +41,12 @@ class ManuscriptProjectUpdate(BaseModel):
     settings: dict[str, Any] | None = Field(None, description="Project settings JSON")
 
 
+class ManuscriptProjectSettings(BaseModel):
+    """Structured manuscript project settings with forward-compatible keys."""
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ManuscriptProjectResponse(BaseModel):
     id: str
     title: str
@@ -50,7 +56,7 @@ class ManuscriptProjectResponse(BaseModel):
     status: str
     synopsis: str | None = None
     target_word_count: int | None = None
-    settings: dict[str, Any] = Field(default_factory=dict)
+    settings: ManuscriptProjectSettings = Field(default_factory=ManuscriptProjectSettings)
     word_count: int = 0
     created_at: datetime
     last_modified: datetime
@@ -237,8 +243,19 @@ class ManuscriptStructureResponse(BaseModel):
 class ReorderItem(BaseModel):
     id: str = Field(..., description="Entity ID")
     sort_order: float = Field(..., description="New sort order")
-    version: int = Field(..., description="Expected version for optimistic locking")
+    version: int | None = Field(
+        None,
+        description="Expected version for optimistic locking; optional for backward-compatible reorders",
+    )
     new_parent_id: str | None = Field(None, description="Optional new parent ID (for reparenting chapters)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_null_version(cls, data: Any) -> Any:
+        """Permit omitted versions for legacy clients, but reject explicit null values."""
+        if isinstance(data, dict) and "version" in data and data["version"] is None:
+            raise ValueError("version may be omitted, but explicit null is invalid")
+        return data
 
 
 class ReorderRequest(BaseModel):
@@ -271,7 +288,8 @@ class ManuscriptSearchResponse(BaseModel):
 # Character
 # ---------------------------------------------------------------------------
 
-_CHARACTER_ROLES = Literal["protagonist", "antagonist", "supporting", "minor", "mentioned"]
+CHARACTER_ROLES = Literal["protagonist", "antagonist", "supporting", "minor", "mentioned"]
+_CHARACTER_ROLES = CHARACTER_ROLES
 
 
 class ManuscriptCharacterCreate(BaseModel):
@@ -366,7 +384,8 @@ class ManuscriptRelationshipResponse(BaseModel):
 # World Info
 # ---------------------------------------------------------------------------
 
-_WORLD_INFO_KINDS = Literal["location", "item", "faction", "concept", "event", "custom"]
+WORLD_INFO_KINDS = Literal["location", "item", "faction", "concept", "event", "custom"]
+_WORLD_INFO_KINDS = WORLD_INFO_KINDS
 
 
 class ManuscriptWorldInfoCreate(BaseModel):
@@ -517,6 +536,7 @@ class ManuscriptPlotHoleUpdate(BaseModel):
     scene_id: str | None = Field(None, description="Associated scene ID")
     chapter_id: str | None = Field(None, description="Associated chapter ID")
     plot_line_id: str | None = Field(None, description="Associated plot line ID")
+    detected_by: _PLOT_HOLE_DETECTED_BY | None = Field(None, description="Detection method")
 
 
 class ManuscriptPlotHoleResponse(BaseModel):
@@ -609,6 +629,63 @@ class ManuscriptResearchRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=50, description="Maximum number of results to return")
 
 
+class ManuscriptResearchResult(BaseModel):
+    """A single research result item."""
+    source_id: str | None = None
+    title: str
+    excerpt: str | None = None
+    source_type: str | None = None
+    relevance_score: float | None = None
+
+
 class ManuscriptResearchResponse(BaseModel):
     query: str
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[ManuscriptResearchResult] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# AI Analysis
+# ---------------------------------------------------------------------------
+
+
+class ManuscriptAnalysisRequest(BaseModel):
+    analysis_types: list[Literal["pacing", "plot_holes", "consistency"]] = Field(
+        default_factory=lambda: ["pacing"],
+        min_length=1,
+        description="Analysis types to run: pacing, plot_holes, consistency",
+    )
+    provider: str | None = Field(None, description="LLM provider override")
+    model: str | None = Field(None, description="Model override")
+
+    @field_validator("analysis_types")
+    @classmethod
+    def validate_analysis_types(cls, v: list[str]) -> list[str]:
+        allowed = {"pacing", "plot_holes", "consistency"}
+        invalid = set(v) - allowed
+        if invalid:
+            raise ValueError(
+                f"Unsupported analysis types: {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(allowed))}"
+            )
+        return v
+
+
+class ManuscriptAnalysisResponse(BaseModel):
+    id: str
+    project_id: str
+    scope_type: str
+    scope_id: str
+    analysis_type: str
+    result: dict[str, Any]
+    score: float | None = None
+    stale: bool = False
+    provider: str | None = None
+    model: str | None = None
+    created_at: datetime
+    last_modified: datetime
+    version: int
+
+
+class ManuscriptAnalysisListResponse(BaseModel):
+    analyses: list[ManuscriptAnalysisResponse]
+    total: int

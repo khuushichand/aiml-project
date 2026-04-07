@@ -1331,7 +1331,35 @@ async def acp_health(
             runner_probe = {"status": "error", "detail": str(exc)}
     result["runner_probe"] = runner_probe
 
-    # 4. Overall status
+    # 4. Route-gating status
+    try:
+        from tldw_Server_API.app.core.config import route_enabled as _route_enabled
+
+        _stable_only = False
+        try:
+            from tldw_Server_API.app.core.config import _route_toggle_policy
+            _policy = _route_toggle_policy()
+            _stable_only = bool(_policy.get("stable_only", False))
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        _acp_enabled = _route_enabled("acp", default_stable=False)
+        _route_note: str | None = None
+        if _stable_only and not _acp_enabled:
+            _route_note = (
+                "ACP routes are hidden because stable_only is enabled. "
+                "Add 'acp' to the enable list in [API-Routes] section of "
+                "config.txt, or set ROUTES_STABLE_ONLY=false."
+            )
+        result["routes"] = {
+            "stable_only": _stable_only,
+            "acp_enabled": _acp_enabled,
+            "note": _route_note,
+        }
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        result["routes"] = None
+
+    # 5. Overall status
     any_agent_available = any(a.get("status") == "available" for a in agents_status)
     runner_ok = runner_status.get("status") == "ok"
 

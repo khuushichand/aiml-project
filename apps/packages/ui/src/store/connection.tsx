@@ -172,8 +172,12 @@ const readLocalStoragePersona = (key: string): UserPersona => {
 
 /** Read a single key from chrome.storage.local (extension context only). */
 const chromeStorageGet = (key: string): Promise<string | undefined> =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     chrome.storage.local.get(key, (res) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError)
+        return
+      }
       resolve(
         res && Object.prototype.hasOwnProperty.call(res, key)
           ? (res[key] as string)
@@ -201,12 +205,16 @@ const getUserPersonaFlag = async (): Promise<UserPersona> => {
 const setUserPersonaFlag = async (persona: UserPersona): Promise<void> => {
   try {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         const storage = chrome.storage.local
+        const cb = () => {
+          if (chrome.runtime.lastError) { reject(chrome.runtime.lastError); return }
+          resolve()
+        }
         if (persona) {
-          storage.set({ [USER_PERSONA_KEY]: persona }, () => resolve())
+          storage.set({ [USER_PERSONA_KEY]: persona }, cb)
         } else {
-          storage.remove(USER_PERSONA_KEY, () => resolve())
+          storage.remove(USER_PERSONA_KEY, cb)
         }
       })
       return

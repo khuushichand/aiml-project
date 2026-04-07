@@ -52,13 +52,20 @@ class TestWordCount:
 
 class TestProjectCRUD:
     def test_create_and_get(self, mdb):
-        pid = mdb.create_project("My Novel", author="Alice", genre="Fantasy")
+        pid = mdb.create_project(
+            "My Novel",
+            author="Alice",
+            genre="Fantasy",
+            settings={"theme": "noir", "view": {"mode": "board"}},
+        )
         proj = mdb.get_project(pid)
         assert proj is not None
         assert proj["title"] == "My Novel"
         assert proj["author"] == "Alice"
         assert proj["genre"] == "Fantasy"
         assert proj["status"] == "draft"
+        assert proj["settings"] == {"theme": "noir", "view": {"mode": "board"}}
+        assert "settings_json" not in proj
         assert proj["word_count"] == 0
         assert proj["version"] == 1
         assert proj["deleted"] == 0
@@ -117,6 +124,28 @@ class TestProjectCRUD:
 
         proj = mdb.get_project(pid)
         assert proj["settings"] == {"theme": "dark"}
+        assert "settings_json" not in proj
+
+    def test_project_settings_roundtrip(self, mdb):
+        pid = mdb.create_project("With Settings", settings={"font": "serif", "columns": 2})
+        proj = mdb.get_project(pid)
+        assert proj["settings"] == {"font": "serif", "columns": 2}
+        assert "settings_json" not in proj
+
+    def test_list_projects_settings_deserialized(self, mdb):
+        mdb.create_project("P1", settings={"a": 1})
+        projects, _ = mdb.list_projects()
+        assert projects[0]["settings"] == {"a": 1}
+        assert "settings_json" not in projects[0]
+
+    def test_list_projects_exposes_settings_dict(self, mdb):
+        mdb.create_project("With Settings", settings={"theme": "dark", "autosave": True})
+
+        projects, total = mdb.list_projects()
+
+        assert total == 1
+        assert projects[0]["settings"] == {"theme": "dark", "autosave": True}
+        assert "settings_json" not in projects[0]
 
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")
@@ -263,6 +292,18 @@ class TestChapterCRUD:
 
         ch = mdb.get_chapter(cid)
         assert ch["title"] == "New"
+        assert ch["version"] == 2
+
+    def test_update_chapter_part_id(self, mdb):
+        pid = mdb.create_project("Novel")
+        part_a = mdb.create_part(pid, "Part A")
+        part_b = mdb.create_part(pid, "Part B")
+        cid = mdb.create_chapter(pid, "Movable", part_id=part_a)
+
+        mdb.update_chapter(cid, {"part_id": part_b}, expected_version=1)
+
+        ch = mdb.get_chapter(cid)
+        assert ch["part_id"] == part_b
         assert ch["version"] == 2
 
     def test_update_chapter_version_conflict(self, mdb):

@@ -121,6 +121,9 @@ _SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES = {"off", "accented"}
 _FLASHCARD_REVIEW_SESSION_STATUSES = frozenset({"active", "completed", "abandoned"})
 _FLASHCARD_REVIEW_MODES = frozenset({"due", "cram"})
 _FLASHCARD_REVIEW_SESSION_TIMEOUT = timedelta(minutes=30)
+_SUPPORTED_WEB_CLIPPER_DESTINATIONS = {"note", "workspace", "both"}
+_SUPPORTED_WEB_CLIPPER_OUTCOME_STATES = {"saved", "saved_with_warnings", "partially_saved", "failed"}
+_SUPPORTED_WEB_CLIPPER_ENRICHMENT_TYPES = {"ocr", "vlm"}
 
 
 def _coerce_scheduler_type(value: Any) -> str:
@@ -534,7 +537,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 42  # Schema v42 adds characters, world info, plot, citations
+    _CURRENT_SCHEMA_VERSION = 44  # Schema v44 adds sync metadata to scene-link tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -4052,6 +4055,10 @@ CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
   scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
   is_pov        BOOLEAN NOT NULL DEFAULT 0,
+  last_modified TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, character_id)
 );
 
@@ -4059,6 +4066,10 @@ CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
 CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
   scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  last_modified   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, world_info_id)
 );
 
@@ -4094,10 +4105,12 @@ AFTER INSERT ON manuscript_characters BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,'age',NEW.age,
-                     'gender',NEW.gender,'appearance',NEW.appearance,'personality',NEW.personality,
-                     'backstory',NEW.backstory,'motivation',NEW.motivation,'arc_summary',NEW.arc_summary,
-                     'notes',NEW.notes,'custom_fields_json',NEW.custom_fields_json,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4120,16 +4133,21 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.notes IS NOT NEW.notes OR
      OLD.custom_fields_json IS NOT NEW.custom_fields_json OR
      OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.age IS NOT NEW.age OR
+     OLD.gender IS NOT NEW.gender OR
+     OLD.notes IS NOT NEW.notes OR
      OLD.last_modified IS NOT NEW.last_modified OR
      OLD.version IS NOT NEW.version)
 BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,'age',NEW.age,
-                     'gender',NEW.gender,'appearance',NEW.appearance,'personality',NEW.personality,
-                     'backstory',NEW.backstory,'motivation',NEW.motivation,'arc_summary',NEW.arc_summary,
-                     'notes',NEW.notes,'custom_fields_json',NEW.custom_fields_json,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4152,10 +4170,12 @@ BEGIN
   INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
   VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
          json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
-                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,'age',NEW.age,
-                     'gender',NEW.gender,'appearance',NEW.appearance,'personality',NEW.personality,
-                     'backstory',NEW.backstory,'motivation',NEW.motivation,'arc_summary',NEW.arc_summary,
-                     'notes',NEW.notes,'custom_fields_json',NEW.custom_fields_json,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
                      'sort_order',NEW.sort_order,
                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -4373,6 +4393,7 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.event_type IS NOT NEW.event_type OR
      OLD.scene_id IS NOT NEW.scene_id OR
      OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.plot_line_id IS NOT NEW.plot_line_id OR
      OLD.sort_order IS NOT NEW.sort_order OR
      OLD.last_modified IS NOT NEW.last_modified OR
      OLD.version IS NOT NEW.version)
@@ -4437,6 +4458,10 @@ WHEN OLD.deleted = NEW.deleted AND (
      OLD.severity IS NOT NEW.severity OR
      OLD.status IS NOT NEW.status OR
      OLD.resolution IS NOT NEW.resolution OR
+     OLD.scene_id IS NOT NEW.scene_id OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.plot_line_id IS NOT NEW.plot_line_id OR
+     OLD.detected_by IS NOT NEW.detected_by OR
      OLD.last_modified IS NOT NEW.last_modified OR
      OLD.version IS NOT NEW.version)
 BEGIN
@@ -4683,12 +4708,20 @@ CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
   scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
   is_pov        BOOLEAN NOT NULL DEFAULT FALSE,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, character_id)
 );
 
 CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
   scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
   world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (scene_id, world_info_id)
 );
 
@@ -4716,6 +4749,260 @@ UPDATE db_schema_version
    SET version = 42
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 42;
+"""
+
+    # --- Migration: V42 -> V43 (AI Analyses) ---
+    _MIGRATION_SQL_V42_TO_V43 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 43 — Manuscript AI Analyses (2026-04-XX)
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_ai_analyses (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scope_type    TEXT NOT NULL CHECK(scope_type IN ('scene','chapter','part','project')),
+  scope_id      TEXT NOT NULL,
+  analysis_type TEXT NOT NULL,
+  provider      TEXT,
+  model         TEXT,
+  result_json   TEXT NOT NULL DEFAULT '{}',
+  score         REAL,
+  stale         BOOLEAN NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_maa_scope ON manuscript_ai_analyses(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_maa_project_type ON manuscript_ai_analyses(project_id, analysis_type);
+CREATE INDEX IF NOT EXISTS idx_maa_stale ON manuscript_ai_analyses(stale);
+CREATE INDEX IF NOT EXISTS idx_maa_deleted ON manuscript_ai_analyses(deleted);
+
+/* ── sync triggers: manuscript_ai_analyses ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_create;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_update;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_undelete;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_create
+AFTER INSERT ON manuscript_ai_analyses BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'result_json',NEW.result_json,
+                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_update
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.analysis_type IS NOT NEW.analysis_type OR
+     OLD.result_json IS NOT NEW.result_json OR
+     OLD.score IS NOT NEW.score OR
+     OLD.stale IS NOT NEW.stale OR
+     OLD.provider IS NOT NEW.provider OR
+     OLD.model IS NOT NEW.model OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'result_json',NEW.result_json,
+                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_delete
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_undelete
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 43
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 43;
+"""
+
+    _MIGRATION_SQL_V42_TO_V43_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 43 — Manuscript AI Analyses (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_ai_analyses (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scope_type    TEXT NOT NULL CHECK(scope_type IN ('scene','chapter','part','project')),
+  scope_id      TEXT NOT NULL,
+  analysis_type TEXT NOT NULL,
+  provider      TEXT,
+  model         TEXT,
+  result_json   TEXT NOT NULL DEFAULT '{}',
+  score         REAL,
+  stale         BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_maa_scope ON manuscript_ai_analyses(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_maa_project_type ON manuscript_ai_analyses(project_id, analysis_type);
+CREATE INDEX IF NOT EXISTS idx_maa_stale ON manuscript_ai_analyses(stale);
+CREATE INDEX IF NOT EXISTS idx_maa_deleted ON manuscript_ai_analyses(deleted);
+
+UPDATE db_schema_version
+   SET version = 43
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 43;
+"""
+
+    _MIGRATION_SQL_V43_TO_V44 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 44 — Sync metadata on scene-link tables (2026-04-XX)
+  NOTE: ALTER TABLE ADD COLUMN is handled in _migrate_from_v43_to_v44()
+  to avoid errors on fresh databases that already have the columns.
+───────────────────────────────────────────────────────────────*/
+
+-- Backfill last_modified for existing rows (no-op on fresh DBs)
+UPDATE manuscript_scene_characters SET last_modified = strftime('%Y-%m-%dT%H:%M:%f','now') WHERE last_modified = '';
+UPDATE manuscript_scene_world_info SET last_modified = strftime('%Y-%m-%dT%H:%M:%f','now') WHERE last_modified = '';
+
+/* ── sync triggers: manuscript_scene_characters ────────────── */
+DROP TRIGGER IF EXISTS msc_sync_create;
+DROP TRIGGER IF EXISTS msc_sync_update;
+DROP TRIGGER IF EXISTS msc_sync_delete;
+
+CREATE TRIGGER msc_sync_create
+AFTER INSERT ON manuscript_scene_characters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'create',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'is_pov',NEW.is_pov,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER msc_sync_update
+AFTER UPDATE ON manuscript_scene_characters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.is_pov IS NOT NEW.is_pov OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'update',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'is_pov',NEW.is_pov,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER msc_sync_delete
+AFTER UPDATE ON manuscript_scene_characters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'delete',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+/* ── sync triggers: manuscript_scene_world_info ────────────── */
+DROP TRIGGER IF EXISTS mswi_sync_create;
+DROP TRIGGER IF EXISTS mswi_sync_update;
+DROP TRIGGER IF EXISTS mswi_sync_delete;
+
+CREATE TRIGGER mswi_sync_create
+AFTER INSERT ON manuscript_scene_world_info BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'create',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER mswi_sync_update
+AFTER UPDATE ON manuscript_scene_world_info
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'update',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER mswi_sync_delete
+AFTER UPDATE ON manuscript_scene_world_info
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'delete',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+UPDATE db_schema_version
+   SET version = 44
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 44;
+"""
+
+    _MIGRATION_SQL_V43_TO_V44_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 44 — Sync metadata on scene-link tables (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+UPDATE db_schema_version
+   SET version = 44
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 44;
 """
 
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
@@ -6581,6 +6868,59 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V41->V42: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V42 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v42_to_v43(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V42 to V43 (manuscript AI analyses)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V42 to V43 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V42_TO_V43)
+            final_version = self._get_db_version(conn)
+            if final_version != 43:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V42->V43 failed version check. Expected 43, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V43 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V42->V43 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V42->V43 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V42->V43: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V43 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v43_to_v44(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V43 to V44 (sync metadata on scene-link tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V43 to V44 for DB: {self.db_path_str}...")
+        try:
+            # Only add columns if they don't exist (fresh DBs already have them).
+            for table in ("manuscript_scene_characters", "manuscript_scene_world_info"):
+                existing_cols = {row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+                for col, coldef in (
+                    ("last_modified", "TEXT NOT NULL DEFAULT ''"),
+                    ("deleted", "BOOLEAN NOT NULL DEFAULT 0"),
+                    ("client_id", "TEXT"),
+                    ("version", "INTEGER NOT NULL DEFAULT 1"),
+                ):
+                    if col not in existing_cols:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")  # nosec B608
+
+            # Backfill and create triggers (idempotent via IF EXISTS/IF NOT EXISTS).
+            conn.executescript(self._MIGRATION_SQL_V43_TO_V44)
+            final_version = self._get_db_version(conn)
+            if final_version != 44:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V43->V44 failed version check. Expected 44, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V44 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V43->V44 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V43->V44 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V43->V44: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V44 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -7062,6 +7402,388 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for statement in statements:
             self.backend.execute(statement, connection=conn)
 
+    def _ensure_web_clipper_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure the web clipper sidecar tables exist for SQLite deployments."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_clipper_documents(
+                  clip_id               TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  note_id               TEXT NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  clip_type             TEXT NOT NULL,
+                  source_url            TEXT,
+                  source_title          TEXT,
+                  capture_metadata_json TEXT NOT NULL DEFAULT '{}',
+                  analysis_json         TEXT NOT NULL DEFAULT '{}',
+                  content_budget_json   TEXT NOT NULL DEFAULT '{}',
+                  source_note_version   INTEGER,
+                  created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted               BOOLEAN NOT NULL DEFAULT 0,
+                  CHECK(clip_id = note_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_clipper_documents_note_id ON note_clipper_documents(note_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_clipper_workspace_placements(
+                  clip_id             TEXT NOT NULL REFERENCES note_clipper_documents(clip_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  workspace_id        TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  workspace_note_id   INTEGER,
+                  source_note_id      TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  source_note_version INTEGER,
+                  created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted             BOOLEAN NOT NULL DEFAULT 0,
+                  PRIMARY KEY (clip_id, workspace_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_workspace ON note_clipper_workspace_placements(workspace_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_source_note ON note_clipper_workspace_placements(source_note_id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite web clipper schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_web_clipper_schema_postgres(self, conn: Any) -> None:
+        """Ensure the web clipper sidecar tables exist for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_clipper_documents(
+              clip_id               TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              note_id               TEXT NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              clip_type             TEXT NOT NULL,
+              source_url            TEXT,
+              source_title          TEXT,
+              capture_metadata_json TEXT NOT NULL DEFAULT '{}',
+              analysis_json         TEXT NOT NULL DEFAULT '{}',
+              content_budget_json   TEXT NOT NULL DEFAULT '{}',
+              source_note_version   INTEGER,
+              created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted               BOOLEAN NOT NULL DEFAULT FALSE,
+              CHECK(clip_id = note_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_clipper_documents_note_id ON note_clipper_documents(note_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_clipper_workspace_placements(
+              clip_id             TEXT NOT NULL REFERENCES note_clipper_documents(clip_id) ON DELETE CASCADE ON UPDATE CASCADE,
+              workspace_id        TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              workspace_note_id   INTEGER,
+              source_note_id      TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_note_version INTEGER,
+              created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted             BOOLEAN NOT NULL DEFAULT FALSE,
+              PRIMARY KEY (clip_id, workspace_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_workspace ON note_clipper_workspace_placements(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_source_note ON note_clipper_workspace_placements(source_note_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    @staticmethod
+    def _serialize_note_clipper_json_field(value: Any, field_name: str) -> str:
+        if value is None:
+            return "{}"
+        if isinstance(value, str):
+            try:
+                json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise InputError(f"{field_name} must be valid JSON when provided as a string.") from exc  # noqa: TRY003
+            return value
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value)
+            except TypeError as exc:
+                raise InputError(f"{field_name} must be JSON serializable.") from exc  # noqa: TRY003
+        raise InputError(f"{field_name} must be a mapping, list, JSON string, or None.")  # noqa: TRY003
+
+    def _fetch_note_clipper_document_row(
+        self,
+        *,
+        column: str,
+        value: str,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        if column not in {"clip_id", "note_id"}:
+            raise InputError("Unsupported note clipper document lookup column.")  # noqa: TRY003
+        query = f"SELECT * FROM note_clipper_documents WHERE {column} = ?"  # nosec B608
+        params: list[Any] = [value]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if conn is None:
+            cursor = self.execute_query(query, tuple(params))
+        else:
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+        row = cursor.fetchone()
+        return self._deserialize_row_fields(
+            row,
+            ["capture_metadata_json", "analysis_json", "content_budget_json"],
+        ) if row else None
+
+    def get_note_clipper_document_by_clip_id(self, clip_id: str) -> dict[str, Any] | None:
+        """Return the active clipper document for a clip id."""
+        return self._fetch_note_clipper_document_row(column="clip_id", value=clip_id)
+
+    def get_note_clipper_document_by_note_id(self, note_id: str) -> dict[str, Any] | None:
+        """Return the active clipper document for a note id."""
+        return self._fetch_note_clipper_document_row(column="note_id", value=note_id)
+
+    def list_note_clipper_workspace_placements(self, clip_id: str) -> list[dict[str, Any]]:
+        """Return active workspace placements for a clip."""
+        query = (
+            "SELECT clip_id, workspace_id, workspace_note_id, source_note_id, source_note_version "
+            "FROM note_clipper_workspace_placements WHERE clip_id = ? AND deleted = ? "
+            "ORDER BY workspace_id"
+        )
+        params = (clip_id, False if self.backend_type == BackendType.POSTGRESQL else 0)
+        cursor = self.execute_query(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _invalidate_note_clipper_sidecars(
+        self,
+        note_id: str,
+        *,
+        conn: sqlite3.Connection,
+        deleted: bool,
+    ) -> None:
+        deleted_value = True if self.backend_type == BackendType.POSTGRESQL else 1
+        active_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        flag_value = deleted_value if deleted else active_value
+        now = self._get_current_utc_timestamp_iso()
+
+        document = conn.execute(
+            "SELECT clip_id FROM note_clipper_documents WHERE note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if document is None:
+            return
+        clip_id = document["clip_id"]
+        conn.execute(
+            "UPDATE note_clipper_documents SET deleted = ?, last_modified = ? WHERE clip_id = ?",
+            (flag_value, now, clip_id),
+        )
+        conn.execute(
+            "UPDATE note_clipper_workspace_placements SET deleted = ?, last_modified = ? WHERE clip_id = ?",
+            (flag_value, now, clip_id),
+        )
+
+    def _delete_note_clipper_sidecars(self, note_id: str, *, conn: sqlite3.Connection) -> None:
+        document = conn.execute(
+            "SELECT clip_id FROM note_clipper_documents WHERE note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if document is None:
+            conn.execute("DELETE FROM note_clipper_workspace_placements WHERE source_note_id = ?", (note_id,))
+            return
+        clip_id = document["clip_id"]
+        conn.execute("DELETE FROM note_clipper_workspace_placements WHERE clip_id = ?", (clip_id,))
+        conn.execute("DELETE FROM note_clipper_documents WHERE clip_id = ?", (clip_id,))
+
+    def upsert_note_clipper_document(
+        self,
+        *,
+        clip_id: str,
+        note_id: str,
+        clip_type: str,
+        source_url: str | None = None,
+        source_title: str | None = None,
+        capture_metadata: dict[str, Any] | list[Any] | str | None = None,
+        enrichments: dict[str, Any] | list[Any] | str | None = None,
+        content_budget: dict[str, Any] | list[Any] | str | None = None,
+        source_note_version: int | None = None,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+    ) -> dict[str, Any]:
+        normalized_clip_id = str(clip_id).strip()
+        normalized_note_id = str(note_id).strip()
+        normalized_clip_type = str(clip_type).strip()
+        if not normalized_clip_id or not normalized_note_id:
+            raise InputError("clip_id and note_id are required.")  # noqa: TRY003
+        if normalized_clip_id != normalized_note_id:
+            raise InputError("clip_id and note_id must match for the canonical clip record.")  # noqa: TRY003
+        if not normalized_clip_type:
+            raise InputError("clip_type cannot be empty.")  # noqa: TRY003
+        if source_note_version is not None and (not isinstance(source_note_version, int) or source_note_version < 1):
+            raise InputError("source_note_version must be an integer >= 1 when provided.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        capture_metadata_json = self._serialize_note_clipper_json_field(capture_metadata, "capture_metadata")
+        analysis_json = self._serialize_note_clipper_json_field(enrichments, "enrichments")
+        content_budget_json = self._serialize_note_clipper_json_field(content_budget, "content_budget")
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        query = (
+            "INSERT INTO note_clipper_documents ("
+            "clip_id, note_id, clip_type, source_url, source_title, capture_metadata_json, "
+            "analysis_json, content_budget_json, source_note_version, created_at, last_modified, deleted"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(clip_id) DO UPDATE SET "
+            "note_id = excluded.note_id, "
+            "clip_type = excluded.clip_type, "
+            "source_url = excluded.source_url, "
+            "source_title = excluded.source_title, "
+            "capture_metadata_json = excluded.capture_metadata_json, "
+            "analysis_json = excluded.analysis_json, "
+            "content_budget_json = excluded.content_budget_json, "
+            "source_note_version = excluded.source_note_version, "
+            "last_modified = excluded.last_modified, "
+            "deleted = excluded.deleted"
+        )
+        params = (
+            normalized_clip_id,
+            normalized_note_id,
+            normalized_clip_type,
+            source_url,
+            source_title,
+            capture_metadata_json,
+            analysis_json,
+            content_budget_json,
+            source_note_version,
+            now,
+            now,
+            deleted_value,
+        )
+
+        def _execute(inner_conn: sqlite3.Connection | BackendConnectionWrapper) -> dict[str, Any]:
+            note_row = inner_conn.execute(
+                "SELECT id FROM notes WHERE id = ? AND deleted = ?",
+                (
+                    normalized_note_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if note_row is None:
+                raise ConflictError(
+                    "Canonical note not found or deleted.",
+                    entity="notes",
+                    entity_id=normalized_note_id,
+                )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            inner_conn.execute(prepared_query, prepared_params or ())
+            document = self._fetch_note_clipper_document_row(
+                column="clip_id",
+                value=normalized_clip_id,
+                conn=inner_conn if isinstance(inner_conn, sqlite3.Connection) else None,
+            )
+            if document is None:
+                raise CharactersRAGDBError(
+                    f"Failed to read web clipper document for clip ID '{normalized_clip_id}'."
+                )
+            return document
+
+        if conn is None:
+            with self.transaction() as transaction_conn:
+                return _execute(transaction_conn)
+        return _execute(conn)
+
+    def upsert_note_clipper_workspace_placement(
+        self,
+        *,
+        clip_id: str,
+        workspace_id: str,
+        workspace_note_id: int | None = None,
+        source_note_id: str | None = None,
+        source_note_version: int | None = None,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+    ) -> dict[str, Any]:
+        normalized_clip_id = str(clip_id).strip()
+        normalized_workspace_id = str(workspace_id).strip()
+        normalized_source_note_id = str(source_note_id).strip() if source_note_id is not None else normalized_clip_id
+        if not normalized_clip_id or not normalized_workspace_id:
+            raise InputError("clip_id and workspace_id are required.")  # noqa: TRY003
+        if normalized_source_note_id != normalized_clip_id:
+            raise InputError("source_note_id must match clip_id for the canonical clip placement.")  # noqa: TRY003
+        if source_note_version is not None and (not isinstance(source_note_version, int) or source_note_version < 1):
+            raise InputError("source_note_version must be an integer >= 1 when provided.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        query = (
+            "INSERT INTO note_clipper_workspace_placements ("
+            "clip_id, workspace_id, workspace_note_id, source_note_id, source_note_version, "
+            "created_at, last_modified, deleted"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(clip_id, workspace_id) DO UPDATE SET "
+            "workspace_note_id = excluded.workspace_note_id, "
+            "source_note_id = excluded.source_note_id, "
+            "source_note_version = excluded.source_note_version, "
+            "last_modified = excluded.last_modified, "
+            "deleted = excluded.deleted"
+        )
+        params = (
+            normalized_clip_id,
+            normalized_workspace_id,
+            workspace_note_id,
+            normalized_source_note_id,
+            source_note_version,
+            now,
+            now,
+            deleted_value,
+        )
+
+        def _execute(inner_conn: sqlite3.Connection | BackendConnectionWrapper) -> dict[str, Any]:
+            workspace_row = inner_conn.execute(
+                "SELECT id FROM workspaces WHERE id = ? AND deleted = ?",
+                (
+                    normalized_workspace_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if workspace_row is None:
+                raise ConflictError(
+                    "Workspace not found or deleted.",
+                    entity="workspaces",
+                    entity_id=normalized_workspace_id,
+                )
+            clip_row = inner_conn.execute(
+                "SELECT clip_id FROM note_clipper_documents WHERE clip_id = ? AND deleted = ?",
+                (
+                    normalized_clip_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if clip_row is None:
+                raise ConflictError(
+                    "Canonical clip document not found or deleted.",
+                    entity="note_clipper_documents",
+                    entity_id=normalized_clip_id,
+                )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            inner_conn.execute(prepared_query, prepared_params or ())
+            result = inner_conn.execute(
+                "SELECT clip_id, workspace_id, workspace_note_id, source_note_id, source_note_version "
+                "FROM note_clipper_workspace_placements WHERE clip_id = ? AND workspace_id = ? AND deleted = ?",
+                (
+                    normalized_clip_id,
+                    normalized_workspace_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if result is None:
+                raise CharactersRAGDBError(
+                    f"Failed to read workspace placement for clip ID '{normalized_clip_id}' and workspace '{normalized_workspace_id}'."
+                )
+            return dict(result)
+
+        if conn is None:
+            with self.transaction() as transaction_conn:
+                return _execute(transaction_conn)
+        return _execute(conn)
+
     def _ensure_workspace_subresource_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure workspace settings columns and sub-resource tables exist for SQLite."""
         try:
@@ -7541,6 +8263,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 42 and current_db_version == 41:
                         self._migrate_from_v41_to_v42(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 43 and current_db_version == 42:
+                        self._migrate_from_v42_to_v43(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 44 and current_db_version == 43:
+                        self._migrate_from_v43_to_v44(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -7978,11 +8706,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 42 and current_db_version == 41:
                     self._migrate_from_v41_to_v42(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 43 and current_db_version == 42:
+                    self._migrate_from_v42_to_v43(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 44 and current_db_version == 43:
+                    self._migrate_from_v43_to_v44(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
                 self._ensure_note_folder_schema_sqlite(conn)
                 self._ensure_note_studio_schema_sqlite(conn)
+                self._ensure_web_clipper_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -7997,6 +8732,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_study_pack_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
                 self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
+                self._ensure_web_clipper_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
@@ -11316,6 +12052,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 42:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V41_TO_V42_POSTGRES, conn, expected_version=42)
                 current_version = 42
+            if current_version < 43:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V42_TO_V43_POSTGRES, conn, expected_version=43)
+                current_version = 43
+            if current_version < 44:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V43_TO_V44_POSTGRES, conn, expected_version=44)
+                current_version = 44
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -11333,6 +12075,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_recent_voice_command_schema_postgres(conn)
             self._ensure_note_folder_schema_postgres(conn)
             self._ensure_note_studio_schema_postgres(conn)
+            self._ensure_web_clipper_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
             self._ensure_manuscript_phase2_sync_triggers_postgres(conn)
 
@@ -23102,6 +23845,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         msg = f"Soft delete for note ID {note_id} (expected v{expected_version}) affected 0 rows."
                     raise ConflictError(msg, entity="notes", entity_id=note_id)  # noqa: TRY301
 
+                self._invalidate_note_clipper_sidecars(note_id, conn=conn, deleted=True)
                 logger.info(
                     f"Soft-deleted note ID {note_id} (was v{expected_version}), new version {next_version_val}.")
                 return True
@@ -23123,6 +23867,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cur_ver = int(row["version"])
                 deleted = bool(row["deleted"])
                 if hard_delete:
+                    self._delete_note_clipper_sidecars(note_id, conn=conn)
                     conn.execute("DELETE FROM note_studio_documents WHERE note_id = ?", (note_id,))
                     conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
                     return True
@@ -23136,6 +23881,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "WHERE id = ? AND deleted = 0",
                     (deleted_val, now, cur_ver + 1, self.client_id, note_id),
                 ).rowcount
+                if rc > 0:
+                    self._invalidate_note_clipper_sidecars(note_id, conn=conn, deleted=True)
                 return rc > 0
         except BackendDatabaseError as e:
             raise CharactersRAGDBError(f"Failed to delete note: {e}") from e  # noqa: TRY003
@@ -23216,6 +23963,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         msg = f"Restore for Note ID {note_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks."
                     raise ConflictError(msg, entity="notes", entity_id=note_id)  # noqa: TRY301
 
+                self._invalidate_note_clipper_sidecars(note_id, conn=conn, deleted=False)
                 logger.info(
                     f"Restored note ID {note_id} (was version {expected_version}), new version {next_version_val}.")
                 return True

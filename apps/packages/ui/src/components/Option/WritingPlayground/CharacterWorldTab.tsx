@@ -11,6 +11,14 @@ import {
   listManuscriptPlotLines,
   createManuscriptPlotLine,
   listManuscriptPlotHoles,
+  type ManuscriptCharacter,
+  type ManuscriptCharacterListResponse,
+  type ManuscriptPlotHole,
+  type ManuscriptPlotHoleListResponse,
+  type ManuscriptPlotLine,
+  type ManuscriptPlotLineListResponse,
+  type ManuscriptWorldInfoItem,
+  type ManuscriptWorldInfoListResponse,
 } from "@/services/writing-playground"
 
 type CharacterWorldTabProps = { isOnline: boolean }
@@ -43,33 +51,38 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
   const [newPlotTitle, setNewPlotTitle] = useState("")
 
   // ── Queries ──
-  const { data: characters = [], isLoading: charsLoading } = useQuery({
+  const { data: charactersResponse, isLoading: charsLoading, isError: charsError } = useQuery<ManuscriptCharacterListResponse>({
     queryKey: ["manuscript-characters", activeProjectId],
     queryFn: () => listManuscriptCharacters(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "characters",
     staleTime: 30_000,
   })
 
-  const { data: worldInfo = [], isLoading: worldLoading } = useQuery({
+  const { data: worldInfoResponse, isLoading: worldLoading, isError: worldError } = useQuery<ManuscriptWorldInfoListResponse>({
     queryKey: ["manuscript-world-info", activeProjectId],
     queryFn: () => listManuscriptWorldInfo(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "world",
     staleTime: 30_000,
   })
 
-  const { data: plotLines = [], isLoading: plotLoading } = useQuery({
+  const { data: plotLinesResponse, isLoading: plotLoading, isError: plotError } = useQuery<ManuscriptPlotLineListResponse>({
     queryKey: ["manuscript-plot-lines", activeProjectId],
     queryFn: () => listManuscriptPlotLines(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "plot",
     staleTime: 30_000,
   })
 
-  const { data: plotHoles = [] } = useQuery({
+  const { data: plotHolesResponse, isError: plotHolesError } = useQuery<ManuscriptPlotHoleListResponse>({
     queryKey: ["manuscript-plot-holes", activeProjectId],
     queryFn: () => listManuscriptPlotHoles(activeProjectId!),
     enabled: isOnline && !!activeProjectId && subView === "plot",
     staleTime: 30_000,
   })
+
+  const characters = charactersResponse?.characters ?? []
+  const worldInfo = worldInfoResponse?.items ?? []
+  const plotLines = plotLinesResponse?.plot_lines ?? []
+  const plotHoles = plotHolesResponse?.plot_holes ?? []
 
   // ── Mutations ──
   const addCharMutation = useMutation({
@@ -132,7 +145,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               placeholder="Character name..."
               value={newCharName}
               onChange={(e) => setNewCharName(e.target.value)}
-              onPressEnter={() => isOnline && newCharName.trim() && addCharMutation.mutate(newCharName.trim())}
+              onPressEnter={() => isOnline && newCharName.trim() && !addCharMutation.isPending && addCharMutation.mutate(newCharName.trim())}
             />
             <Button
               size="small"
@@ -140,15 +153,17 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               icon={<Plus className="h-3 w-3" />}
               disabled={!newCharName.trim() || !isOnline}
               loading={addCharMutation.isPending}
-              onClick={() => addCharMutation.mutate(newCharName.trim())}
+              onClick={() => isOnline && addCharMutation.mutate(newCharName.trim())}
             />
           </div>
-          {charsLoading ? <Spin size="small" /> : (
+          {charsLoading ? <Spin size="small" /> : charsError ? (
+            <Typography.Text type="danger" className="text-xs">Failed to load characters</Typography.Text>
+          ) : (
             <List
               size="small"
-              dataSource={characters as any[]}
+              dataSource={characters}
               locale={{ emptyText: "No characters yet" }}
-              renderItem={(char: any) => (
+              renderItem={(char: ManuscriptCharacter) => (
                 <List.Item className="!px-0 !py-1">
                   <div className="flex items-center gap-2 w-full">
                     <Typography.Text className="text-sm flex-1">{char.name}</Typography.Text>
@@ -178,7 +193,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               placeholder="Entry name..."
               value={newWorldName}
               onChange={(e) => setNewWorldName(e.target.value)}
-              onPressEnter={() => isOnline && newWorldName.trim() && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
+              onPressEnter={() => isOnline && newWorldName.trim() && !addWorldMutation.isPending && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
               className="flex-1"
             />
             <Button
@@ -187,15 +202,17 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               icon={<Plus className="h-3 w-3" />}
               disabled={!newWorldName.trim() || !isOnline}
               loading={addWorldMutation.isPending}
-              onClick={() => addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
+              onClick={() => isOnline && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
             />
           </div>
-          {worldLoading ? <Spin size="small" /> : (
+          {worldLoading ? <Spin size="small" /> : worldError ? (
+            <Typography.Text type="danger" className="text-xs">Failed to load world info</Typography.Text>
+          ) : (
             <List
               size="small"
-              dataSource={worldInfo as any[]}
+              dataSource={worldInfo}
               locale={{ emptyText: "No world info yet" }}
-              renderItem={(wi: any) => (
+              renderItem={(wi: ManuscriptWorldInfoItem) => (
                 <List.Item className="!px-0 !py-1">
                   <div className="flex items-center gap-2 w-full">
                     <Typography.Text className="text-sm flex-1">{wi.name}</Typography.Text>
@@ -218,7 +235,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 placeholder="Plot line title..."
                 value={newPlotTitle}
                 onChange={(e) => setNewPlotTitle(e.target.value)}
-                onPressEnter={() => isOnline && newPlotTitle.trim() && addPlotMutation.mutate(newPlotTitle.trim())}
+                onPressEnter={() => isOnline && newPlotTitle.trim() && !addPlotMutation.isPending && addPlotMutation.mutate(newPlotTitle.trim())}
               />
               <Button
                 size="small"
@@ -226,15 +243,17 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 icon={<Plus className="h-3 w-3" />}
                 disabled={!newPlotTitle.trim() || !isOnline}
                 loading={addPlotMutation.isPending}
-                onClick={() => addPlotMutation.mutate(newPlotTitle.trim())}
+                onClick={() => isOnline && addPlotMutation.mutate(newPlotTitle.trim())}
               />
             </div>
-            {plotLoading ? <Spin size="small" /> : (
+            {plotLoading ? <Spin size="small" /> : plotError ? (
+              <Typography.Text type="danger" className="text-xs">Failed to load plot lines</Typography.Text>
+            ) : (
               <List
                 size="small"
-                dataSource={plotLines as any[]}
+                dataSource={plotLines}
                 locale={{ emptyText: "No plot lines yet" }}
-                renderItem={(pl: any) => (
+                renderItem={(pl: ManuscriptPlotLine) => (
                   <List.Item className="!px-0 !py-1">
                     <div className="flex items-center gap-2 w-full">
                       <Typography.Text className="text-sm flex-1">{pl.title}</Typography.Text>
@@ -247,13 +266,15 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               />
             )}
           </div>
-          {(plotHoles as any[]).length > 0 && (
+          {plotHolesError ? (
+            <Typography.Text type="danger" className="text-xs">Failed to load plot holes</Typography.Text>
+          ) : plotHoles.length > 0 ? (
             <div>
               <Typography.Text strong className="text-xs">Plot Holes</Typography.Text>
               <List
                 size="small"
-                dataSource={plotHoles as any[]}
-                renderItem={(ph: any) => (
+                dataSource={plotHoles}
+                renderItem={(ph: ManuscriptPlotHole) => (
                   <List.Item className="!px-0 !py-1">
                     <div className="flex items-center gap-2 w-full">
                       <Typography.Text className="text-sm flex-1">{ph.title}</Typography.Text>
@@ -265,7 +286,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 )}
               />
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>
