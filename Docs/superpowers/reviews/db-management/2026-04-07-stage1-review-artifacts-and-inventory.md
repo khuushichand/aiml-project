@@ -382,8 +382,8 @@ d6760282f fix: address remaining PR #1002 review items (batch 3)
 714086728 fix: address remaining PR #1002 review feedback
 1066c3a13 Merge feat/writing-suite-phase3 into dev with review fixes
 d62c0b602 Fix PR 1001 manuscript review feedback
-ec5dfd341 fix: address PR #1002 review feedback
-01a1ff6c3 fix: address PR #999 review feedback
+ec5dfd341 fix: address PR 1002 review feedback
+01a1ff6c3 fix: address PR 999 review feedback
 d65a5c9cb fix: remove stale _ALLOWED_*_COLUMNS refs and duplicate migration SQL
 fd747f94d merge: incorporate latest dev into feat/writing-suite-phase2
 ```
