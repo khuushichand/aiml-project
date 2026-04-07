@@ -114,13 +114,17 @@ class LockoutTracker:
         if not self._initialized:
             await self.initialize()
         repo = self._get_repo()
-        locked_until = await repo.get_active_lockout(identifier=identifier, now=datetime.now(timezone.utc))
+        locked_until = await repo.get_active_lockout(
+            identifier=identifier,
+            attempt_type=attempt_type,
+            now=datetime.now(timezone.utc),
+        )
         if locked_until is not None:
             return True, locked_until
         return False, None
 
     async def reset_failed_attempts(self, identifier: str, attempt_type: str = "login") -> None:
-        """Clear failed attempt counters and lockout for an identifier."""
+        """Clear failed attempt counters and lockout for an identifier and attempt type."""
         if not self._initialized:
             await self.initialize()
         repo = self._get_repo()

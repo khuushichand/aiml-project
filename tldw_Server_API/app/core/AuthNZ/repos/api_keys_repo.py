@@ -7,7 +7,12 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, build_sqlite_in_clause
+from tldw_Server_API.app.core.AuthNZ.database import (
+    DatabasePool,
+    build_sqlite_in_clause,
+    should_enforce_sqlite_schema_strictness,
+    validate_required_sqlite_api_key_schema,
+)
 
 
 @dataclass
@@ -64,9 +69,13 @@ class AuthnzApiKeysRepo:
                     "Run the AuthNZ migrations/bootstrap (see "
                     "'python -m tldw_Server_API.app.core.AuthNZ.initialize')."
                 )
+
+            if should_enforce_sqlite_schema_strictness(getattr(self.db_pool, "_sqlite_fs_path", None)):
+                validate_required_sqlite_api_key_schema(getattr(self.db_pool, "_sqlite_fs_path", None))
         except Exception as exc:
             logger.error(f"AuthnzApiKeysRepo.ensure_tables failed: {exc}")
             raise
+
     async def fetch_active_by_hash_candidates(
         self,
         hash_candidates: list[str],
