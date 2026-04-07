@@ -15,13 +15,20 @@ The review should prioritize actionable findings over exhaustive narration, pres
 This review is limited to:
 
 - `tldw_Server_API/app/core/AuthNZ`
-- `tldw_Server_API/tests/AuthNZ`
+- primary test evidence in `tldw_Server_API/tests/AuthNZ`
 
 This review excludes:
 
 - API endpoints outside the AuthNZ core module
 - app wiring outside local AuthNZ dependencies
 - fixes or refactors during the review itself unless the user explicitly requests remediation afterward
+
+Code scope remains limited to `tldw_Server_API/app/core/AuthNZ`. Test evidence may also be drawn selectively from other AuthNZ-specific test directories when those tests directly exercise the scoped core module, especially backend-specific behavior:
+
+- `tldw_Server_API/tests/AuthNZ_SQLite`
+- `tldw_Server_API/tests/AuthNZ_Postgres`
+- `tldw_Server_API/tests/AuthNZ_Unit`
+- `tldw_Server_API/tests/AuthNZ_Federation`
 
 ## Deliverable
 
@@ -99,6 +106,7 @@ The review order inside the module should bias toward:
 - secret storage and key material handling
 - RBAC, permissions, org or team authorization logic inside the scoped module
 - quotas, rate limits, lockout, and budget enforcement logic
+- migrations, schema evolution, backend divergence, and repository persistence paths
 - configuration defaults, migration-sensitive paths, and fail-open or fail-closed behavior
 
 Initial hotspot files include:
@@ -112,6 +120,10 @@ Initial hotspot files include:
 - `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py`
 - `tldw_Server_API/app/core/AuthNZ/permissions.py`
 - `tldw_Server_API/app/core/AuthNZ/settings.py`
+- `tldw_Server_API/app/core/AuthNZ/migrations.py`
+- `tldw_Server_API/app/core/AuthNZ/pg_migrations_extra.py`
+- `tldw_Server_API/app/core/AuthNZ/database.py`
+- selected files under `tldw_Server_API/app/core/AuthNZ/repos/`
 
 ## Evidence Model
 
@@ -119,6 +131,7 @@ The review will rely on:
 
 - direct source inspection in `tldw_Server_API/app/core/AuthNZ`
 - direct test inspection in `tldw_Server_API/tests/AuthNZ`
+- targeted test inspection in `tldw_Server_API/tests/AuthNZ_SQLite`, `tldw_Server_API/tests/AuthNZ_Postgres`, `tldw_Server_API/tests/AuthNZ_Unit`, and `tldw_Server_API/tests/AuthNZ_Federation` when those tests directly validate scoped AuthNZ core behavior
 - targeted static inspection commands where useful
 - focused verification runs only when they answer a specific question
 
@@ -129,6 +142,8 @@ The review is not planned as a full integration or broad runtime test sweep. Ver
 - whether code and tests disagree on observable behavior
 
 If a concern depends on behavior outside the approved scope, it should be downgraded to a probable risk unless the local AuthNZ evidence is enough to prove it directly.
+
+The older plan in `Docs/superpowers/plans/2026-03-23-authnz-sequential-review.md` should not be reused as-is for this run because it intentionally broadens into API deps and endpoint files outside the approved boundary.
 
 ## Finding Categories
 
@@ -178,6 +193,7 @@ The testing analysis should emphasize which missing tests would most reduce secu
 - The review remains read-first and non-invasive.
 - Severe findings should include remediation guidance, but not code changes.
 - The review must not silently expand into endpoint or platform-wide behavior analysis.
+- Targeted verification should prefer the smallest test selection that can answer the question and should avoid broad backend sweeps unless a backend-specific claim requires them.
 
 ## Final Deliverable Contract
 
@@ -187,6 +203,8 @@ The final report will contain four ordered sections:
 2. `Correctness`
 3. `Maintainability`
 4. `Test Gaps`
+
+It will also end with a short `Blind Spots / Not Reviewed` section that makes any meaningful excluded surface or unresolved evidence limits explicit.
 
 Within each section:
 
@@ -218,6 +236,7 @@ The review is successful when:
 - remediation effort is easy to estimate from the report
 - targeted verification is used only where it improves confidence materially
 - test gaps identify the highest-leverage missing coverage first
+- report blind spots are explicit so scope limits are not mistaken for clearance
 
 ## Constraints
 
