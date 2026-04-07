@@ -4646,6 +4646,26 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Shutting down unified audit services...")
         await shutdown_all_audit_services()
         logger.info("App Shutdown: Unified audit services stopped")
+
+        try:
+            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+                shutdown_local_audit_adapter_loop,
+            )
+
+            shutdown_local_audit_adapter_loop()
+            logger.info("App Shutdown: Embeddings audit adapter loop stopped")
+        except _STARTUP_GUARD_EXCEPTIONS as _e:
+            logger.debug(f"Embeddings audit adapter loop shutdown skipped: {_e}")
+
+        try:
+            from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+                shutdown_local_evaluations_audit_loop,
+            )
+
+            shutdown_local_evaluations_audit_loop()
+            logger.info("App Shutdown: Evaluations audit adapter loop stopped")
+        except _STARTUP_GUARD_EXCEPTIONS as _e:
+            logger.debug(f"Evaluations audit adapter loop shutdown skipped: {_e}")
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")
 
@@ -4701,17 +4721,6 @@ async def lifespan(app: FastAPI):
                 logger.info("AuthNZ scheduler stopped")
         except _IMPORT_EXCEPTIONS as _e:
             logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
-
-        # Shutdown cached audit adapter services (Embeddings adapter)
-        try:
-            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
-                shutdown_audit_adapter_services as _shutdown_audit_adapter,
-            )
-
-            await _shutdown_audit_adapter()
-            logger.info("Embeddings audit adapter services shutdown")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
-            logger.debug(f"Embeddings audit adapter shutdown skipped: {_e}")
 
         shutdown_telemetry()
         logger.info("App Shutdown: Telemetry shutdown")

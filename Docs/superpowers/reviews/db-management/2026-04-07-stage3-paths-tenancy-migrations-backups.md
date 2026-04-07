@@ -1,23 +1,27 @@
-# Stage 3 Paths Tenancy Migrations Backups
+# Stage 3 Audit: Paths, Tenancy, Migrations, and Backups
 
 ## Findings
 1. High: PostgreSQL RLS installers can partially fail and still return success, so tenant isolation policy setup can silently diverge from the code's assumptions.
    - Issue class: Isolation
+   - Evidence: Source-confirmed; not directly exercised by the targeted Stage 3 tests because PostgreSQL fixture setup failed in this environment.
    - Confidence: High
    - Why it matters: `ensure_prompt_studio_rls()` and `ensure_chacha_rls()` execute each `ALTER TABLE`/`CREATE POLICY` statement independently, swallow every exception as debug-only noise, and return `True` once any statement succeeded. A deployment can therefore end up with only some tables protected, or with `FORCE ROW LEVEL SECURITY` missing on some tables, while higher layers continue as if PostgreSQL tenancy is fully enforced.
    - File references: `tldw_Server_API/app/core/DB_Management/backends/pg_rls_policies.py:24-215`, `tldw_Server_API/app/core/DB_Management/backends/pg_rls_policies.py:218-263`
 2. High: the migration loader skips malformed or unreadable migration files instead of failing closed, and the upgrade path does not enforce contiguous version advancement.
    - Issue class: Correctness
+   - Evidence: Source-confirmed; not reproduced by the targeted tests in this stage because the migration loader tests only covered the successful and duplicate-version cases.
    - Confidence: High
    - Why it matters: `load_migrations()` logs and continues when a `.json` or `.sql` migration cannot be parsed. `_migrate_to_version_locked()` then applies whatever later versions remain without checking that every intermediate version exists. A broken v2 file plus a valid v3 file can therefore advance the database to v3 without ever running v2, and the current targeted tests only exercise the happy path where duplicates are ignored intentionally.
    - File references: `tldw_Server_API/app/core/DB_Management/db_migration.py:255-301`, `tldw_Server_API/app/core/DB_Management/db_migration.py:344-366`, `tldw_Server_API/app/core/DB_Management/db_migration.py:543-645`
 3. Medium: trusted SQLite path containment is lexical, not realpath-based, so a symlink placed under a trusted root can redirect writes outside that root.
    - Issue class: Isolation
+   - Evidence: Source-confirmed; not directly exercised by the targeted Stage 3 tests because no symlink-escape case exists in the current path test set.
    - Confidence: High
    - Why it matters: `resolve_trusted_database_path()` normalizes with `normpath()` and accepts the first path that is textually relative to a trusted root, but it does not resolve symlinks before the containment check. Callers such as `PersonalizationDB` and the embeddings A/B test store rely on this helper as their trust boundary, so a symlinked subdirectory under a trusted base can escape to an arbitrary filesystem location while still passing validation.
    - File references: `tldw_Server_API/app/core/DB_Management/db_path_utils.py:120-178`, `tldw_Server_API/app/core/DB_Management/Personalization_DB.py:63-73`, `tldw_Server_API/app/core/Evaluations/embeddings_abtest_repository.py:663-668`
 4. Low: the migration CLI advertises `--no-backup`, but the flag is never wired into the actual migrate call.
    - Issue class: Correctness
+   - Evidence: Source-confirmed; the targeted Stage 3 tests did not directly exercise the CLI flag path.
    - Confidence: High
    - Why it matters: operators invoking `migrate_db.py migrate --no-backup` still take the default backup path because `main()` ignores `args.no_backup` and `migrate()` has no parameter for it. This is not a data-loss issue, but the CLI contract is inaccurate and can mislead automation or incident response workflows.
    - File references: `tldw_Server_API/app/core/DB_Management/migrate_db.py:79-122`, `tldw_Server_API/app/core/DB_Management/migrate_db.py:194-204`, `tldw_Server_API/app/core/DB_Management/migrate_db.py:228-236`
@@ -82,6 +86,7 @@ Limited transitive scope expansion:
 - The two errors were `test_migration_cli_transfers_content_rows` and `test_migration_cli_transfers_workflow_rows`, both failing during PostgreSQL fixture setup rather than on migration assertions.
 - Follow-up verification outside the sandbox: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py -v`
 - Follow-up result on 2026-04-07: both integration tests still errored, now with `connection refused` on `127.0.0.1:5432`, confirming an environment dependency gap rather than a sandbox-only false positive.
+- Confidence boundary: PostgreSQL-backed runtime behavior in Stage 3 is only partially runtime-validated here and remains partly source-traced because the PostgreSQL fixture setup failed before the migration assertions could run.
 
 ## Coverage Gaps
 - No targeted Stage 3 test exercises `scope_context` activation/reset directly, `auth_deps._activate_scope_context()`, or `postgresql_backend._apply_scope_settings()`, so request-scope lifetime and GUC propagation are source-traced rather than test-confirmed.
