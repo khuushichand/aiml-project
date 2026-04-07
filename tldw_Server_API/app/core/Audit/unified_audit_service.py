@@ -408,6 +408,18 @@ class AuditEventType(Enum):
     OPS_INCIDENT = "ops.incident"
 
 
+def _event_type_value(event_type: AuditEventType | str) -> str:
+    if isinstance(event_type, AuditEventType):
+        return event_type.value
+    return str(event_type).strip()
+
+
+def _event_type_name(event_type: AuditEventType | str) -> str:
+    if isinstance(event_type, AuditEventType):
+        return event_type.name.lower()
+    return _event_type_value(event_type).lower().replace(".", "_")
+
+
 class AuditSeverity(Enum):
     """Severity levels for audit events"""
     DEBUG = "debug"
@@ -442,7 +454,7 @@ class AuditEvent:
     event_id: str = field(default_factory=lambda: str(uuid4()))
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     category: AuditEventCategory = AuditEventCategory.SYSTEM
-    event_type: AuditEventType = AuditEventType.SYSTEM_START
+    event_type: AuditEventType | str = AuditEventType.SYSTEM_START
     severity: AuditSeverity = AuditSeverity.INFO
     tenant_user_id: Optional[str] = None
 
@@ -483,7 +495,7 @@ class AuditEvent:
             "event_id": self.event_id,
             "timestamp": ts.isoformat(),
             "category": self.category.value,
-            "event_type": self.event_type.value,
+            "event_type": _event_type_value(self.event_type),
             "severity": self.severity.value,
             "tenant_user_id": self.tenant_user_id,
             "resource_type": self.resource_type,
@@ -1647,7 +1659,7 @@ class UnifiedAuditService:
                         }
                         if self._shared_mode:
                             record["tenant_user_id"] = self._resolve_tenant_id_for_write(
-                                raw_tenant=None,
+                                raw_tenant=tenant_user_id_override,
                                 context_user_id=context_user_id,
                                 event_type=event_type_val,
                                 category=record.get("category"),
@@ -2139,7 +2151,7 @@ class UnifiedAuditService:
 
     async def log_event(
         self,
-        event_type: AuditEventType,
+        event_type: AuditEventType | str,
         context: Optional[AuditContext] = None,
         category: Optional[AuditEventCategory] = None,
         severity: Optional[AuditSeverity] = None,
@@ -2152,7 +2164,8 @@ class UnifiedAuditService:
         tokens_used: Optional[int] = None,
         estimated_cost: Optional[float] = None,
         result_count: Optional[int] = None,
-        metadata: Optional[dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None,
+        tenant_user_id_override: Optional[str] = None,
     ) -> str:
         """
         Log an audit event.
@@ -2186,7 +2199,7 @@ class UnifiedAuditService:
         tenant_user_id = None
         if self._shared_mode:
             tenant_user_id = self._resolve_tenant_id_for_write(
-                raw_tenant=None,
+                raw_tenant=tenant_user_id_override,
                 context_user_id=context.user_id,
                 event_type=event_type,
                 category=category,
@@ -2266,7 +2279,7 @@ class UnifiedAuditService:
             if event.risk_score >= HIGH_RISK_SCORE:
                 self.stats["high_risk_events"] += 1
                 logger.warning(
-                    f"High-risk event: {event_type.value} "
+                    f"High-risk event: {_event_type_value(event_type)} "
                     f"(risk: {event.risk_score}, user: {context.user_id})"
                 )
 
@@ -2753,7 +2766,7 @@ class UnifiedAuditService:
                     except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         return AuditEventCategory.SYSTEM
 
-            def _as_event_type(val: Any) -> AuditEventType:
+            def _as_event_type(val: Any) -> AuditEventType | str:
                 try:
                     if isinstance(val, AuditEventType):
                         return val
@@ -2762,7 +2775,8 @@ class UnifiedAuditService:
                     try:
                         return AuditEventType[str(val)]
                     except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                        return AuditEventType.SYSTEM_START
+                        normalized = str(val).strip()
+                        return normalized if normalized else AuditEventType.SYSTEM_START
 
             def _as_severity(val: Any) -> AuditSeverity:
                 try:
@@ -3494,67 +3508,74 @@ class UnifiedAuditService:
         p.write_text(_rows_to_csv(all_rows), encoding="utf-8")
         return len(all_rows)
 
-    def _determine_category(self, event_type: AuditEventType) -> AuditEventCategory:
-        """Auto-determine category from event type"""
-        type_name = event_type.name.lower()
+    def _determine_category(self, event_type: AuditEventType | str) -> AuditEventCategory:
+        """Auto-determine category from event type."""
+        type_name = _event_type_name(event_type)
+        type_value = _event_type_value(event_type).lower()
 
         if type_name.startswith("auth_"):
             return AuditEventCategory.AUTHENTICATION
-        elif type_name.startswith("user_"):
+        if type_name.startswith("user_"):
             return AuditEventCategory.AUTHORIZATION
-        elif type_name.startswith("data_"):
-            # Differentiate read vs modification operations
-            if type_name.endswith("write") or type_name.endswith("update") or type_name.endswith("delete") or type_name.endswith("import") or type_name.endswith("export"):
+        if type_name.startswith("data_"):
+            if any(type_name.endswith(suffix) for suffix in ("write", "update", "delete", "import", "export")):
                 return AuditEventCategory.DATA_MODIFICATION
             return AuditEventCategory.DATA_ACCESS
-        elif type_name.startswith("rag_"):
+        if type_name.startswith("rag_"):
             return AuditEventCategory.RAG
-        elif type_name.startswith("eval_"):
+        if type_name.startswith("eval_"):
             return AuditEventCategory.EVALUATION
-        elif type_name.startswith("api_"):
-            # Keep API operations under API_CALL consistently (rate limiting, errors)
+        if type_name.startswith("api_"):
             return AuditEventCategory.API_CALL
-        elif type_name.startswith("security_"):
+        if type_name.startswith("security_"):
             return AuditEventCategory.SECURITY
-        elif type_name.startswith("system_"):
+        if type_name.startswith("system_"):
             return AuditEventCategory.SYSTEM
-        else:
-            # Map specific non-prefixed types to appropriate categories
-            if event_type in (AuditEventType.PERMISSION_DENIED, AuditEventType.SUSPICIOUS_ACTIVITY):
-                return AuditEventCategory.SECURITY
-            if event_type is AuditEventType.PII_DETECTED:
-                return AuditEventCategory.COMPLIANCE
-            return AuditEventCategory.SYSTEM
+        if type_value.startswith("share."):
+            return AuditEventCategory.DATA_MODIFICATION
+        if type_value == "token.used":
+            return AuditEventCategory.DATA_ACCESS
+        if type_value.startswith("token.password_"):
+            return AuditEventCategory.SECURITY
+        if type_value.startswith("token."):
+            return AuditEventCategory.DATA_MODIFICATION
+        if type_value in {
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+        }:
+            return AuditEventCategory.SECURITY
+        if type_value == AuditEventType.PII_DETECTED.value:
+            return AuditEventCategory.COMPLIANCE
+        return AuditEventCategory.SYSTEM
 
-    def _determine_severity(self, event_type: AuditEventType, result: str) -> AuditSeverity:
-        """Auto-determine severity from event type and result"""
+    def _determine_severity(self, event_type: AuditEventType | str, result: str) -> AuditSeverity:
+        """Auto-determine severity from event type and result."""
         result_norm = _normalize_result(result)
-        # Critical events
-        if event_type in [
-            AuditEventType.SECURITY_VIOLATION,
-            AuditEventType.SUSPICIOUS_ACTIVITY
-        ]:
+        type_value = _event_type_value(event_type).lower()
+
+        if type_value in {
+            AuditEventType.SECURITY_VIOLATION.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+        }:
             return AuditSeverity.CRITICAL
 
         if result_norm == "error":
             return AuditSeverity.ERROR
-        elif result_norm == "failure" or event_type in [
-            AuditEventType.AUTH_LOGIN_FAILURE,
-            AuditEventType.PERMISSION_DENIED,
-            AuditEventType.API_RATE_LIMITED
-        ]:
+        if result_norm == "failure" or type_value in {
+            AuditEventType.AUTH_LOGIN_FAILURE.value,
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.API_RATE_LIMITED.value,
+            "token.password_failed",
+        }:
             return AuditSeverity.WARNING
 
-        # Debug events
-        elif event_type in [
-            AuditEventType.SYSTEM_START,
-            AuditEventType.SYSTEM_STOP
-        ]:
+        if type_value in {
+            AuditEventType.SYSTEM_START.value,
+            AuditEventType.SYSTEM_STOP.value,
+        }:
             return AuditSeverity.DEBUG
 
-        # Default to INFO
-        else:
-            return AuditSeverity.INFO
+        return AuditSeverity.INFO
 
     def get_statistics(self) -> dict[str, Any]:
         """Get current statistics"""
