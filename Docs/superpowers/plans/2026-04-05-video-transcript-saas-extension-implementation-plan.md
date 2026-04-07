@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a private overlay product repo for a YouTube-first extension launcher and lightweight hosted transcript workspace, backed by a new idempotent `video-lite` orchestration contract in `tldw_server`.
+**Goal:** Build a private overlay product repo for a YouTube-first extension launcher and lightweight hosted transcript workspace, backed by a new idempotent `video-lite` orchestration contract in `tldw_server`, with eager summary generation owned by the backend workspace lifecycle.
 
-**Architecture:** Keep backend and trial/orchestration logic in `tldw_server`, but deliver the store-facing extension and hosted app from a separate private sibling repo. That private repo should reuse selected frontend surfaces from the existing app through an explicit upstream sync plus patch-overlay workflow, with private-only patches for branding, lightweight routes, launcher behavior, and upgrade flow.
+**Architecture:** Keep backend and trial/orchestration logic in `tldw_server`, but deliver the store-facing extension and hosted app from a separate private sibling repo. That private repo should reuse selected frontend surfaces from the existing app through an explicit upstream sync plus patch-overlay workflow, with private-only patches for branding, lightweight routes, launcher behavior, upgrade flow, and a hosted workspace that reads one backend-owned transcript-plus-summary contract.
 
 **Tech Stack:** FastAPI, Pydantic, existing Jobs/media ingestion stack, AuthNZ repos/migrations, private Next.js app, private browser extension package, React, Zustand, Bun/Vitest, pytest, optional sync scripts for vendored frontend updates
 
@@ -17,9 +17,9 @@
 ### Backend In `tldw_server`
 
 - Create: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
-  - Request/response models for normalized source lookup, source-state responses, trial state, and upgrade intent metadata.
+  - Request/response models for normalized source lookup, source-state responses, workspace payloads, summary lifecycle, trial state, and upgrade intent metadata.
 - Create: `tldw_Server_API/app/services/video_lite_service.py`
-  - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce trial semantics, and shape lightweight workspace payloads.
+  - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce trial semantics, shape lightweight workspace payloads, and generate or reuse eager summaries.
 - Create: `tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py`
   - Persistence for anonymous trial identity, normalized-source consumption, and retention timestamps.
 - Create: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
@@ -64,9 +64,9 @@
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/login.tsx`
   - Product login entry that preserves lightweight return intent.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
-  - Branded `Transcript` / `Summary` / `Chat` workspace.
+  - Branded `Transcript` / `Summary` / `Chat` workspace backed by backend transcript and eager-summary state.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
-  - Client for the backend `video-lite` contract.
+  - Client for the backend `video-lite` source and workspace contracts.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-intent.ts`
   - Shared helpers for preserving source key, target tab, and post-upgrade return intent.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/src/routes/sidepanel-video.tsx`
@@ -548,6 +548,130 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add docs/veri
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "docs: add overlay verification guide"
 ```
 
+## Task 10: Extend The Backend `video-lite` Contract To Return Workspace State
+
+**Files:**
+- Modify: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
+- Modify: `tldw_Server_API/app/services/video_lite_service.py`
+- Modify: `tldw_Server_API/app/api/v1/endpoints/media/video_lite.py`
+- Modify: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
+
+- [ ] **Step 1: Write the failing workspace contract tests**
+
+```python
+def test_video_lite_workspace_returns_summary_lifecycle(client, authed_headers):
+    response = client.get(
+        "/api/v1/media/video-lite/workspace/youtube:abc123",
+        headers=authed_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary_state"] in {"not_requested", "processing", "ready", "failed"}
+```
+
+- [ ] **Step 2: Run the targeted tests to verify they fail**
+
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Expected: FAIL because the workspace response does not exist yet.
+
+- [ ] **Step 3: Implement the workspace response contract**
+
+```python
+@router.get("/video-lite/workspace/{source_key}", response_model=VideoLiteWorkspaceResponse)
+async def get_video_lite_workspace(...):
+    return await service.get_workspace(...)
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Expected: PASS for workspace payload, entitlement shape, and summary lifecycle fields.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
+        tldw_Server_API/app/services/video_lite_service.py \
+        tldw_Server_API/app/api/v1/endpoints/media/video_lite.py \
+        tldw_Server_API/tests/media/test_video_lite_endpoint.py
+git commit -m "feat: add video-lite workspace contract"
+```
+
+## Task 11: Add Eager Summary Generation And Reuse
+
+**Files:**
+- Modify: `tldw_Server_API/app/services/video_lite_service.py`
+- Modify: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/video/[sourceKey].tsx`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/web/VideoWorkspacePage.test.tsx`
+
+- [ ] **Step 1: Write the failing eager-summary tests**
+
+```python
+def test_video_lite_generates_summary_once_when_transcript_ready(...):
+    ...
+```
+
+```tsx
+it("renders summary processing and summary ready states from backend workspace data", async () => {
+  ...
+})
+```
+
+- [ ] **Step 2: Run the targeted tests to verify they fail**
+
+Run backend:
+`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+
+Run frontend:
+`cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
+
+Expected: FAIL because eager summary generation and workspace-backed rendering are not implemented yet.
+
+- [ ] **Step 3: Implement eager summary generation and caching in the backend**
+
+```python
+async def ensure_workspace_summary(...):
+    ...
+```
+
+- [ ] **Step 4: Update the hosted page to fetch backend workspace state**
+
+```tsx
+export default function LiteVideoPage() {
+  const workspace = await getVideoLiteWorkspace(...)
+  return <VideoWorkspacePage initialState={workspace} />
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run backend:
+`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+
+Run frontend:
+`cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
+
+Expected: PASS for one-time summary generation, summary reuse on reopen, and hosted rendering of `processing`, `ready`, and `failed` summary states.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add tldw_Server_API/app/services/video_lite_service.py \
+        tldw_Server_API/tests/media/test_video_lite_endpoint.py \
+        Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md \
+        Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md
+git commit -m "feat: add eager video-lite summaries"
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add \
+  web/lib/video-lite-client.ts \
+  web/pages/lite/video/[sourceKey].tsx \
+  web/components/VideoWorkspacePage.tsx \
+  tests/web/VideoWorkspacePage.test.tsx
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: render eager video-lite summaries"
+```
+
 ## Notes For The Implementer
 
 - Do not ship the store-facing extension or hosted app from `apps/` inside `tldw_server`.
@@ -556,4 +680,5 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "do
 - Prefer wrapper files and private routes over invasive edits to vendored upstream files when possible.
 - Keep anonymous trial YouTube-only in both backend validation and frontend affordances.
 - Do not debit trial quota on submission; debit only when a normalized source reaches transcript-ready.
+- Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
 - Preserve source key and target-tab intent through login and upgrade flows.

@@ -2,7 +2,7 @@
 
 ## Summary
 
-This design defines a lightweight SaaS product for users who want to ingest video URLs, read transcripts, generate summaries, and chat against transcript content without entering the full `tldw` product surface.
+This design defines a lightweight SaaS product for users who want to ingest video URLs, read transcripts, receive eagerly generated summaries, and chat against transcript content without entering the full `tldw` product surface.
 
 The product should ship as a browser extension plus a reduced hosted web experience backed by the existing `tldw-hosted` / `tldw_server` platform. The extension is the discovery and launch surface. The hosted web app is the primary workspace.
 
@@ -18,6 +18,7 @@ V1 should also treat trial management, anonymous identity, lightweight upgrade f
   - `Transcript`
   - `Summary`
   - `Chat`
+- Generate the default summary eagerly as part of backend workspace readiness rather than as a client-triggered action.
 - Reuse the existing `tldw` backend for ingestion, transcript retrieval, summarization, and chat.
 - Keep the store-facing extension and hosted app in a separate private project so the product is not directly packaged as part of the open-source monorepo.
 - Reuse the existing app through an upstream sync plus private patch-overlay model rather than rebuilding the frontend from scratch.
@@ -238,10 +239,44 @@ V1 should compose existing capabilities rather than invent a separate open-sourc
 - submit URL for ingest
 - query existing ingest status
 - resolve the transcript-backed media record
+- generate and cache the default transcript summary once transcript readiness is reached
 - route chat and summary calls against that record
-- return one canonical source-state answer for the launcher and hosted workspace
+- return one canonical workspace answer for the launcher and hosted workspace
 - derive and persist a canonical normalized-source identity for reuse across extension and hosted lightweight mode
 - make repeated submit requests for the same normalized source idempotent
+
+## Workspace Contract And Summary Lifecycle
+
+The backend should grow from a source-state contract into a small workspace contract.
+
+The recommended contract shape is:
+
+- keep `POST /api/v1/media/video-lite/source` for normalization, entitlement checks, and ingest kickoff
+- add a backend-backed workspace/status response that includes:
+  - `source_key`
+  - `source_url`
+  - `state`
+  - `transcript`
+  - `summary`
+  - `summary_state`
+  - `chat_preview` if seeded preview copy is still desired
+  - `entitlement`
+
+Because V1 now prefers eager summary generation, summary lifecycle belongs to the backend rather than the hosted page. New source flows should normally move through:
+
+- media `processing`
+- media `ready` plus summary `processing`
+- media `ready` plus summary `ready`
+
+`summary_state` should be explicit. The useful V1 states are:
+
+- `not_requested`
+  - legacy or incomplete records only
+- `processing`
+- `ready`
+- `failed`
+
+The hosted page should render from that workspace payload rather than triggering summary generation itself. `Transcript` should render transcript or transcript-processing state, `Summary` should render summary or summary-processing state, and `Chat` should remain grounded on transcript-ready content.
 
 ## User Flow
 
@@ -252,8 +287,9 @@ The primary user flow is:
 3. If the item is not yet ready for the current user or anonymous trial session, the extension triggers ingest.
 4. The extension shows shallow progress feedback.
 5. Once transcript-ready, the user is routed into the hosted lightweight workspace.
-6. The user reads the transcript, requests a summary, or asks questions grounded in the transcript.
-7. If the anonymous quota is exhausted, the user is pushed into account creation and paid subscription flow.
+6. The backend generates the default summary as part of the same workspace lifecycle.
+7. The user reads the transcript, reviews the ready or in-progress summary, and asks questions grounded in the transcript.
+8. If the anonymous quota is exhausted, the user is pushed into account creation and paid subscription flow.
 
 The hosted experience may also accept direct pasted URLs for sources beyond YouTube, but extension auto-detection in V1 should stay focused on YouTube pages.
 
@@ -341,8 +377,9 @@ The main data flow should be:
 1. Extension or hosted lightweight mode submits a URL.
 2. Backend creates or reuses the media-processing record.
 3. Ingestion and transcription run to readiness.
-4. Hosted app polls or subscribes for ready state.
-5. Transcript, summary, and chat all bind to the same underlying transcript-backed media record.
+4. Once transcript-ready, the backend generates or reuses the default summary for that record.
+5. Hosted app polls or subscribes for workspace state.
+6. Transcript, summary, and chat all bind to the same underlying transcript-backed media record.
 
 The main design rule is to avoid inventing a separate “extension-only video” entity. Extension, hosted lightweight mode, and existing product surfaces should all reference the same underlying backend objects.
 
@@ -435,6 +472,8 @@ V1 should define explicit failure and boundary states.
 - `Unsupported URL`
 - `Ingestion in progress`
 - `Transcript unavailable`
+- `Summary in progress`
+- `Summary unavailable`
 - `Trial exhausted`
 - `Auth required`
 - `Chat unavailable`
@@ -486,6 +525,8 @@ Implementation should verify the following flows:
 - ingest handoff from extension to hosted lightweight mode
 - ingest status transitions and ready-state rendering
 - launcher action behavior across all source states
+- eager summary generation once transcript-ready
+- summary reuse for reopened normalized sources
 - transcript, summary, and chat behavior on transcript-backed media
 - server-side trial enforcement across anonymous and signed-in states
 - upgrade routing and subscription gating when quota is exhausted
