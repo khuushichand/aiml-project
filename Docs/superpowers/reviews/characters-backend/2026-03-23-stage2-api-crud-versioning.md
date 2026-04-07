@@ -98,30 +98,27 @@ rg -n "add_character_card|get_character_card_by_|query_character_cards|update_ch
   tldw_Server_API/app/core/Character_Chat/modules/character_db.py \
   tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py
 ```
-- Partial scoped pytest run before interruption:
-```bash
-source .venv/bin/activate
-python -m pytest \
-  tldw_Server_API/tests/Characters/test_characters_endpoint.py \
-  tldw_Server_API/tests/Characters/test_character_functionality_db.py \
-  tldw_Server_API/tests/Characters/test_character_chat_lib.py \
-  tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_api.py \
-  tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_cards_fts_bootstrap.py \
-  tldw_Server_API/tests/ChaChaNotesDB/test_character_card_tag_search.py -v
-```
-- Narrower pytest run before interruption:
+- Completed targeted pytest runs:
 ```bash
 source .venv/bin/activate
 python -m pytest tldw_Server_API/tests/Characters/test_characters_endpoint.py -v
+python -m pytest \
+  tldw_Server_API/tests/Characters/test_character_functionality_db.py \
+  tldw_Server_API/tests/Characters/test_character_chat_lib.py -v
+python -m pytest \
+  tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_api.py \
+  tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_cards_fts_bootstrap.py \
+  tldw_Server_API/tests/ChaChaNotesDB/test_character_card_tag_search.py -v
 ```
 - Direct DB repros used to confirm two findings:
   - `restore_character_card()` on an already-active row with a bogus `expected_version`
   - `update_character_card(..., {}, expected_version=999)` on an active row
 
-### Observed validation results before interruption
-- Combined 6-file pytest command collected `289` tests and progressed through the Stage 2 endpoint/version/restore cases with no observed failures before the turn was interrupted.
-- Narrower endpoint-only pytest command collected `48` tests and was observed passing through `test_character_world_book_attachment_lifecycle_integration` at `56%` with no observed failures before the turn was interrupted.
-- No full end-of-run pytest summary was captured for either interrupted command.
+### Validation results
+- `tldw_Server_API/tests/Characters/test_characters_endpoint.py`: `48 passed` in `780.33s`
+- `tldw_Server_API/tests/Characters/test_character_functionality_db.py` + `tldw_Server_API/tests/Characters/test_character_chat_lib.py`: `190 passed` in `22.94s`
+- `tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_api.py` + `tldw_Server_API/tests/Character_Chat_NEW/unit/test_character_cards_fts_bootstrap.py` + `tldw_Server_API/tests/ChaChaNotesDB/test_character_card_tag_search.py`: `48 passed, 3 skipped` in `335.15s`
+- The three skipped tests were existing skips in `test_character_api.py` and did not block the targeted lifecycle validation.
 
 ## Findings
 - High | correctness | `restore_character_card()` accepts an invalid restore request for an already-active row and returns success without checking `expected_version`.
@@ -174,7 +171,6 @@ python -m pytest tldw_Server_API/tests/Characters/test_characters_endpoint.py -v
 - Open question: whether restore of an already-active row should be idempotent success at all. The endpoint description reads as if restore is only valid for soft-deleted rows.
 
 ## Coverage Gaps
-- Full planned validation did not complete. The two pytest commands above were both interrupted before their final summaries were emitted, so this stage cannot claim full green coverage for the scoped test set.
 - `tldw_Server_API/tests/Characters/test_character_functionality_db.py` does not directly cover `restore_character_card()` or `get_character_version_history()`, leaving the highest-risk Stage 2 restore/version invariants under-tested.
 - `tldw_Server_API/tests/Characters/test_characters_endpoint.py` covers restore/revert happy paths but does not cover:
   - restore against an already-active row
@@ -190,6 +186,5 @@ python -m pytest tldw_Server_API/tests/Characters/test_characters_endpoint.py -v
 - Consider documenting restore-not-found semantics explicitly if `409` is intentional.
 
 ## Exit Note
-- Stage 2 review completed with concrete findings, but validation is incomplete due to interrupted pytest runs. Status for this stage should be treated as `DONE_WITH_CONCERNS`, not fully clean.
+- Stage 2 review completed with concrete findings and completed targeted validation across the planned test surface.
 - No source files were modified. The only intended artifact from this task is this report.
-- Attempted process cleanup after interruption was limited by sandbox restrictions (`pkill` could not inspect the process table), so I cannot prove whether the interrupted pytest process had already exited on its own. The report therefore records only the observed test progress, not a final process-state guarantee.
