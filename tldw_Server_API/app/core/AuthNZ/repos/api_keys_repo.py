@@ -7,7 +7,13 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, build_sqlite_in_clause
+from tldw_Server_API.app.core.AuthNZ.database import (
+    DatabasePool,
+    SQLITE_REQUIRED_API_KEYS_COLUMNS,
+    SQLITE_REQUIRED_API_KEY_AUDIT_COLUMNS,
+    build_sqlite_in_clause,
+    should_enforce_sqlite_schema_strictness,
+)
 
 
 @dataclass
@@ -64,9 +70,33 @@ class AuthnzApiKeysRepo:
                     "Run the AuthNZ migrations/bootstrap (see "
                     "'python -m tldw_Server_API.app.core.AuthNZ.initialize')."
                 )
+
+            if should_enforce_sqlite_schema_strictness(getattr(self.db_pool, "_sqlite_fs_path", None)):
+                api_key_cols = {
+                    row["name"] if isinstance(row, dict) else row[1]
+                    for row in await self.db_pool.fetchall("PRAGMA table_info(api_keys)")
+                }
+                missing_api_key_cols = sorted(SQLITE_REQUIRED_API_KEYS_COLUMNS - api_key_cols)
+                if missing_api_key_cols:
+                    raise RuntimeError(
+                        "SQLite api_keys schema missing required columns: "
+                        + ", ".join(missing_api_key_cols)
+                    )
+
+                audit_cols = {
+                    row["name"] if isinstance(row, dict) else row[1]
+                    for row in await self.db_pool.fetchall("PRAGMA table_info(api_key_audit_log)")
+                }
+                missing_audit_cols = sorted(SQLITE_REQUIRED_API_KEY_AUDIT_COLUMNS - audit_cols)
+                if missing_audit_cols:
+                    raise RuntimeError(
+                        "SQLite api_key_audit_log schema missing required columns: "
+                        + ", ".join(missing_audit_cols)
+                    )
         except Exception as exc:
             logger.error(f"AuthnzApiKeysRepo.ensure_tables failed: {exc}")
             raise
+
     async def fetch_active_by_hash_candidates(
         self,
         hash_candidates: list[str],

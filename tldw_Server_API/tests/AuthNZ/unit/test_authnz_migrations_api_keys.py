@@ -47,3 +47,26 @@ def test_migration_017_extend_api_keys_virtual_adds_columns() -> None:
             assert expected in cols
     finally:
         conn.close()
+
+
+def test_migration_085_removes_api_keys_scope_default() -> None:
+    from tldw_Server_API.app.core.AuthNZ.migrations import (
+        migration_001_create_users_table,
+        migration_003_create_api_keys_table,
+        migration_004_create_api_key_audit_log,
+        migration_085_remove_api_keys_scope_default,
+    )
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        migration_001_create_users_table(conn)
+        migration_003_create_api_keys_table(conn)
+        migration_004_create_api_key_audit_log(conn)
+
+        migration_085_remove_api_keys_scope_default(conn)
+
+        columns = conn.execute("PRAGMA table_info(api_keys)").fetchall()
+        scope_row = next(row for row in columns if row[1] == "scope")
+        assert scope_row[4] is None
+    finally:
+        conn.close()
