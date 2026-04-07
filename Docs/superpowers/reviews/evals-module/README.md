@@ -1,7 +1,7 @@
 # Evals Module Review
 
 ## Baseline Snapshot
-- Head commit: `ec30354a2`
+- Frozen review baseline commit (short HEAD at review start): `ec30354a2`
 - Dirty Evals-related files at review start:
   - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py`
   - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py`
@@ -45,12 +45,18 @@ Use this exact structure for every later finding entry:
 1. Severity: High
    Confidence: High
    Priority: Immediate
+   Applicability: Baseline
    Why it matters: ...
    File references: `path/to/file.py:line`
    Recommended fix: ...
    Recommended tests: ...
    Verification note: ...
 ```
+
+### Confidence Model
+- High: directly observed in the current file set or verified with targeted evidence.
+- Medium: supported by strong code-path evidence, but one or more assumptions still need confirmation.
+- Low: tentative or inferred from surrounding context and should be treated as `needs verification`.
 
 ## Severity and Priority Model
 - Critical / High / Medium / Low
@@ -62,6 +68,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 2: Core Orchestration and Execution
@@ -70,6 +77,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 3: Persistence and State Management
@@ -78,6 +86,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 4: CRUD and Run Lifecycle Endpoints
@@ -86,6 +95,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 5: Retrieval and Recipe-Driven Evaluation Surfaces
@@ -94,6 +104,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 6: Benchmark, Dataset, and Synthetic Evaluation Surfaces
@@ -102,6 +113,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 7: Embeddings A/B and Webhook Surfaces
@@ -110,6 +122,7 @@ Use this exact structure for every later finding entry:
 ### Control and Data Flow Notes
 ### Findings
 ### Open Questions
+### Verification Run
 ### Slice Status
 
 ## Slice 8: Cross-Slice Contract Synthesis
@@ -118,4 +131,5 @@ Use this exact structure for every later finding entry:
 ### Priority Summary
 ### Recommended Remediation Order
 ### Coverage Gaps and Verification Items
+### Verification Run
 ### Slice Status

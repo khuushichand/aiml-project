@@ -85,11 +85,27 @@ This remediation is intended to address these reviewed findings:
   `/versions` and `/versions/diff` APIs to return raw avatar payloads by
   default. Default version-history responses should stay compact and expose
   avatar presence or diff semantics without bloating normal API responses.
+- The compact public avatar-history shape is locked now rather than left as an
+  implementation choice:
+  - `/versions` entries expose `payload.image_present: bool`
+  - `/versions` entries expose `payload.image_digest: str | null`, where the
+    digest is derived from normalized avatar bytes and is safe to compare
+  - `/versions/diff` reports avatar changes only through
+    `changed_fields[].field == "image_present"` and
+    `changed_fields[].field == "image_digest"` and must never return raw
+    `image_base64` by default
 - Plain-text synthetic character import remains allowed only for explicitly
   plain-text inputs. Structured card inputs are determined by the import
   classifier and parser path, not just filename extension examples. Structured
   card candidates such as JSON, YAML, and PNG-embedded card metadata are
   rejected when parse or validation fails.
+- Image-container imports get an explicit split:
+  - image files with embedded character metadata are structured-card imports and
+    must fail if metadata parsing or validation fails
+  - image files without embedded character metadata may only use image-only
+    import behavior when the caller explicitly allows that mode
+  - image files without embedded metadata must not fall through to synthetic
+    plain-text character import
 - Image-file imports and base64/image-field imports must converge on one avatar
   normalization contract before persistence.
 - PNG export must honor the same effective metadata-size contract as the PNG
@@ -206,18 +222,26 @@ Revert and diff behavior:
 Public version API shaping:
 
 - internal sync snapshots remain complete
-- `/versions` and `/versions/diff` must not include raw `image_base64` by
+- `/versions` entries expose compact avatar fields in `payload`:
+  - `image_present: bool`
+  - `image_digest: str | null`
+- `/versions/diff` reports avatar changes only through `image_present` and
+  `image_digest` field entries and must not include raw `image_base64` by
   default
-- default responses should expose compact avatar semantics such as presence or
-  changed-state markers, while revert continues to read the complete internal
-  snapshot
+- revert continues to read the complete internal snapshot rather than the
+  compact public payload shape
 - if full avatar snapshot inspection is needed later, that should be an
   explicit opt-in behavior rather than the default history payload shape
 
 Migration strategy:
 
-- introduce ChaChaNotes schema version `45`
-- schema v45 refreshes the character sync triggers so new snapshots contain
+- assuming no intervening schema work lands first, introduce ChaChaNotes schema
+  version `45`
+- implementation must revalidate the current head schema version when the
+  remediation branch is cut and use the next available version if `45` is no
+  longer correct
+- the selected schema version refreshes the character sync triggers so new
+  snapshots contain
   `image_base64`
 - no historical backfill of old sync rows is required for correctness; mixed
   old/new history is supported intentionally
@@ -235,6 +259,16 @@ Character import behavior becomes mode-explicit:
 
 This preserves useful plain-text import without silently accepting malformed
 card files as something else.
+
+Image-container classification rule:
+
+- PNG, WEBP, and JPEG imports with embedded character metadata are structured
+  card mode and must succeed as structured cards or fail clearly
+- PNG, WEBP, and JPEG imports without embedded character metadata are not
+  structured cards
+- those metadata-less image imports may only succeed through explicit
+  image-only import mode and otherwise fail with the existing
+  `missing_character_data` style contract
 
 #### 3.2 Unified Avatar Normalization
 
@@ -383,16 +417,16 @@ sync.
 
 Requirements:
 
-- schema v45 captures any new trigger or auxiliary-table changes required by
-  this remediation
+- the selected next schema version captures any new trigger or auxiliary-table
+  changes required by this remediation
 - Postgres schema initialization and migration translation must remain valid for
   the same logical changes
 - tests must cover migrated SQLite behavior and at least one Postgres-safe
   parity check for touched schema logic where practical
 
 If the final implementation requires an auxiliary guard table for strict quota
-serialization, that table is part of schema v45 and must exist in both backend
-paths.
+serialization, that table is part of the selected schema bump and must exist in
+both backend paths.
 
 ### 8. Worktree And Repository Discipline
 
