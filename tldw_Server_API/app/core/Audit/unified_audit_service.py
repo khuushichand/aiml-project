@@ -1497,7 +1497,8 @@ class UnifiedAuditService:
                     risk_score INTEGER,
                     pii_detected BOOLEAN,
                     compliance_flags TEXT,
-                    metadata TEXT
+                    metadata TEXT,
+                    chain_hash TEXT
                 )
                 """
             )
@@ -1531,7 +1532,8 @@ class UnifiedAuditService:
                     risk_score INTEGER,
                     pii_detected BOOLEAN,
                     compliance_flags TEXT,
-                    metadata TEXT
+                    metadata TEXT,
+                    chain_hash TEXT
                 )
                 """
             )
@@ -1641,6 +1643,7 @@ class UnifiedAuditService:
                             "pii_detected": bool(data.get("pii_detected") or False),
                             "compliance_flags": _json_text(data.get("compliance_flags"), default="[]"),
                             "metadata": _json_text(data.get("metadata"), default="{}"),
+                            "chain_hash": str(data.get("chain_hash") or ""),
                         }
                         if self._shared_mode:
                             record["tenant_user_id"] = self._resolve_tenant_id_for_write(
@@ -2365,14 +2368,19 @@ class UnifiedAuditService:
             return deduped
         return [event for event in deduped if event.event_id not in existing_ids]
 
-    def _apply_chain_hashes(self, records: list[dict[str, Any]]) -> None:
+    def _apply_chain_hashes(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        previous_hash: Optional[str] = None,
+    ) -> str:
         """Compute and assign chain hashes to a batch of event records.
 
-        Mutates each record in-place, setting the ``chain_hash`` key.
-        Updates ``self._last_chain_hash`` so subsequent batches continue
-        the chain.
+        Mutates each record in-place, setting the ``chain_hash`` key and returns
+        the last computed hash. Callers are responsible for updating
+        ``self._last_chain_hash`` only after the write is durably committed.
         """
-        prev = self._last_chain_hash
+        prev = self._last_chain_hash if previous_hash is None else previous_hash
         for rec in records:
             event_dict = {
                 "action": rec.get("action", ""),
@@ -2383,7 +2391,7 @@ class UnifiedAuditService:
             h = compute_event_hash(event_dict, prev)
             rec["chain_hash"] = h
             prev = h
-        self._last_chain_hash = prev
+        return prev
 
     async def flush(self, *, raise_on_failure: bool = False) -> bool:
         """Flush buffered events to database.
@@ -2417,10 +2425,14 @@ class UnifiedAuditService:
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
                             self._ensure_record_tenant_ids(records)
-                            self._apply_chain_hashes(records)
+                            committed_chain_hash = self._apply_chain_hashes(
+                                records,
+                                previous_hash=self._last_chain_hash,
+                            )
                             await db.executemany(self._event_insert_sql, records)
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
+                            self._last_chain_hash = committed_chain_hash
                     else:
                         db = await self._ensure_db_pool()
                         async with self._db_lock:
@@ -2432,12 +2444,16 @@ class UnifiedAuditService:
 
                             # Batch insert
                             self._ensure_record_tenant_ids(records)
-                            self._apply_chain_hashes(records)
+                            committed_chain_hash = self._apply_chain_hashes(
+                                records,
+                                previous_hash=self._last_chain_hash,
+                            )
                             await db.executemany(self._event_insert_sql, records)
 
                             # Update daily statistics
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
+                            self._last_chain_hash = committed_chain_hash
 
                     # Success
                     self.stats["events_flushed"] += len(new_events)
@@ -2843,6 +2859,7 @@ class UnifiedAuditService:
                     return 0
 
                 async def _do_write() -> int:
+                    nonlocal replay_chain_hash
                     record_ids = [str(r.get("event_id")) for r in records_chunk if r.get("event_id")]
                     existing_ids = await self._fetch_existing_event_ids(db, record_ids)
                     seen: set[str] = set()
@@ -2864,6 +2881,10 @@ class UnifiedAuditService:
                         record["pii_detected"] = _coerce_bool(record.get("pii_detected"), False)
 
                     self._ensure_record_tenant_ids(filtered_records)
+                    committed_chain_hash = self._apply_chain_hashes(
+                        filtered_records,
+                        previous_hash=replay_chain_hash,
+                    )
                     await db.executemany(self._event_insert_sql, filtered_records)
                     if stats_events:
                         filtered_stats: list[AuditEvent] = []
@@ -2880,6 +2901,8 @@ class UnifiedAuditService:
                         if filtered_stats:
                             await self._update_daily_stats(db, filtered_stats)
                     await db.commit()
+                    replay_chain_hash = committed_chain_hash
+                    self._last_chain_hash = committed_chain_hash
                     return len(filtered_records)
 
                 if use_db_lock:
@@ -2888,6 +2911,7 @@ class UnifiedAuditService:
                 else:
                     return await _do_write()
 
+            replay_chain_hash = self._last_chain_hash
             temp_path = fb_path.with_suffix(".tmp")
             bad_path = fb_path.with_suffix(".bad.jsonl")
             inserted = 0
@@ -3084,6 +3108,7 @@ class UnifiedAuditService:
     ) -> int:
         """Count audit events with filters."""
         self._touch()
+        await self.flush(raise_on_failure=True)
         base_query, params = self._build_events_query(
             start_time=start_time,
             end_time=end_time,
@@ -3153,6 +3178,7 @@ class UnifiedAuditService:
             If file_path is provided: the number of rows written
         """
         self._touch()
+        await self.flush(raise_on_failure=True)
         fmt = (format or "json").lower()
         if fmt not in {"json", "csv", "jsonl"}:
             raise ValueError("format must be 'json', 'csv', or 'jsonl'")
