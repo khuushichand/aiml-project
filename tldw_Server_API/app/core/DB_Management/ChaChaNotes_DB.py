@@ -118,6 +118,9 @@ from tldw_Server_API.app.core.Persona.buddy import resolve_persona_buddy_profile
 _SUPPORTED_FLASHCARD_SCHEDULERS = {"sm2_plus", "fsrs"}
 _SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES = {"lined", "grid", "cornell"}
 _SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES = {"off", "accented"}
+_FLASHCARD_REVIEW_SESSION_STATUSES = frozenset({"active", "completed", "abandoned"})
+_FLASHCARD_REVIEW_MODES = frozenset({"due", "cram"})
+_FLASHCARD_REVIEW_SESSION_TIMEOUT = timedelta(minutes=30)
 _SUPPORTED_WEB_CLIPPER_DESTINATIONS = {"note", "workspace", "both"}
 _SUPPORTED_WEB_CLIPPER_OUTCOME_STATES = {"saved", "saved_with_warnings", "partially_saved", "failed"}
 _SUPPORTED_WEB_CLIPPER_ENRICHMENT_TYPES = {"ocr", "vlm"}
@@ -624,12 +627,15 @@ class CharactersRAGDB:
         ("decks", "id"),
         ("flashcards", "id"),
         ("flashcard_reviews", "id"),
+        ("flashcard_review_sessions", "id"),
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
         ("study_packs", "id"),
         ("study_pack_cards", "id"),
         ("flashcard_citations", "id"),
+        ("suggestion_snapshots", "id"),
+        ("suggestion_generation_links", "id"),
         ("study_assistant_threads", "id"),
         ("study_assistant_messages", "id"),
         ("writing_templates", "id"),
@@ -1520,6 +1526,24 @@ CREATE TABLE IF NOT EXISTS flashcard_reviews(
 );
 CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(card_id);
 CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_time ON flashcard_reviews(reviewed_at);
+
+/* Review session persistence for grouped flashcard study runs */
+CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  deck_id          INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+  review_mode      TEXT NOT NULL DEFAULT 'due',
+  tag_filter       TEXT,
+  scope_key        TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'active',
+  started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at     DATETIME,
+  client_id        TEXT NOT NULL DEFAULT 'unknown'
+);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_activity ON flashcard_review_sessions(last_activity_at);
 
 /* Sync triggers for decks */
 DROP TRIGGER IF EXISTS decks_sync_create;
@@ -9413,8 +9437,34 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
                 if "next_due_at" not in review_cols:
                     conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
+                if "review_session_id" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN review_session_id INTEGER")
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring flashcard review scheduler columns: {exc}") from exc  # noqa: TRY003
+
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
+                  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                  deck_id          INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  review_mode      TEXT NOT NULL DEFAULT 'due',
+                  tag_filter       TEXT,
+                  scope_key        TEXT NOT NULL,
+                  status           TEXT NOT NULL DEFAULT 'active',
+                  started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  completed_at     DATETIME,
+                  client_id        TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_activity ON flashcard_review_sessions(last_activity_at)")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard review session schema: {exc}") from exc  # noqa: TRY003
 
         self._ensure_flashcard_scheduler_sync_triggers_sqlite(
             conn,
@@ -9610,6 +9660,43 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             self.backend.execute(
                 "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS next_due_at TIMESTAMPTZ",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS review_session_id INTEGER",
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
+                  id BIGSERIAL PRIMARY KEY,
+                  deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  review_mode TEXT NOT NULL DEFAULT 'due',
+                  tag_filter TEXT,
+                  scope_key TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'active',
+                  started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  completed_at TIMESTAMPTZ,
+                  client_id TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_activity ON flashcard_review_sessions(last_activity_at)",
                 connection=conn,
             )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
@@ -9930,6 +10017,132 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 END;
             """
 
+        suggestion_snapshots_script = ""
+        if "suggestion_snapshots" in table_names:
+            suggestion_snapshots_script = """
+                CREATE TRIGGER suggestion_snapshots_sync_create
+                AFTER INSERT ON suggestion_snapshots BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'service',NEW.service,'activity_type',NEW.activity_type,
+                                     'anchor_type',NEW.anchor_type,'anchor_id',NEW.anchor_id,
+                                     'suggestion_type',NEW.suggestion_type,'status',NEW.status,
+                                     'payload_json',NEW.payload_json,'user_selection_json',NEW.user_selection_json,
+                                     'refreshed_from_snapshot_id',NEW.refreshed_from_snapshot_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_snapshots_sync_update
+                AFTER UPDATE ON suggestion_snapshots
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.service IS NOT NEW.service OR
+                     OLD.activity_type IS NOT NEW.activity_type OR
+                     OLD.anchor_type IS NOT NEW.anchor_type OR
+                     OLD.anchor_id IS NOT NEW.anchor_id OR
+                     OLD.suggestion_type IS NOT NEW.suggestion_type OR
+                     OLD.status IS NOT NEW.status OR
+                     OLD.payload_json IS NOT NEW.payload_json OR
+                     OLD.user_selection_json IS NOT NEW.user_selection_json OR
+                     OLD.refreshed_from_snapshot_id IS NOT NEW.refreshed_from_snapshot_id OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'service',NEW.service,'activity_type',NEW.activity_type,
+                                     'anchor_type',NEW.anchor_type,'anchor_id',NEW.anchor_id,
+                                     'suggestion_type',NEW.suggestion_type,'status',NEW.status,
+                                     'payload_json',NEW.payload_json,'user_selection_json',NEW.user_selection_json,
+                                     'refreshed_from_snapshot_id',NEW.refreshed_from_snapshot_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_snapshots_sync_delete
+                AFTER UPDATE ON suggestion_snapshots
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER suggestion_snapshots_sync_undelete
+                AFTER UPDATE ON suggestion_snapshots
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'service',NEW.service,'activity_type',NEW.activity_type,
+                                     'anchor_type',NEW.anchor_type,'anchor_id',NEW.anchor_id,
+                                     'suggestion_type',NEW.suggestion_type,'status',NEW.status,
+                                     'payload_json',NEW.payload_json,'user_selection_json',NEW.user_selection_json,
+                                     'refreshed_from_snapshot_id',NEW.refreshed_from_snapshot_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        suggestion_generation_links_script = ""
+        if "suggestion_generation_links" in table_names:
+            suggestion_generation_links_script = """
+                CREATE TRIGGER suggestion_generation_links_sync_create
+                AFTER INSERT ON suggestion_generation_links BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'snapshot_id',NEW.snapshot_id,'target_service',NEW.target_service,
+                                     'target_type',NEW.target_type,'target_id',NEW.target_id,
+                                     'selection_fingerprint',NEW.selection_fingerprint,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_generation_links_sync_update
+                AFTER UPDATE ON suggestion_generation_links
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.snapshot_id IS NOT NEW.snapshot_id OR
+                     OLD.target_service IS NOT NEW.target_service OR
+                     OLD.target_type IS NOT NEW.target_type OR
+                     OLD.target_id IS NOT NEW.target_id OR
+                     OLD.selection_fingerprint IS NOT NEW.selection_fingerprint OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'snapshot_id',NEW.snapshot_id,'target_service',NEW.target_service,
+                                     'target_type',NEW.target_type,'target_id',NEW.target_id,
+                                     'selection_fingerprint',NEW.selection_fingerprint,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_generation_links_sync_delete
+                AFTER UPDATE ON suggestion_generation_links
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER suggestion_generation_links_sync_undelete
+                AFTER UPDATE ON suggestion_generation_links
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'snapshot_id',NEW.snapshot_id,'target_service',NEW.target_service,
+                                     'target_type',NEW.target_type,'target_id',NEW.target_id,
+                                     'selection_fingerprint',NEW.selection_fingerprint,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
         try:
             conn.executescript(
                 f"""
@@ -9948,6 +10161,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 DROP TRIGGER IF EXISTS flashcard_citations_sync_delete;
                 DROP TRIGGER IF EXISTS flashcard_citations_sync_undelete;
                 {flashcard_citations_script}
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_create;
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_update;
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_delete;
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_undelete;
+                {suggestion_snapshots_script}
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_create;
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_update;
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_delete;
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_undelete;
+                {suggestion_generation_links_script}
                 """
             )
         except sqlite3.Error as exc:
@@ -10007,6 +10230,44 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS suggestion_snapshots(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  service TEXT NOT NULL,
+                  activity_type TEXT NOT NULL,
+                  anchor_type TEXT NOT NULL,
+                  anchor_id INTEGER NOT NULL,
+                  suggestion_type TEXT NOT NULL,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+                  payload_json TEXT NOT NULL,
+                  user_selection_json TEXT,
+                  refreshed_from_snapshot_id INTEGER REFERENCES suggestion_snapshots(id) ON DELETE SET NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS suggestion_generation_links(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  snapshot_id INTEGER NOT NULL REFERENCES suggestion_snapshots(id) ON DELETE CASCADE,
+                  target_service TEXT NOT NULL,
+                  target_type TEXT NOT NULL,
+                  target_id TEXT NOT NULL,
+                  selection_fingerprint TEXT NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)")
@@ -10024,6 +10285,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_anchor ON suggestion_snapshots(anchor_type, anchor_id)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_status ON suggestion_snapshots(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_deleted ON suggestion_snapshots(deleted)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_snapshot_id ON suggestion_generation_links(snapshot_id)"
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
+                    ON suggestion_generation_links(
+                        snapshot_id,
+                        target_service,
+                        target_type,
+                        target_id,
+                        selection_fingerprint
+                    )
+                 WHERE deleted = 0
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_deleted ON suggestion_generation_links(deleted)"
+            )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring SQLite study pack schema: {exc}") from exc  # noqa: TRY003
 
@@ -10077,6 +10362,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               version INTEGER NOT NULL DEFAULT 1
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS suggestion_snapshots(
+              id BIGSERIAL PRIMARY KEY,
+              service TEXT NOT NULL,
+              activity_type TEXT NOT NULL,
+              anchor_type TEXT NOT NULL,
+              anchor_id BIGINT NOT NULL,
+              suggestion_type TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+              payload_json TEXT NOT NULL,
+              user_selection_json TEXT,
+              refreshed_from_snapshot_id BIGINT REFERENCES suggestion_snapshots(id) ON DELETE SET NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS suggestion_generation_links(
+              id BIGSERIAL PRIMARY KEY,
+              snapshot_id BIGINT NOT NULL REFERENCES suggestion_snapshots(id) ON DELETE CASCADE,
+              target_service TEXT NOT NULL,
+              target_type TEXT NOT NULL,
+              target_id TEXT NOT NULL,
+              selection_fingerprint TEXT NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
             "CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)",
             "CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)",
             "CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)",
@@ -10092,6 +10411,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)",
             "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)",
             "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_anchor ON suggestion_snapshots(anchor_type, anchor_id)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_status ON suggestion_snapshots(status)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_deleted ON suggestion_snapshots(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_snapshot_id ON suggestion_generation_links(snapshot_id)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
+                ON suggestion_generation_links(snapshot_id, target_service, target_type, target_id, selection_fingerprint)
+             WHERE deleted = FALSE
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_deleted ON suggestion_generation_links(deleted)",
         ]
         try:
             for statement in statements:
@@ -10352,6 +10681,186 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 """,
                 connection=conn,
             )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION suggestion_snapshots_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_snapshots',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'service', NEW.service,
+                        'activity_type', NEW.activity_type,
+                        'anchor_type', NEW.anchor_type,
+                        'anchor_id', NEW.anchor_id,
+                        'suggestion_type', NEW.suggestion_type,
+                        'status', NEW.status,
+                        'payload_json', NEW.payload_json,
+                        'user_selection_json', NEW.user_selection_json,
+                        'refreshed_from_snapshot_id', NEW.refreshed_from_snapshot_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_snapshots',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.service IS DISTINCT FROM NEW.service OR
+                    OLD.activity_type IS DISTINCT FROM NEW.activity_type OR
+                    OLD.anchor_type IS DISTINCT FROM NEW.anchor_type OR
+                    OLD.anchor_id IS DISTINCT FROM NEW.anchor_id OR
+                    OLD.suggestion_type IS DISTINCT FROM NEW.suggestion_type OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.payload_json IS DISTINCT FROM NEW.payload_json OR
+                    OLD.user_selection_json IS DISTINCT FROM NEW.user_selection_json OR
+                    OLD.refreshed_from_snapshot_id IS DISTINCT FROM NEW.refreshed_from_snapshot_id OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_snapshots',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'service', NEW.service,
+                        'activity_type', NEW.activity_type,
+                        'anchor_type', NEW.anchor_type,
+                        'anchor_id', NEW.anchor_id,
+                        'suggestion_type', NEW.suggestion_type,
+                        'status', NEW.status,
+                        'payload_json', NEW.payload_json,
+                        'user_selection_json', NEW.user_selection_json,
+                        'refreshed_from_snapshot_id', NEW.refreshed_from_snapshot_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION suggestion_generation_links_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_generation_links',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'snapshot_id', NEW.snapshot_id,
+                        'target_service', NEW.target_service,
+                        'target_type', NEW.target_type,
+                        'target_id', NEW.target_id,
+                        'selection_fingerprint', NEW.selection_fingerprint,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_generation_links',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.snapshot_id IS DISTINCT FROM NEW.snapshot_id OR
+                    OLD.target_service IS DISTINCT FROM NEW.target_service OR
+                    OLD.target_type IS DISTINCT FROM NEW.target_type OR
+                    OLD.target_id IS DISTINCT FROM NEW.target_id OR
+                    OLD.selection_fingerprint IS DISTINCT FROM NEW.selection_fingerprint OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_generation_links',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'snapshot_id', NEW.snapshot_id,
+                        'target_service', NEW.target_service,
+                        'target_type', NEW.target_type,
+                        'target_id', NEW.target_id,
+                        'selection_fingerprint', NEW.selection_fingerprint,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
             self.backend.execute("DROP TRIGGER IF EXISTS study_packs_sync_log ON study_packs", connection=conn)
             self.backend.execute(
                 "CREATE TRIGGER study_packs_sync_log AFTER INSERT OR UPDATE ON study_packs "
@@ -10368,6 +10877,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self.backend.execute(
                 "CREATE TRIGGER flashcard_citations_sync_log AFTER INSERT OR UPDATE ON flashcard_citations "
                 "FOR EACH ROW EXECUTE FUNCTION flashcard_citations_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS suggestion_snapshots_sync_log ON suggestion_snapshots", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER suggestion_snapshots_sync_log AFTER INSERT OR UPDATE ON suggestion_snapshots "
+                "FOR EACH ROW EXECUTE FUNCTION suggestion_snapshots_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute(
+                "DROP TRIGGER IF EXISTS suggestion_generation_links_sync_log ON suggestion_generation_links",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE TRIGGER suggestion_generation_links_sync_log AFTER INSERT OR UPDATE ON suggestion_generation_links "
+                "FOR EACH ROW EXECUTE FUNCTION suggestion_generation_links_sync_log_fn()",
                 connection=conn,
             )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
@@ -16756,6 +17280,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
     _STUDY_PACK_JSON_FIELDS = ['source_bundle_json', 'generation_options_json']
+    _SUGGESTION_SNAPSHOT_JSON_FIELDS = ('payload_json', 'user_selection_json')
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
     _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
@@ -25617,7 +26142,249 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             'was_lapse': was_lapse,
         }
 
-    def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: int | None = None) -> dict[str, Any]:
+    def _normalize_flashcard_review_mode(self, review_mode: str) -> str:
+        normalized = str(review_mode or "").strip().lower()
+        if normalized not in _FLASHCARD_REVIEW_MODES:
+            raise InputError("review_mode must be one of: due, cram")  # noqa: TRY003
+        return normalized
+
+    def _normalize_flashcard_review_session_status(self, status: str) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized not in _FLASHCARD_REVIEW_SESSION_STATUSES:
+            raise InputError("status must be one of: active, completed, abandoned")  # noqa: TRY003
+        return normalized
+
+    def abandon_stale_flashcard_review_sessions(self, *, scope_key: str | None = None) -> int:
+        """Mark active review sessions as abandoned when inactive for over 30 minutes."""
+        cutoff = to_iso_z(datetime.now(timezone.utc) - _FLASHCARD_REVIEW_SESSION_TIMEOUT) or self._get_current_utc_timestamp_iso()
+        query = (
+            """
+            UPDATE flashcard_review_sessions
+               SET status = 'abandoned'
+             WHERE status = 'active'
+               AND last_activity_at < ?
+            """
+        )
+        params: list[Any] = [cutoff]
+        if scope_key:
+            query += " AND scope_key = ?"
+            params.append(scope_key)
+        cursor = self.execute_query(query, tuple(params), commit=True)
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+    def list_flashcard_review_sessions(
+        self,
+        *,
+        deck_id: int | None = None,
+        scope_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List persisted review sessions ordered from newest to oldest."""
+        self.abandon_stale_flashcard_review_sessions(scope_key=scope_key)
+        query_parts = [
+            """
+            SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                   started_at, last_activity_at, completed_at, client_id
+              FROM flashcard_review_sessions
+             WHERE 1 = 1
+            """
+        ]
+        params: list[Any] = []
+        if deck_id is not None:
+            query_parts.append("AND deck_id = ?")
+            params.append(int(deck_id))
+        if scope_key:
+            query_parts.append("AND scope_key = ?")
+            params.append(scope_key)
+        if status:
+            query_parts.append("AND status = ?")
+            params.append(self._normalize_flashcard_review_session_status(status))
+        query_parts.append("ORDER BY last_activity_at DESC, started_at DESC, id DESC LIMIT ?")
+        params.append(max(1, int(limit)))
+        cursor = self.execute_query(" ".join(query_parts), tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_or_create_flashcard_review_session(
+        self,
+        *,
+        deck_id: int | None,
+        review_mode: str,
+        tag_filter: str | None,
+        scope_key: str,
+    ) -> dict[str, Any]:
+        """Return the authoritative active session for a scope or create a new one."""
+        normalized_scope_key = str(scope_key or "").strip()
+        if not normalized_scope_key:
+            raise InputError("scope_key is required")  # noqa: TRY003
+        normalized_mode = self._normalize_flashcard_review_mode(review_mode)
+        normalized_tag_filter = self._normalize_nullable_text(tag_filter)
+        self.abandon_stale_flashcard_review_sessions(scope_key=normalized_scope_key)
+        now = self._get_current_utc_timestamp_iso()
+
+        try:
+            with self.transaction() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                           started_at, last_activity_at, completed_at, client_id
+                      FROM flashcard_review_sessions
+                     WHERE scope_key = ? AND status = 'active'
+                     ORDER BY last_activity_at DESC, started_at DESC, id DESC
+                    """,
+                    (normalized_scope_key,),
+                ).fetchall()
+                if rows:
+                    authoritative = dict(rows[0])
+                    if len(rows) > 1:
+                        duplicate_ids = [int(row["id"]) for row in rows[1:]]
+                        placeholders = ", ".join("?" for _ in duplicate_ids)
+                        conn.execute(
+                            f"UPDATE flashcard_review_sessions SET status = 'abandoned' WHERE id IN ({placeholders})",  # nosec B608
+                            tuple(duplicate_ids),
+                        )
+                    conn.execute(
+                        """
+                        UPDATE flashcard_review_sessions
+                           SET last_activity_at = ?
+                         WHERE id = ?
+                        """,
+                        (now, int(authoritative["id"])),
+                    )
+                    authoritative["last_activity_at"] = now
+                    return authoritative
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO flashcard_review_sessions(
+                            deck_id, review_mode, tag_filter, scope_key, status,
+                            started_at, last_activity_at, completed_at, client_id
+                        )
+                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, ?)
+                        RETURNING id
+                        """,
+                        (
+                            int(deck_id) if deck_id is not None else None,
+                            normalized_mode,
+                            normalized_tag_filter,
+                            normalized_scope_key,
+                            now,
+                            now,
+                            self.client_id,
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    session_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO flashcard_review_sessions(
+                            deck_id, review_mode, tag_filter, scope_key, status,
+                            started_at, last_activity_at, completed_at, client_id
+                        )
+                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, ?)
+                        """,
+                        (
+                            int(deck_id) if deck_id is not None else None,
+                            normalized_mode,
+                            normalized_tag_filter,
+                            normalized_scope_key,
+                            now,
+                            now,
+                            self.client_id,
+                        ),
+                    )
+                    session_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if session_id is None:
+                    raise CharactersRAGDBError("Failed to determine flashcard review session ID after insert")  # noqa: TRY003
+                row = conn.execute(
+                    """
+                    SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                           started_at, last_activity_at, completed_at, client_id
+                      FROM flashcard_review_sessions
+                     WHERE id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                return dict(row)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to get or create flashcard review session: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to get or create flashcard review session: {exc}") from exc  # noqa: TRY003
+
+    def get_flashcard_review_session(self, session_id: int) -> dict[str, Any] | None:
+        """Fetch a single flashcard review session by id, or None if not found."""
+        cursor = self.execute_query(
+            """
+            SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                   started_at, last_activity_at, completed_at, client_id
+              FROM flashcard_review_sessions
+             WHERE id = ?
+            """,
+            (int(session_id),),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def mark_flashcard_review_session_completed(self, session_id: int) -> dict[str, Any]:
+        """Mark a persisted review session as completed."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            cursor = self.execute_query(
+                """
+                UPDATE flashcard_review_sessions
+                   SET status = 'completed',
+                       last_activity_at = ?,
+                       completed_at = ?
+                 WHERE id = ?
+                """,
+                (now, now, int(session_id)),
+                commit=True,
+            )
+            if getattr(cursor, "rowcount", 0) == 0:
+                raise ConflictError("Flashcard review session not found", entity="flashcard_review_sessions", entity_id=session_id)  # noqa: TRY003
+            row = self.execute_query(
+                """
+                SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                       started_at, last_activity_at, completed_at, client_id
+                  FROM flashcard_review_sessions
+                 WHERE id = ?
+                """,
+                (int(session_id),),
+            ).fetchone()
+            return dict(row)
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise CharactersRAGDBError(f"Failed to mark flashcard review session completed: {exc}") from exc  # noqa: TRY003
+
+    def get_latest_flashcard_review(self, card_uuid: str) -> dict[str, Any] | None:
+        """Return the most recent review row for a flashcard, including nullable session linkage."""
+        cursor = self.execute_query(
+            """
+            SELECT fr.id, fr.card_id, fr.reviewed_at, fr.rating, fr.answer_time_ms,
+                   fr.scheduled_interval_days, fr.new_ef, fr.new_repetitions, fr.was_lapse,
+                   fr.client_id, fr.scheduler_type, fr.previous_queue_state, fr.next_queue_state,
+                   fr.previous_due_at, fr.next_due_at, fr.review_session_id
+              FROM flashcard_reviews fr
+              JOIN flashcards f ON f.id = fr.card_id
+             WHERE f.uuid = ?
+             ORDER BY fr.id DESC
+             LIMIT 1
+            """,
+            (card_uuid,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def review_flashcard(
+        self,
+        card_uuid: str,
+        rating: int,
+        answer_time_ms: int | None = None,
+        review_session_id: int | None = None,
+    ) -> dict[str, Any]:
         """Submit a review for a flashcard and update scheduling. Returns updated card fields."""
         now_dt = datetime.now(timezone.utc)
         now = to_iso_z(now_dt) or self._get_current_utc_timestamp_iso()
@@ -25639,6 +26406,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if not card:
                     raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)  # noqa: TRY003
                 card_id = int(card['id'])
+                card_deck_id = int(card["deck_id"]) if card["deck_id"] is not None else None
+                resolved_review_session_id = int(review_session_id) if review_session_id is not None else None
+                if resolved_review_session_id is None:
+                    auto_session = self.get_or_create_flashcard_review_session(
+                        deck_id=card_deck_id,
+                        review_mode="due",
+                        tag_filter=None,
+                        scope_key=f"due:deck:{card_deck_id}" if card_deck_id is not None else "due:global",
+                    )
+                    resolved_review_session_id = int(auto_session["id"])
+                if resolved_review_session_id is not None:
+                    session_row = conn.execute(
+                        """
+                        SELECT id, deck_id, status
+                          FROM flashcard_review_sessions
+                         WHERE id = ?
+                        """,
+                        (resolved_review_session_id,),
+                    ).fetchone()
+                    if not session_row:
+                        raise ConflictError(
+                            "Flashcard review session not found",
+                            entity="flashcard_review_sessions",
+                            identifier=resolved_review_session_id,
+                        )
+                    session_deck_id = int(session_row["deck_id"]) if session_row["deck_id"] is not None else None
+                    if session_deck_id != card_deck_id:
+                        raise InputError("review_session_id must match the flashcard deck scope")  # noqa: TRY003
+                    if str(session_row["status"] or "").strip().lower() != "active":
+                        raise ConflictError(
+                            "Flashcard review session is not active",
+                            entity="flashcard_review_sessions",
+                            identifier=resolved_review_session_id,
+                        )
                 previous_queue_state = coerce_queue_state(dict(card))
                 previous_due_at = self._normalize_nullable_text(card["due_at"])
                 scheduler_type = _coerce_scheduler_type(card["scheduler_type"])
@@ -25680,9 +26481,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     INSERT INTO flashcard_reviews(
                         card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days,
                         new_ef, new_repetitions, was_lapse, client_id, scheduler_type,
-                        previous_queue_state, next_queue_state, previous_due_at, next_due_at
+                        previous_queue_state, next_queue_state, previous_due_at, next_due_at, review_session_id
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -25699,8 +26500,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         upd["queue_state"],
                         previous_due_at,
                         upd["due_at"],
+                        resolved_review_session_id,
                     )
                 )
+                if resolved_review_session_id is not None:
+                    conn.execute(
+                        """
+                        UPDATE flashcard_review_sessions
+                           SET last_activity_at = ?
+                         WHERE id = ?
+                        """,
+                        (now, resolved_review_session_id),
+                    )
                 updated = conn.execute(
                     """
                     SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at,
@@ -25718,6 +26529,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     scheduler_settings_envelope=scheduler_settings,
                     now=now_dt,
                 )
+                updated_payload["review_session_id"] = resolved_review_session_id
                 return updated_payload
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
@@ -26397,6 +27209,459 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+
+    _SAFE_SUGGESTION_PAYLOAD_EXACT_KEYS = frozenset(
+        {
+            "summary",
+            "topics",
+            "counts",
+            "flags",
+            "score",
+            "selected",
+            "display_label",
+            "label",
+            "source_id",
+            "source_type",
+            "source_ref",
+            "ref",
+            "refs",
+            "status",
+            "available",
+            "enabled",
+            "count",
+            "total",
+            "id",
+            "ids",
+            "type",
+            "types",
+            "service",
+            "services",
+        }
+    )
+    _SAFE_SUGGESTION_PAYLOAD_SUFFIXES = (
+        "_id",
+        "_ids",
+        "_type",
+        "_types",
+        "_label",
+        "_labels",
+        "_ref",
+        "_refs",
+        "_count",
+        "_counts",
+        "_flag",
+        "_flags",
+        "_score",
+        "_status",
+    )
+    _SAFE_SUGGESTION_PAYLOAD_MAX_TEXT_LENGTH = 256
+
+    @classmethod
+    def _is_safe_suggestion_payload_key(cls, key: str) -> bool:
+        normalized = str(key or "").strip().lower()
+        return normalized in cls._SAFE_SUGGESTION_PAYLOAD_EXACT_KEYS or normalized.endswith(
+            cls._SAFE_SUGGESTION_PAYLOAD_SUFFIXES
+        )
+
+    @classmethod
+    def _sanitize_suggestion_payload(cls, payload: Any, *, parent_key: str | None = None) -> Any:
+        """Persist only safe labels/refs/flags/counts by default."""
+        if isinstance(payload, dict):
+            sanitized: dict[str, Any] = {}
+            for raw_key, value in payload.items():
+                key_text = str(raw_key)
+                if not cls._is_safe_suggestion_payload_key(key_text):
+                    continue
+                cleaned_value = cls._sanitize_suggestion_payload(value, parent_key=key_text)
+                if cleaned_value in (None, {}, []):
+                    continue
+                sanitized[key_text] = cleaned_value
+            return sanitized
+
+        if isinstance(payload, list | tuple):
+            sanitized_items = [
+                cls._sanitize_suggestion_payload(item, parent_key=parent_key)
+                for item in payload
+            ]
+            return [item for item in sanitized_items if item not in (None, {}, [])]
+
+        if isinstance(payload, bool | int | float):
+            return payload
+
+        if isinstance(payload, str):
+            if not parent_key or not cls._is_safe_suggestion_payload_key(parent_key):
+                return None
+            text = payload.strip()
+            if not text or len(text) > cls._SAFE_SUGGESTION_PAYLOAD_MAX_TEXT_LENGTH:
+                return None
+            return text
+
+        return None
+
+    def create_suggestion_snapshot(
+        self,
+        *,
+        service: str,
+        activity_type: str,
+        anchor_type: str,
+        anchor_id: int,
+        suggestion_type: str,
+        payload_json: dict[str, Any] | list[Any] | str,
+        status: str = "active",
+        user_selection_json: dict[str, Any] | list[Any] | str | None = None,
+        refreshed_from_snapshot_id: int | None = None,
+    ) -> int:
+        """Create a suggestion snapshot row and return its integer id."""
+        if status not in ("active", "superseded"):
+            raise InputError("Invalid suggestion snapshot status; must be 'active' or 'superseded'")  # noqa: TRY003
+
+        sanitized_payload: Any = payload_json
+        if isinstance(payload_json, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                sanitized_payload = json.loads(payload_json)
+        sanitized_payload = self._sanitize_suggestion_payload(sanitized_payload)
+        payload_value = self._ensure_json_string_from_mixed(sanitized_payload)
+        if payload_value is None:
+            raise InputError("Suggestion snapshot payload_json is required")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+
+        try:
+            with self.transaction() as conn:
+                if isinstance(user_selection_json, str):
+                    try:
+                        parsed_user_selection = json.loads(user_selection_json)
+                    except json.JSONDecodeError as exc:
+                        raise InputError("Suggestion snapshot user_selection_json must be valid JSON") from exc  # noqa: TRY003
+                    user_selection_value = self._ensure_json_string_from_mixed(parsed_user_selection)
+                else:
+                    user_selection_value = self._ensure_json_string_from_mixed(user_selection_json)
+
+                if refreshed_from_snapshot_id is not None:
+                    parent_row = conn.execute(
+                        """
+                        SELECT service, activity_type, anchor_type, anchor_id, suggestion_type, user_selection_json
+                          FROM suggestion_snapshots
+                         WHERE id = ? AND deleted = 0
+                        """,
+                        (refreshed_from_snapshot_id,),
+                    ).fetchone()
+                    if not parent_row:
+                        raise ConflictError(
+                            "Suggestion snapshot refresh source not found",
+                            entity="suggestion_snapshots",
+                            identifier=refreshed_from_snapshot_id,
+                        )
+                    if (
+                        str(parent_row["service"]) != str(service)
+                        or str(parent_row["activity_type"]) != str(activity_type)
+                        or str(parent_row["anchor_type"]) != str(anchor_type)
+                        or int(parent_row["anchor_id"]) != int(anchor_id)
+                        or str(parent_row["suggestion_type"]) != str(suggestion_type)
+                    ):
+                        raise InputError("refreshed_from_snapshot_id must reference the same suggestion lineage")  # noqa: TRY003
+                    if user_selection_value is None:
+                        user_selection_value = parent_row["user_selection_json"]
+                insert_sql = (
+                    "INSERT INTO suggestion_snapshots("
+                    "service, activity_type, anchor_type, anchor_id, suggestion_type, status, "
+                    "payload_json, user_selection_json, refreshed_from_snapshot_id, "
+                    "created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    service,
+                    activity_type,
+                    anchor_type,
+                    int(anchor_id),
+                    suggestion_type,
+                    status,
+                    payload_value,
+                    user_selection_value,
+                    refreshed_from_snapshot_id,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    snapshot_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    snapshot_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if snapshot_id is None:
+                    raise CharactersRAGDBError("Failed to determine suggestion snapshot ID after insert")  # noqa: TRY003
+                return snapshot_id
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create suggestion snapshot: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create suggestion snapshot: {exc}") from exc  # noqa: TRY003
+
+    def get_suggestion_snapshot(self, snapshot_id: int) -> dict[str, Any] | None:
+        """Fetch a single active suggestion snapshot by id."""
+        query = """
+            SELECT id, service, activity_type, anchor_type, anchor_id, suggestion_type, status,
+                   payload_json, user_selection_json, refreshed_from_snapshot_id,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_snapshots
+             WHERE id = ? AND deleted = 0
+        """
+        cursor = self.execute_query(query, (snapshot_id,))
+        row = cursor.fetchone()
+        return self._deserialize_row_fields(row, self._SUGGESTION_SNAPSHOT_JSON_FIELDS)
+
+    def list_suggestion_snapshots_for_anchor(
+        self,
+        anchor_type: str,
+        anchor_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List snapshots for a concrete anchor in newest-first order."""
+        deleted_clause = "1=1" if include_deleted else "deleted = 0"
+        query = f"""
+            SELECT id, service, activity_type, anchor_type, anchor_id, suggestion_type, status,
+                   payload_json, user_selection_json, refreshed_from_snapshot_id,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_snapshots
+             WHERE anchor_type = ? AND anchor_id = ? AND {deleted_clause}
+             ORDER BY id DESC
+        """  # nosec B608
+        cursor = self.execute_query(query, (anchor_type, anchor_id))
+        return [
+            self._deserialize_row_fields(row, self._SUGGESTION_SNAPSHOT_JSON_FIELDS)
+            for row in cursor.fetchall()
+            if row
+        ]
+
+    def create_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        target_id: str,
+        selection_fingerprint: str,
+    ) -> int:
+        """Persist one durable link per concrete snapshot/action result."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    "INSERT INTO suggestion_generation_links("
+                    "snapshot_id, target_service, target_type, target_id, selection_fingerprint, "
+                    "created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    snapshot_id,
+                    target_service,
+                    target_type,
+                    target_id,
+                    selection_fingerprint,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    link_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    link_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if link_id is None:
+                    raise CharactersRAGDBError("Failed to determine suggestion generation link ID after insert")  # noqa: TRY003
+                return link_id
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Suggestion generation link already exists",
+                    entity="suggestion_generation_links",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{target_id}:{selection_fingerprint}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Suggestion generation link already exists",
+                    entity="suggestion_generation_links",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{target_id}:{selection_fingerprint}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
+
+    def find_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        target_id: str,
+        selection_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        """Find the durable link row for a concrete snapshot/action result."""
+        query = """
+            SELECT id, snapshot_id, target_service, target_type, target_id, selection_fingerprint,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_generation_links
+             WHERE snapshot_id = ?
+               AND target_service = ?
+               AND target_type = ?
+               AND target_id = ?
+               AND selection_fingerprint = ?
+               AND deleted = 0
+             ORDER BY id DESC
+             LIMIT 1
+        """
+        cursor = self.execute_query(
+            query,
+            (snapshot_id, target_service, target_type, target_id, selection_fingerprint),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def find_suggestion_generation_link_by_fingerprint(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        """Find an existing generation link by fingerprint without requiring the target id."""
+        query = """
+            SELECT id, snapshot_id, target_service, target_type, target_id, selection_fingerprint,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_generation_links
+             WHERE snapshot_id = ?
+               AND target_service = ?
+               AND target_type = ?
+               AND selection_fingerprint = ?
+               AND deleted = 0
+             ORDER BY id DESC
+             LIMIT 1
+        """
+        cursor = self.execute_query(
+            query,
+            (int(snapshot_id), target_service, target_type, selection_fingerprint),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def finalize_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+        final_target_id: str,
+    ) -> int:
+        """Replace an in-progress reservation target id with the real durable target id.
+
+        Returns the number of rows updated (0 means the reservation was not found).
+        """
+        now = self._get_current_utc_timestamp_iso()
+        pending_target_id = f"pending:{selection_fingerprint}"
+        try:
+            with self.transaction() as conn:
+                updated = conn.execute(
+                    """
+                    UPDATE suggestion_generation_links
+                       SET target_id = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE snapshot_id = ?
+                       AND target_service = ?
+                       AND target_type = ?
+                       AND target_id = ?
+                       AND selection_fingerprint = ?
+                       AND deleted = 0
+                    """,
+                    (
+                        str(final_target_id),
+                        now,
+                        self.client_id,
+                        int(snapshot_id),
+                        target_service,
+                        target_type,
+                        pending_target_id,
+                        selection_fingerprint,
+                    ),
+                ).rowcount
+            return int(updated)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to finalize suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to finalize suggestion generation link: {exc}") from exc  # noqa: TRY003
+
+    def release_suggestion_generation_link_reservation(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+    ) -> None:
+        """Soft-delete an in-progress reservation after generation failure."""
+        now = self._get_current_utc_timestamp_iso()
+        pending_target_id = f"pending:{selection_fingerprint}"
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE suggestion_generation_links
+                       SET deleted = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE snapshot_id = ?
+                       AND target_service = ?
+                       AND target_type = ?
+                       AND target_id = ?
+                       AND selection_fingerprint = ?
+                       AND deleted = 0
+                    """,
+                    (
+                        True,
+                        now,
+                        self.client_id,
+                        int(snapshot_id),
+                        target_service,
+                        target_type,
+                        pending_target_id,
+                        selection_fingerprint,
+                    ),
+                )
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to release suggestion generation link reservation: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to release suggestion generation link reservation: {exc}") from exc  # noqa: TRY003
+
+    def soft_delete_deck_by_id(self, deck_id: int) -> None:
+        """Best-effort soft-delete of a deck by id."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE decks
+                       SET deleted = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        True,
+                        now,
+                        self.client_id,
+                        int(deck_id),
+                    ),
+                )
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to soft-delete deck: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to soft-delete deck: {exc}") from exc  # noqa: TRY003
 
     def get_study_pack(self, pack_id: int) -> dict[str, Any] | None:
         """Fetch a single active study pack by id."""

@@ -5,6 +5,7 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 from tldw_Server_API.app.api.v1.schemas.quizzes import (
     AttemptListResponse,
     AttemptResponse,
@@ -32,6 +33,7 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     StudyAssistantRespondRequest,
     StudyAssistantRespondResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -42,6 +44,13 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_quiz_attempt_question_context,
     generate_study_assistant_reply,
+)
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.StudySuggestions.jobs import (
+    STUDY_SUGGESTIONS_DOMAIN,
+    STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+    build_study_suggestions_job_payload,
+    study_suggestions_jobs_queue,
 )
 from tldw_Server_API.app.services.quiz_generator import (
     QuizProvenanceValidationError,
@@ -102,6 +111,34 @@ def _mark_orphaned_remediation_items(
         marked_item["orphaned"] = orphaned
         marked_items.append(marked_item)
     return marked_items
+
+
+def _enqueue_study_suggestions_refresh(
+    *,
+    jm: Optional[JobManager],
+    current_user: User,
+    anchor_type: str,
+    anchor_id: int,
+) -> None:
+    if jm is None:
+        logger.debug("Study-suggestions refresh enqueue skipped (no JobManager) for {}:{}", anchor_type, anchor_id)
+        return
+    try:
+        jm.create_job(
+            domain=STUDY_SUGGESTIONS_DOMAIN,
+            queue=study_suggestions_jobs_queue(),
+            job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+            payload=build_study_suggestions_job_payload(
+                job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+                anchor_type=anchor_type,
+                anchor_id=anchor_id,
+            ),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=1,
+        )
+    except Exception as exc:
+        logger.warning("Study-suggestions refresh enqueue skipped for {}:{}: {}", anchor_type, anchor_id, exc)
 
 
 @router.get("", response_model=QuizListResponse)
@@ -389,10 +426,19 @@ def submit_attempt(
     attempt_id: int,
     submission: AttemptSubmitRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: Optional[JobManager] = Depends(get_job_manager),
 ):
     """Submit answers for an attempt."""
     try:
-        return db.submit_attempt(attempt_id, [a.model_dump() for a in submission.answers])
+        attempt = db.submit_attempt(attempt_id, [a.model_dump() for a in submission.answers])
+        _enqueue_study_suggestions_refresh(
+            jm=jm,
+            current_user=current_user,
+            anchor_type="quiz_attempt",
+            anchor_id=int(attempt["id"]),
+        )
+        return attempt
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
