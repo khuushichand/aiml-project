@@ -267,6 +267,26 @@ body {
   [data-density="compact"]     { --spacing-unit: 3px; }
   [data-density="comfortable"] { --spacing-unit: 5px; }
 
+  /* Density for custom inputs */
+  [data-density="compact"] .panel-input {
+    padding: round(calc(var(--spacing-unit) * 1.5), 1px) round(calc(var(--spacing-unit) * 2.5), 1px);
+    font-size: 13px;
+  }
+  [data-density="comfortable"] .panel-input {
+    padding: round(calc(var(--spacing-unit) * 2.5), 1px) round(calc(var(--spacing-unit) * 3.5), 1px);
+  }
+
+  /* Density for icon buttons */
+  [data-density="compact"] .panel-icon-button {
+    height: 1.5rem;
+    width: 1.5rem;
+  }
+  [data-density="comfortable"] .panel-icon-button {
+    height: 2rem;
+    width: 2rem;
+  }
+
+
   /* ===== Animation speed ===== */
   [data-animation="none"]   { --duration-base: 0ms; }
   [data-animation="subtle"] { --duration-base: 75ms; }

@@ -92,9 +92,12 @@ export const ACPPlayground: React.FC = () => {
     [connectionConfig]
   )
 
-  // Health check query to determine ACP backend availability
+  // Health check query to determine ACP backend availability.
+  // Include the server URL in the query key so changing the ACP server
+  // configuration invalidates the cached health status.
+  const acpServerUrl = connectionConfig?.serverUrl ?? ""
   const { data: healthData, isLoading: isHealthLoading } = useQuery({
-    queryKey: ["acp", "health"],
+    queryKey: ["acp", "health", acpServerUrl],
     queryFn: async () => {
       try {
         const resp = await fetch(
@@ -112,8 +115,11 @@ export const ACPPlayground: React.FC = () => {
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
-  const acpHealthy =
-    healthData?.overall === "healthy" || healthData?.overall === "degraded"
+  // Return undefined while the initial health check is in flight so
+  // downstream components can distinguish "loading" from "unhealthy".
+  const acpHealthy: boolean | undefined = isHealthLoading
+    ? undefined
+    : healthData?.overall === "healthy" || healthData?.overall === "degraded"
 
   const refreshSessionsFromServer = React.useCallback(async () => {
     if (!restClient) {
@@ -404,7 +410,7 @@ export const ACPPlayground: React.FC = () => {
   // Mobile layout
   if (isMobile) {
     return (
-      <div className="flex h-full flex-col bg-bg text-text">
+      <div className="relative flex h-full flex-col bg-bg text-text">
         <ACPPlaygroundHeader
           leftPaneOpen={false}
           rightPaneOpen={false}
@@ -432,7 +438,7 @@ export const ACPPlayground: React.FC = () => {
 
   // Desktop layout
   return (
-    <div className="flex h-full flex-col bg-bg text-text">
+    <div className="relative flex h-full flex-col bg-bg text-text">
       <ACPPlaygroundHeader
         leftPaneOpen={!!leftPaneOpen}
         rightPaneOpen={!!rightPaneOpen}

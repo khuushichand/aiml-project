@@ -16,7 +16,7 @@ const ClipEnhancementFields = ({
   const { t } = useTranslation()
 
   return (
-    <section className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+    <section className="panel-card p-3">
       <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted">
         {t("sidepanel:clipper.enhancementLegend", "Enhancements")}
       </div>

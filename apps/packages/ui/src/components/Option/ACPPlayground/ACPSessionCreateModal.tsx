@@ -317,19 +317,29 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
       onSuccess?.(result.serverSessionId)
       onClose()
     },
-    onError: (error: Error & { data?: { code?: string; message?: string; suggestions?: Array<{action: string; description?: string}> } }) => {
+    onError: (
+      error: Error &
+        Partial<ACPStructuredError> & {
+          data?: Partial<ACPStructuredError>
+        }
+    ) => {
       setCreationStep("error")
 
+      // Read structured ACP errors from top level first, then fall back to error.data
+      const errorCode = error.code ?? error.data?.code
+      const errorMessage = error.message ?? error.data?.message
+      const errorSuggestions = error.suggestions ?? error.data?.suggestions
+
       // Prefer structured error from backend if available
-      if (error.data?.code && error.data?.message) {
+      if (errorCode && errorMessage) {
         setCreationError({
-          code: error.data.code,
-          message: error.data.message,
-          suggestions: error.data.suggestions || [],
+          code: errorCode,
+          message: errorMessage,
+          suggestions: errorSuggestions ?? [],
         })
         notification.error({
           message: t("common:error", "Error"),
-          description: error.data.message,
+          description: errorMessage,
         })
         return
       }

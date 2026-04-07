@@ -1,9 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { useQuery } from "@tanstack/react-query"
 import { Bot, Check, X, AlertCircle, Loader2 } from "lucide-react"
-import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
-import { buildACPAuthHeaders } from "@/services/acp/connection"
 
 interface ACPHealthResponse {
   overall: string
@@ -18,39 +15,29 @@ interface ACPHealthResponse {
   [key: string]: unknown
 }
 
+interface ACPStatusCardProps {
+  /** Health data from the parent's query (avoids a duplicate fetch). */
+  healthData?: ACPHealthResponse | null
+  /** Whether the health query is still loading. */
+  isLoading?: boolean
+  /** Whether the health query errored. */
+  isError?: boolean
+}
+
 /**
  * ACPStatusCard - Displays ACP backend health status.
  *
- * Fetches `/api/v1/acp/health` and shows runner status,
- * configured agent count, and overall availability.
+ * Accepts health data as a prop from the parent rather than making its own
+ * query, so that React Query can deduplicate the health check via the shared
+ * `["acp", "health", serverUrl]` key.
  */
-export const ACPStatusCard: React.FC = () => {
+export const ACPStatusCard: React.FC<ACPStatusCardProps> = ({
+  healthData,
+  isLoading = false,
+  isError = false,
+}) => {
   const { t } = useTranslation(["playground", "common"])
-  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
-  const {
-    data: healthData,
-    isLoading,
-    isError,
-  } = useQuery<ACPHealthResponse>({
-    queryKey: ["acp", "health", "status-card"],
-    queryFn: async () => {
-      const resp = await fetch(
-        `${connectionConfig!.serverUrl}/api/v1/acp/health`,
-        { headers: buildACPAuthHeaders(connectionConfig) }
-      )
-      if (!resp.ok) {
-        throw new Error(`Health check failed: ${resp.status}`)
-      }
-      return resp.json()
-    },
-    enabled: !!connectionConfig,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  })
-
-  const isHealthy =
-    healthData?.overall === "healthy" || healthData?.overall === "degraded"
   const isDegraded = healthData?.overall === "degraded"
   const agentCount = Array.isArray(healthData?.agents)
     ? healthData.agents.length

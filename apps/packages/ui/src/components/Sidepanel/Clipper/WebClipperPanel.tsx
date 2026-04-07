@@ -422,7 +422,7 @@ const WebClipperPanel = ({ draft, onCancel }: WebClipperPanelProps) => {
 
   return (
     <div className="space-y-3">
-      <section className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+      <section className="panel-card p-3">
         <div className="grid gap-3">
           <div className="space-y-1">
             <label className="block text-sm font-medium text-text" htmlFor="clip-title">
@@ -527,7 +527,7 @@ const WebClipperPanel = ({ draft, onCancel }: WebClipperPanelProps) => {
       ) : null}
 
       {enrichmentStatuses.length > 0 ? (
-        <section className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+        <section className="panel-card p-3">
           <ul className="space-y-2">
             {enrichmentStatuses.map((status) => (
               <li
