@@ -364,6 +364,49 @@ tldw_Server_API/tests/DB_Management/unit/test_users_db_update_backend_detection.
 - `git log --oneline -n 20 -- tldw_Server_API/app/core/DB_Management`
 - `git status --short`
 
+### Workspace Snapshot
+```text
+ M Docs/superpowers/specs/2026-04-07-workflows-backend-review-design.md
+ M tldw_Server_API/app/api/v1/endpoints/audit.py
+ M tldw_Server_API/app/api/v1/endpoints/auth.py
+ M tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py
+ M tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py
+ M tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py
+ M tldw_Server_API/app/api/v1/endpoints/research.py
+ M tldw_Server_API/app/api/v1/endpoints/web_clipper.py
+ M tldw_Server_API/app/core/Audit/unified_audit_service.py
+ M tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py
+ M tldw_Server_API/app/core/AuthNZ/settings.py
+ M tldw_Server_API/app/core/Chunking/chunker.py
+ M tldw_Server_API/app/core/Chunking/strategies/code.py
+ M tldw_Server_API/app/core/Chunking/templates.py
+ M tldw_Server_API/app/core/Evaluations/db_adapter.py
+ M tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py
+ M tldw_Server_API/app/core/Evaluations/webhook_manager.py
+ M tldw_Server_API/app/core/Evaluations/webhook_security.py
+ M tldw_Server_API/app/core/WebClipper/service.py
+ M tldw_Server_API/app/core/Web_Scraping/WebSearch_APIs.py
+ M tldw_Server_API/tests/Audit/test_audit_export_endpoint.py
+ M tldw_Server_API/tests/Audit/test_unified_audit_service.py
+ M tldw_Server_API/tests/AuthNZ/unit/test_auth_endpoints_extended.py
+ M tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py
+ M tldw_Server_API/tests/AuthNZ/unit/test_session_manager_configured_key.py
+ M tldw_Server_API/tests/AuthNZ/unit/test_user_db_handling_api_keys.py
+ M tldw_Server_API/tests/Chunking/test_chunker_v2.py
+ M tldw_Server_API/tests/Chunking/test_code_chunking_regressions.py
+ M tldw_Server_API/tests/Chunking/test_template_hierarchical_options.py
+ M tldw_Server_API/tests/Chunking/test_thread_safety.py
+ M tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py
+ M tldw_Server_API/tests/Evaluations/unit/test_unified_evaluation_service_mapping.py
+ M tldw_Server_API/tests/Notes_NEW/integration/test_web_clipper_api.py
+ M tldw_Server_API/tests/Notes_NEW/unit/test_web_clipper_service.py
+ M tldw_Server_API/tests/WebScraping/test_config_cache_and_limits.py
+ M tldw_Server_API/tests/WebScraping/test_review_selector.py
+ M tldw_Server_API/tests/WebSearch/integration/test_websearch_endpoint.py
+ M tldw_Server_API/tests/WebSearch/integration/test_websearch_engines_endpoint.py
+ M tldw_Server_API/tests/WebSearch/test_websearch_core.py
+```
+
 ### Recent-History Baseline
 ```text
 96229fc32 fix: harden migration retry by cleaning up failed records and using INSERT OR REPLACE
