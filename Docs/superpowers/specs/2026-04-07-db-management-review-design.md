@@ -161,6 +161,17 @@ When the review samples representative callers or `*_DB.py` modules, the selecti
 
 At minimum, the audit should cover enough representatives to include shared foundations, `media_db`, and multiple non-`media_db` database helpers from different risk profiles so the final findings are not driven by a single subsystem.
 
+The initial audit seed set should include these files before expanding further:
+
+- `tldw_Server_API/app/core/DB_Management/content_backend.py`
+- `tldw_Server_API/app/core/DB_Management/db_path_utils.py`
+- `tldw_Server_API/app/core/DB_Management/DB_Manager.py`
+- `tldw_Server_API/app/core/DB_Management/backends/sqlite_backend.py`
+- `tldw_Server_API/app/core/DB_Management/backends/postgresql_backend.py`
+- `tldw_Server_API/app/core/DB_Management/media_db/api.py`
+
+From there, the review should branch into the highest-risk adjacent modules identified by churn, fan-out, migration complexity, or tenancy sensitivity.
+
 ## Execution Boundaries
 
 - The review remains inside the `DB_Management` subsystem and closely related tests and callers.
@@ -180,6 +191,12 @@ Each finding will include:
 - file and line references
 
 The report may include confirmed findings, probable risks, and improvements. If an area appears healthy, the review may say so briefly rather than inventing debt. If uncertainty remains, it should be labeled as an assumption or open question rather than overstated as a confirmed bug.
+
+A probable risk may be upgraded to a confirmed finding when at least one of these is true:
+
+- the source code alone establishes the defect unambiguously
+- targeted verification reproduces or directly confirms the behavior
+- independent evidence from source, tests, and callers converges strongly enough that no material ambiguity remains
 
 ## Success Criteria
 
