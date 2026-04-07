@@ -2,20 +2,28 @@
 
 ## Findings
 1. Medium: shared PostgreSQL content backend resets replace cached backend objects without closing the superseded pools, so runtime reconfiguration can leak live connections until process exit.
+   - Backend classification: PostgreSQL-specific
    - Confidence: High
    - Why it matters: `get_content_backend()` swaps `_cached_backend` in place and the reset path clears cache globals by assignment, but neither path closes the previous pool. `DB_Manager.shutdown_content_backend()` only closes the currently reachable backend, so reload-heavy tests or long-lived processes can strand connections to the old DSN/configuration.
    - File references: `tldw_Server_API/app/core/DB_Management/content_backend.py:153-205`, `tldw_Server_API/app/core/DB_Management/media_db/runtime/defaults.py:42-109`, `tldw_Server_API/app/core/DB_Management/DB_Manager.py:222-241`
 2. Medium: the shared `DatabaseBackend` FTS surface is not actually syntax-parity across SQLite and PostgreSQL, even though an FTS translator exists specifically for that purpose.
+   - Backend classification: Cross-backend parity concern
    - Confidence: High
    - Why it matters: SQLite `fts_search()` sends raw FTS5 `MATCH` text through unchanged, while PostgreSQL `fts_search()` passes raw `fts_query.query_text` directly to `to_tsquery('english', ...)`. Queries that are valid in SQLite FTS5 but require translation for PostgreSQL can therefore succeed on SQLite and fail or change meaning on PostgreSQL when callers use the backend abstraction directly.
    - File references: `tldw_Server_API/app/core/DB_Management/backends/sqlite_backend.py:543-590`, `tldw_Server_API/app/core/DB_Management/backends/postgresql_backend.py:1075-1120`, `tldw_Server_API/app/core/DB_Management/backends/fts_translator.py:1-216`
 3. Low: the named singleton backend factory can silently return a stale backend for a different configuration because cache identity is only the caller-provided name.
+   - Backend classification: Backend-agnostic factory risk
    - Confidence: High
    - Why it matters: `get_backend(name, config=...)` ignores the new config once a name is cached, so later calls can reuse the wrong database connection settings and bypass any expected recreation or validation step. I did not find this path on the main Media DB runtime path, but it remains part of the public factory surface.
    - File references: `tldw_Server_API/app/core/DB_Management/backends/factory.py:35-36`, `tldw_Server_API/app/core/DB_Management/backends/factory.py:219-254`
 
 ## Scope
 Review the shared DB_Management entry points, backend abstraction, backend factories, and Media DB routing used by the compatibility surface in `DB_Manager.py` and `media_db/api.py`.
+
+Limited transitive scope expansion:
+- `tldw_Server_API/app/core/DB_Management/media_db/runtime/defaults.py`
+- `tldw_Server_API/app/core/DB_Management/media_db/runtime/factory.py`
+- These runtime modules were consulted deliberately because `DB_Manager.py` and `media_db/api.py` delegate into them for backend loading and Media DB construction. They were used only to trace those delegated paths, not to broaden Stage 2 into a general runtime-module review.
 
 ## Code Paths Reviewed
 ### Construction and routing map
@@ -42,7 +50,7 @@ Review the shared DB_Management entry points, backend abstraction, backend facto
 ## Tests Reviewed
 - `tldw_Server_API/tests/DB_Management/test_backend_utils.py`: asserts placeholder conversion, SQLite-to-PostgreSQL SQL rewrites, runtime helper delegation, backend-specific case-insensitive search helpers, and boolean rewrite behavior. Coverage: both backends via shared utility layer. This upgrades query-rewrite claims from probable to confirmed.
 - `tldw_Server_API/tests/DB_Management/test_content_backend_cache.py`: asserts the shared content backend cache key changes when PostgreSQL password or `sslmode` changes. Coverage: PostgreSQL cache path only. This confirms only part of the cache signature, not cleanup behavior or pool-tuning invalidation.
-- `tldw_Server_API/tests/DB_Management/test_database_backends.py`: asserts SQLite backend creation/features/PRAGMA wiring/schema creation/transaction semantics/rank-expression sanitization, plus selected PostgreSQL behavior such as mixed-case `table_exists()`, failed-statement rollback before reuse, CTE write detection, and FTS source-table mapping. Coverage: both, but several PostgreSQL integration cases require a live Postgres fixture.
+- `tldw_Server_API/tests/DB_Management/test_database_backends.py`: asserts SQLite backend creation/features/PRAGMA wiring/schema creation/transaction semantics/rank-expression sanitization, plus selected PostgreSQL behavior such as mixed-case `table_exists()`, failed-statement rollback before reuse, CTE write detection, and FTS source-table mapping. Coverage: both. The live-PostgreSQL integration assertions were reviewed in the file, but several of them are skipped in this validation run unless a live Postgres fixture is available.
 - `tldw_Server_API/tests/DB_Management/test_db_manager_config_behavior.py`: asserts backup path precedence and `db_type` derivation across SQLite/PostgreSQL/unsupported values. Coverage: routing/config only. This confirms manager-level config discrimination, not backend cleanup.
 - `tldw_Server_API/tests/DB_Management/test_db_manager_wrappers.py`: asserts wrapper functions require explicit DB instances, route through the Media DB API/runtime factory, accept request-scoped sessions, and preserve deprecated compatibility surfaces without going back through `Media_DB_v2`. Coverage: mostly SQLite-backed doubles plus forced Postgres mode branches. This confirms wrapper routing claims.
 - `tldw_Server_API/tests/DB_Management/test_transaction_utils.py`: asserts async retry behavior, rollback rules, decorator behavior, and conversation/message transactional helpers. Coverage: backend-agnostic `CharactersRAGDB` transaction helpers, not the backend implementations themselves.
@@ -57,9 +65,9 @@ Review the shared DB_Management entry points, backend abstraction, backend facto
 - Skipped items were the live-PostgreSQL integration cases from `test_database_backends.py`, so claims that depend on full Postgres execution remain source-backed unless covered by the PostgreSQL unit tests above.
 
 ## Coverage Gaps
-- No targeted test exercises cache replacement or reset cleanup for the shared content backend, so the connection-leak finding is source-confirmed rather than test-confirmed.
-- No targeted test exercises backend-level FTS query translation for PostgreSQL with SQLite-style FTS operators; the current evidence is the code path mismatch plus the existence of the unused translator.
-- No targeted test covers `backends.factory.get_backend()` with conflicting configs under the same cache name.
+- PostgreSQL-specific: no targeted test exercises cache replacement or reset cleanup for the shared content backend, so the connection-leak finding is source-confirmed rather than test-confirmed.
+- Cross-backend parity concern: no targeted test exercises backend-level FTS query translation for PostgreSQL with SQLite-style FTS operators; the current evidence is the code path mismatch plus the existence of the unused translator.
+- Backend-agnostic factory risk: no targeted test covers `backends.factory.get_backend()` with conflicting configs under the same cache name.
 
 ## Improvements
 - Close and dispose the previous shared content backend pool before overwriting cache globals in `content_backend` or `media_db.runtime.defaults`, then add a regression test that verifies old pools are closed on reset/reconfiguration.

@@ -25,11 +25,10 @@ This review covers the backend Writing surface area, centered on:
 - `tldw_Server_API/app/api/v1/schemas/writing_schemas.py`
 - `tldw_Server_API/app/api/v1/schemas/writing_manuscript_schemas.py`
 - `tldw_Server_API/app/core/Writing/manuscript_analysis.py`
-- `tldw_Server_API/app/core/Writing/note_title.py`
-- related persistence helpers only where endpoint correctness depends on them, especially manuscript and ChaChaNotes DB interactions
+- related persistence helpers only where the listed Writing endpoints depend on them directly, especially `ManuscriptDBHelper` and `CharactersRAGDB` call paths used by writing and manuscript routes
 - related backend tests under `tldw_Server_API/tests/Writing/`
 
-The review includes API behavior, schema handling, auth and rate-limit boundaries, error mapping, create/update/delete and reorder flows, analysis endpoints, tokenization helpers, and any backend coupling that can affect correctness or data integrity.
+The review includes API behavior, schema handling, auth and rate-limit boundaries, error mapping, create/update/delete and reorder flows, snapshot import/export behavior, analysis endpoints, tokenizer and capability metadata behavior, wordcloud job/cache behavior, and any backend coupling that can affect correctness or data integrity.
 
 ## Non-Goals
 
@@ -91,7 +90,7 @@ Execution order:
 
 1. inspect endpoint contracts and dependency boundaries
 2. trace state-changing flows and persistence assumptions
-3. inspect analysis/tokenization/helper behavior that can fail silently or misreport results
+3. inspect analysis, tokenizer/capability, and wordcloud helper behavior that can fail silently or misreport results
 4. compare findings against current test coverage and identify gaps
 
 This balances bug-finding speed with enough coverage analysis to make the output actionable.
@@ -120,6 +119,7 @@ Inspect:
 - create, update, delete, restore, and fetch flows
 - optimistic locking, reorder semantics, and version handling
 - soft-delete and not-found behavior
+- snapshot import/export merge and replace behavior
 - create-then-read assumptions and helper return-value handling
 
 Primary questions:
@@ -128,13 +128,14 @@ Primary questions:
 - are concurrent edits handled consistently?
 - do state transitions preserve invariants?
 
-### Pass 3: Analysis and tokenizer behavior
+### Pass 3: Analysis, capability, and async helper behavior
 
 Inspect:
 
 - manuscript analysis request validation and result shaping
 - tokenizer and detokenizer resolution behavior
 - provider capability and compatibility lookups used by Writing endpoints
+- wordcloud job lifecycle, caching, and response shaping
 - fallback paths that may return misleading metadata or silently degrade behavior
 
 Primary questions:

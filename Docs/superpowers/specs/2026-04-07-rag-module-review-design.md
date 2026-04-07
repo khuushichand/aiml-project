@@ -28,6 +28,7 @@ This includes:
 - retrieval composition across databases, vector stores, and source adapters
 - reranking and post-retrieval composition including citations, guardrails, grading, and verification touchpoints
 - architectural test coverage and where the current test layout masks structural risk
+- direct boundary or support modules that materially control RAG request defaults, type contracts, or cache behavior when they are on an active RAG call path
 
 This review excludes:
 
@@ -75,13 +76,13 @@ Use the recommended staged review ledger with six ordered stages:
 1. `Architecture survey and inventory`
    Review the full RAG tree, identify major seams, hotspot files, dependency concentration, recent churn, and early architectural concerns.
 2. `Unified pipeline orchestration`
-   Review `unified_pipeline.py` as the central orchestration layer, focusing on orchestration overload, parameter sprawl, hidden phase coupling, and response-shaping leakage.
+   Review `unified_pipeline.py` as the central orchestration layer, focusing on orchestration overload, parameter sprawl, hidden phase coupling, and response-shaping leakage, along with adjacent shared type or contract modules when they materially shape orchestration behavior.
 3. `API, schema, and request boundaries`
-   Review `rag_unified.py`, `rag_health.py`, and `rag_schemas_unified.py` for ownership drift across schema defaults, endpoint defaults, profile resolution, request construction, and response mapping.
+   Review `rag_unified.py`, `rag_health.py`, `rag_schemas_unified.py`, `rag_schemas_simple.py`, and `profiles.py` for ownership drift across schema defaults, endpoint defaults, profile resolution, request construction, and response mapping.
 4. `Retrieval boundaries and data sources`
-   Review retriever composition, data-source abstractions, vector-store seams, and database-facing boundaries for mixed responsibilities and weak extension points.
+   Review retriever composition, query-expansion hooks, data-source abstractions, vector-store seams, and database-facing boundaries for mixed responsibilities and weak extension points.
 5. `Reranking and post-retrieval composition`
-   Review reranking, citations, guardrails, grading, verification, and related post-retrieval modules for feature tangling and ambiguous ownership.
+   Review reranking, generation, citations, guardrails, grading, verification, response writing, and related post-retrieval modules for feature tangling and ambiguous ownership.
 6. `Test gaps and synthesis`
    Compare the reviewed architecture against the test surface, identify missing structural protections, and produce one prioritized synthesis.
 
@@ -155,17 +156,45 @@ The audit should bias toward:
 - docs, examples, or tests that no longer match the current architecture
 - structural test gaps caused by over-mocking or only validating happy-path wiring
 
+## Representative Selection and Routing Rule
+
+Because `tldw_Server_API/app/core/RAG` is too large for equal-depth review, the audit should use an explicit seed set and a routing rule for newly discovered hotspots.
+
+The initial seed set should include at minimum:
+
+- `tldw_Server_API/app/core/RAG/README.md`
+- `tldw_Server_API/app/core/RAG/rag_service/README.md`
+- `tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py`
+- `tldw_Server_API/app/core/RAG/rag_service/database_retrievers.py`
+- `tldw_Server_API/app/core/RAG/rag_service/advanced_reranking.py`
+- `tldw_Server_API/app/core/RAG/rag_service/generation.py`
+- `tldw_Server_API/app/core/RAG/rag_service/guardrails.py`
+- `tldw_Server_API/app/core/RAG/rag_service/citations.py`
+- `tldw_Server_API/app/core/RAG/rag_service/profiles.py`
+- `tldw_Server_API/app/core/RAG/rag_service/types.py`
+- `tldw_Server_API/app/core/RAG/rag_service/semantic_cache.py`
+- `tldw_Server_API/app/core/RAG/rag_service/vector_stores/factory.py`
+- `tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py`
+- `tldw_Server_API/app/core/RAG/rag_service/research_agent.py`
+- `tldw_Server_API/app/api/v1/endpoints/rag_unified.py`
+- `tldw_Server_API/app/api/v1/endpoints/rag_health.py`
+- `tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py`
+- `tldw_Server_API/app/api/v1/schemas/rag_schemas_simple.py`
+- `tldw_Server_API/app/api/v1/utils/rag_cache.py`
+
+If Stage 1 identifies a hotspot outside this seed set, that module must be assigned explicitly to one later stage with a short rationale recorded in the Stage 1 exit note. No important secondary seam should be left unowned between stages.
+
 ## Sequential Review Artifacts
 
 The review should be recorded in:
 
-- `docs/superpowers/reviews/rag/README.md`
-- `docs/superpowers/reviews/rag/2026-04-07-stage1-architecture-survey-and-inventory.md`
-- `docs/superpowers/reviews/rag/2026-04-07-stage2-unified-pipeline-orchestration.md`
-- `docs/superpowers/reviews/rag/2026-04-07-stage3-api-schema-and-request-boundaries.md`
-- `docs/superpowers/reviews/rag/2026-04-07-stage4-retrieval-boundaries-and-data-sources.md`
-- `docs/superpowers/reviews/rag/2026-04-07-stage5-reranking-and-post-retrieval-composition.md`
-- `docs/superpowers/reviews/rag/2026-04-07-stage6-test-gaps-and-synthesis.md`
+- `Docs/superpowers/reviews/rag/README.md`
+- `Docs/superpowers/reviews/rag/2026-04-07-stage1-architecture-survey-and-inventory.md`
+- `Docs/superpowers/reviews/rag/2026-04-07-stage2-unified-pipeline-orchestration.md`
+- `Docs/superpowers/reviews/rag/2026-04-07-stage3-api-schema-and-request-boundaries.md`
+- `Docs/superpowers/reviews/rag/2026-04-07-stage4-retrieval-boundaries-and-data-sources.md`
+- `Docs/superpowers/reviews/rag/2026-04-07-stage5-reranking-and-post-retrieval-composition.md`
+- `Docs/superpowers/reviews/rag/2026-04-07-stage6-test-gaps-and-synthesis.md`
 
 Each stage record should use this structure:
 
@@ -187,7 +216,7 @@ Each stage record should use this structure:
 
 ## Final Deliverable
 
-The final response to the user will be a code-review style findings list ordered by severity.
+The canonical review record will be the six stage files above plus a final synthesis stage. The final response to the user will summarize the highest-signal findings in code-review style, ordered by severity, and point back to the stage artifacts rather than replacing them.
 
 Each finding will include:
 
