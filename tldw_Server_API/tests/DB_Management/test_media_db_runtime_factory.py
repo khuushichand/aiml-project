@@ -29,6 +29,47 @@ def test_runtime_factory_no_longer_mentions_media_db_v2_in_source():
     assert "Media_DB_v2" not in inspect.getsource(runtime_factory)
 
 
+def test_runtime_media_class_no_longer_mentions_legacy_identifiers_in_source():
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import media_class
+
+    source = inspect.getsource(media_class)
+
+    assert "legacy_identifiers" not in source
+    assert "NATIVE_MEDIA_DB_MODULE" in source
+
+
+def test_load_media_database_cls_resolves_native_class_module():
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime.media_class import (
+        load_media_database_cls,
+    )
+    from tldw_Server_API.app.core.DB_Management.media_db import media_database
+    from tldw_Server_API.app.core.DB_Management.media_db import native_class
+
+    cls = load_media_database_cls()
+
+    assert cls is native_class.MediaDatabase
+    assert cls is media_database.MediaDatabase
+
+
+def test_runtime_media_database_cls_resolves_direct_native_owner() -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime.media_class import (
+        load_media_database_cls,
+    )
+
+    cls = load_media_database_cls()
+
+    assert cls.__module__.endswith("media_database_impl")
+
+
+def test_get_current_media_schema_version_matches_canonical_runtime_class():
+    from tldw_Server_API.app.core.DB_Management.media_db import media_database
+
+    assert (
+        runtime_factory.get_current_media_schema_version()
+        == media_database.MediaDatabase._CURRENT_SCHEMA_VERSION
+    )
+
+
 def test_create_media_database_sqlite_uses_default_path_and_no_backend(monkeypatch):
     class StubMediaDatabase:
         calls = []
@@ -150,6 +191,82 @@ def test_validate_postgres_content_backend_uses_factory_validator(monkeypatch):
     assert StubMediaDatabase.instances
     assert StubMediaDatabase.instances[-1].checked_policies
     assert StubMediaDatabase.instances[-1].closed is True
+
+
+def test_validate_postgres_content_backend_reports_schema_version_probe_failure(monkeypatch):
+    class StubBackend:
+        backend_type = BackendType.POSTGRESQL
+
+        @contextmanager
+        def transaction(self):
+            yield object()
+
+        def execute(self, query, params=None, connection=None):
+            if "schema_version" in query:
+                raise RuntimeError("relation schema_version does not exist")
+            return QueryResult(rows=[{"ok": 1}], rowcount=1)
+
+    class StubMediaDatabase:
+        _CURRENT_SCHEMA_VERSION = 7
+
+        def __init__(self, **kwargs):
+            self.closed = False
+
+        def _postgres_policy_exists(self, conn, table, policy):
+            return True
+
+        def close_connection(self):
+            self.closed = True
+
+    runtime = _runtime_config(
+        postgres_content_mode=True,
+        backend_loader=lambda: None,
+    )
+    monkeypatch.setattr(runtime_factory, "_load_media_database_cls", lambda: StubMediaDatabase)
+
+    with pytest.raises(RuntimeError, match="schema validation failed while reading schema_version"):
+        runtime_factory.validate_postgres_content_backend(
+            runtime=runtime,
+            get_content_backend_instance=lambda: StubBackend(),
+        )
+
+
+def test_validate_postgres_content_backend_reports_unreadable_policy_as_validation_failure(monkeypatch):
+    class StubBackend:
+        backend_type = BackendType.POSTGRESQL
+
+        @contextmanager
+        def transaction(self):
+            yield object()
+
+        def execute(self, query, params=None, connection=None):
+            if "schema_version" in query:
+                return QueryResult(rows=[{"version": 7}], rowcount=1)
+            return QueryResult(rows=[{"ok": 1}], rowcount=1)
+
+    class StubMediaDatabase:
+        _CURRENT_SCHEMA_VERSION = 7
+
+        def __init__(self, **kwargs):
+            self.closed = False
+
+        def _postgres_policy_exists(self, conn, table, policy):
+            return False
+
+        def close_connection(self):
+            self.closed = True
+
+    runtime = _runtime_config(
+        postgres_content_mode=True,
+        backend_loader=lambda: None,
+    )
+    monkeypatch.setattr(runtime_factory, "_load_media_database_cls", lambda: StubMediaDatabase)
+
+    with pytest.raises(RuntimeError, match="is missing or could not be inspected"):
+        runtime_factory.validate_postgres_content_backend(
+            runtime=runtime,
+            get_content_backend_instance=lambda: StubBackend(),
+        )
 
 
 def test_load_collections_database_cls_returns_none_for_missing_optional_module(monkeypatch):

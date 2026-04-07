@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from tldw_Server_API.app.core.config import get_config_section
@@ -92,6 +92,7 @@ class ImageGenerationConfig:
     modelstudio_image_poll_interval_seconds: int
     modelstudio_image_timeout_seconds: int
     modelstudio_image_allowed_extra_params: list[str]
+    reference_image_supported_models: dict[str, list[str]] = field(default_factory=dict)
 
 
 _config_cache: ImageGenerationConfig | None = None
@@ -139,6 +140,48 @@ def _parse_list(value: Any) -> list[str]:
     if isinstance(parsed, list):
         return [str(item).strip() for item in parsed if str(item).strip()]
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _parse_mapping_of_lists(value: Any) -> dict[str, list[str]]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        parsed = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+
+    result: dict[str, list[str]] = {}
+    for raw_key, raw_values in parsed.items():
+        key = str(raw_key).strip().lower()
+        if not key:
+            continue
+        if isinstance(raw_values, list):
+            items = [str(item).strip() for item in raw_values if str(item).strip()]
+        elif raw_values is None:
+            items = []
+        else:
+            raw = str(raw_values).strip()
+            if not raw:
+                items = []
+            else:
+                try:
+                    candidate = json.loads(raw)
+                except Exception:
+                    candidate = None
+                if isinstance(candidate, list):
+                    items = [str(item).strip() for item in candidate if str(item).strip()]
+                else:
+                    items = [item.strip() for item in raw.split(",") if item.strip()]
+        result[key] = items
+    return result
 
 
 def _get_config_value(section: dict[str, str], key: str) -> str | None:
@@ -255,6 +298,7 @@ def get_image_generation_config(*, reload: bool = False) -> ImageGenerationConfi
             DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
         ),
         modelstudio_image_allowed_extra_params=_parse_list(section.get("modelstudio_image_allowed_extra_params")),
+        reference_image_supported_models=_parse_mapping_of_lists(section.get("reference_image_supported_models")),
     )
 
     _config_cache = config

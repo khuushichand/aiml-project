@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import api, { getApiBaseUrl } from '@web/lib/api';
+import { buildApiBaseUrl, resolveDeploymentMode, resolvePublicApiOrigin } from '@web/lib/api-base';
 import { setRuntimeApiBearer, setRuntimeApiKey } from '@web/lib/authStorage';
 
 type Theme = 'light' | 'dark' | 'system';
@@ -24,12 +25,45 @@ interface ConfigContextType {
 }
 
 const DEFAULT_HOST = (typeof window !== 'undefined' && window.location?.origin) || (process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000');
+const DEPLOYMENT_ENV = {
+  NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+};
+const DOCS_INFO_API_VERSION = 'v1';
 
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 
+function getPageOrigin(): string | undefined {
+  return typeof window !== 'undefined' ? window.location?.origin : undefined;
+}
+
+function getDefaultHost(): string {
+  const pageOrigin = getPageOrigin();
+  const resolvedOrigin = resolvePublicApiOrigin(DEPLOYMENT_ENV, pageOrigin);
+  return resolvedOrigin || pageOrigin || DEFAULT_HOST;
+}
+
 function computeBaseURL(host: string, version: string) {
-  const cleanHost = host.replace(/\/$/, '');
-  return `${cleanHost}/api/${version || 'v1'}`;
+  if (resolveDeploymentMode(DEPLOYMENT_ENV) === 'quickstart') {
+    return buildApiBaseUrl('', version);
+  }
+  return buildApiBaseUrl(host || resolvePublicApiOrigin(DEPLOYMENT_ENV, getPageOrigin()), version);
+}
+
+function normalizeDocsInfoOrigin(value: string): string {
+  return value.replace(/\/api\/[^/]+\/?$/, '').replace(/\/$/, '');
+}
+
+function computeDocsInfoUrl(host: string): string {
+  if (resolveDeploymentMode(DEPLOYMENT_ENV) === 'quickstart') {
+    return `${buildApiBaseUrl('', DOCS_INFO_API_VERSION)}/config/docs-info`;
+  }
+
+  const preferredOrigin = (process.env.NEXT_PUBLIC_API_BASE_URL || '').toString().trim();
+  const resolvedOrigin = normalizeDocsInfoOrigin(
+    preferredOrigin || host || resolvePublicApiOrigin(DEPLOYMENT_ENV, getPageOrigin())
+  );
+  return `${buildApiBaseUrl(resolvedOrigin, DOCS_INFO_API_VERSION)}/config/docs-info`;
 }
 
 function applyTheme(theme: Theme) {
@@ -51,7 +85,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<AppConfig>(() => {
     if (typeof window === 'undefined') {
       return {
-        apiBaseHost: DEFAULT_HOST,
+        apiBaseHost: getDefaultHost(),
         apiVersion: process.env.NEXT_PUBLIC_API_VERSION || 'v1',
         xApiKey: process.env.NEXT_PUBLIC_X_API_KEY,
         apiBearer: process.env.NEXT_PUBLIC_API_BEARER,
@@ -59,12 +93,16 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         csrfToken: null,
       };
     }
-    const storedHost = localStorage.getItem('tldw-api-host') || DEFAULT_HOST;
+    const storedHost = localStorage.getItem('tldw-api-host');
+    const apiBaseHost =
+      resolveDeploymentMode(DEPLOYMENT_ENV) === 'quickstart'
+        ? getDefaultHost()
+        : storedHost || getDefaultHost();
     const storedVersion = localStorage.getItem('tldw-api-version') || (process.env.NEXT_PUBLIC_API_VERSION || 'v1');
     const storedKey = process.env.NEXT_PUBLIC_X_API_KEY || '';
     const storedBearer = process.env.NEXT_PUBLIC_API_BEARER || '';
     const storedTheme = (localStorage.getItem('theme') || localStorage.getItem('tldw-theme') || 'dark') as Theme;
-    return { apiBaseHost: storedHost, apiVersion: storedVersion, xApiKey: storedKey || undefined, apiBearer: storedBearer || undefined, theme: storedTheme, csrfToken: null };
+    return { apiBaseHost, apiVersion: storedVersion, xApiKey: storedKey || undefined, apiBearer: storedBearer || undefined, theme: storedTheme, csrfToken: null };
   });
 
   // Initialize axios baseURL and theme on mount
@@ -106,14 +144,15 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
 
   const reloadBootstrapConfig = useCallback(async () => {
     try {
-      // Prefer explicit UI base origin if provided; else use API host; else window origin
-      const preferredBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').toString().trim() || config.apiBaseHost || (typeof window !== 'undefined' ? window.location.origin : '');
-      const base = (preferredBase || '').replace(/\/$/, '');
+      const docsInfoUrl = computeDocsInfoUrl(config.apiBaseHost);
       // docs-info is intentionally non-sensitive; avoid credentialed CORS requirements.
-      const resp = await fetch(`${base}/api/v1/config/docs-info`, { credentials: 'omit' });
+      const resp = await fetch(docsInfoUrl, { credentials: 'omit' });
       if (!resp.ok) return;
       const json = await resp.json();
-      const host = json?.base_url || json?.api_base_url || config.apiBaseHost;
+      const host =
+        resolveDeploymentMode(DEPLOYMENT_ENV) === 'quickstart'
+          ? getDefaultHost()
+          : json?.base_url || json?.api_base_url || config.apiBaseHost;
       const version = config.apiVersion || 'v1';
       const rawKey = json?.api_key || json?.x_api_key || '';
       const key = rawKey && rawKey !== 'YOUR_API_KEY' ? rawKey : config.xApiKey;

@@ -12,11 +12,14 @@ import {
   useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useEndFlashcardReviewSessionMutation,
+  useRecentFlashcardReviewSessionsQuery,
   useFlashcardAssistantQuery,
   useFlashcardAssistantRespondMutation,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
+  useGlobalFlashcardTagSuggestionsQuery,
   useFlashcardShortcuts,
   useDebouncedFormField,
   useDueCountsQuery,
@@ -52,6 +55,14 @@ vi.mock("react-i18next", () => ({
     }
   })
 }))
+
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>()
+  return {
+    ...actual,
+    useNavigate: () => vi.fn()
+  }
+})
 
 vi.mock("@/utils/flashcards-error-recovery-telemetry", () => ({
   trackFlashcardsErrorRecoveryTelemetry: trackErrorRecoveryTelemetryMock
@@ -95,6 +106,9 @@ vi.mock("../../hooks", () => ({
   useCramQueueQuery: vi.fn(),
   useReviewQuery: vi.fn(),
   useReviewFlashcardMutation: vi.fn(),
+  useEndFlashcardReviewSessionMutation: vi.fn(),
+  useRecentFlashcardReviewSessionsQuery: vi.fn(),
+  useGlobalFlashcardTagSuggestionsQuery: vi.fn(),
   useFlashcardAssistantQuery: vi.fn(),
   useFlashcardAssistantRespondMutation: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
@@ -185,6 +199,12 @@ describe("ReviewTab create CTA visibility", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    vi.mocked(useGlobalFlashcardTagSuggestionsQuery).mockReturnValue({
+      data: { items: [] },
+      isLoading: false,
+      isFetching: false,
+      isError: false
+    } as any)
     vi.mocked(useFlashcardShortcuts).mockImplementation(() => undefined)
     vi.mocked(useDebouncedFormField).mockReturnValue(undefined as any)
     vi.mocked(useDueCountsQuery).mockReturnValue({
@@ -203,6 +223,14 @@ describe("ReviewTab create CTA visibility", () => {
     } as any)
     vi.mocked(useNextDueQuery).mockReturnValue({
       data: null
+    } as any)
+    vi.mocked(useEndFlashcardReviewSessionMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useRecentFlashcardReviewSessionsQuery).mockReturnValue({
+      data: [],
+      isLoading: false
     } as any)
   })
 
@@ -378,6 +406,39 @@ describe("ReviewTab create CTA visibility", () => {
     expect(screen.getByText("Biology (7 due)")).toBeInTheDocument()
   })
 
+  it("force-shows the addressed workspace deck without widening the visible deck list", () => {
+    vi.mocked(useDecksQuery).mockImplementation((params: any) => ({
+      data: params?.includeWorkspaceItems
+        ? [
+            {
+              id: 9,
+              name: "Workspace Biology",
+              workspace_id: "workspace-77"
+            }
+          ]
+        : [],
+      isLoading: false
+    } as any))
+
+    render(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={9}
+        onReviewDeckChange={() => {}}
+        isActive
+        forceShowWorkspaceItems
+      />
+    )
+
+    expect(screen.getByText("Workspace Biology")).toBeInTheDocument()
+    expect(vi.mocked(useHasCardsQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        includeWorkspaceItems: true
+      })
+    )
+  })
+
   it("matches baseline snapshot for active review state", () => {
     vi.mocked(useReviewQuery).mockReturnValue({
       data: {
@@ -509,7 +570,7 @@ describe("ReviewTab create CTA visibility", () => {
     })
     const latestError = String(messageSpies.error.mock.calls.at(-1)?.[0] || "")
     expect(latestError).toContain("FLASHCARDS_VERSION_CONFLICT")
-    expect(latestError).toContain("Reload")
+    expect(latestError).toContain("Refresh")
     expect(trackErrorRecoveryTelemetryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "flashcards_mutation_failed",

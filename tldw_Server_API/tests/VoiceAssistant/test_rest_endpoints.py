@@ -81,7 +81,7 @@ def client_with_user(monkeypatch, mock_user, tmp_path):
     )
 
     # Mock TTS generation
-    async def mock_generate_tts(text, provider=None, voice=None, response_format="mp3"):
+    async def mock_generate_tts(text, provider=None, model=None, voice=None, response_format="mp3"):
         return b"audio-data", "audio/mpeg"
 
     monkeypatch.setattr(

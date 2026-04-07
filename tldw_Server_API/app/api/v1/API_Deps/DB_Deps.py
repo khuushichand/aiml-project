@@ -273,10 +273,12 @@ async def get_media_db_for_user(
 
 def get_media_db_for_owner(owner_user_id: int) -> MediaDbSession:
     """
-    Return a MediaDatabase for an arbitrary user (the workspace owner).
+    Return a request-scoped Media DB session for an arbitrary owner user.
 
-    Used by the sharing module to read sources from the owner's DB.
-    Constructs a temporary User object for the internal resolver.
+    This is the low-level session constructor used by
+    ``managed_media_db_for_owner()``. Non-dependency callers should normally
+    prefer the managed helper so ``release_context_connection()`` is always
+    invoked for the returned request-scoped session.
     """
     if not isinstance(owner_user_id, int):
         raise HTTPException(

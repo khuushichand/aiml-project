@@ -11,6 +11,7 @@ from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
     FileArtifactResponse,
     FileArtifactsPurgeRequest,
@@ -18,12 +19,18 @@ from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
     FileCreateRequest,
     FileCreateResponse,
     FileDeleteResponse,
+    ReferenceImageListItem,
+    ReferenceImageListResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, file_artifacts_http_status
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
+from tldw_Server_API.app.core.Image_Generation.reference_images import (
+    ReferenceImageOperationalError,
+    list_reference_image_candidates,
+)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -128,6 +135,34 @@ async def create_file_artifact(
         raise _file_artifacts_http_exception(exc) from exc
     response.status_code = status_code
     return FileCreateResponse(artifact=artifact)
+
+
+@router.get(
+    "/reference-images",
+    response_model=ReferenceImageListResponse,
+    summary="List picker-safe managed reference images",
+)
+async def get_reference_images(
+    media_db = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> ReferenceImageListResponse:
+    try:
+        items = await list_reference_image_candidates(media_db, user_id=current_user.id)
+    except ReferenceImageOperationalError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ReferenceImageListResponse(
+        items=[
+            ReferenceImageListItem(
+                file_id=item.file_id,
+                title=item.title,
+                mime_type=item.mime_type,
+                width=item.width,
+                height=item.height,
+                created_at=item.created_at,
+            )
+            for item in items
+        ]
+    )
 
 
 @router.get(

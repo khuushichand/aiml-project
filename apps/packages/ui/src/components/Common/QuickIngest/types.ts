@@ -26,6 +26,8 @@ export type ResultItem = {
   type: string
   data?: unknown
   error?: string
+  /** Whether the original file was persisted during this ingest run. */
+  persisted?: boolean
 }
 
 export type ResultOutcome =
@@ -117,6 +119,41 @@ export type TabBadgeState = {
   hasFailure?: boolean
 }
 
+export type QuickIngestSessionLifecycle =
+  | "draft"
+  | "processing"
+  | "completed"
+  | "partial_failure"
+  | "cancelled"
+  | "interrupted"
+
+export type PersistedQuickIngestTracking = {
+  mode: "webui-direct" | "extension-runtime" | "unknown"
+  sessionId?: string
+  batchId?: string
+  batchIds?: string[]
+  jobIds?: number[]
+  submittedItemIds?: string[]
+  /** @deprecated use submittedItemIds */
+  itemIds?: string[]
+  jobIdToItemId?: Record<string, string>
+  startedAt?: number
+}
+
+export type ReattachedQuickIngestJob = {
+  jobId: number
+  status: string
+  result?: unknown
+  error?: string
+  sourceItemId?: string
+}
+
+export type ReattachedQuickIngestSnapshot = {
+  lifecycle: QuickIngestSessionLifecycle
+  jobs: ReattachedQuickIngestJob[]
+  errorMessage?: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Wizard types (ingest wizard redesign)
 // ---------------------------------------------------------------------------
@@ -155,12 +192,20 @@ export type QueueItemValidation = {
 export type WizardQueueItem = {
   /** Unique identifier for this queue item. */
   id: string
+  /** Persisted queue item kind for refresh restore. */
+  kind?: "url" | "file"
   /** Original file name (for file uploads). */
   fileName?: string
   /** URL string (for URL-based items). */
   url?: string
   /** The File object if this is a local file upload. */
   file?: File
+  /** Persisted file stub metadata used to signal reattach-after-refresh. */
+  fileStub?: {
+    key?: string
+    instanceId?: string
+    lastModified?: number
+  }
   /** Detected media type based on extension/MIME. */
   detectedType: DetectedMediaType
   /** Icon identifier (lucide icon name) for the detected type. */

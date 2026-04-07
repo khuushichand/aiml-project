@@ -11,6 +11,7 @@ type GlobalWithExtensionRuntime = typeof globalThis & {
 const chromeDescriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome")
 const browserDescriptor = Object.getOwnPropertyDescriptor(globalThis, "browser")
 const originalApiUrl = process.env.NEXT_PUBLIC_API_URL
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 
 const setGlobal = (key: "chrome" | "browser", value: unknown) => {
   Object.defineProperty(globalThis, key, {
@@ -28,7 +29,6 @@ const restoreGlobal = (
     Object.defineProperty(globalThis, key, descriptor)
     return
   }
-  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
   delete (globalThis as Record<string, unknown>)[key]
 }
 
@@ -61,6 +61,11 @@ describe("runtime-bootstrap chrome shim", () => {
       delete process.env.NEXT_PUBLIC_API_URL
     } else {
       process.env.NEXT_PUBLIC_API_URL = originalApiUrl
+    }
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
     }
     localStorage.clear()
   })
@@ -124,8 +129,67 @@ describe("runtime-bootstrap chrome shim", () => {
     ).toBe("true")
   })
 
-  it("repairs a stale stored server URL from the web default host", async () => {
+  it("backfills MCP Hub into persisted web header shortcuts", async () => {
+    localStorage.setItem(
+      HEADER_SHORTCUT_SELECTION_SETTING.key,
+      JSON.stringify(["chat", "media"])
+    )
+
+    await import("@web/extension/shims/runtime-bootstrap")
+
+    const nextRaw = localStorage.getItem(HEADER_SHORTCUT_SELECTION_SETTING.key)
+    expect(nextRaw).toBeTruthy()
+    const nextSelection = JSON.parse(String(nextRaw))
+    expect(Array.isArray(nextSelection)).toBe(true)
+    expect(nextSelection).toContain("chat")
+    expect(nextSelection).toContain("media")
+    expect(nextSelection).toContain("mcp-hub")
+    expect(
+      localStorage.getItem("tldw:web-defaults:header-shortcuts-mcp-hub:v1")
+    ).toBe("true")
+  })
+
+  it("canonicalizes quickstart webui bootstrap to the current page origin", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+    delete process.env.NEXT_PUBLIC_API_URL
+    localStorage.setItem(
+      "tldwConfig",
+      JSON.stringify({
+        authMode: "single-user",
+        apiKey: "frontend-key",
+        serverUrl: "http://127.0.0.1:8000"
+      })
+    )
+
+    await import("@web/extension/shims/runtime-bootstrap")
+
+    expect(localStorage.getItem("tldw-api-host")).toBe(window.location.origin)
+    await vi.waitFor(() => {
+      expect(readStoredValue("tldwServerUrl")).toBe(window.location.origin)
+
+      const nextConfig = readStoredValue("tldwConfig") as Record<string, unknown>
+      expect(nextConfig.serverUrl).toBe(window.location.origin)
+      expect(nextConfig.apiKey).toBe("frontend-key")
+    })
+  })
+
+  it("repairs a stale env LAN host to the current browser host during bootstrap", async () => {
+    process.env.NEXT_PUBLIC_API_URL = "http://192.168.5.184:8000"
+
+    await import("@web/extension/shims/runtime-bootstrap")
+
+    expect(localStorage.getItem("tldw-api-host")).toBe("http://localhost:8000")
+    await vi.waitFor(() => {
+      expect(readStoredValue("tldwServerUrl")).toBe("http://localhost:8000")
+
+      const nextConfig = readStoredValue("tldwConfig") as Record<string, unknown>
+      expect(nextConfig.serverUrl).toBe("http://localhost:8000")
+    })
+  })
+
+  it("repairs a stale explicit web host to the current browser host during bootstrap", async () => {
     process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:8000"
+    localStorage.setItem("tldw-api-host", "http://192.168.5.186:8000")
     localStorage.setItem(
       "tldwConfig",
       JSON.stringify({
@@ -137,12 +201,12 @@ describe("runtime-bootstrap chrome shim", () => {
 
     await import("@web/extension/shims/runtime-bootstrap")
 
-    expect(localStorage.getItem("tldw-api-host")).toBe("http://127.0.0.1:8000")
+    expect(localStorage.getItem("tldw-api-host")).toBe("http://localhost:8000")
     await vi.waitFor(() => {
-      expect(readStoredValue("tldwServerUrl")).toBe("http://127.0.0.1:8000")
+      expect(readStoredValue("tldwServerUrl")).toBe("http://localhost:8000")
 
       const nextConfig = readStoredValue("tldwConfig") as Record<string, unknown>
-      expect(nextConfig.serverUrl).toBe("http://127.0.0.1:8000")
+      expect(nextConfig.serverUrl).toBe("http://localhost:8000")
       expect(nextConfig.apiKey).toBe("frontend-key")
     })
   })

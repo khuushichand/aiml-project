@@ -108,10 +108,10 @@ describe("core route identity guardrails", () => {
     phase = null
   })
 
-  it("provides unique route-intent headings for home/setup/onboarding-test", () => {
+  it("provides unique route-intent headings for home/setup/onboarding-test", async () => {
     const firstRender = render(<OptionIndex />)
     expect(screen.getByText("Home Onboarding")).toBeInTheDocument()
-    expect(screen.getByTestId("onboarding-wizard")).toBeInTheDocument()
+    expect(await screen.findByTestId("onboarding-wizard")).toBeInTheDocument()
     expect(optionLayoutMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         hideHeader: true,

@@ -67,6 +67,19 @@ describe("FollowUpInput accessibility", () => {
     )
   })
 
+  it("switches to a recovery-oriented follow-up prompt when requested", () => {
+    render(<FollowUpInput mode="recovery" />)
+
+    expect(screen.getByText("Try a sharper follow-up")).toBeInTheDocument()
+    expect(
+      screen.getByText(/Ask for the missing detail, timeframe, or source you still need/i)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Ask a follow-up question" })).toHaveAttribute(
+      "placeholder",
+      "Ask a more specific follow-up..."
+    )
+  })
+
   it("routes the New Topic action through the fresh-topic lifecycle handler", () => {
     render(<FollowUpInput />)
 

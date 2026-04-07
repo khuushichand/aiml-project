@@ -4,6 +4,7 @@ import { useStorage } from '@plasmohq/storage/hook'
 import { ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { formatRelativeTime } from '@/utils/dateFormatters'
+import { requestQuickIngestOpen } from '@/utils/quick-ingest-open'
 
 type MediaIngestJobStatus = {
   id: number
@@ -69,6 +70,21 @@ export function MediaIngestJobsPanel() {
   useEffect(() => {
     setBatchDraft(String(savedBatchId || ''))
   }, [savedBatchId])
+
+  // Auto-link batch ID and expand panel when Quick Ingest completes
+  useEffect(() => {
+    const handleIngestComplete = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail
+      const batchId = detail?.batchId
+      if (batchId) {
+        setBatchDraft(batchId)
+        void setSavedBatchId(batchId)
+        void setCollapsed(false)
+      }
+    }
+    window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+    return () => window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+  }, [setSavedBatchId, setCollapsed])
 
   const summary = useMemo(() => {
     return jobs.reduce(
@@ -357,12 +373,11 @@ export function MediaIngestJobsPanel() {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (job.source && typeof window !== 'undefined') {
-                                window.dispatchEvent(
-                                  new CustomEvent('tldw:open-quick-ingest', {
-                                    detail: { source: job.source, sourceKind: job.source_kind }
-                                  })
-                                )
+                              if (job.source) {
+                                requestQuickIngestOpen({
+                                  source: job.source,
+                                  sourceKind: job.source_kind,
+                                })
                               }
                             }}
                             className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-danger/40 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 transition-colors"

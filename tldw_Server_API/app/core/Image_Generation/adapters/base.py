@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from tldw_Server_API.app.core.Image_Generation.capabilities import ResolvedReferenceImage
+
 
 @dataclass(frozen=True)
 class ImageGenRequest:
@@ -21,6 +23,7 @@ class ImageGenRequest:
     format: str
     extra_params: dict[str, Any]
     request_id: str | None = None
+    reference_image: ResolvedReferenceImage | None = None
 
 
 @dataclass(frozen=True)

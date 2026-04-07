@@ -1,0 +1,10 @@
+.reveal[data-style-pack="retro_pixel"] {
+  background-color: var(--surface, #111827);
+  color: var(--text, #f9fafb);
+  font-family: "Press Start 2P", "Courier New", monospace;
+}
+
+.reveal[data-style-pack="retro_pixel"] .slides section {
+  border: 4px solid var(--accent, #22c55e);
+  box-shadow: 0 0 0 var(--pixel, 4px) rgba(34, 197, 94, 0.12);
+}

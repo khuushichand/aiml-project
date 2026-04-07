@@ -132,7 +132,20 @@ def test_copy_media_deep_copies_transcripts():
         "ingestion_date": "",
     }
     transcripts = [
-        {"transcription": "hello world", "whisper_model": "base", "created_at": "2026-01-01"},
+        {
+            "transcription": "hello world",
+            "whisper_model": "base",
+            "created_at": "2026-01-01",
+            "transcription_run_id": 1,
+            "idempotency_key": "clone-job-1",
+        },
+        {
+            "transcription": "hello world updated",
+            "whisper_model": "base",
+            "created_at": "2026-01-02",
+            "transcription_run_id": 2,
+            "idempotency_key": None,
+        },
     ]
     svc, _, _, _, tgt_media = _make_service(
         src_media_items=media_row,
@@ -153,13 +166,112 @@ def test_copy_media_deep_copies_transcripts():
         new_id = svc._copy_media_item("30")
 
     assert new_id == "10"
-    mock_upsert.assert_called_once_with(
-        tgt_media,
-        10,
-        transcription="hello world",
-        whisper_model="base",
-        created_at="2026-01-01",
+    assert mock_upsert.call_count == 2
+    assert mock_upsert.call_args_list[0].args == (tgt_media, 10)
+    assert mock_upsert.call_args_list[0].kwargs == {
+        "transcription": "hello world",
+        "whisper_model": "base",
+        "created_at": "2026-01-01",
+        "transcription_run_id": 1,
+        "idempotency_key": "clone-job-1",
+        "set_as_latest": False,
+    }
+    assert mock_upsert.call_args_list[1].args == (tgt_media, 10)
+    assert mock_upsert.call_args_list[1].kwargs == {
+        "transcription": "hello world updated",
+        "whisper_model": "base",
+        "created_at": "2026-01-02",
+        "transcription_run_id": 2,
+        "idempotency_key": None,
+        "set_as_latest": True,
+    }
+
+
+def test_copy_media_falls_back_to_last_transcript_when_latest_pointer_dangles():
+    media_row = {
+        "url": "",
+        "title": "T",
+        "type": "text",
+        "content": "c",
+        "keywords": "",
+        "prompt": "",
+        "transcription_model": "",
+        "author": "",
+        "ingestion_date": "",
+        "latest_transcription_run_id": 999,
+    }
+    transcripts = [
+        {
+            "transcription": "hello world",
+            "whisper_model": "base",
+            "created_at": "2026-01-01",
+            "transcription_run_id": 1,
+            "idempotency_key": "clone-job-1",
+        },
+        {
+            "transcription": "hello world updated",
+            "whisper_model": "base",
+            "created_at": "2026-01-02",
+            "transcription_run_id": 2,
+            "idempotency_key": None,
+        },
+    ]
+    svc, _, _, _, tgt_media = _make_service(
+        src_media_items=media_row,
+        add_result=(10, "u10", "ok"),
     )
+
+    mock_upsert = MagicMock()
+    with (
+        patch(
+            "tldw_Server_API.app.core.Sharing.clone_service.get_media_transcripts",
+            return_value=transcripts,
+        ),
+        patch(
+            "tldw_Server_API.app.core.Sharing.clone_service.upsert_transcript",
+            mock_upsert,
+        ),
+    ):
+        new_id = svc._copy_media_item("30")
+
+    assert new_id == "10"
+    assert mock_upsert.call_count == 2
+    assert mock_upsert.call_args_list[0].kwargs["set_as_latest"] is False
+    assert mock_upsert.call_args_list[1].kwargs["set_as_latest"] is True
+
+
+def test_copy_media_normalizes_string_media_id_for_source_lookup():
+    media_row = {
+        "url": "",
+        "title": "T",
+        "type": "text",
+        "content": "c",
+        "keywords": "",
+        "prompt": "",
+        "transcription_model": "",
+        "author": "",
+        "ingestion_date": "",
+    }
+    svc, _, src_media, _, _ = _make_service(
+        src_media_items=media_row,
+        add_result=(10, "u10", "ok"),
+    )
+
+    def _lookup(media_id):
+        if isinstance(media_id, int) and media_id == 10:
+            return media_row
+        return None
+
+    src_media.get_media_by_id.side_effect = _lookup
+
+    with patch(
+        "tldw_Server_API.app.core.Sharing.clone_service.get_media_transcripts",
+        return_value=[],
+    ):
+        new_id = svc._copy_media_item("10")
+
+    assert new_id == "10"
+    assert src_media.get_media_by_id.call_args.args == (10,)
 
 
 def test_copy_media_returns_none_for_missing_media():

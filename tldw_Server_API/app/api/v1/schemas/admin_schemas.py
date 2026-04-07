@@ -7,9 +7,12 @@ from datetime import date, datetime
 # Imports
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, SecretStr, field_validator
+
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 
 
 def _blank_string_to_none(value: Any) -> Any:
@@ -29,6 +32,20 @@ def unwrap_optional_secret(value: Any) -> str | None:
         raw_value = str(value)
     normalized = raw_value.strip()
     return normalized or None
+
+
+def validate_admin_webhook_url(value: str) -> str:
+    """Enforce public http(s) webhook targets allowed by the egress policy."""
+    stripped = value.strip()
+    parsed = urlsplit(stripped)
+    if parsed.username or parsed.password:
+        raise ValueError("Webhook URL must not include embedded credentials")
+
+    policy = evaluate_url_policy(stripped)
+    if not policy.allowed:
+        reason = policy.reason or "blocked by egress policy"
+        raise ValueError(f"Webhook URL is not allowed: {reason}")
+    return stripped
 
 #######################################################################################################################
 #
@@ -141,6 +158,7 @@ class UserSummary(BaseModel):
     role: str
     is_active: bool
     is_verified: bool
+    mfa_enabled: bool = False
     created_at: datetime
     last_login: datetime | None = None
     storage_quota_mb: int
@@ -359,11 +377,23 @@ class SessionStats(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TokensTodayStats(BaseModel):
+    """Token usage stats for today"""
+    prompt: int = 0
+    completion: int = 0
+    total: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SystemStatsResponse(BaseModel):
     """System statistics response"""
     users: UserStats
     storage: StorageStats
     sessions: SessionStats
+    active_acp_sessions: int | None = None
+    tokens_today: TokensTodayStats | None = None
+    mcp_invocations_today: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -384,6 +414,50 @@ class ActivitySummaryResponse(BaseModel):
     granularity: Literal["hour", "day"] = "day"
     points: list[ActivityPoint]
     warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPermissionDebugRequest(BaseModel):
+    """Request payload for permission resolution debug endpoint."""
+
+    user_id: int = Field(..., ge=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPermissionDebugResponse(BaseModel):
+    """Permission resolution debug output."""
+
+    user_id: int
+    roles: list[str]
+    effective_permissions: list[str]
+    permission_count: int | None = None
+    error: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminTokenDecodeRequest(BaseModel):
+    """Request payload for token decode debug endpoint."""
+
+    token: SecretStr = Field(..., repr=False)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminTokenDecodeResponse(BaseModel):
+    """Token decode debug output without signature validation."""
+
+    decoded: bool
+    signature_verified: bool = False
+    header: dict[str, Any] | None = None
+    payload: dict[str, Any] | None = None
+    expired: bool | None = None
+    expires_at: datetime | None = None
+    issuer: str | None = None
+    subject: str | None = None
+    error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -442,6 +516,64 @@ class AuditLogResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Error Breakdown Schemas
+
+class ErrorBreakdownItem(BaseModel):
+    """A single row in the error breakdown aggregation."""
+    endpoint: str
+    status_code: int
+    count: int
+    last_occurred: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ErrorBreakdownResponse(BaseModel):
+    """Aggregated error breakdown over a recent period."""
+    items: list[ErrorBreakdownItem]
+    total_errors: int
+    period: str = "24h"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Rate Limit Summary Schemas
+
+class RateLimitThrottledEntity(BaseModel):
+    """A frequently throttled user/IP/entity."""
+    entity: str
+    rejections: int
+    last_rejected_at: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateLimitPolicyHeadroom(BaseModel):
+    """Headroom utilization for a single policy."""
+    policy_id: str
+    resource_type: str | None = None
+    scope: str | None = None
+    total_decisions: int = 0
+    total_denials: int = 0
+    utilization_pct: float = 0.0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateLimitSummaryResponse(BaseModel):
+    """Aggregated rate limit summary for a period."""
+    total_throttle_events: int
+    period: str = "24h"
+    top_throttled_entities: list[RateLimitThrottledEntity]
+    policy_headroom: list[RateLimitPolicyHeadroom]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1160,6 +1292,7 @@ class IncidentItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None = None
+    acknowledged_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
     timeline: list[IncidentEvent] = []
@@ -1167,7 +1300,10 @@ class IncidentItem(BaseModel):
     assigned_to_label: str | None = None
     root_cause: str | None = None
     impact: str | None = None
+    runbook_url: str | None = None
     action_items: list[IncidentActionItem] = []
+    time_to_acknowledge_seconds: int | None = None
+    time_to_resolve_seconds: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1211,6 +1347,8 @@ class IncidentUpdateRequest(BaseModel):
     assigned_to_user_id: int | None = None
     root_cause: str | None = None
     impact: str | None = None
+    acknowledged_at: datetime | None = None
+    runbook_url: str | None = None
     action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
 
@@ -1220,6 +1358,116 @@ class IncidentUpdateRequest(BaseModel):
 class IncidentEventCreateRequest(BaseModel):
     """Request to append a timeline entry."""
     message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyRequest(BaseModel):
+    """Request to notify stakeholders about an incident."""
+    recipients: list[str]
+    message: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyRecipientResult(BaseModel):
+    """Per-recipient delivery result."""
+    email: str
+    status: str
+    error: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentNotifyResponse(BaseModel):
+    """Response from incident stakeholder notification.
+
+    Used by both the email notification endpoint (populates ``notifications``)
+    and the webhook dispatch endpoint (populates ``webhooks_delivered``).
+    """
+    incident_id: str
+    notifications: list[IncidentNotifyRecipientResult] = []
+    notified: bool = True
+    webhooks_delivered: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Webhook Schemas
+
+
+class WebhookItem(BaseModel):
+    """Webhook summary (secret redacted)."""
+    id: str
+    url: str
+    events: list[str] = []
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreateResponse(BaseModel):
+    """Response for webhook creation, includes the secret (shown once)."""
+    id: str
+    url: str
+    secret: str
+    events: list[str] = []
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookListResponse(BaseModel):
+    """Response for webhook listing."""
+    items: list[WebhookItem]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreateRequest(BaseModel):
+    """Request to create a webhook."""
+    url: str
+    events: list[str]
+    enabled: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookUpdateRequest(BaseModel):
+    """Request to update a webhook (partial update)."""
+    url: str | None = None
+    events: list[str] | None = None
+    enabled: bool | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookDeliveryItem(BaseModel):
+    """A single webhook delivery record."""
+    id: str
+    webhook_id: str
+    event_type: str = ""
+    status_code: int | None = None
+    response_time_ms: int | None = None
+    success: bool = False
+    error: str | None = None
+    attempted_at: str | None = None
+    payload_preview: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookDeliveryListResponse(BaseModel):
+    """Response for webhook delivery listing."""
+    items: list[WebhookDeliveryItem]
+    total: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1468,6 +1716,18 @@ class OrgBudgetListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BudgetForecastResponse(BaseModel):
+    """Forecast summary for organization budgets."""
+
+    org_id: int
+    forecast_available: bool
+    reason: str | None = None
+    monthly_limit_usd: float | None = None
+    note: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2142,6 +2402,172 @@ class AdminCircuitBreakerListFilters(BaseModel):
     category: str | None = None
     service: str | None = None
     name_prefix: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Per-API-Key Usage Attribution
+
+class ApiKeyDailySnapshot(BaseModel):
+    """A single day's usage snapshot for an API key."""
+    date: str
+    requests: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class ApiKeyUsageSummary(BaseModel):
+    """Aggregated usage summary for a single API key."""
+    key_id: str
+    request_count: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    last_used_at: str | None = None
+    daily_snapshots: list[ApiKeyDailySnapshot] = Field(default_factory=list)
+
+
+class ApiKeyUsageTopItem(BaseModel):
+    """A ranked entry in the top-keys-by-usage list."""
+    key_id: str
+    request_count: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    last_used_at: str | None = None
+
+
+class ApiKeyUsageTopResponse(BaseModel):
+    """Response for the top-keys-by-usage endpoint."""
+    items: list[ApiKeyUsageTopItem] = Field(default_factory=list)
+
+
+#######################################################################################################################
+#
+# Admin Webhooks Schemas
+
+
+class AdminWebhookCreateRequest(BaseModel):
+    """Request to register a new admin webhook."""
+
+    url: str = Field(..., min_length=1, max_length=2048)
+    event_types: list[str] = Field(default_factory=lambda: ["*"])
+    description: str = Field(default="", max_length=500)
+    secret: str | None = Field(default=None, max_length=256)
+    active: bool = True
+    retry_count: int = Field(default=3, ge=0, le=10)
+    timeout_seconds: int = Field(default=10, ge=1, le=60)
+
+    @field_validator("secret", mode="before")
+    @classmethod
+    def normalize_secret(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_scheme(cls, v: str) -> str:
+        """Only allow webhook URLs that pass egress safety checks."""
+        return validate_admin_webhook_url(v)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookUpdateRequest(BaseModel):
+    """Request to update an existing admin webhook."""
+
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+    event_types: list[str] | None = None
+    description: str | None = Field(default=None, max_length=500)
+    secret: str | None = Field(default=None, max_length=256)
+    active: bool | None = None
+    retry_count: int | None = Field(default=None, ge=0, le=10)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=60)
+
+    @field_validator("secret", mode="before")
+    @classmethod
+    def normalize_secret(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_scheme(cls, v: str | None) -> str | None:
+        """Only allow webhook URLs that pass egress safety checks."""
+        if v is None:
+            return v
+        return validate_admin_webhook_url(v)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookResponse(BaseModel):
+    """Single webhook record returned by the API."""
+
+    id: int
+    url: str
+    event_types: list[str]
+    description: str
+    active: bool
+    retry_count: int
+    timeout_seconds: int
+    created_by: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookListResponse(BaseModel):
+    """Paginated list of admin webhooks."""
+
+    items: list[AdminWebhookResponse]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookDeleteResponse(BaseModel):
+    """Response after deleting a webhook."""
+
+    deleted: bool
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookDeliveryLogEntry(BaseModel):
+    """Single delivery log entry."""
+
+    id: int
+    webhook_id: int
+    event_type: str
+    status_code: int | None = None
+    latency_ms: int | None = None
+    retry_attempt: int = 0
+    error_message: str | None = None
+    delivered_at: datetime | None = None
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookDeliveryLogListResponse(BaseModel):
+    """Paginated delivery log list."""
+
+    items: list[AdminWebhookDeliveryLogEntry]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookTestResponse(BaseModel):
+    """Response from testing a webhook."""
+
+    success: bool
+    status_code: int | None = None
+    latency_ms: int | None = None
+    error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

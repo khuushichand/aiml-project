@@ -33,9 +33,9 @@ import {
   PenLine,
   ShieldCheck
 } from "lucide-react"
+import { Navigate } from "react-router-dom"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
-import { Navigate } from "react-router-dom"
 
 export type RouteKind = "options" | "sidepanel"
 
@@ -149,6 +149,7 @@ const OptionSettingsPromptStudio = createSettingsRoute(
 const OptionAdminServer = lazy(() => import("./option-admin-server"))
 const OptionAdminLlamacpp = lazy(() => import("./option-admin-llamacpp"))
 const OptionAdminMlx = lazy(() => import("./option-admin-mlx"))
+const OptionAdminMonitoring = lazy(() => import("./option-admin-monitoring"))
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
@@ -168,6 +169,8 @@ const OptionQuickIngestSettings = createSettingsRoute(
 const OptionQuickChatPopout = lazy(() => import("./option-quick-chat-popout"))
 const OptionContentReview = lazy(() => import("./option-content-review"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
+const OptionSettingsMcpHub = lazy(() => import("./option-settings-mcp-hub"))
 const OptionChunkingPlayground = lazy(() => import("./option-chunking-playground"))
 const OptionDocumentation = lazy(() => import("./option-documentation"))
 const OptionQuiz = lazy(() => import("./option-quiz"))
@@ -376,6 +379,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:promptStudio.nav",
       icon: Microscope,
       order: 10,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/mcp-hub",
+    element: <OptionSettingsMcpHub />,
+    nav: {
+      group: "server",
+      labelToken: "settings:mcpHubNav",
+      icon: ServerIcon,
+      order: 11.1,
       beta: true
     }
   },
@@ -691,6 +706,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       beta: true
     }
   },
+  { kind: "options", path: "/mcp-hub", element: <OptionMcpHub /> },
   {
     kind: "options",
     path: "/admin/server",
@@ -719,6 +735,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.adminMlx",
       icon: Gauge,
       order: 8
+    }
+  },
+  {
+    kind: "options",
+    path: "/admin/monitoring",
+    element: <OptionAdminMonitoring />,
+    targets: ALL_TARGETS,
+    nav: {
+      group: "server",
+      labelToken: "option:header.adminMonitoring",
+      icon: ActivityIcon,
+      order: 9
     }
   },
   {

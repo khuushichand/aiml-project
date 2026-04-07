@@ -1,6 +1,6 @@
 import React from "react"
 import { render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AgentRegistryPage } from "../index"
 
@@ -109,6 +109,8 @@ vi.mock("antd", () => ({
 }))
 
 describe("AgentRegistryPage connection config", () => {
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+
   beforeEach(() => {
     vi.clearAllMocks()
     acpMocks.constructedConfigs.length = 0
@@ -152,6 +154,14 @@ describe("AgentRegistryPage connection config", () => {
     )
   })
 
+  afterEach(() => {
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+  })
+
   it("uses the canonical tldw config for ACP requests instead of stale legacy storage keys", async () => {
     render(<AgentRegistryPage />)
 
@@ -171,6 +181,25 @@ describe("AgentRegistryPage connection config", () => {
       expect(authHeaders).toEqual(
         expect.objectContaining({
           "X-API-KEY": "real-key"
+        })
+      )
+    })
+  })
+
+  it("uses the shared quickstart health path instead of concatenating the backend serverUrl", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    render(<AgentRegistryPage />)
+
+    expect(await screen.findByText("Planner Agent")).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/v1/acp/health",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "X-API-KEY": "real-key"
+          })
         })
       )
     })

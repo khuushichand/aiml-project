@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { useTranslation } from "react-i18next"
+import { useSearchParams } from "react-router-dom"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Alert, Drawer, Tabs, Tooltip } from "antd"
 import {
@@ -26,15 +27,6 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { bgRequest } from "@/services/background-proxy"
 import { tldwClient } from "@/services/tldw"
 import type { SidebarTab, RightPanelTab } from "./types"
-import { DocumentViewer } from "./DocumentViewer"
-import {
-  DocumentInfoTab,
-  TableOfContentsTab,
-  QuickInsightsTab,
-  ReferencesTab,
-  FiguresTab,
-} from "./LeftSidebar"
-import { DocumentChat, AnnotationsPanel, CitationPanel, QuizPanel } from "./RightPanel"
 import { DocumentWorkspaceErrorBoundary } from "./DocumentWorkspaceErrorBoundary"
 import { DocumentShortcutsModal } from "./DocumentShortcutsModal"
 import { DocumentTabBar } from "./DocumentTabBar"
@@ -52,6 +44,62 @@ import {
 } from "@/hooks/document-workspace"
 
 const DocumentPickerModal = React.lazy(() => import("./DocumentPickerModal"))
+const DocumentViewer = React.lazy(() =>
+  import("./DocumentViewer").then((module) => ({
+    default: module.DocumentViewer
+  }))
+)
+const QuickInsightsTab = React.lazy(() =>
+  import("./LeftSidebar/QuickInsightsTab").then((module) => ({
+    default: module.QuickInsightsTab
+  }))
+)
+const FiguresTab = React.lazy(() =>
+  import("./LeftSidebar/FiguresTab").then((module) => ({
+    default: module.FiguresTab
+  }))
+)
+const TableOfContentsTab = React.lazy(() =>
+  import("./LeftSidebar/TableOfContentsTab").then((module) => ({
+    default: module.TableOfContentsTab
+  }))
+)
+const DocumentInfoTab = React.lazy(() =>
+  import("./LeftSidebar/DocumentInfoTab").then((module) => ({
+    default: module.DocumentInfoTab
+  }))
+)
+const ReferencesTab = React.lazy(() =>
+  import("./LeftSidebar/ReferencesTab").then((module) => ({
+    default: module.ReferencesTab
+  }))
+)
+const DocumentChat = React.lazy(() =>
+  import("./RightPanel/DocumentChat").then((module) => ({
+    default: module.DocumentChat
+  }))
+)
+const AnnotationsPanel = React.lazy(() =>
+  import("./RightPanel/AnnotationsPanel").then((module) => ({
+    default: module.AnnotationsPanel
+  }))
+)
+const CitationPanel = React.lazy(() =>
+  import("./RightPanel/CitationPanel").then((module) => ({
+    default: module.CitationPanel
+  }))
+)
+const QuizPanel = React.lazy(() =>
+  import("./RightPanel/QuizPanel").then((module) => ({
+    default: module.QuizPanel
+  }))
+)
+const tabPanelFallback = <div className="h-full min-h-0" />
+const viewerPanelFallback = (
+  <div className="flex h-full items-center justify-center">
+    <div className="text-xs text-text-muted">Loading...</div>
+  </div>
+)
 
 type ErrorWithStatus = {
   status: number
@@ -76,41 +124,52 @@ const LeftSidebarContent: React.FC = () => {
     (s) => s.setActiveSidebarTab
   )
 
+  const renderSidebarTab = (tab: SidebarTab) => {
+    switch (tab) {
+      case "insights":
+        return <QuickInsightsTab />
+      case "figures":
+        return <FiguresTab />
+      case "toc":
+        return <TableOfContentsTab />
+      case "info":
+        return <DocumentInfoTab />
+      case "references":
+        return <ReferencesTab />
+      default:
+        return null
+    }
+  }
+
   const sidebarTabs: Array<{
     key: SidebarTab
     label: string
     icon: React.ReactNode
-    children: React.ReactNode
   }> = [
     {
       key: "insights",
       label: t("option:documentWorkspace.insights", "Insights"),
-      icon: <Lightbulb className="h-4 w-4" />,
-      children: <QuickInsightsTab />
+      icon: <Lightbulb className="h-4 w-4" />
     },
     {
       key: "figures",
       label: t("option:documentWorkspace.figures", "Figures"),
-      icon: <Image className="h-4 w-4" />,
-      children: <FiguresTab />
+      icon: <Image className="h-4 w-4" />
     },
     {
       key: "toc",
       label: t("option:documentWorkspace.toc", "Contents"),
-      icon: <List className="h-4 w-4" />,
-      children: <TableOfContentsTab />
+      icon: <List className="h-4 w-4" />
     },
     {
       key: "info",
       label: t("option:documentWorkspace.info", "Info"),
-      icon: <Info className="h-4 w-4" />,
-      children: <DocumentInfoTab />
+      icon: <Info className="h-4 w-4" />
     },
     {
       key: "references",
       label: t("option:documentWorkspace.references", "References"),
-      icon: <BookOpen className="h-4 w-4" />,
-      children: <ReferencesTab />
+      icon: <BookOpen className="h-4 w-4" />
     }
   ]
 
@@ -124,7 +183,11 @@ const LeftSidebarContent: React.FC = () => {
           label: <TabIconLabel label={tab.label} icon={tab.icon} />,
           children: (
             <div className="h-full min-h-0 overflow-auto overscroll-contain">
-              {tab.children}
+              {activeSidebarTab === tab.key ? (
+                <Suspense fallback={tabPanelFallback}>
+                  {renderSidebarTab(tab.key)}
+                </Suspense>
+              ) : null}
             </div>
           )
         }))}
@@ -146,35 +209,45 @@ const RightPanelContent: React.FC = () => {
     (s) => s.setActiveRightTab
   )
 
+  const renderRightTab = (tab: RightPanelTab) => {
+    switch (tab) {
+      case "chat":
+        return <DocumentChat />
+      case "annotations":
+        return <AnnotationsPanel />
+      case "citations":
+        return <CitationPanel />
+      case "quiz":
+        return <QuizPanel />
+      default:
+        return null
+    }
+  }
+
   const rightTabs: Array<{
     key: RightPanelTab
     label: string
     icon: React.ReactNode
-    children: React.ReactNode
   }> = [
     {
       key: "chat",
       label: t("option:documentWorkspace.chat", "Chat"),
-      icon: <MessageSquare className="h-4 w-4" />,
-      children: <DocumentChat />
+      icon: <MessageSquare className="h-4 w-4" />
     },
     {
       key: "annotations",
       label: t("option:documentWorkspace.annotations", "Notes"),
-      icon: <Highlighter className="h-4 w-4" />,
-      children: <AnnotationsPanel />
+      icon: <Highlighter className="h-4 w-4" />
     },
     {
       key: "citations",
       label: t("option:documentWorkspace.citations", "Cite"),
-      icon: <Quote className="h-4 w-4" />,
-      children: <CitationPanel />
+      icon: <Quote className="h-4 w-4" />
     },
     {
       key: "quiz",
       label: t("option:documentWorkspace.quiz", "Quiz"),
-      icon: <HelpCircle className="h-4 w-4" />,
-      children: <QuizPanel />
+      icon: <HelpCircle className="h-4 w-4" />
     }
   ]
 
@@ -186,7 +259,12 @@ const RightPanelContent: React.FC = () => {
         items={rightTabs.map((tab) => ({
           key: tab.key,
           label: <TabIconLabel label={tab.label} icon={tab.icon} />,
-          children: tab.children
+          children:
+            activeRightTab === tab.key ? (
+              <Suspense fallback={tabPanelFallback}>
+                {renderRightTab(tab.key)}
+              </Suspense>
+            ) : null
         }))}
         size="small"
         className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
@@ -570,7 +648,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             message.error(
               t(
                 "option:documentWorkspace.missingFile",
-                "This item was ingested without keeping the original file. Re-ingest with “Keep original file” enabled."
+                "This document's original file was not preserved during ingest. To view it in the workspace, re-upload it using the Upload tab above, or re-ingest it \u2014 newer ingests automatically preserve document files."
               )
             )
             return
@@ -644,6 +722,43 @@ export const DocumentWorkspacePage: React.FC = () => {
     },
     [message, openDocument, registerBlobUrl, setLoadingDocumentId, t]
   )
+
+  // Handle ?open={mediaId} URL parameter for auto-opening documents
+  const [searchParams, setSearchParams] = useSearchParams()
+  const autoOpenId = searchParams.get("open")
+  const autoOpenHandledRef = useRef(false)
+
+  useEffect(() => {
+    if (!autoOpenId) {
+      autoOpenHandledRef.current = false
+      return
+    }
+    if (autoOpenHandledRef.current) return
+    // Wait until we are not already loading another document
+    if (loadingDocumentId !== null) return
+    const mediaId = Number(autoOpenId)
+    if (!Number.isFinite(mediaId) || mediaId <= 0) return
+
+    // Check if this document is already open
+    const alreadyOpen = openDocuments.some((d) => d.id === mediaId)
+    if (alreadyOpen) {
+      // Just clear the param
+      autoOpenHandledRef.current = true
+      setSearchParams((prev) => {
+        prev.delete("open")
+        return prev
+      }, { replace: true })
+      return
+    }
+
+    autoOpenHandledRef.current = true
+    // Remove the param from the URL first so it doesn't re-trigger
+    setSearchParams((prev) => {
+      prev.delete("open")
+      return prev
+    }, { replace: true })
+    void openDocumentById(mediaId)
+  }, [autoOpenId, loadingDocumentId, openDocuments, openDocumentById, setSearchParams])
 
   const loadingAlert =
     loadingDocumentId !== null ? (
@@ -720,13 +835,15 @@ export const DocumentWorkspacePage: React.FC = () => {
 
     const mobileContent = {
       sidebar: <LeftSidebarContent />,
-      viewer: (
-        <DocumentViewer
-          loadingDocumentId={loadingDocumentId}
-          onOpenLibrary={() => handleOpenPicker("library")}
-          onOpenUpload={() => handleOpenPicker("upload")}
-          onReloadDocument={openDocumentById}
-        />
+       viewer: (
+        <Suspense fallback={viewerPanelFallback}>
+          <DocumentViewer
+            loadingDocumentId={loadingDocumentId}
+            onOpenLibrary={() => handleOpenPicker("library")}
+            onOpenUpload={() => handleOpenPicker("upload")}
+            onReloadDocument={openDocumentById}
+          />
+        </Suspense>
       ),
       chat: <RightPanelContent />
     }
@@ -860,12 +977,14 @@ export const DocumentWorkspacePage: React.FC = () => {
 
           {/* Center pane - Document Viewer */}
           <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
-            <DocumentViewer
-              loadingDocumentId={loadingDocumentId}
-              onOpenLibrary={() => handleOpenPicker("library")}
-              onOpenUpload={() => handleOpenPicker("upload")}
-              onReloadDocument={openDocumentById}
-            />
+            <Suspense fallback={viewerPanelFallback}>
+              <DocumentViewer
+                loadingDocumentId={loadingDocumentId}
+                onOpenLibrary={() => handleOpenPicker("library")}
+                onOpenUpload={() => handleOpenPicker("upload")}
+                onReloadDocument={openDocumentById}
+              />
+            </Suspense>
           </main>
 
           {/* Right pane - Chat/Annotations (desktop) */}

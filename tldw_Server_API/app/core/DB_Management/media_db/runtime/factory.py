@@ -121,10 +121,19 @@ def validate_postgres_content_backend(
     )
     try:
         with backend.transaction() as conn:  # type: ignore[arg-type]
-            version_result = backend.execute(
-                "SELECT version FROM schema_version LIMIT 1",
-                connection=conn,
-            )
+            try:
+                version_result = backend.execute(
+                    "SELECT version FROM schema_version LIMIT 1",
+                    connection=conn,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "PostgreSQL content schema validation failed while reading schema_version. "
+                    "The content schema may be missing, inaccessible, or not yet migrated. "
+                    "Inspect the database connection and, if needed, run migrations: "
+                    "python -m tldw_Server_API.app.core.DB_Management.migration_tools "
+                    "or apply the SQL under app/core/DB_Management/migrations/."
+                ) from exc
             current_version_row = version_result.first if version_result else None
             if isinstance(current_version_row, dict):
                 current_version_raw = current_version_row.get("version")
@@ -138,7 +147,7 @@ def validate_postgres_content_backend(
             expected_version = validator._CURRENT_SCHEMA_VERSION
             if current_version != expected_version:
                 raise RuntimeError(
-                    "PostgreSQL content schema is outdated. "
+                    "PostgreSQL content schema validation failed: schema is outdated. "
                     f"Current version={current_version}, expected={expected_version}. "
                     "Run migrations: python -m tldw_Server_API.app.core.DB_Management.migration_tools "
                     "or apply the SQL under app/core/DB_Management/migrations/."
@@ -161,9 +170,11 @@ def validate_postgres_content_backend(
 
             for table, policies in required_policies.items():
                 for policy in policies:
-                    if not validator._postgres_policy_exists(conn, table, policy):
+                    policy_exists = validator._postgres_policy_exists(conn, table, policy)
+                    if not policy_exists:
                         raise RuntimeError(
-                            f"Missing Postgres RLS policy '{policy}' on table '{table}'. "
+                            "PostgreSQL content RLS validation failed: policy "
+                            f"'{policy}' on table '{table}' is missing or could not be inspected. "
                             "Apply policies via pg_rls_policies.ensure_* helpers or run: "
                             "python -m tldw_Server_API.app.core.DB_Management.migration_tools --apply-rls"
                         )

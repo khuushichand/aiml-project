@@ -11,8 +11,6 @@ def test_process_single_item_stores_vectors(monkeypatch):
         def add_media_with_keywords(self, **_kwargs: Any):
             return 123, "ok"
 
-    monkeypatch.setattr(mediawiki, "create_media_database", lambda client_id: DummyDB())
-
     class FakeManager:
         last_call: Dict[str, Any] | None = None
 
@@ -67,6 +65,7 @@ def test_process_single_item_stores_vectors(monkeypatch):
         store_to_vector_db=True,
         api_name_vector_db="openai:text-embedding-3-small",
         api_key_vector_db="test-key",
+        media_writer=DummyDB(),
     )
 
     assert result["media_id"] == 123

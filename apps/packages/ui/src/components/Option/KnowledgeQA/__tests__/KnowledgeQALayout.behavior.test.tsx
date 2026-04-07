@@ -196,7 +196,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
     state.evidenceRailOpen = true
 
     const { rerender } = renderLayout()
-    expect(screen.getByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
 
     state.settingsPanelOpen = true
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
@@ -213,11 +213,11 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
 
-    expect(screen.getByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
   })
 
   it("reopens the evidence rail for a new search after a manual close", async () => {
-    state.results = [{ id: "r1" }]
+    state.results = [{ id: "r1" }, { id: "r2" }, { id: "r3" }]
     state.answer = "Answer"
     state.queryStage = "complete"
     state.evidenceRailOpen = true
@@ -230,7 +230,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close evidence panel" }))
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
-    expect(screen.getByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
 
     state.queryStage = "searching"
     state.messages = [
@@ -244,9 +244,9 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
     })
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
-    expect(screen.getByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
 
-    state.results = [{ id: "r2" }]
+    state.results = [{ id: "r4" }, { id: "r5" }, { id: "r6" }]
     state.answer = "Updated answer"
     state.queryStage = "complete"
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
@@ -257,7 +257,78 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
 
-    expect(screen.getByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
+  })
+
+  it("does not auto-open the evidence rail when fewer than 3 results are returned", async () => {
+    state.results = [{ id: "r1" }, { id: "r2" }]
+    state.answer = "Short answer"
+    state.queryStage = "complete"
+    state.evidenceRailOpen = false
+
+    const { rerender } = renderLayout()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
+
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(state.setEvidenceRailOpen).not.toHaveBeenCalledWith(true)
+  })
+
+  it("auto-opens the evidence rail when exactly 3 results are returned", async () => {
+    state.results = [{ id: "r1" }, { id: "r2" }, { id: "r3" }]
+    state.answer = "Good answer"
+    state.queryStage = "complete"
+    state.evidenceRailOpen = false
+
+    const { rerender } = renderLayout()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
+
+    expect(state.setEvidenceRailOpen).toHaveBeenCalledWith(true)
+  })
+
+  it("does not auto-open the evidence rail with only 1 result even when answer exists", async () => {
+    state.results = [{ id: "r1" }]
+    state.answer = "Single-source answer"
+    state.queryStage = "complete"
+    state.evidenceRailOpen = false
+
+    const { rerender } = renderLayout()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
+
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(state.setEvidenceRailOpen).not.toHaveBeenCalledWith(true)
   })
 
   it("marks the scope as changed when granular source filters differ from the last search", () => {

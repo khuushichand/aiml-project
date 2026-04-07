@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ChatSettings } from "../ChatSettings"
+import { CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH } from "@/services/settings/ui-settings"
 
 const {
   useChatSettingsMock,
@@ -245,6 +246,57 @@ describe("ChatSettings background image controls", () => {
         "data:image/png;base64,abc123"
       )
     })
+  })
+
+  it("accepts background images under the new 15 MB cap", async () => {
+    toBase64Mock.mockResolvedValue(
+      `data:image/png;base64,${"a".repeat(CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH - 32)}`
+    )
+
+    const { container } = render(<ChatSettings />)
+    const fileInput = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement | null
+    expect(fileInput).not.toBeNull()
+
+    const imageFile = new File(["fake image"], "chat-bg-large.png", {
+      type: "image/png"
+    })
+    fireEvent.change(fileInput as HTMLInputElement, {
+      target: { files: [imageFile] }
+    })
+
+    await waitFor(() => {
+      expect(toBase64Mock).toHaveBeenCalledWith(imageFile)
+      expect(setChatBackgroundImageMock).toHaveBeenCalledWith(
+        expect.stringContaining("data:image/png;base64,")
+      )
+    })
+    expect(notificationErrorMock).not.toHaveBeenCalled()
+  })
+
+  it("rejects background images above the 15 MB cap", async () => {
+    toBase64Mock.mockResolvedValue(
+      `data:image/png;base64,${"a".repeat(CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH + 1)}`
+    )
+
+    const { container } = render(<ChatSettings />)
+    const fileInput = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement | null
+    expect(fileInput).not.toBeNull()
+
+    const imageFile = new File(["fake image"], "chat-bg-too-large.png", {
+      type: "image/png"
+    })
+    fireEvent.change(fileInput as HTMLInputElement, {
+      target: { files: [imageFile] }
+    })
+
+    await waitFor(() => {
+      expect(notificationErrorMock).toHaveBeenCalled()
+    })
+    expect(setChatBackgroundImageMock).not.toHaveBeenCalled()
   })
 
   it("shows and handles remove button when a background is set", async () => {

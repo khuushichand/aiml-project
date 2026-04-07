@@ -16,12 +16,15 @@ Design Philosophy:
 import asyncio
 import calendar
 import hashlib
+import inspect
+import os
 import re
 import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
@@ -40,6 +43,152 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
+
+_RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS = 500
+
+
+def _serialize_result_document(doc: Any) -> dict[str, Any]:
+    """Serialize a pipeline document into the response-compatible document shape."""
+    if isinstance(doc, dict):
+        metadata = dict(doc.get("metadata") or {})
+        source = doc.get("source")
+        if source is not None:
+            metadata.setdefault(
+                "source",
+                source.value if hasattr(source, "value") else str(source),
+            )
+        for field_name in ("media_id", "note_id", "chunk_id", "record_id", "start", "end"):
+            value = doc.get(field_name)
+            if value is not None:
+                metadata.setdefault(field_name, value)
+        doc_id = doc.get("id")
+        if doc_id is not None:
+            metadata.setdefault("chunk_id", str(doc_id))
+        return {
+            "id": doc_id,
+            "content": doc.get("content") or doc.get("text") or doc.get("body"),
+            "score": doc.get("score", 0.0),
+            "metadata": metadata,
+        }
+
+    metadata = dict(getattr(doc, "metadata", {}) or {})
+    try:
+        source = getattr(doc, "source", None)
+        if source is not None:
+            metadata.setdefault(
+                "source",
+                source.value if hasattr(source, "value") else str(source),
+            )
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    doc_id = getattr(doc, "id", None)
+    if doc_id is not None:
+        metadata.setdefault("chunk_id", str(doc_id))
+
+    return {
+        "id": doc_id,
+        "content": getattr(doc, "content", None),
+        "score": getattr(doc, "score", 0.0),
+        "metadata": metadata,
+    }
+
+
+def _resolve_include_rerank_debug_documents(explicit_flag: Any) -> bool:
+    """Resolve whether rerank debug snapshots are enabled."""
+    if explicit_flag is None:
+        return _shared_is_truthy(os.getenv("RAG_INCLUDE_RERANK_DEBUG_DOCUMENTS", "false"))
+    if isinstance(explicit_flag, bool):
+        return explicit_flag
+    return _shared_is_truthy(explicit_flag)
+
+
+def _truncate_rerank_debug_content(content: Any, *, max_chars: int = _RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS) -> str | None:
+    if content is None:
+        return None
+    text = str(content)
+    if max_chars > 0 and len(text) > max_chars:
+        return f"{text[:max_chars].rstrip()}..."
+    return text
+
+
+def _serialize_rerank_debug_document(
+    doc: Any,
+    *,
+    include_content: bool,
+    max_content_chars: int = _RERANK_DEBUG_DOCUMENT_CONTENT_MAX_CHARS,
+) -> dict[str, Any]:
+    """Serialize rerank debug snapshots without duplicating the full document body by default."""
+    serialized = _serialize_result_document(doc)
+    metadata = dict(serialized.get("metadata", {}) or {})
+
+    def _pick(field_name: str) -> Any:
+        value = serialized.get(field_name)
+        if value is None:
+            value = metadata.get(field_name)
+        return value
+
+    debug_doc: dict[str, Any] = {}
+    doc_id = _pick("id") or _pick("chunk_id") or _pick("record_id")
+    if doc_id is not None:
+        debug_doc["id"] = doc_id
+    score = _pick("score")
+    if score is not None:
+        debug_doc["score"] = score
+    source = _pick("source")
+    if source is not None:
+        debug_doc["source"] = source
+
+    identity_fields = (
+        "chunk_id",
+        "media_id",
+        "note_id",
+        "record_id",
+        "sql_target_id",
+        "start",
+        "end",
+        "chunk_start",
+        "chunk_end",
+        "page_number",
+        "section_title",
+        "title",
+        "path",
+    )
+    debug_metadata: dict[str, Any] = {}
+    for field_name in identity_fields:
+        value = _pick(field_name)
+        if value is None:
+            continue
+        if field_name in {"chunk_id", "media_id", "note_id", "record_id", "start", "end"}:
+            debug_doc[field_name] = value
+        debug_metadata[field_name] = value
+    if debug_metadata:
+        debug_doc["metadata"] = debug_metadata
+
+    if include_content:
+        content = _truncate_rerank_debug_content(
+            serialized.get("content"),
+            max_chars=max_content_chars,
+        )
+        if content:
+            debug_doc["content"] = content
+
+    return debug_doc
+
+
+def _serialize_rerank_debug_documents(
+    documents: list[Any] | None,
+    *,
+    include_content: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    return [
+        _serialize_rerank_debug_document(doc, include_content=include_content)
+        for doc in list(documents or [])[:limit]
+    ]
+
 
 # Optional dependency placeholders (typed as Any to keep mypy tolerant for missing deps).
 _get_telemetry_manager: Any = None
@@ -806,6 +955,30 @@ def _normalize_chunk_type_value(value: Any) -> Optional[str]:
         return "media"
     return raw
 
+
+def _coerce_security_filter_sequence(value: Any, *, description: str) -> list[Any]:
+    """Normalize security-filter outputs and fail closed on invalid shapes."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (str, bytes, bytearray, dict)):
+        logger.warning(
+            "Security filter returned unsupported {} type {}; dropping all documents",
+            description,
+            type(value).__name__,
+        )
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        logger.warning(
+            "Security filter returned non-iterable {} type {}; dropping all documents",
+            description,
+            type(value).__name__,
+        )
+        return []
+
 try:
     from .user_personalization_store import UserPersonalizationStore as _UserPersonalizationStore
 except ImportError:
@@ -955,6 +1128,35 @@ def _sources_to_data_sources(sources: list[str]) -> list[DataSource]:
     return data_sources
 
 
+def _resolve_sqlite_rag_db_path(
+    explicit_path: Optional[str],
+    *,
+    db: Any = None,
+) -> Optional[str]:
+    """Return a usable SQLite path, suppressing Postgres placeholder values."""
+    raw_path = explicit_path
+    if raw_path is None and db is not None:
+        raw_path = getattr(db, "db_path_str", None)
+        if raw_path is None:
+            raw_path = getattr(db, "db_path", None)
+    if raw_path is None:
+        return None
+
+    normalized = str(raw_path).strip()
+    if not normalized:
+        return None
+
+    backend_type = getattr(db, "backend_type", None)
+    if backend_type is None:
+        backend = getattr(db, "backend", None)
+        backend_type = getattr(backend, "backend_type", None)
+    backend_name = str(getattr(backend_type, "name", backend_type or "")).upper()
+
+    if backend_name == "POSTGRESQL" and normalized in {":memory:", "/:memory:"}:
+        return None
+    return normalized
+
+
 async def unified_rag_pipeline(
     # ========== REQUIRED PARAMETERS ==========
     query: str,
@@ -971,6 +1173,11 @@ async def unified_rag_pipeline(
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
     fts_level: Literal["media", "chunk"] = "media",
+    enable_text_late_chunking: bool = False,
+    chunk_method: Optional[str] = None,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+    chunk_language: Optional[str] = None,
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
     adaptive_hybrid_weights: bool = False,
     enable_intent_routing: bool = False,
@@ -1136,6 +1343,7 @@ async def unified_rag_pipeline(
     highlight_query_terms: bool = False,
     track_cost: bool = False,
     debug_mode: bool = False,
+    include_rerank_debug_documents: Optional[bool] = None,
 
     # ========== GENERATION GUARDRAILS ==========
     # Pre-generation: instruction-injection filtering and down-weighting
@@ -1369,6 +1577,7 @@ async def unified_rag_pipeline(
 
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
+    media_db_path = _resolve_sqlite_rag_db_path(media_db_path, db=media_db)
 
     # ========== SEARCH DEPTH MODE PRESETS ==========
     # Apply parameter presets based on search_depth_mode. Individual parameter
@@ -1606,14 +1815,7 @@ async def unified_rag_pipeline(
             and SQLRetriever is not None
             and any(src == DataSource.SQL for src in resolved_data_sources)
         ):
-            sql_db_path = media_db_path
-            if sql_db_path is None:
-                try:
-                    db_path_val = getattr(media_db, "db_path", None)
-                    if db_path_val:
-                        sql_db_path = str(db_path_val)
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    sql_db_path = None
+            sql_db_path = _resolve_sqlite_rag_db_path(media_db_path, db=media_db)
             if sql_db_path:
                 try:
                     sql_retriever = SQLRetriever(
@@ -2599,7 +2801,12 @@ async def unified_rag_pipeline(
                         use_fts=(search_mode in ["fts", "hybrid"]),
                         use_vector=(search_mode in ["vector", "hybrid"]),
                         include_metadata=True,
-                        fts_level=fts_level
+                        fts_level=fts_level,
+                        enable_text_late_chunking=enable_text_late_chunking,
+                        chunk_method=chunk_method,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        chunk_language=chunk_language,
                     )
                     # Optional date filter
                     if enable_date_filter and date_range and isinstance(date_range, dict):
@@ -2652,7 +2859,7 @@ async def unified_rag_pipeline(
                     # perform a direct Media DB FTS-only search. This guards against
                     # configuration or adapter issues that can cause hybrid retrieval
                     # to silently return an empty set even when media is present.
-                    if (not documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                    if (not documents) and (media_db_path or media_db is not None) and search_mode in ("fts", "hybrid"):
                         try:
                             from .database_retrievers import MediaDBRetriever as _MDBR
                             from .database_retrievers import RetrievalConfig as _RCfg
@@ -2668,6 +2875,7 @@ async def unified_rag_pipeline(
                                 db_path=media_db_path,
                                 config=fb_cfg,
                                 user_id=str(user_id or "0"),
+                                media_db=media_db,
                             )
                             fallback_docs = await fb_retriever.retrieve(
                                 query=query,
@@ -3134,7 +3342,7 @@ async def unified_rag_pipeline(
                 # This is especially important in local/test environments where
                 # vector stores or adapters may be misconfigured but the Media DB
                 # itself contains the uploaded content.
-                if (not result.documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                if (not result.documents) and (media_db_path or media_db is not None) and search_mode in ("fts", "hybrid"):
                     try:
                         from .database_retrievers import MediaDBRetriever as _MDBR
                         from .database_retrievers import RetrievalConfig as _RCfg
@@ -3150,6 +3358,7 @@ async def unified_rag_pipeline(
                             db_path=media_db_path,
                             config=fb_cfg,
                             user_id=str(user_id or "0"),
+                            media_db=media_db,
                         )
                         fallback_docs = await fb_retriever.retrieve(
                             query=query,
@@ -3511,33 +3720,114 @@ async def unified_rag_pipeline(
             try:
                 if SecurityFilter and SensitivityLevel:
                     security_filter = SecurityFilter()
-
-                    # Detect PII if requested
-                    if detect_pii:
-                        pii_report = await security_filter.detect_pii_batch(
-                            [doc.content for doc in result.documents]
-                        )
-                        result.security_report = {"pii_detected": pii_report}
-
-                    # Filter by sensitivity
                     sensitivity_map = {
                         "public": SensitivityLevel.PUBLIC,
                         "internal": SensitivityLevel.INTERNAL,
                         "confidential": SensitivityLevel.CONFIDENTIAL,
-                        "restricted": SensitivityLevel.RESTRICTED
+                        "restricted": SensitivityLevel.RESTRICTED,
                     }
+                    sensitivity_value = sensitivity_map.get(sensitivity_level)
+                    if sensitivity_value is None:
+                        valid_levels = ", ".join(sensitivity_map.keys())
+                        raise ValueError(
+                            f"Invalid sensitivity_level '{sensitivity_level}'. Expected one of: {valid_levels}"
+                        )
 
-                    filtered_docs = await security_filter.filter_by_sensitivity(
-                        result.documents,
-                        max_level=sensitivity_map[sensitivity_level]
-                    )
+                    # Detect PII if requested
+                    if detect_pii:
+                        detect_pii_batch = getattr(security_filter, "detect_pii_batch", None)
+                        if callable(detect_pii_batch):
+                            pii_report = detect_pii_batch([doc.content for doc in result.documents])
+                            if inspect.isawaitable(pii_report):
+                                pii_report = await pii_report
+                        else:
+                            detector = getattr(security_filter, "pii_detector", None)
+                            detect_single = getattr(detector, "detect_pii", None) if detector is not None else None
+                            if callable(detect_single):
+                                pii_report = []
+                                for doc in result.documents:
+                                    matches = detect_single(doc.content)
+                                    if inspect.isawaitable(matches):
+                                        matches = await matches
+                                    pii_report.append(
+                                        [
+                                            match.to_dict() if hasattr(match, "to_dict") else match
+                                            for match in (matches or [])
+                                        ]
+                                    )
+                            else:
+                                pii_report = []
+                        result.security_report = {"pii_detected": pii_report}
 
-                    # Redact PII if requested
-                    if redact_pii:
-                        for doc in filtered_docs:
-                            doc.content = await security_filter.redact_pii(doc.content)
+                    filtered_docs = None
+                    filter_by_sensitivity = getattr(security_filter, "filter_by_sensitivity", None)
+                    if callable(filter_by_sensitivity):
+                        filtered_docs = filter_by_sensitivity(
+                            result.documents,
+                            max_level=sensitivity_value,
+                        )
+                        if inspect.isawaitable(filtered_docs):
+                            filtered_docs = await filtered_docs
+                        filtered_docs = _coerce_security_filter_sequence(
+                            filtered_docs,
+                            description="document sequence",
+                        )
 
-                    result.documents = filtered_docs
+                        if redact_pii:
+                            redact_pii_fn = getattr(security_filter, "redact_pii", None)
+                            if callable(redact_pii_fn):
+                                for doc in filtered_docs:
+                                    redacted = redact_pii_fn(doc.content)
+                                    doc.content = await redacted if inspect.isawaitable(redacted) else redacted
+                    else:
+                        filter_documents = getattr(security_filter, "filter_documents", None)
+                        if callable(filter_documents):
+                            serialized_docs = [
+                                {
+                                    "id": doc.id,
+                                    "content": doc.content,
+                                    "metadata": dict(doc.metadata or {}),
+                                    "_document_ref": doc,
+                                }
+                                for doc in result.documents
+                            ]
+                            filtered_payloads = filter_documents(
+                                serialized_docs,
+                                user_id="anonymous",
+                                max_sensitivity=sensitivity_value,
+                                mask_pii=bool(redact_pii),
+                            )
+                            if inspect.isawaitable(filtered_payloads):
+                                filtered_payloads = await filtered_payloads
+
+                            filtered_docs = []
+                            for payload in _coerce_security_filter_sequence(
+                                filtered_payloads,
+                                description="payload sequence",
+                            ):
+                                if not isinstance(payload, dict):
+                                    logger.warning(
+                                        "Security filter payload entry had unsupported type {}; skipping entry",
+                                        type(payload).__name__,
+                                    )
+                                    continue
+                                doc_ref = payload.get("_document_ref")
+                                if doc_ref is None:
+                                    continue
+                                doc_ref.content = payload.get("content", doc_ref.content)
+                                merged_metadata = dict(doc_ref.metadata or {})
+                                payload_metadata = payload.get("metadata")
+                                if isinstance(payload_metadata, dict):
+                                    merged_metadata.update(payload_metadata)
+                                if "pii_masked" in payload:
+                                    merged_metadata["pii_masked"] = payload["pii_masked"]
+                                if "pii_types" in payload:
+                                    merged_metadata["pii_types"] = payload["pii_types"]
+                                doc_ref.metadata = merged_metadata
+                                filtered_docs.append(doc_ref)
+
+                    if filtered_docs is not None:
+                        result.documents = filtered_docs
                     result.timings["security_filter"] = time.time() - security_start
 
             except ImportError:
@@ -3564,11 +3854,25 @@ async def unified_rag_pipeline(
                     processed_docs = []
 
                     for doc in result.documents:
-                        processed = await processor.process_document(
-                            doc.content,
-                            method=table_method
-                        )
-                        doc.content = processed
+                        process_document = getattr(processor, "process_document", None)
+                        process_document_tables = getattr(processor, "process_document_tables", None)
+
+                        if callable(process_document):
+                            processed = process_document(doc.content, method=table_method)
+                            processed = await processed if inspect.isawaitable(processed) else processed
+                            doc.content = processed
+                        elif callable(process_document_tables):
+                            processed = process_document_tables(doc.content, serialize_method=table_method)
+                            processed = await processed if inspect.isawaitable(processed) else processed
+                            if isinstance(processed, tuple):
+                                processed_text, table_metadata = processed
+                                doc.content = processed_text
+                                if table_metadata:
+                                    merged_metadata = dict(doc.metadata or {})
+                                    merged_metadata["table_metadata"] = table_metadata
+                                    doc.metadata = merged_metadata
+                            else:
+                                doc.content = processed
                         processed_docs.append(doc)
 
                     result.documents = processed_docs
@@ -3745,6 +4049,11 @@ async def unified_rag_pipeline(
                             use_vector=(search_mode in ["vector", "hybrid"]),
                             include_metadata=True,
                             fts_level=fts_level,
+                            enable_text_late_chunking=enable_text_late_chunking,
+                            chunk_method=chunk_method,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            chunk_language=chunk_language,
                         )
                         data_sources = list(resolved_data_sources)
                         if not data_sources:
@@ -3954,6 +4263,11 @@ async def unified_rag_pipeline(
                                 use_vector=(search_mode in ["vector", "hybrid"]),
                                 include_metadata=True,
                                 fts_level=fts_level,
+                                enable_text_late_chunking=enable_text_late_chunking,
+                                chunk_method=chunk_method,
+                                chunk_size=chunk_size,
+                                chunk_overlap=chunk_overlap,
+                                chunk_language=chunk_language,
                             )
                             data_sources = list(resolved_data_sources)
 
@@ -4156,7 +4470,17 @@ async def unified_rag_pipeline(
                         min_relevance_prob=rerank_min_relevance_prob,
                         sentinel_margin=rerank_sentinel_margin,
                     )
+                    include_rerank_snapshots = debug_mode and _resolve_include_rerank_debug_documents(
+                        include_rerank_debug_documents
+                    )
+                    rerank_debug_limit = max(1, int(rerank_top_k or top_k or 1))
                     try:
+                        if include_rerank_snapshots and isinstance(result.metadata, dict):
+                            result.metadata["pre_rerank_documents"] = _serialize_rerank_debug_documents(
+                                result.documents,
+                                include_content=True,
+                                limit=rerank_debug_limit,
+                            )
                         reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
                         reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
                     except Exception as rerank_exc:
@@ -4187,6 +4511,12 @@ async def unified_rag_pipeline(
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
                         result.documents = reranked[:(rerank_top_k or top_k)]
+                    if include_rerank_snapshots and isinstance(result.metadata, dict):
+                        result.metadata["reranked_documents"] = _serialize_rerank_debug_documents(
+                            result.documents,
+                            include_content=True,
+                            limit=rerank_debug_limit,
+                        )
 
                     result.timings["reranking"] = time.time() - rerank_start
                     try:
@@ -5432,7 +5762,7 @@ async def unified_rag_pipeline(
                                 try:
                                     if MultiDatabaseRetriever and RetrievalConfig and media_db_path:
                                         mdr = _build_multi_retriever({"media_db": media_db_path})
-                                        conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level)
+                                        conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level, enable_text_late_chunking=enable_text_late_chunking, chunk_method=chunk_method, chunk_size=chunk_size, chunk_overlap=chunk_overlap, chunk_language=chunk_language)
                                         numeric_added: list[Document] = []
                                         for tok in list(nf.missing)[:3]:
                                             try:
@@ -5673,6 +6003,7 @@ async def unified_rag_pipeline(
                             highlight_query_terms=highlight_query_terms,
                             track_cost=track_cost,
                             debug_mode=debug_mode,
+                            include_rerank_debug_documents=include_rerank_debug_documents,
                         )
                         # Quick verify the new answer without repairs to compare factuality
                         new_ratio = None
@@ -5924,11 +6255,15 @@ async def unified_rag_pipeline(
             highlight_start = time.time()
             try:
                 if highlight_func:
-                    for doc in result.documents:
-                        doc.content = await highlight_func(
-                            doc.content,
-                            query if highlight_query_terms else None
-                        )
+                    highlight_context = SimpleNamespace(
+                        config={"highlighting": {"enabled": True}},
+                        query=query if highlight_query_terms else "",
+                        documents=result.documents,
+                    )
+                    highlighted = highlight_func(highlight_context)
+                    highlighted_context = await highlighted if inspect.isawaitable(highlighted) else highlighted
+                    if getattr(highlighted_context, "documents", None) is not None:
+                        result.documents = highlighted_context.documents
 
                     result.timings["highlighting"] = time.time() - highlight_start
 
@@ -6178,20 +6513,7 @@ async def unified_rag_pipeline(
     # Convert to Pydantic response
     try:
         from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
-        doc_dicts: list[dict[str, Any]] = []
-        for d in result.documents or []:
-            md = dict(d.metadata or {})
-            try:
-                if getattr(d, 'source', None) is not None:
-                    md.setdefault('source', d.source.value)
-            except (AttributeError, TypeError, ValueError):
-                pass
-            doc_dicts.append({
-                "id": d.id,
-                "content": d.content,
-                "score": getattr(d, 'score', 0.0),
-                "metadata": md
-            })
+        doc_dicts = [_serialize_result_document(d) for d in (result.documents or [])]
         return UnifiedRAGResponse(
             documents=doc_dicts,
             query=result.query,
@@ -6212,10 +6534,7 @@ async def unified_rag_pipeline(
     except (ImportError, TypeError, ValueError):
         # Fallback: return a minimal dict if Pydantic is not available
         return {
-            "documents": [
-                {"id": getattr(d, 'id', None), "content": getattr(d, 'content', None), "metadata": getattr(d, 'metadata', {})}
-                for d in (result.documents or [])
-            ],
+            "documents": [_serialize_result_document(d) for d in (result.documents or [])],
             "query": result.query,
             "expanded_queries": result.expanded_queries,
             "metadata": result.metadata,

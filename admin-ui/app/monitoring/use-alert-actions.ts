@@ -7,6 +7,7 @@ import {
   setAlertAssignment,
   setAlertSnoozeUntil,
 } from './alert-state-utils';
+import { logger } from '@/lib/logger';
 import type { SnoozeDurationOption, SystemAlert } from './types';
 
 type ConfirmVariant = 'danger' | 'warning' | 'default';
@@ -52,15 +53,30 @@ export const useAlertActions = ({
   onReloadRequested,
 }: UseAlertActionsArgs) => {
   const handleAcknowledgeAlert = useCallback(async (alert: SystemAlert) => {
+    setError('');
+    // Optimistic: update UI immediately
+    const acknowledgedAt = new Date().toISOString();
+    setAlerts((prev) => markAlertAcknowledged(prev, alert.id, acknowledgedAt));
     try {
-      setError('');
       await apiClient.acknowledgeAlert(alert.id);
-      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
       setSuccess('Alert acknowledged');
+    } catch (err: unknown) {
+      // Rollback on failure
+      setAlerts((prev) =>
+        prev.map((a) =>
+          a.id === alert.id ? { ...a, acknowledged: false, acknowledged_at: undefined } : a,
+        ),
+      );
+      logger.error('Failed to acknowledge alert', { component: 'useAlertActions', error: err instanceof Error ? err.message : String(err) });
+      setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
+      return;
+    }
+
+    try {
       await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
-      console.error('Failed to acknowledge alert:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
+      console.error('Failed to reload alerts after acknowledgement:', err);
+      setError('Alert acknowledged, but refresh failed');
     }
   }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 
@@ -81,7 +97,7 @@ export const useAlertActions = ({
       setSuccess('Alert dismissed');
       await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
-      console.error('Failed to dismiss alert:', err);
+      logger.error('Failed to dismiss alert', { component: 'useAlertActions', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to dismiss alert');
     }
   }, [apiClient, confirm, onReloadRequested, setAlerts, setError, setSuccess]);
@@ -96,7 +112,7 @@ export const useAlertActions = ({
       setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
       await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
-      console.error('Failed to assign alert:', err);
+      logger.error('Failed to assign alert', { component: 'useAlertActions', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to assign alert');
     }
   }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
@@ -112,7 +128,7 @@ export const useAlertActions = ({
       setSuccess(`Alert snoozed for ${duration}`);
       await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
-      console.error('Failed to snooze alert:', err);
+      logger.error('Failed to snooze alert', { component: 'useAlertActions', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to snooze alert');
     }
   }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
@@ -128,7 +144,7 @@ export const useAlertActions = ({
       setSuccess('Alert escalated to critical');
       await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
-      console.error('Failed to escalate alert:', err);
+      logger.error('Failed to escalate alert', { component: 'useAlertActions', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to escalate alert');
     }
   }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);

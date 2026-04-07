@@ -119,6 +119,15 @@ describe("PlaygroundEmpty", () => {
     expect(openHelpModal).toHaveBeenCalledTimes(1)
   })
 
+  it("does not render the stale try-asking prompt suggestions", () => {
+    render(<PlaygroundEmpty />)
+
+    expect(screen.queryByText("Try asking:")).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Summarize the key points from my last uploaded document")
+    ).not.toBeInTheDocument()
+  })
+
   it("routes the deep research starter to the research console", () => {
     render(<PlaygroundEmpty />)
 

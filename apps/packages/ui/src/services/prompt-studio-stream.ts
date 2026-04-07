@@ -1,4 +1,5 @@
 import type { TldwConfig } from "@/services/tldw/TldwApiClient"
+import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 
 export const buildPromptStudioWebSocketUrl = (
   config: Pick<TldwConfig, "serverUrl" | "authMode" | "apiKey" | "accessToken">,
@@ -9,7 +10,7 @@ export const buildPromptStudioWebSocketUrl = (
     throw new Error("tldw server is not configured")
   }
 
-  const base = serverUrl.replace(/^http/i, "ws").replace(/\/$/, "")
+  const base = resolveBrowserWebSocketBase(serverUrl)
   const params = new URLSearchParams()
 
   if (config.authMode === "multi-user") {

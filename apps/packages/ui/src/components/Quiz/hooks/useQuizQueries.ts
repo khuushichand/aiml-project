@@ -64,6 +64,48 @@ type QuizListCacheValue = {
   count: number
 }
 
+const normalizeWorkspaceId = (value?: string | null): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const normalizeWorkspaceTag = (value?: string | null): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const quizHasWorkspaceOwnership = (quiz: Quiz): boolean => (
+  normalizeWorkspaceId(quiz.workspace_id) != null ||
+  normalizeWorkspaceTag(quiz.workspace_tag) != null
+)
+
+const quizMatchesVisibility = (quiz: Quiz, params: QuizListParams): boolean => {
+  const workspaceId = normalizeWorkspaceId(params.workspace_id)
+  const includeWorkspaceItems = params.include_workspace_items ?? false
+  const quizWorkspaceId = normalizeWorkspaceId(quiz.workspace_id)
+  const quizWorkspaceTag = normalizeWorkspaceTag(quiz.workspace_tag)
+  const isWorkspaceOwned = quizHasWorkspaceOwnership(quiz)
+  const matchesSpecificWorkspace = workspaceId != null && (
+    quizWorkspaceId === workspaceId ||
+    quizWorkspaceTag === `workspace:${workspaceId}`
+  )
+
+  if (workspaceId != null) {
+    if (includeWorkspaceItems) {
+      return !isWorkspaceOwned || matchesSpecificWorkspace
+    }
+    return matchesSpecificWorkspace
+  }
+
+  if (includeWorkspaceItems) {
+    return true
+  }
+
+  return !isWorkspaceOwned
+}
+
 type OptimisticQuizContext = {
   previousLists: Array<[readonly unknown[], QuizListCacheValue | undefined]>
   previousDetail: Quiz | undefined
@@ -83,6 +125,11 @@ const sanitizeQuizPatch = (patch: QuizUpdate): Partial<Quiz> => {
     Object.entries(rest).filter(([, value]) => value !== undefined)
   ) as Partial<Quiz>
 }
+
+const applyQuizPatch = (quiz: Quiz, patch: Partial<Quiz>): Quiz => ({
+  ...quiz,
+  ...patch
+})
 
 /**
  * Helper to check if quizzes feature is available
@@ -170,6 +217,7 @@ export function useCreateQuizMutation() {
         id: tempId,
         name: payload.name,
         description: payload.description ?? null,
+        workspace_id: payload.workspace_id ?? null,
         workspace_tag: payload.workspace_tag ?? null,
         media_id: payload.media_id ?? null,
         total_questions: 0,
@@ -189,11 +237,11 @@ export function useCreateQuizMutation() {
         if (offset > 0) return
 
         const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined
-        const nextItems = [optimisticQuiz, ...previous.items]
+        const nextItems = [optimisticQuiz, ...previous.items].filter((quiz) => quizMatchesVisibility(quiz, params))
         qc.setQueryData(queryKey, {
           ...previous,
           items: limit ? nextItems.slice(0, limit) : nextItems,
-          count: previous.count + 1
+          count: previous.count + (quizMatchesVisibility(optimisticQuiz, params) ? 1 : 0)
         } satisfies QuizListCacheValue)
       })
 
@@ -248,14 +296,24 @@ export function useUpdateQuizMutation() {
       qc.setQueryData(["quizzes:detail", variables.quizId], (current: Quiz | undefined) => (
         current ? { ...current, ...patch } : current
       ))
-      qc.setQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] }, (current) => {
-        if (!current) return current
-        return {
-          ...current,
-          items: current.items.map((quiz) =>
-            quiz.id === variables.quizId ? { ...quiz, ...patch } : quiz
-          )
-        }
+      previousLists.forEach(([queryKey, previous]) => {
+        if (!previous) return
+        const params = extractQuizListParams(queryKey)
+        const previousQuiz =
+          previous.items.find((quiz) => quiz.id === variables.quizId) ?? previousDetail
+        const nextQuiz = previousQuiz ? applyQuizPatch(previousQuiz, patch) : null
+        const previousVisible = previousQuiz ? quizMatchesVisibility(previousQuiz, params) : false
+        const nextVisible = nextQuiz ? quizMatchesVisibility(nextQuiz, params) : false
+        const countDelta = Number(nextVisible) - Number(previousVisible)
+        const nextItems = previous.items
+          .map((quiz) => (quiz.id === variables.quizId ? applyQuizPatch(quiz, patch) : quiz))
+          .filter((quiz) => quizMatchesVisibility(quiz, params))
+
+        qc.setQueryData(queryKey, {
+          ...previous,
+          items: nextItems,
+          count: Math.max(0, previous.count + countDelta)
+        } satisfies QuizListCacheValue)
       })
 
       return {
@@ -654,6 +712,7 @@ export function useGenerateRemediationQuizMutation() {
     difficulty?: "easy" | "medium" | "hard" | "mixed"
     focusTopics?: string[]
     model?: string
+    apiProvider?: string
     workspaceTag?: string | null
     signal?: AbortSignal
   }
@@ -670,6 +729,7 @@ export function useGenerateRemediationQuizMutation() {
       if (params.difficulty !== undefined) request.difficulty = params.difficulty
       if (params.focusTopics !== undefined) request.focus_topics = params.focusTopics
       if (params.model !== undefined) request.model = params.model
+      if (params.apiProvider !== undefined) request.api_provider = params.apiProvider
       if (params.workspaceTag !== undefined) request.workspace_tag = params.workspaceTag
 
       return params.signal

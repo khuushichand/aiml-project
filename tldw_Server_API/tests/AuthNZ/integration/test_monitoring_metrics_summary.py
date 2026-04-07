@@ -1,10 +1,18 @@
+import sqlite3
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.monitoring import AuthNZMonitor
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+from tldw_Server_API.app.core.AuthNZ.migrations import (
+    ensure_authnz_tables,
+    migration_072_create_identity_providers_table,
+    migration_073_create_federated_identities_table,
+    migration_074_create_federated_managed_grants_table,
+)
 from tldw_Server_API.app.core.AuthNZ.scheduler import AuthNZScheduler
 
 
@@ -14,6 +22,12 @@ pytestmark = pytest.mark.integration
 @pytest.mark.asyncio
 async def test_metrics_summary_uses_boolean_revoked_filter(monkeypatch):
     pool = await get_db_pool()
+    if getattr(pool, "pool", None) is None and getattr(pool, "db_path", None):
+        ensure_authnz_tables(Path(pool.db_path))
+        with sqlite3.connect(pool.db_path) as conn:
+            migration_072_create_identity_providers_table(conn)
+            migration_073_create_federated_identities_table(conn)
+            migration_074_create_federated_managed_grants_table(conn)
 
     # Insert a dedicated user and related records for this test
     uname = f"metrics_user_{uuid.uuid4().hex[:8]}"

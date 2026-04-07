@@ -9,6 +9,7 @@ import {
 } from "antd"
 import { WandSparkles } from "lucide-react"
 import { getProviderDisplayName } from "@/utils/provider-registry"
+import type { ReferenceImageCandidate } from "@/services/tldw/TldwApiClient"
 import {
   normalizeImageGenerationEventSyncPolicy,
   normalizeImageGenerationEventSyncMode,
@@ -110,6 +111,10 @@ export interface PlaygroundImageGenModalProps {
   onNegativePromptChange: (value: string) => void
   extraParams: string
   onExtraParamsChange: (value: string) => void
+  referenceFileId?: number
+  onReferenceFileIdChange: (value: number | undefined) => void
+  referenceImageCandidates: ReferenceImageCandidate[]
+  referenceImageCandidatesLoading: boolean
 
   // Submit
   submitting: boolean
@@ -124,6 +129,24 @@ export interface PlaygroundImageGenModalProps {
 
 const toNum = (value: number | null | undefined): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined
+
+const formatReferenceImageLabel = (
+  candidate: ReferenceImageCandidate
+): string => {
+  const parts = [candidate.title]
+  if (
+    typeof candidate.width === "number" &&
+    Number.isFinite(candidate.width) &&
+    typeof candidate.height === "number" &&
+    Number.isFinite(candidate.height)
+  ) {
+    parts.push(`${candidate.width}x${candidate.height}`)
+  }
+  if (candidate.mime_type) {
+    parts.push(candidate.mime_type)
+  }
+  return parts.join(" · ")
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -183,6 +206,10 @@ export const PlaygroundImageGenModal: React.FC<PlaygroundImageGenModalProps> =
       onNegativePromptChange,
       extraParams,
       onExtraParamsChange,
+      referenceFileId,
+      onReferenceFileIdChange,
+      referenceImageCandidates,
+      referenceImageCandidatesLoading,
       submitting,
       onSubmit,
       t
@@ -338,6 +365,40 @@ export const PlaygroundImageGenModal: React.FC<PlaygroundImageGenModalProps> =
                 disabled={busy}
               />
             </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-text-muted">
+              {t(
+                "playground:imageGeneration.referenceImageLabel",
+                "Reference image (optional)"
+              )}
+            </label>
+            <Select
+              value={referenceFileId ?? undefined}
+              data-testid="image-generate-reference-image-select"
+              allowClear
+              loading={referenceImageCandidatesLoading}
+              placeholder={t(
+                "playground:imageGeneration.referenceImagePlaceholder",
+                "Select a managed reference image"
+              )}
+              options={referenceImageCandidates.map((candidate) => ({
+                value: candidate.file_id,
+                label: formatReferenceImageLabel(candidate)
+              }))}
+              onChange={(value) =>
+                onReferenceFileIdChange(
+                  typeof value === "number" ? value : undefined
+                )
+              }
+              disabled={busy}
+            />
+            <p className="text-[11px] text-text-muted">
+              {t(
+                "playground:imageGeneration.referenceImageHint",
+                "The list is provided by managed reference images on this server."
+              )}
+            </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">

@@ -1848,8 +1848,20 @@ export const useMessage = () => {
     signal: AbortSignal,
     messageType: string,
     regenerateFromMessage?: Message,
+    options?: {
+      selectedModel?: string | null;
+      useOCR?: boolean;
+    },
   ) => {
-    if (!selectedModel || selectedModel.trim().length === 0) {
+    const resolvedPresetModel = (
+      typeof options?.selectedModel === "string"
+        ? options.selectedModel
+        : selectedModel || ""
+    ).trim();
+    const resolvedPresetUseOCR =
+      typeof options?.useOCR === "boolean" ? options.useOCR : useOCR;
+
+    if (!resolvedPresetModel) {
       notification.error({
         message: t("error"),
         description: t("validationSelectModel"),
@@ -1857,7 +1869,7 @@ export const useMessage = () => {
       return;
     }
 
-    const model = selectedModel.trim();
+    const model = resolvedPresetModel;
     setStreaming(true);
 
     if (image.length > 0) {
@@ -1960,7 +1972,7 @@ export const useMessage = () => {
           },
         ],
         model,
-        useOCR,
+        useOCR: resolvedPresetUseOCR,
       });
       if (image.length > 0) {
         humanMessage = await humanMessageFormatter({
@@ -1975,7 +1987,7 @@ export const useMessage = () => {
             },
           ],
           model,
-          useOCR,
+          useOCR: resolvedPresetUseOCR,
         });
       }
 
@@ -2380,6 +2392,10 @@ export const useMessage = () => {
           signal,
           messageType,
           regenerateFromMessage,
+          {
+            selectedModel: resolvedSelectedModel,
+            useOCR: resolvedUseOCR,
+          },
         );
       } else {
         if (resolvedChatMode === "normal") {

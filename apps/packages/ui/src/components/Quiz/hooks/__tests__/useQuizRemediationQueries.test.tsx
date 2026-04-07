@@ -166,6 +166,7 @@ describe("useGenerateRemediationQuizMutation", () => {
         numQuestions: 4,
         difficulty: "medium",
         focusTopics: ["renal"],
+        apiProvider: "openai",
         workspaceTag: "workspace:med-school"
       })
     })
@@ -176,6 +177,7 @@ describe("useGenerateRemediationQuizMutation", () => {
       num_questions: 4,
       difficulty: "medium",
       focus_topics: ["renal"],
+      api_provider: "openai",
       workspace_tag: "workspace:med-school"
     })
   })

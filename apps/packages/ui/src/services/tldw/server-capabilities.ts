@@ -22,9 +22,11 @@ export type ServerCapabilities = {
   hasChatbooks: boolean
   hasChatQueue: boolean
   hasChatSaveToDb: boolean
+  hasWebClipper: boolean
   hasStt: boolean
   hasTts: boolean
   hasVoiceChat: boolean
+  hasVoiceConversationTransport: boolean
   hasAudio: boolean
   hasEmbeddings: boolean
   hasMetrics: boolean
@@ -39,7 +41,9 @@ export type ServerCapabilities = {
   hasPersonalization: boolean
   hasGuardian: boolean
   hasSelfMonitoring: boolean
+  ffmpegAvailable: boolean | null
   specVersion: string | null
+  specSource: "authoritative" | "fallback"
 }
 
 const defaultCapabilities: ServerCapabilities = {
@@ -62,9 +66,11 @@ const defaultCapabilities: ServerCapabilities = {
   hasChatbooks: false,
   hasChatQueue: false,
   hasChatSaveToDb: false,
+  hasWebClipper: false,
   hasStt: false,
   hasTts: false,
   hasVoiceChat: false,
+  hasVoiceConversationTransport: false,
   hasAudio: false,
   hasEmbeddings: false,
   hasMetrics: false,
@@ -79,7 +85,9 @@ const defaultCapabilities: ServerCapabilities = {
   hasPersonalization: false,
   hasGuardian: false,
   hasSelfMonitoring: false,
-  specVersion: null
+  ffmpegAvailable: null,
+  specVersion: null,
+  specSource: "authoritative"
 }
 
 const fallbackSpec = {
@@ -174,10 +182,11 @@ const fallbackSpec = {
 type DocsInfoResponse = {
   capabilities?: Record<string, unknown> | null
   supported_features?: Record<string, unknown> | null
+  ffmpeg_available?: boolean | null
 }
 
 const CAPABILITIES_CACHE_TTL_MS = 5 * 60 * 1000
-const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV1"
+const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV3"
 
 type CapabilitiesCachePayload = {
   key: string
@@ -330,6 +339,14 @@ const applyDocsInfoFeatureGates = (
   capabilities: ServerCapabilities,
   docsInfo: DocsInfoResponse | null | undefined
 ): ServerCapabilities => {
+  const audioFeatureEnabled = extractFeatureFlag(docsInfo, "hasAudio")
+  const sttFeatureEnabled = extractFeatureFlag(docsInfo, "hasStt")
+  const ttsFeatureEnabled = extractFeatureFlag(docsInfo, "hasTts")
+  const voiceChatFeatureEnabled = extractFeatureFlag(docsInfo, "hasVoiceChat")
+  const voiceConversationTransportFeatureEnabled = extractFeatureFlag(
+    docsInfo,
+    "hasVoiceConversationTransport"
+  )
   const slidesFeatureEnabled = extractFeatureFlag(docsInfo, "hasSlides")
   const presentationStudioFeatureEnabled = extractFeatureFlag(
     docsInfo,
@@ -346,6 +363,21 @@ const applyDocsInfoFeatureGates = (
   )
   const mergeFeatureFlag = (computed: boolean, explicit: boolean | null): boolean =>
     explicit === null ? computed : explicit
+  const hasStt = mergeFeatureFlag(capabilities.hasStt, sttFeatureEnabled)
+  const hasTts = mergeFeatureFlag(capabilities.hasTts, ttsFeatureEnabled)
+  const hasVoiceChat = mergeFeatureFlag(
+    capabilities.hasVoiceChat,
+    voiceChatFeatureEnabled
+  )
+  const hasVoiceConversationTransport = mergeFeatureFlag(
+    capabilities.hasVoiceConversationTransport,
+    voiceConversationTransportFeatureEnabled
+  )
+  const hasAudio =
+    mergeFeatureFlag(capabilities.hasAudio, audioFeatureEnabled) ||
+    hasStt ||
+    hasTts ||
+    hasVoiceChat
   const hasSlides = mergeFeatureFlag(capabilities.hasSlides, slidesFeatureEnabled)
   const hasPresentationStudio =
     mergeFeatureFlag(
@@ -360,6 +392,11 @@ const applyDocsInfoFeatureGates = (
 
   return {
     ...capabilities,
+    hasAudio,
+    hasStt,
+    hasTts,
+    hasVoiceChat,
+    hasVoiceConversationTransport,
     hasSlides,
     hasPresentationStudio,
     hasPresentationRender,
@@ -370,12 +407,21 @@ const applyDocsInfoFeatureGates = (
     hasPersonalization:
       personalizationFeatureEnabled === null
         ? capabilities.hasPersonalization
-        : capabilities.hasPersonalization && personalizationFeatureEnabled
+        : capabilities.hasPersonalization && personalizationFeatureEnabled,
+    ffmpegAvailable:
+      docsInfo?.ffmpeg_available != null
+        ? Boolean(docsInfo.ffmpeg_available)
+        : capabilities.ffmpegAvailable
   }
 }
 
-const computeCapabilities = (spec: any | null | undefined): ServerCapabilities => {
-  if (!spec || typeof spec !== "object") return { ...defaultCapabilities }
+const computeCapabilities = (
+  spec: any | null | undefined,
+  specSource: "authoritative" | "fallback" = "authoritative"
+): ServerCapabilities => {
+  if (!spec || typeof spec !== "object") {
+    return { ...defaultCapabilities, specSource }
+  }
   const paths = normalizePaths(spec.paths || {})
   const has = (p: string) => Boolean(paths[p])
   const hasChatSaveToDb = detectChatSaveToDb(spec)
@@ -402,6 +448,8 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     has("/api/v1/audio/chat/stream")
   const hasVoiceChat =
     has("/api/v1/audio/chat/stream") || (hasStt && hasTts)
+  const hasVoiceConversationTransport =
+    specSource === "fallback" ? false : has("/api/v1/audio/chat/stream")
 
   return {
     hasChat: has("/api/v1/chat/completions"),
@@ -437,9 +485,11 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     hasChatbooks: has("/api/v1/chatbooks/export") || has("/api/v1/chatbooks/health"),
     hasChatQueue: has("/api/v1/chat/queue/status") || has("/api/v1/chat/queue/activity"),
     hasChatSaveToDb,
+    hasWebClipper: has("/api/v1/web-clipper/save"),
     hasStt,
     hasTts,
     hasVoiceChat,
+    hasVoiceConversationTransport,
     hasAudio: hasStt || hasTts || hasVoiceChat,
     hasEmbeddings:
       has("/api/v1/embeddings/models") ||
@@ -472,7 +522,9 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
       has("/api/v1/self-monitoring/rules") ||
       has("/api/v1/self-monitoring/alerts") ||
       has("/api/v1/self-monitoring/crisis-resources"),
-    specVersion: spec?.info?.version ?? null
+    ffmpegAvailable: null,
+    specVersion: spec?.info?.version ?? null,
+    specSource
   }
 }
 
@@ -587,7 +639,13 @@ const readPersistedCapabilities = async (
       capabilitiesDiagnostics.stalePersistedMisses += 1
       return null
     }
-    return raw
+    return {
+      ...raw,
+      capabilities: {
+        ...defaultCapabilities,
+        ...raw.capabilities
+      }
+    }
   } catch {
     return null
   }
@@ -626,19 +684,23 @@ const fetchCapabilitiesFromServer = async (): Promise<ServerCapabilities> => {
     capabilitiesDiagnostics.lastError = toErrorString(error)
     // ignore, fall back to bundled spec
   }
-  let source: ServerCapabilitiesCacheDiagnostics["lastSource"] = "network"
+  let diagnosticsSource: ServerCapabilitiesCacheDiagnostics["lastSource"] = "network"
+  let specSource: "authoritative" | "fallback" = "authoritative"
   if (!spec) {
     spec = fallbackSpec
-    source = "fallback"
+    diagnosticsSource = "fallback"
+    specSource = "fallback"
     capabilitiesDiagnostics.fallbackSpecUses += 1
   }
   capabilitiesDiagnostics.lastFetchAt = Date.now()
   capabilitiesDiagnostics.lastFetchDurationMs =
     capabilitiesDiagnostics.lastFetchAt - startedAt
-  capabilitiesDiagnostics.lastSource = source
+  capabilitiesDiagnostics.lastSource = diagnosticsSource
 
-  maybeLogDiagnostics(source === "fallback" ? "fallback-spec" : "network-fetch")
-  return applyDocsInfoFeatureGates(computeCapabilities(spec), docsInfo)
+  maybeLogDiagnostics(
+    diagnosticsSource === "fallback" ? "fallback-spec" : "network-fetch"
+  )
+  return applyDocsInfoFeatureGates(computeCapabilities(spec, specSource), docsInfo)
 }
 
 export const getServerCapabilities = async (

@@ -388,6 +388,10 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
 
     # --- Embedding Options ---
     generate_embeddings: bool = Field(False, description="Generate embeddings after media processing")
+    embedding_dispatch_mode: Optional[Literal["auto", "jobs", "background"]] = Field(
+        None,
+        description="Embeddings dispatch strategy override for /media/add",
+    )
     embedding_model: Optional[str] = Field(None, description="Specific embedding model to use (e.g., 'Qwen/Qwen3-Embedding-4B-GGUF')")
     embedding_provider: Optional[str] = Field(None, description="Embedding provider (huggingface, openai, etc)")
 
@@ -434,6 +438,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
                 "chunk_size": 800,
                 "chunk_overlap": 150,
                 "generate_embeddings": True,
+                "embedding_dispatch_mode": "background",
                 "embedding_provider": "huggingface",
                 "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
             }

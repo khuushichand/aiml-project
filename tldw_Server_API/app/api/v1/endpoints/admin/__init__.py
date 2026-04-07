@@ -51,6 +51,7 @@ from . import admin_storage_quotas as admin_storage_quotas_endpoints
 from . import admin_user as admin_user_endpoints
 from . import admin_tenant_provisioning as admin_tenant_provisioning_endpoints
 from . import admin_impersonation as admin_impersonation_endpoints
+from . import admin_webhooks as admin_webhooks_endpoints
 
 _ADMIN_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,

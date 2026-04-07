@@ -16,6 +16,8 @@ import type {
   MaintenanceRotationRunItem,
 } from '@/types';
 import { Settings, Trash2, FileText, Database, Key, RefreshCw } from 'lucide-react';
+import { logger } from '@/lib/logger';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type CleanupSettings = {
   auto_cleanup_enabled: boolean;
@@ -83,7 +85,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
       setEditRetentionDays(settings?.retention_days?.toString() || '30');
       setEditAutoCleanup(settings?.auto_cleanup_enabled ?? false);
     } catch (err: unknown) {
-      console.warn('Failed to load cleanup settings:', err);
+      logger.warn('Failed to load cleanup settings', { component: 'MaintenanceSection', error: err instanceof Error ? err.message : String(err) });
       setCleanupSettings({
         auto_cleanup_enabled: false,
         retention_days: 30,
@@ -104,7 +106,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
       setEditAutoTitles(settings?.auto_generate_titles ?? true);
       setEditMaxTitleLength(settings?.max_title_length?.toString() || '100');
     } catch (err: unknown) {
-      console.warn('Failed to load notes title settings:', err);
+      logger.warn('Failed to load notes title settings', { component: 'MaintenanceSection', error: err instanceof Error ? err.message : String(err) });
       setNotesSettings({
         auto_generate_titles: true,
         max_title_length: 100,
@@ -132,7 +134,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
         return items[0] ?? null;
       });
     } catch (err) {
-      console.warn('Failed to load maintenance rotation runs:', err);
+      logger.warn('Failed to load maintenance rotation runs', { component: 'MaintenanceSection', error: err instanceof Error ? err.message : String(err) });
     } finally {
       setRotationHistoryLoading(false);
     }
@@ -165,7 +167,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
           }
         } catch (err) {
           if (cancelled) return;
-          console.warn('Failed to poll maintenance rotation run:', err);
+          logger.warn('Failed to poll maintenance rotation run', { component: 'MaintenanceSection', error: err instanceof Error ? err.message : String(err) });
         }
       })();
     }, 2000);
@@ -335,7 +337,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
           </CardHeader>
           <CardContent className="space-y-4">
             {cleanupLoading ? (
-              <div className="py-4 text-center text-muted-foreground">Loading...</div>
+              <CardSkeleton />
             ) : (
               <>
                 <div className="flex items-center justify-between">
@@ -384,7 +386,7 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
           </CardHeader>
           <CardContent className="space-y-4">
             {notesLoading ? (
-              <div className="py-4 text-center text-muted-foreground">Loading...</div>
+              <CardSkeleton />
             ) : (
               <>
                 <div className="flex items-center justify-between">

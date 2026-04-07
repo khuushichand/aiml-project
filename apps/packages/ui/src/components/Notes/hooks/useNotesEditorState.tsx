@@ -53,6 +53,7 @@ import {
   NOTE_ASSIST_STOP_WORDS,
   toAttachmentMarkdown,
 } from '../notes-manager-utils'
+import type { NoteStudioDocumentSummary } from '../notes-studio-types'
 
 type ConfirmDanger = (options: ConfirmDangerOptions) => Promise<boolean>
 
@@ -117,6 +118,8 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
   const [saving, setSaving] = React.useState(false)
   const [saveIndicator, setSaveIndicator] = React.useState<SaveIndicatorState>('idle')
   const [originalMetadata, setOriginalMetadata] = React.useState<Record<string, any> | null>(null)
+  const [selectedStudioSummary, setSelectedStudioSummary] =
+    React.useState<NoteStudioDocumentSummary | null>(null)
   const [selectedVersion, setSelectedVersion] = React.useState<number | null>(null)
   const [selectedLastSavedAt, setSelectedLastSavedAt] = React.useState<string | null>(null)
   const [isDirty, setIsDirty] = React.useState(false)
@@ -364,6 +367,12 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
       setOriginalMetadata(
         rawMeta && typeof rawMeta === "object" ? { ...(rawMeta as Record<string, any>) } : null
       )
+      const rawStudio = d && typeof d === 'object' ? (d as any).studio : null
+      setSelectedStudioSummary(
+        rawStudio && typeof rawStudio === 'object'
+          ? { ...(rawStudio as NoteStudioDocumentSummary) }
+          : null
+      )
       const links = extractBacklink(d)
       setBacklinkConversationId(links.conversation_id)
       setBacklinkMessageId(links.message_id)
@@ -394,6 +403,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     setContent('')
     setEditorKeywords([])
     setOriginalMetadata(null)
+    setSelectedStudioSummary(null)
     setSelectedVersion(null)
     setSelectedLastSavedAt(null)
     setBacklinkConversationId(null)
@@ -1660,6 +1670,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     saving,
     saveIndicator, setSaveIndicator,
     originalMetadata,
+    selectedStudioSummary,
     selectedVersion,
     selectedLastSavedAt,
     isDirty, setIsDirty,

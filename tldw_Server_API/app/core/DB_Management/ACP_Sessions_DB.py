@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection,
 )
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 7
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -47,10 +47,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     policy_snapshot_refreshed_at TEXT,
     policy_summary TEXT,
     policy_provenance_summary TEXT,
-    policy_refresh_error TEXT
+    policy_refresh_error TEXT,
+    model TEXT,
+    token_budget INTEGER DEFAULT NULL,
+    auto_terminate_at_budget INTEGER NOT NULL DEFAULT 0,
+    budget_exhausted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_agent ON sessions(created_at, agent_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_forked ON sessions(forked_from);
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -107,6 +112,8 @@ _BOOL_FIELDS = frozenset({
     "needs_bootstrap",
     "mcp_structured_response",
     "mcp_refresh_tools",
+    "auto_terminate_at_budget",
+    "budget_exhausted",
 })
 
 # Columns that are stored as JSON TEXT but should be returned as parsed objects
@@ -120,6 +127,10 @@ _ALLOWED_MIGRATION_COLUMNS = {
         "policy_summary": "policy_summary TEXT",
         "policy_provenance_summary": "policy_provenance_summary TEXT",
         "policy_refresh_error": "policy_refresh_error TEXT",
+        "model": "model TEXT",
+        "token_budget": "token_budget INTEGER DEFAULT NULL",
+        "auto_terminate_at_budget": "auto_terminate_at_budget INTEGER NOT NULL DEFAULT 0",
+        "budget_exhausted": "budget_exhausted INTEGER NOT NULL DEFAULT 0",
     },
     "agent_registry": {
         "mcp_orchestration": "mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven'",
@@ -316,6 +327,32 @@ class ACPSessionsDB:
                     "mcp_refresh_tools",
                     "mcp_refresh_tools INTEGER NOT NULL DEFAULT 0",
                 )
+            if current_version < 6:
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "model",
+                    "model TEXT",
+                )
+            if current_version < 7:
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "token_budget",
+                    "token_budget INTEGER DEFAULT NULL",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "auto_terminate_at_budget",
+                    "auto_terminate_at_budget INTEGER NOT NULL DEFAULT 0",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "budget_exhausted",
+                    "budget_exhausted INTEGER NOT NULL DEFAULT 0",
+                )
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -370,6 +407,9 @@ class ACPSessionsDB:
         policy_refresh_error: str | None = None,
         forked_from: str | None = None,
         needs_bootstrap: bool = False,
+        model: str | None = None,
+        token_budget: int | None = None,
+        auto_terminate_at_budget: bool = False,
     ) -> dict[str, Any]:
         """Insert a new session record and return it as a dict."""
         conn = self._get_conn()
@@ -383,8 +423,9 @@ class ACPSessionsDB:
                 persona_id, workspace_id, workspace_group_id, scope_snapshot_id,
                 policy_snapshot_version, policy_snapshot_fingerprint, policy_snapshot_refreshed_at,
                 policy_summary, policy_provenance_summary, policy_refresh_error,
-                forked_from, needs_bootstrap
-            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                forked_from, needs_bootstrap, model,
+                token_budget, auto_terminate_at_budget
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id, user_id, agent_type, name, cwd,
@@ -401,6 +442,9 @@ class ACPSessionsDB:
                 else None,
                 policy_refresh_error,
                 forked_from, int(needs_bootstrap),
+                model,
+                token_budget,
+                int(auto_terminate_at_budget),
             ),
         )
         conn.commit()
@@ -586,6 +630,79 @@ class ACPSessionsDB:
         ).fetchall()
 
         return [self._row_to_dict(r) for r in rows], total
+
+    def aggregate_metrics_by_agent(self) -> list[dict[str, Any]]:
+        """Aggregate session metrics grouped by agent_type.
+
+        Returns a list of dicts sorted by total_tokens descending, each with:
+        agent_type, session_count, active_sessions, total_prompt_tokens,
+        total_completion_tokens, total_tokens, total_messages, last_used_at.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT
+                agent_type,
+                COUNT(*)                                       AS session_count,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_sessions,
+                COALESCE(SUM(prompt_tokens), 0)                AS total_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0)            AS total_completion_tokens,
+                COALESCE(SUM(total_tokens), 0)                 AS total_tokens,
+                COALESCE(SUM(message_count), 0)                AS total_messages,
+                MAX(COALESCE(last_activity_at, created_at))    AS last_used_at
+            FROM sessions
+            GROUP BY agent_type
+            ORDER BY total_tokens DESC
+            """
+        ).fetchall()
+        return [
+            {
+                "agent_type": r["agent_type"],
+                "session_count": r["session_count"],
+                "active_sessions": r["active_sessions"],
+                "total_prompt_tokens": r["total_prompt_tokens"],
+                "total_completion_tokens": r["total_completion_tokens"],
+                "total_tokens": r["total_tokens"],
+                "total_messages": r["total_messages"],
+                "last_used_at": r["last_used_at"],
+            }
+            for r in rows
+        ]
+
+    def get_session_cost_data(self) -> list[dict[str, Any]]:
+        """Return per-session (agent_type, model, prompt_tokens, completion_tokens).
+
+        Used by the service layer to compute estimated costs using the
+        pricing catalog (which lives outside the DB module).
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT agent_type, model, prompt_tokens, completion_tokens FROM sessions"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_agent_usage_stats(self, *, since_iso: str) -> list[dict[str, Any]]:
+        """Aggregate per-agent token usage for sessions created on or after *since_iso*."""
+        conn = self._get_conn()
+        query = (
+            "SELECT "
+            "  agent_type, "
+            "  COUNT(*) AS invocation_count, "
+            "  COALESCE(SUM(total_tokens), 0) AS total_tokens, "
+            "  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+            "  COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+            "  SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count, "
+            "  CASE WHEN COUNT(*) > 0 "
+            "    THEN CAST(COALESCE(SUM(total_tokens), 0) AS REAL) / COUNT(*) "
+            "    ELSE 0 "
+            "  END AS avg_tokens_per_session "
+            "FROM sessions "
+            "WHERE created_at >= ? "
+            "GROUP BY agent_type "
+            "ORDER BY total_tokens DESC"
+        )
+        rows = conn.execute(query, [since_iso]).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Text normalization (local helper — no external imports)
@@ -779,6 +896,74 @@ class ACPSessionsDB:
         )
         conn.commit()
 
+    def update_session_budget(
+        self,
+        session_id: str,
+        token_budget: int | None,
+        auto_terminate_at_budget: bool,
+    ) -> bool:
+        """Update token budget settings for a session.
+
+        Returns True if the session was found and updated.
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """
+            UPDATE sessions
+            SET token_budget = ?,
+                auto_terminate_at_budget = ?,
+                last_activity_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                token_budget,
+                int(auto_terminate_at_budget),
+                _utcnow_iso(),
+                session_id,
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def check_budget_and_terminate(self, session_id: str) -> bool:
+        """Check if a session has exceeded its token budget.
+
+        If auto_terminate_at_budget is enabled and total_tokens >= token_budget,
+        marks the session as closed with budget_exhausted = 1.
+
+        Returns True if the session was terminated due to budget exhaustion.
+        """
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT total_tokens, token_budget, auto_terminate_at_budget, status "
+            "FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        # Skip if no budget set, auto-terminate not enabled, or already closed
+        if row["token_budget"] is None or not row["auto_terminate_at_budget"]:
+            return False
+        if row["status"] != "active":
+            return False
+        if row["total_tokens"] >= row["token_budget"]:
+            now = _utcnow_iso()
+            conn.execute(
+                "UPDATE sessions SET status = 'closed', budget_exhausted = 1, "
+                "last_activity_at = ? WHERE session_id = ?",
+                (now, session_id),
+            )
+            conn.commit()
+            logger.info(
+                "ACP session {} auto-terminated: token budget exhausted "
+                "({}/{})",
+                session_id,
+                row["total_tokens"],
+                row["token_budget"],
+            )
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Fork
     # ------------------------------------------------------------------
@@ -815,6 +1000,7 @@ class ACPSessionsDB:
             scope_snapshot_id=source.get("scope_snapshot_id"),
             forked_from=source_session_id,
             needs_bootstrap=True,
+            model=source.get("model"),
         )
 
         # Copy messages from source up to message_index (inclusive)

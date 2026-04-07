@@ -43,6 +43,7 @@ export type ChatModeParamsBase = {
   selectedModel: string
   useOCR: boolean
   toolChoice?: ToolChoice
+  conversationId?: string
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
   saveMessageOnSuccess: (data: SaveMessageData) => Promise<string | null>
   saveMessageOnError: (data: SaveMessageErrorData) => Promise<string | null>
@@ -170,7 +171,8 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     assistantParentMessageId,
     documents,
     regenerateFromMessage,
-    imageEventSyncPolicy
+    imageEventSyncPolicy,
+    conversationId
   } = params
 
   const resolvedAssistantMessageId = assistantMessageId ?? generateID()
@@ -495,6 +497,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     const modelClient = await pageAssistModel({
       model: selectedModel,
       toolChoice,
+      conversationId,
       researchContext: context.researchContext
     })
 

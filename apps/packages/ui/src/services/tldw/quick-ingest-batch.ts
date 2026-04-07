@@ -4,13 +4,16 @@ import {
   getProcessPathForType,
   inferIngestTypeFromUrl,
   inferUploadMediaTypeFromFile,
-  normalizeMediaType
+  normalizeMediaType,
+  shouldKeepOriginalFile
 } from "@/services/tldw/media-routing"
+import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import {
   createIngestJobsTracker,
   extractIngestJobIds,
   pollSingleIngestJob
 } from "@/services/tldw/ingest-jobs-orchestrator"
+import type { PersistedQuickIngestTracking } from "@/components/Common/QuickIngest/types"
 
 type TypeDefaults = {
   audio?: { language?: string; diarize?: boolean }
@@ -52,6 +55,7 @@ type QuickIngestBatchInput = {
   chunkingTemplateName?: string
   autoApplyTemplate?: boolean
   __quickIngestSessionId?: string
+  onTrackingMetadata?: (tracking: PersistedQuickIngestTracking) => void
 }
 
 type QuickIngestBatchResult = {
@@ -62,6 +66,7 @@ type QuickIngestBatchResult = {
   type: string
   data?: unknown
   error?: string
+  persisted?: boolean
 }
 
 type QuickIngestBatchResponse = {
@@ -79,11 +84,18 @@ export type QuickIngestStartAck = {
 export type QuickIngestCancelInput = {
   sessionId: string
   reason?: string
+  batchIds?: string[]
+  tracking?: PersistedQuickIngestTracking
 }
 
 export type QuickIngestCancelResponse = {
   ok: boolean
   error?: string
+}
+
+type UploadError = Error & {
+  status?: number
+  details?: unknown
 }
 
 const EXTENSION_TIMEOUT_MS = 10_000
@@ -115,6 +127,23 @@ const buildDirectSessionSuffix = (): string => {
   }
   return Date.now().toString(36).slice(-8)
 }
+
+const normalizeBatchIds = (batchIds?: string[]): string[] =>
+  Array.from(
+    new Set(
+      Array.isArray(batchIds)
+        ? batchIds
+            .map((batchId) => String(batchId || "").trim())
+            .filter(Boolean)
+        : []
+    )
+  )
+
+const buildJobIdToItemId = (
+  jobIds: number[],
+  sourceItemId: string
+): Record<string, string> =>
+  Object.fromEntries(jobIds.map((jobId) => [String(jobId), sourceItemId]))
 
 const ensureDirectSessionTracker = (
   sessionId: string | undefined
@@ -273,6 +302,81 @@ const serializeUploadFields = (
   return serialized
 }
 
+const extractUploadErrorText = (error: unknown): string => {
+  const parts: string[] = []
+
+  if (error instanceof Error && error.message) {
+    parts.push(error.message)
+  } else if (typeof error === "string" && error.trim()) {
+    parts.push(error)
+  }
+
+  if (error && typeof error === "object") {
+    const details = (error as UploadError).details
+    if (typeof details === "string" && details.trim()) {
+      parts.push(details)
+    } else if (details && typeof details === "object" && !Array.isArray(details)) {
+      for (const key of ["detail", "message", "error"]) {
+        const value = (details as Record<string, unknown>)[key]
+        if (typeof value === "string" && value.trim()) {
+          parts.push(value)
+        }
+      }
+    }
+  }
+
+  return parts.join(" ").trim()
+}
+
+const shouldFallbackToPersistentAdd = (error: unknown): boolean => {
+  const status = (error as UploadError | null)?.status
+  if (status !== 429) return false
+  const normalized = extractUploadErrorText(error).toLowerCase()
+  return /concurrent job limit|max(?:imum)? concurrent|queue is full|queue full/.test(
+    normalized
+  )
+}
+
+const normalizePersistentAddResponse = <T>(data: T): T => {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data
+  const results = (data as { results?: unknown }).results
+  if (!Array.isArray(results)) return data
+  return {
+    ...(data as Record<string, unknown>),
+    results: results.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item
+      const record = item as Record<string, unknown>
+      if (record.media_id != null || record.db_id == null) return item
+      return {
+        ...record,
+        media_id: record.db_id
+      }
+    })
+  } as T
+}
+
+const submitPersistentAdd = async ({
+  fields,
+  file
+}: {
+  fields: Record<string, any>
+  file?: {
+    name: string
+    type: string
+    data: number[] | Uint8Array | ArrayBuffer
+  }
+}): Promise<any> =>
+  normalizePersistentAddResponse(
+    await bgUpload<any>({
+      path: "/api/v1/media/add",
+      method: "POST",
+      fields: serializeUploadFields(fields),
+      file,
+      fileFieldName: file ? "files" : undefined,
+      timeoutMs: DIRECT_INGEST_TIMEOUT_MS
+    })
+  )
+
 const buildFields = ({
   rawType,
   entry,
@@ -280,7 +384,8 @@ const buildFields = ({
   common,
   advancedValues,
   chunkingTemplateName,
-  autoApplyTemplate
+  autoApplyTemplate,
+  persist = true
 }: {
   rawType: string
   entry?: QuickIngestEntry
@@ -289,13 +394,15 @@ const buildFields = ({
   advancedValues?: Record<string, any>
   chunkingTemplateName?: string
   autoApplyTemplate?: boolean
+  persist?: boolean
 }): Record<string, any> => {
   const mediaType = normalizeMediaType(rawType)
   const fields: Record<string, any> = {
     media_type: mediaType,
     perform_analysis: Boolean(common?.perform_analysis),
-    perform_chunking: Boolean(common?.perform_chunking),
-    overwrite_existing: Boolean(common?.overwrite_existing)
+    perform_chunking: resolvePerformChunking(common?.perform_chunking),
+    overwrite_existing: Boolean(common?.overwrite_existing),
+    keep_original_file: persist && shouldKeepOriginalFile(rawType)
   }
 
   const nested: Record<string, any> = {}
@@ -459,6 +566,9 @@ const runDirectQuickIngestBatch = async (
     }
 
     for (const entry of entries) {
+      if (isDirectSessionCancelled(directSessionId)) {
+        break
+      }
       const url = String(entry?.url || "").trim()
       if (!url) continue
 
@@ -483,28 +593,46 @@ const runDirectQuickIngestBatch = async (
             autoApplyTemplate: input.autoApplyTemplate
           })
           fields.urls = [url]
-          const submitData = await bgUpload<any>({
-            path: "/api/v1/media/ingest/jobs",
-            method: "POST",
-            fields: serializeUploadFields(fields),
-            timeoutMs: DIRECT_INGEST_TIMEOUT_MS
-          })
-          const batchId = String(submitData?.batch_id || "").trim()
-          const jobIds = extractIngestJobIds(submitData)
-          if (!batchId || jobIds.length === 0) {
-            throw new Error("Ingest job submission returned no job IDs.")
+          try {
+            const submitData = await bgUpload<any>({
+              path: "/api/v1/media/ingest/jobs",
+              method: "POST",
+              fields: serializeUploadFields(fields),
+              timeoutMs: DIRECT_INGEST_TIMEOUT_MS
+            })
+            const batchId = String(submitData?.batch_id || "").trim()
+            const jobIds = extractIngestJobIds(submitData)
+            if (!batchId || jobIds.length === 0) {
+              throw new Error("Ingest job submission returned no job IDs.")
+            }
+            const directTracker = ensureDirectSessionTracker(directSessionId)
+            directTracker?.trackJobs(batchId, jobIds, { sourceId: entry.id })
+            input.onTrackingMetadata?.({
+              mode: "webui-direct",
+              sessionId: directSessionId,
+              batchId,
+              batchIds: [batchId],
+              jobIds,
+              submittedItemIds: [entry.id],
+              itemIds: [entry.id],
+              jobIdToItemId: buildJobIdToItemId(jobIds, entry.id),
+              startedAt: Date.now()
+            })
+            const firstJobId = jobIds[0]
+            const pollResult = await pollIngestJobStatus(
+              firstJobId,
+              DIRECT_INGEST_TIMEOUT_MS
+            )
+            if (!pollResult.ok) {
+              throw new Error(String(pollResult.error || "Ingest failed"))
+            }
+            data = pollResult.data
+          } catch (error) {
+            if (!shouldFallbackToPersistentAdd(error)) {
+              throw error
+            }
+            data = await submitPersistentAdd({ fields })
           }
-          const directTracker = ensureDirectSessionTracker(directSessionId)
-          directTracker?.trackJobs(batchId, jobIds, { sourceId: entry.id })
-          const firstJobId = jobIds[0]
-          const pollResult = await pollIngestJobStatus(
-            firstJobId,
-            DIRECT_INGEST_TIMEOUT_MS
-          )
-          if (!pollResult.ok) {
-            throw new Error(String(pollResult.error || "Ingest failed"))
-          }
-          data = pollResult.data
         } else if (resolvedType === "html") {
           data = await processWebScrape({
             url,
@@ -523,7 +651,8 @@ const runDirectQuickIngestBatch = async (
             common: input.common,
             advancedValues: input.advancedValues,
             chunkingTemplateName: input.chunkingTemplateName,
-            autoApplyTemplate: input.autoApplyTemplate
+            autoApplyTemplate: input.autoApplyTemplate,
+            persist: false
           })
           fields.urls = [url]
           data = await bgUpload<any>({
@@ -539,7 +668,8 @@ const runDirectQuickIngestBatch = async (
           status: "ok",
           url,
           type: resolvedType,
-          data
+          data,
+          persisted: false
         })
       } catch (error) {
         out.push({
@@ -553,6 +683,9 @@ const runDirectQuickIngestBatch = async (
     }
 
     for (const file of files) {
+      if (isDirectSessionCancelled(directSessionId)) {
+        break
+      }
       const id = String(file?.id || crypto.randomUUID())
       const fileName = String(file?.name || "upload")
       const mediaType = inferUploadMediaTypeFromFile(fileName, file?.type)
@@ -567,44 +700,76 @@ const runDirectQuickIngestBatch = async (
           common: input.common,
           advancedValues: input.advancedValues,
           chunkingTemplateName: input.chunkingTemplateName,
-          autoApplyTemplate: input.autoApplyTemplate
+          autoApplyTemplate: input.autoApplyTemplate,
+          persist: shouldStoreRemote
         })
+        const uploadFile = {
+          name: fileName,
+          type: file?.type || "application/octet-stream",
+          data:
+            (file?.data as number[] | Uint8Array | ArrayBuffer | undefined) || []
+        }
         if (shouldStoreRemote) {
-          const submitData = await bgUpload<any>({
-            path: "/api/v1/media/ingest/jobs",
-            method: "POST",
-            fields: serializeUploadFields(fields),
-            file: {
-              name: fileName,
-              type: file?.type || "application/octet-stream",
-              data:
-                (file?.data as number[] | Uint8Array | ArrayBuffer | undefined) || []
-            },
-            fileFieldName: "files",
-            timeoutMs: DIRECT_INGEST_TIMEOUT_MS
-          })
-          const batchId = String(submitData?.batch_id || "").trim()
-          const jobIds = extractIngestJobIds(submitData)
-          if (!batchId || jobIds.length === 0) {
-            throw new Error("Ingest job submission returned no job IDs.")
+          try {
+            const submitData = await bgUpload<any>({
+              path: "/api/v1/media/ingest/jobs",
+              method: "POST",
+              fields: serializeUploadFields(fields),
+              file: uploadFile,
+              fileFieldName: "files",
+              timeoutMs: DIRECT_INGEST_TIMEOUT_MS
+            })
+            const batchId = String(submitData?.batch_id || "").trim()
+            const jobIds = extractIngestJobIds(submitData)
+            if (!batchId || jobIds.length === 0) {
+              throw new Error("Ingest job submission returned no job IDs.")
+            }
+            const directTracker = ensureDirectSessionTracker(directSessionId)
+            directTracker?.trackJobs(batchId, jobIds, { sourceId: id })
+            input.onTrackingMetadata?.({
+              mode: "webui-direct",
+              sessionId: directSessionId,
+              batchId,
+              batchIds: [batchId],
+              jobIds,
+              submittedItemIds: [id],
+              itemIds: [id],
+              jobIdToItemId: buildJobIdToItemId(jobIds, id),
+              startedAt: Date.now()
+            })
+            const firstJobId = jobIds[0]
+            const pollResult = await pollIngestJobStatus(
+              firstJobId,
+              DIRECT_INGEST_TIMEOUT_MS
+            )
+            if (!pollResult.ok) {
+              throw new Error(String(pollResult.error || "Upload failed"))
+            }
+            out.push({
+              id,
+              status: "ok",
+              fileName,
+              type: mediaType,
+              data: pollResult.data,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(rawType)
+            })
+          } catch (error) {
+            if (!shouldFallbackToPersistentAdd(error)) {
+              throw error
+            }
+            const data = await submitPersistentAdd({
+              fields,
+              file: uploadFile
+            })
+            out.push({
+              id,
+              status: "ok",
+              fileName,
+              type: mediaType,
+              data,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(rawType)
+            })
           }
-          const directTracker = ensureDirectSessionTracker(directSessionId)
-          directTracker?.trackJobs(batchId, jobIds, { sourceId: id })
-          const firstJobId = jobIds[0]
-          const pollResult = await pollIngestJobStatus(
-            firstJobId,
-            DIRECT_INGEST_TIMEOUT_MS
-          )
-          if (!pollResult.ok) {
-            throw new Error(String(pollResult.error || "Upload failed"))
-          }
-          out.push({
-            id,
-            status: "ok",
-            fileName,
-            type: mediaType,
-            data: pollResult.data
-          })
           continue
         }
 
@@ -612,12 +777,7 @@ const runDirectQuickIngestBatch = async (
           path: getProcessPathForType(mediaType),
           method: "POST",
           fields: serializeUploadFields(fields),
-          file: {
-            name: fileName,
-            type: file?.type || "application/octet-stream",
-            data:
-              (file?.data as number[] | Uint8Array | ArrayBuffer | undefined) || []
-          },
+          file: uploadFile,
           timeoutMs: DIRECT_INGEST_TIMEOUT_MS
         })
 
@@ -626,7 +786,8 @@ const runDirectQuickIngestBatch = async (
           status: "ok",
           fileName,
           type: mediaType,
-          data
+          data,
+          persisted: false
         })
       } catch (error) {
         out.push({
@@ -691,6 +852,7 @@ export const cancelQuickIngestSession = async (
   input: QuickIngestCancelInput
 ): Promise<QuickIngestCancelResponse> => {
   const sessionId = String(input?.sessionId || "").trim()
+  const tracking = input?.tracking
   if (!sessionId) {
     return { ok: false, error: "Missing session id." }
   }
@@ -712,6 +874,24 @@ export const cancelQuickIngestSession = async (
 
   directQuickIngestCancelledSessions.add(sessionId)
   await cancelDirectSessionBatches(sessionId, input?.reason || "user_cancelled")
+  for (const batchId of normalizeBatchIds([
+    ...(input?.batchIds || []),
+    tracking?.batchId || "",
+    ...(tracking?.batchIds || []),
+  ])) {
+    try {
+      await bgRequest<any>({
+        path: `/api/v1/media/ingest/jobs/cancel?batch_id=${encodeURIComponent(
+          batchId
+        )}&reason=${encodeURIComponent(input?.reason || "user_cancelled")}`,
+        method: "POST",
+        timeoutMs: 10_000,
+        returnResponse: true
+      })
+    } catch {
+      // best effort cancellation for resumed sessions without in-memory trackers
+    }
+  }
   return { ok: true }
 }
 

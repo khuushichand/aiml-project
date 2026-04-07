@@ -33,12 +33,10 @@ from tldw_Server_API.app.api.v1.schemas.media_navigation_schemas import (
 )
 from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    get_document_version,
     get_latest_transcription,
     get_media_transcripts,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
-    get_document_version,
 )
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
@@ -845,7 +843,7 @@ def _extract_transcript_segment_nodes(
         return []
 
     try:
-        transcripts = get_media_transcripts(db_instance=db, media_id=media_id)
+        transcripts = get_media_transcripts(db, media_id)
     except Exception as exc:
         logger.warning("Navigation source transcript_segment query failed: {}", exc)
         return []
@@ -1274,7 +1272,7 @@ def _find_navigation_node(nodes: list[MediaNavigationNode], node_id: str) -> Med
 def _get_media_text(media_id: int, media: dict[str, Any], db: MediaNavigationDb) -> str:
     try:
         latest_doc = get_document_version(
-            db_instance=db,
+            db,
             media_id=media_id,
             version_number=None,
             include_content=True,
@@ -1291,7 +1289,7 @@ def _get_media_text(media_id: int, media: dict[str, Any], db: MediaNavigationDb)
     media_type = str(media.get("type") or "").strip().lower()
     if media_type in {"audio", "video"}:
         try:
-            transcript = get_latest_transcription(db_instance=db, media_id=media_id)
+            transcript = get_latest_transcription(db, media_id)
         except Exception as exc:
             logger.debug("Failed to fetch latest transcript for media {}: {}", media_id, exc)
             transcript = None

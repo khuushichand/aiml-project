@@ -1,6 +1,7 @@
 import { SaveButton } from "@/components/Common/SaveButton"
 import { getModels, getVoices } from "@/services/elevenlabs"
 import {
+  DEFAULT_TLDW_TTS_MODEL,
   getTTSSettings,
   setTTSSettings,
   SUPPORTED_TLDW_TTS_FORMATS
@@ -737,16 +738,19 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 />
               ) : (
                 <Input
-                  placeholder="kokoro"
+                  placeholder={DEFAULT_TLDW_TTS_MODEL}
                   className=" mt-4 sm:mt-0 !w-[300px] sm:w-[200px]"
                   {...form.getInputProps("tldwTtsModel")}
                 />
               )}
             </div>
             <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
-              <span className="text-text">
-                TTS Voice
-              </span>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-text">
+                  TTS Voice
+                </span>
+                <a href="https://github.com/rmusser01/tldw_server/tree/main/Docs/STT-TTS/" target="_blank" rel="noopener noreferrer" className="text-xs text-text-muted underline">Voice cloning setup guide</a>
+              </div>
               <Select
                 id={ids.tldwVoice}
                 aria-label="tldw TTS voice"

@@ -1,6 +1,10 @@
+import { Dropdown, Input, Tooltip } from "antd"
+import type { InputRef } from "antd"
+import { useStorage } from "@plasmohq/storage/hook"
 import React from "react"
-import { UserCircle2 } from "lucide-react"
+import { Search, Star, UserCircle2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import type { PersonaInfo } from "@/routes/personaTypes"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import {
@@ -27,13 +31,10 @@ type CharacterSummary = Record<string, unknown> & {
   extensions?: Record<string, unknown> | null
 }
 
-type PersonaSummary = Record<string, unknown> & {
-  id?: string | number
-  name?: string | null
-  avatar_url?: string | null
-  system_prompt?: string | null
-  greeting?: string | null
-  extensions?: Record<string, unknown> | null
+type FavoriteCharacter = {
+  id?: string
+  slug?: string
+  name: string
 }
 
 const normalizeCharacterSelection = (
@@ -60,7 +61,7 @@ const normalizeCharacterSelection = (
 }
 
 const normalizePersonaSelection = (
-  persona: PersonaSummary
+  persona: PersonaInfo
 ): AssistantSelection | null => {
   const normalizedId =
     persona.id != null ? String(persona.id) : null
@@ -76,53 +77,20 @@ const normalizePersonaSelection = (
   })
 }
 
-const renderSelectionList = ({
-  entries,
-  activeSelection,
-  onSelect,
-  emptyLabel
-}: {
-  entries: AssistantSelection[]
-  activeSelection: AssistantSelection | null
-  onSelect: (entry: AssistantSelection) => void
-  emptyLabel: string
-}) => {
-  if (entries.length === 0) {
-    return (
-      <div className="px-3 py-4 text-center text-sm text-text-subtle">
-        {emptyLabel}
-      </div>
-    )
-  }
+const byAssistantName = (left: AssistantSelection, right: AssistantSelection) =>
+  left.name.localeCompare(right.name)
 
-  return (
-    <div className="max-h-80 overflow-y-auto px-2 py-2">
-      <div className="flex flex-col gap-1">
-        {entries.map((entry) => {
-          const isActive =
-            activeSelection?.kind === entry.kind &&
-            activeSelection?.id === entry.id
-          return (
-            <button
-              key={`${entry.kind}:${entry.id}`}
-              type="button"
-              className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
-                isActive
-                  ? "border-primary bg-primary/10 text-text"
-                  : "border-border bg-background text-text hover:bg-surface2"
-              }`}
-              onClick={() => onSelect(entry)}
-            >
-              <span className="block truncate font-medium">{entry.name}</span>
-              <span className="block truncate text-xs text-text-subtle">
-                {entry.kind === "persona" ? "Persona" : "Character"}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
+const normalizeFavoriteEntry = (
+  favorite: FavoriteCharacter
+): FavoriteCharacter | null => {
+  const name =
+    typeof favorite.name === "string" ? favorite.name.trim() : ""
+  if (!name) return null
+  return {
+    id: typeof favorite.id === "string" ? favorite.id : undefined,
+    slug: typeof favorite.slug === "string" ? favorite.slug : undefined,
+    name
+  }
 }
 
 export const AssistantSelect: React.FC<Props> = ({
@@ -135,17 +103,50 @@ export const AssistantSelect: React.FC<Props> = ({
   const [selectedAssistant, setSelectedAssistant] =
     useSelectedAssistant(null)
   const [open, setOpen] = React.useState(false)
+  const [searchText, setSearchText] = React.useState("")
   const [activeTab, setActiveTab] = React.useState<"character" | "persona">(
     selectedAssistant?.kind ?? "character"
   )
   const [characters, setCharacters] = React.useState<CharacterSummary[]>([])
-  const [personas, setPersonas] = React.useState<PersonaSummary[]>([])
+  const [personas, setPersonas] = React.useState<PersonaInfo[]>([])
+  const [favoriteCharacters, setFavoriteCharacters] = useStorage<
+    FavoriteCharacter[]
+  >("favoriteCharacters", [])
+  const searchInputRef = React.useRef<InputRef | null>(null)
 
   React.useEffect(() => {
     if (selectedAssistant?.kind === "character" || selectedAssistant?.kind === "persona") {
       setActiveTab(selectedAssistant.kind)
     }
   }, [selectedAssistant?.kind])
+
+  React.useEffect(() => {
+    if (!open || typeof window === "undefined") return
+
+    let frameId: number | null = null
+    let attempts = 0
+    let cancelled = false
+    const focusWhenReady = () => {
+      if (cancelled) return
+      if (searchInputRef.current) {
+        searchInputRef.current.focus()
+        return
+      }
+      if (attempts < 10) {
+        attempts += 1
+        frameId = window.requestAnimationFrame(focusWhenReady)
+      }
+    }
+
+    frameId = window.requestAnimationFrame(focusWhenReady)
+
+    return () => {
+      cancelled = true
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+  }, [open])
 
   React.useEffect(() => {
     let cancelled = false
@@ -163,7 +164,7 @@ export const AssistantSelect: React.FC<Props> = ({
       if (typeof tldwClient.listPersonaProfiles === "function") {
         const result = await tldwClient.listPersonaProfiles().catch(() => [])
         if (!cancelled && Array.isArray(result)) {
-          setPersonas(result as PersonaSummary[])
+          setPersonas(result as PersonaInfo[])
         }
       }
     }
@@ -189,45 +190,283 @@ export const AssistantSelect: React.FC<Props> = ({
     [personas]
   )
 
+  const favoriteIndex = React.useMemo(() => {
+    const ids = new Set<string>()
+    const slugs = new Set<string>()
+    const names = new Set<string>()
+
+    ;(favoriteCharacters || [])
+      .map(normalizeFavoriteEntry)
+      .filter((entry): entry is FavoriteCharacter => Boolean(entry))
+      .forEach((entry) => {
+        if (entry.id) ids.add(entry.id)
+        if (entry.slug) slugs.add(entry.slug)
+        names.add(entry.name)
+      })
+
+    return { ids, slugs, names }
+  }, [favoriteCharacters])
+
+  const isFavoriteCharacter = React.useCallback(
+    (entry: AssistantSelection) => {
+      const slug =
+        typeof entry.slug === "string" && entry.slug.trim().length > 0
+          ? entry.slug.trim()
+          : ""
+      const name = entry.name.trim()
+      return (
+        favoriteIndex.ids.has(entry.id) ||
+        (slug.length > 0 && favoriteIndex.slugs.has(slug)) ||
+        favoriteIndex.names.has(name)
+      )
+    },
+    [favoriteIndex]
+  )
+
+  const toggleFavoriteCharacter = React.useCallback(
+    (entry: AssistantSelection) => {
+      const slug =
+        typeof entry.slug === "string" && entry.slug.trim().length > 0
+          ? entry.slug.trim()
+          : undefined
+      const nextFavorite: FavoriteCharacter = {
+        id: entry.id,
+        slug,
+        name: entry.name.trim()
+      }
+      if (!nextFavorite.name) return
+
+      void setFavoriteCharacters((previousFavorites) => {
+        const list = Array.isArray(previousFavorites) ? previousFavorites : []
+        const nextFavorites = list.filter((favorite) => {
+          if (nextFavorite.id && favorite.id === nextFavorite.id) return false
+          if (nextFavorite.slug && favorite.slug === nextFavorite.slug) return false
+          if (favorite.name === nextFavorite.name) return false
+          return true
+        })
+
+        if (nextFavorites.length === list.length) {
+          nextFavorites.push(nextFavorite)
+        }
+
+        return nextFavorites
+      })
+    },
+    [setFavoriteCharacters]
+  )
+
+  const filteredCharacterEntries = React.useMemo(() => {
+    const query = searchText.trim().toLowerCase()
+    if (!query) {
+      return characterEntries.slice()
+    }
+    return characterEntries.filter((entry) =>
+      entry.name.toLowerCase().includes(query)
+    )
+  }, [characterEntries, searchText])
+
+  const filteredPersonaEntries = React.useMemo(() => {
+    const query = searchText.trim().toLowerCase()
+    if (!query) {
+      return personaEntries.slice()
+    }
+    return personaEntries.filter((entry) =>
+      entry.name.toLowerCase().includes(query)
+    )
+  }, [personaEntries, searchText])
+
+  const sortedCharacterEntries = React.useMemo(() => {
+    const favorites = filteredCharacterEntries
+      .filter(isFavoriteCharacter)
+      .sort(byAssistantName)
+    const others = filteredCharacterEntries
+      .filter((entry) => !isFavoriteCharacter(entry))
+      .sort(byAssistantName)
+    return [...favorites, ...others]
+  }, [filteredCharacterEntries, isFavoriteCharacter])
+
+  const sortedPersonaEntries = React.useMemo(
+    () => filteredPersonaEntries.slice().sort(byAssistantName),
+    [filteredPersonaEntries]
+  )
+
   const handleSelect = React.useCallback(
     async (entry: AssistantSelection) => {
       await setSelectedAssistant(entry)
       setOpen(false)
+      setSearchText("")
     },
     [setSelectedAssistant]
   )
+
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    setOpen(nextOpen)
+    if (!nextOpen) {
+      setSearchText("")
+    }
+  }, [])
+
+  const openActorSettings = React.useCallback(() => {
+    setOpen(false)
+    setSearchText("")
+    try {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("tldw:open-actor-settings"))
+      }
+    } catch {
+      // no-op
+    }
+  }, [])
 
   const buttonLabel =
     selectedAssistant?.name ||
     t("option:assistant.selectAssistant", "Select assistant")
 
+  const searchLabel = t(
+    "option:assistant.searchPlaceholder",
+    "Search assistants"
+  )
+  const actorLabel = t(
+    "playground:composer.actorTitle",
+    "Scene Director (Actor)"
+  )
+
   const tabs = [
     {
       key: "character" as const,
       label: t("option:assistant.charactersTab", "Characters"),
-      content: renderSelectionList({
-        entries: characterEntries,
-        activeSelection: selectedAssistant,
-        onSelect: handleSelect,
-        emptyLabel: t("option:assistant.noCharacters", "No characters available.")
-      })
+      emptyLabel: searchText.trim()
+        ? t("option:assistant.noCharacterMatches", "No characters match your search.")
+        : t("option:assistant.noCharacters", "No characters available."),
+      entries: sortedCharacterEntries,
+      showFavorites: true
     },
     {
       key: "persona" as const,
       label: t("option:assistant.personasTab", "Personas"),
-      content: renderSelectionList({
-        entries: personaEntries,
-        activeSelection: selectedAssistant,
-        onSelect: handleSelect,
-        emptyLabel: t("option:assistant.noPersonas", "No personas available.")
-      })
+      emptyLabel: searchText.trim()
+        ? t("option:assistant.noPersonaMatches", "No personas match your search.")
+        : t("option:assistant.noPersonas", "No personas available."),
+      entries: sortedPersonaEntries,
+      showFavorites: false
     }
   ]
+  const activeTabDefinition = tabs.find((tab) => tab.key === activeTab) ?? tabs[0]
+  const activeTabEntries = activeTabDefinition?.entries ?? []
+  const activeTabEmptyLabel =
+    activeTabDefinition?.emptyLabel ??
+    t("option:assistant.noAssistants", "No assistants available.")
+  const activeTabShowsFavorites = activeTabDefinition?.showFavorites ?? false
+
   const activeTabContent =
-    tabs.find((tab) => tab.key === activeTab)?.content ?? tabs[0]?.content ?? null
+    activeTabEntries.length === 0 ? (
+      <div className="px-3 py-4 text-center text-sm text-text-subtle">
+        {activeTabEmptyLabel}
+      </div>
+    ) : (
+      <div
+        data-testid="assistant-select-menu"
+        className="max-h-80 overflow-y-auto px-2 py-2"
+      >
+        <div className="flex flex-col gap-1">
+          {activeTabEntries.map((entry) => {
+            const isActive =
+              selectedAssistant?.kind === entry.kind &&
+              selectedAssistant?.id === entry.id
+            const isFavorite =
+              activeTabShowsFavorites && isFavoriteCharacter(entry)
+            const favoriteLabel = isFavorite
+              ? t(
+                  "option:assistant.favoriteRemove",
+                  `Remove ${entry.name} from favorites`
+                )
+              : t(
+                  "option:assistant.favoriteAdd",
+                  `Add ${entry.name} to favorites`
+                )
+
+            return (
+              <div
+                key={`${entry.kind}:${entry.id}`}
+                className="flex items-center gap-2"
+              >
+                <button
+                  type="button"
+                  aria-label={entry.name}
+                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition ${
+                    isActive
+                      ? "border-primary bg-primary/10 text-text"
+                      : "border-border bg-background text-text hover:bg-surface2"
+                  }`}
+                  onClick={() => {
+                    void handleSelect(entry)
+                  }}
+                >
+                  {entry.avatar_url ? (
+                    <img
+                      src={entry.avatar_url}
+                      alt={entry.name}
+                      className="h-5 w-5 rounded-full"
+                    />
+                  ) : (
+                    <UserCircle2 className="h-5 w-5 flex-shrink-0 text-text-subtle" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate font-medium">
+                    {entry.name}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="text-xs text-text-subtle"
+                  >
+                    {entry.kind === "persona" ? "Persona" : "Character"}
+                  </span>
+                </button>
+                {activeTabShowsFavorites ? (
+                  <Tooltip title={favoriteLabel}>
+                    <button
+                      type="button"
+                      className="rounded-md p-1.5 text-text-subtle transition hover:bg-surface2"
+                      aria-label={favoriteLabel}
+                      onMouseDown={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                      }}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        toggleFavoriteCharacter(entry)
+                      }}
+                    >
+                      <Star
+                        className={`h-4 w-4 ${
+                          isFavorite ? "fill-warn text-warn" : "text-text-subtle"
+                        }`}
+                      />
+                    </button>
+                  </Tooltip>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
 
   const content = (
     <div className="w-[320px] rounded-lg border border-border bg-background shadow-lg">
+      <div className="border-b border-border p-2">
+        <Input
+          ref={searchInputRef}
+          aria-label={searchLabel}
+          placeholder={searchLabel}
+          prefix={<Search className="size-4 text-text-subtle" />}
+          value={searchText}
+          allowClear
+          size="small"
+          onChange={(event) => setSearchText(event.target.value)}
+          onKeyDown={(event) => event.stopPropagation()}
+        />
+      </div>
       <div
         role="tablist"
         aria-label={t("option:assistant.tabList", "Assistant types")}
@@ -262,6 +501,15 @@ export const AssistantSelect: React.FC<Props> = ({
       >
         {activeTabContent}
       </div>
+      <div className="border-t border-border p-2">
+        <button
+          type="button"
+          className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-text transition hover:bg-surface2"
+          onClick={openActorSettings}
+        >
+          {actorLabel}
+        </button>
+      </div>
     </div>
   )
 
@@ -270,26 +518,29 @@ export const AssistantSelect: React.FC<Props> = ({
   }
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        data-testid="character-select"
-        className={`inline-flex items-center gap-2 ${className}`.trim()}
-        aria-label={buttonLabel}
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <UserCircle2 className={iconClassName} />
-        {showLabel ? (
-          <span className="max-w-[180px] truncate text-sm">{buttonLabel}</span>
-        ) : null}
-      </button>
-      {open ? (
-        <div className="absolute left-0 top-full z-50 mt-2">
-          {content}
-        </div>
-      ) : null}
-    </div>
+    <Dropdown
+      open={open}
+      onOpenChange={handleOpenChange}
+      menu={{ items: [] }}
+      popupRender={() => content}
+      placement="topLeft"
+      trigger={["click"]}
+    >
+      <Tooltip title={buttonLabel}>
+        <button
+          type="button"
+          data-testid="character-select"
+          className={`inline-flex items-center gap-2 ${className}`.trim()}
+          aria-label={buttonLabel}
+          aria-expanded={open}
+        >
+          <UserCircle2 className={iconClassName} />
+          {showLabel ? (
+            <span className="max-w-[180px] truncate text-sm">{buttonLabel}</span>
+          ) : null}
+        </button>
+      </Tooltip>
+    </Dropdown>
   )
 }
 

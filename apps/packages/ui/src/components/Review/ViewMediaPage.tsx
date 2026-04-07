@@ -7,10 +7,7 @@ import {
   ChevronRight,
   CheckSquare,
   Square,
-  Download,
-  Tags,
   Trash2,
-  X,
 } from 'lucide-react'
 import { useServerOnline } from '@/hooks/useServerOnline'
 import { useServerCapabilities } from '@/hooks/useServerCapabilities'
@@ -26,18 +23,14 @@ import { SearchBar } from '@/components/Media/SearchBar'
 import { FilterPanel } from '@/components/Media/FilterPanel'
 import { ResultsList } from '@/components/Media/ResultsList'
 import { ContentViewer } from '@/components/Media/ContentViewer'
-import { MediaSectionNavigator } from '@/components/Media/MediaSectionNavigator'
 import { Pagination } from '@/components/Media/Pagination'
-import { JumpToNavigator } from '@/components/Media/JumpToNavigator'
-import { KeyboardShortcutsOverlay } from '@/components/Media/KeyboardShortcutsOverlay'
 import { FilterChips } from '@/components/Media/FilterChips'
-import { MediaIngestJobsPanel } from '@/components/Media/MediaIngestJobsPanel'
-import { MediaLibraryStatsPanel } from '@/components/Media/MediaLibraryStatsPanel'
 import type { MediaResultItem } from '@/components/Media/types'
 import {
   useMediaNavigation
 } from '@/hooks/useMediaNavigation'
 import { bgRequest } from '@/services/background-proxy'
+import { requestQuickIngestOpen } from '@/utils/quick-ingest-open'
 import { setSetting } from '@/services/settings/registry'
 import {
   DISCUSS_MEDIA_PROMPT_SETTING,
@@ -56,6 +49,7 @@ import {
   hasMediaFilterParams
 } from '@/components/Review/mediaFilterParams'
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { buildStudyPackRoute } from "@/services/tldw/study-pack-handoff"
 import {
   getMediaNavigationResumeEntry,
   resolveMediaNavigationResumeSelection,
@@ -74,6 +68,42 @@ import { useMediaSelection } from './hooks/useMediaSelection'
 import { useMediaKeyboardShortcuts } from './hooks/useMediaKeyboardShortcuts'
 
 export const MEDIA_STALE_CHECK_INTERVAL_MS = 30_000
+
+const LazyJumpToNavigator = React.lazy(() =>
+  import('@/components/Media/JumpToNavigator').then((module) => ({
+    default: module.JumpToNavigator
+  }))
+)
+
+const LazyKeyboardShortcutsOverlay = React.lazy(() =>
+  import('@/components/Media/KeyboardShortcutsOverlay').then((module) => ({
+    default: module.KeyboardShortcutsOverlay
+  }))
+)
+
+const LazyMediaIngestJobsPanel = React.lazy(() =>
+  import('@/components/Media/MediaIngestJobsPanel').then((module) => ({
+    default: module.MediaIngestJobsPanel
+  }))
+)
+
+const LazyMediaLibraryStatsPanel = React.lazy(() =>
+  import('@/components/Media/MediaLibraryStatsPanel').then((module) => ({
+    default: module.MediaLibraryStatsPanel
+  }))
+)
+
+const LazyMediaBulkToolbar = React.lazy(() =>
+  import('./MediaBulkToolbar').then((module) => ({
+    default: module.MediaBulkToolbar
+  }))
+)
+
+const LazyMediaSectionNavigator = React.lazy(() =>
+  import('@/components/Media/MediaSectionNavigator').then((module) => ({
+    default: module.MediaSectionNavigator
+  }))
+)
 
 const ViewMediaPage: React.FC = () => {
   const { t } = useTranslation(['review', 'common', 'settings'])
@@ -169,6 +199,16 @@ const ViewMediaPage: React.FC = () => {
                 'This feature requires connection to the tldw server. Please check your server connection.'
             })}
             examples={[]}
+            primaryActionLabel={t('option:buttonRetry', {
+              defaultValue: 'Retry connection'
+            })}
+            onPrimaryAction={() => {
+              void checkOnce()
+            }}
+            secondaryActionLabel={t('settings:tldw.openSettings', {
+              defaultValue: 'Open Settings'
+            })}
+            onSecondaryAction={() => navigate('/settings/tldw')}
           />
         </div>
       )
@@ -184,6 +224,16 @@ const ViewMediaPage: React.FC = () => {
             defaultValue: 'Please check your server connection.'
           })}
           examples={[]}
+          primaryActionLabel={t('option:buttonRetry', {
+            defaultValue: 'Retry connection'
+          })}
+          onPrimaryAction={() => {
+            void checkOnce()
+          }}
+          secondaryActionLabel={t('settings:tldw.openSettings', {
+            defaultValue: 'Open Settings'
+          })}
+          onSecondaryAction={() => navigate('/settings/tldw')}
         />
       </div>
     )
@@ -223,10 +273,16 @@ const ViewMediaPage: React.FC = () => {
               'Technical details: this tldw server does not advertise the Media endpoints (for example, /api/v1/media and /api/v1/media/search).'
           })
         ]}
-        primaryActionLabel={t('settings:healthSummary.diagnostics', {
+        primaryActionLabel={t('option:buttonRetry', {
+          defaultValue: 'Retry connection'
+        })}
+        onPrimaryAction={() => {
+          void checkOnce()
+        }}
+        secondaryActionLabel={t('settings:healthSummary.diagnostics', {
           defaultValue: 'Open Diagnostics'
         })}
-        onPrimaryAction={() => navigate('/settings/health')}
+        onSecondaryAction={() => navigate('/settings/health')}
       />
     )
   }
@@ -247,8 +303,29 @@ const MediaPageContent: React.FC = () => {
 
   // --- Hooks ---
   const search = useMediaSearch({ t, message })
+  const { refetch: searchRefetch } = search
 
   const viewPrefs = useMediaViewPreferences()
+
+  // Auto-refresh media results when Quick Ingest completes
+  const searchRefetchRef = useRef(searchRefetch)
+  const ingestRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => { searchRefetchRef.current = searchRefetch }, [searchRefetch])
+  useEffect(() => {
+    const handleIngestComplete = () => {
+      if (ingestRefreshTimeoutRef.current !== null) {
+        clearTimeout(ingestRefreshTimeoutRef.current)
+      }
+      ingestRefreshTimeoutRef.current = setTimeout(() => { searchRefetchRef.current() }, 1500)
+    }
+    window.addEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+    return () => {
+      if (ingestRefreshTimeoutRef.current !== null) {
+        clearTimeout(ingestRefreshTimeoutRef.current)
+      }
+      window.removeEventListener("tldw:quick-ingest-complete", handleIngestComplete)
+    }
+  }, [])
 
   // Compute display results (filtered by favorites/collections)
   // Need selection hook first for favorites/collections, but selection needs displayResults.
@@ -311,6 +388,10 @@ const MediaPageContent: React.FC = () => {
     selection.setShowFavoritesOnly(false)
     selection.setActiveCollectionId(null)
   }, [search, selection])
+
+  const handleSelectAllVisibleItems = useCallback(() => {
+    selection.setBulkSelectedIds(displayResults.map((item) => String(item.id)))
+  }, [displayResults, selection])
 
   const hasJumpTo = displayResults.length > 5
 
@@ -922,6 +1003,34 @@ const MediaPageContent: React.FC = () => {
     [message, navigate, nav.selected, t]
   )
 
+  const handleCreateStudyPackFromMedia = useCallback(() => {
+    const selectedMedia = nav.selected?.kind === "media" ? nav.selected : null
+    const mediaTitle = selectedMedia?.title?.trim() || ""
+    const mediaId = selectedMedia?.id
+
+    if (!mediaTitle || mediaId == null) {
+      message.warning(
+        t("review:mediaPage.studyPackMissingSelection", {
+          defaultValue: "Select media before creating a study pack."
+        })
+      )
+      return
+    }
+
+    navigate(
+      buildStudyPackRoute({
+        title: mediaTitle,
+        sourceItems: [
+          {
+            sourceType: "media",
+            sourceId: String(mediaId),
+            sourceTitle: mediaTitle
+          }
+        ]
+      })
+    )
+  }, [message, nav.selected, navigate, t])
+
   const handleCreateNoteWithContent = useCallback(async (noteContent: string, title: string) => {
     try {
       await bgRequest({
@@ -977,6 +1086,52 @@ const MediaPageContent: React.FC = () => {
       void refetchNavigation()
     })
   }, [nav, showNavigationPanel, refetchNavigation])
+
+  // When the library is truly empty (no results, no search/filters active, not loading),
+  // render a single-column centered onboarding view instead of the two-column split.
+  const isEmptyLibrary =
+    search.activeTotalCount === 0 &&
+    !hasActiveFilters &&
+    !search.query?.trim() &&
+    !search.isLoading &&
+    !search.isFetching
+
+  if (isEmptyLibrary) {
+    return (
+      <div
+        className="relative flex min-h-full bg-bg"
+        style={{ minHeight: `${sidebarDimensions.mediaPageMinHeightPx}px` }}
+      >
+        <div className="flex flex-1 items-center justify-center p-8">
+          <div className="max-w-lg w-full">
+            <ResultsList
+              results={displayResults}
+              selectedId={null}
+              onSelect={() => {}}
+              totalCount={search.activeTotalCount}
+              loadedCount={displayResults.length}
+              isLoading={false}
+              hasActiveFilters={false}
+              searchQuery=""
+              onClearSearch={() => {}}
+              onClearFilters={() => {}}
+              onOpenQuickIngest={(detail) => {
+                requestQuickIngestOpen(detail)
+              }}
+              favorites={selection.favoritesSet}
+              onToggleFavorite={selection.toggleFavorite}
+              selectionMode={false}
+              selectedIds={new Set()}
+              onToggleSelected={() => {}}
+              readingProgress={selection.readingProgressMap}
+              viewMode="standard"
+              onViewModeChange={() => {}}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -1302,150 +1457,17 @@ const MediaPageContent: React.FC = () => {
             )}
           </div>
 
-          {selection.bulkSelectionMode && (
-            <div
-              className="border-b border-border bg-surface2 px-4 py-3 space-y-2.5"
-              data-testid="media-bulk-toolbar"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-medium text-text-muted">
-                  {t('review:mediaPage.bulkSelectedCount', {
-                    defaultValue: '{{count}} selected',
-                    count: selection.bulkSelectedItems.length
-                  })}
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={selection.handleSelectAllVisibleItems}
-                    className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface"
-                    data-testid="media-bulk-select-all"
-                  >
-                    <CheckSquare className="h-3.5 w-3.5" />
-                    {t('review:mediaPage.selectAllVisible', {
-                      defaultValue: 'Select visible'
-                    })}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={selection.handleClearBulkSelection}
-                    className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface"
-                    data-testid="media-bulk-clear"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    {t('review:mediaPage.clearSelection', {
-                      defaultValue: 'Clear'
-                    })}
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={selection.bulkKeywordsDraft}
-                  onChange={(event) => selection.setBulkKeywordsDraft(event.target.value)}
-                  placeholder={t('review:mediaPage.bulkKeywordsPlaceholder', {
-                    defaultValue: 'Keywords (comma separated)'
-                  })}
-                  className="h-8 min-w-[180px] flex-1 rounded-md border border-border bg-surface px-2 text-[11px] text-text"
-                  data-testid="media-bulk-keywords-input"
-                />
-                <button
-                  type="button"
-                  onClick={() => void selection.handleBulkAddKeywords()}
-                  disabled={selection.bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-                  data-testid="media-bulk-tag"
-                >
-                  <Tags className="h-3.5 w-3.5" />
-                  {t('review:mediaPage.bulkAddKeywords', { defaultValue: 'Add tags' })}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void selection.handleBulkDelete()}
-                  disabled={selection.bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-danger/50 px-2 text-[11px] text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  data-testid="media-bulk-delete"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {t('review:mediaPage.bulkDelete', { defaultValue: 'Delete' })}
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  value={selection.collectionDraftName}
-                  onChange={(event) => selection.setCollectionDraftName(event.target.value)}
-                  placeholder={t('review:mediaPage.collectionNamePlaceholder', {
-                    defaultValue: 'Collection name'
-                  })}
-                  className="h-8 min-w-[140px] rounded-md border border-border bg-surface px-2 text-[11px] text-text"
-                  data-testid="media-bulk-collection-name"
-                />
-                <button
-                  type="button"
-                  onClick={selection.handleAddSelectionToCollection}
-                  disabled={selection.bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-                  data-testid="media-bulk-add-collection"
-                >
-                  {t('review:mediaPage.collectionAddSelection', {
-                    defaultValue: 'Add to collection'
-                  })}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void selection.handleOpenSelectionInMultiReview()
-                  }}
-                  disabled={selection.bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-                  data-testid="media-bulk-open-multi"
-                >
-                  {t('review:mediaPage.bulkOpenMultiReview', {
-                    defaultValue: 'Open selection'
-                  })}
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <select
-                  value={selection.bulkExportFormat}
-                  onChange={(event) =>
-                    selection.setBulkExportFormat(event.target.value as 'json' | 'markdown' | 'text')
-                  }
-                  className="h-8 rounded-md border border-border bg-surface px-2 text-[11px] text-text"
-                  data-testid="media-bulk-export-format"
-                >
-                  <option value="json">
-                    {t('review:mediaPage.bulkExportJson', {
-                      defaultValue: 'JSON'
-                    })}
-                  </option>
-                  <option value="markdown">
-                    {t('review:mediaPage.bulkExportMarkdown', {
-                      defaultValue: 'Markdown'
-                    })}
-                  </option>
-                  <option value="text">
-                    {t('review:mediaPage.bulkExportText', {
-                      defaultValue: 'Plain text'
-                    })}
-                  </option>
-                </select>
-                <button
-                  type="button"
-                  onClick={selection.handleBulkExport}
-                  disabled={selection.bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-                  data-testid="media-bulk-export"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  {t('review:mediaPage.bulkExport', { defaultValue: 'Export' })}
-                </button>
-              </div>
-            </div>
-          )}
+          {selection.bulkSelectionMode ? (
+            <React.Suspense fallback={null}>
+              <LazyMediaBulkToolbar
+                selection={{
+                  ...selection,
+                  handleSelectAllVisibleItems
+                }}
+                t={t}
+              />
+            </React.Suspense>
+          ) : null}
 
           </div>
           {/* end Controls wrapper */}
@@ -1485,10 +1507,8 @@ const MediaPageContent: React.FC = () => {
                   search.setQuery('')
                 }}
                 onClearFilters={resetAllFilters}
-                onOpenQuickIngest={() => {
-                  if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
-                  }
+                onOpenQuickIngest={(detail) => {
+                  requestQuickIngestOpen(detail)
                 }}
                 favorites={selection.favoritesSet}
                 onToggleFavorite={selection.toggleFavorite}
@@ -1551,16 +1571,18 @@ const MediaPageContent: React.FC = () => {
                   id="media-jump-bottom-panel"
                   className="mt-2 overflow-y-auto pr-1"
                 >
-                  <JumpToNavigator
-                    results={displayResults.map((r) => ({ id: r.id, title: r.title }))}
-                    selectedId={nav.selected?.id || null}
-                    onSelect={(id) => {
-                      const item = displayResults.find((r) => r.id === id)
-                      if (item) nav.setSelected(item)
-                    }}
-                    maxButtons={12}
-                    showLabel={false}
-                  />
+                  <React.Suspense fallback={null}>
+                    <LazyJumpToNavigator
+                      results={displayResults.map((r) => ({ id: r.id, title: r.title }))}
+                      selectedId={nav.selected?.id || null}
+                      onSelect={(id) => {
+                        const item = displayResults.find((r) => r.id === id)
+                        if (item) nav.setSelected(item)
+                      }}
+                      maxButtons={12}
+                      showLabel={false}
+                    />
+                  </React.Suspense>
                 </div>
               )}
             </div>
@@ -1590,12 +1612,14 @@ const MediaPageContent: React.FC = () => {
 
             {!viewPrefs.libraryToolsCollapsedValue && (
               <div id="media-library-tools-panel">
-                <MediaIngestJobsPanel />
-                <MediaLibraryStatsPanel
-                  results={displayResults}
-                  totalCount={search.activeTotalCount}
-                  storageUsage={selection.libraryStorageUsage}
-                />
+                <React.Suspense fallback={null}>
+                  <LazyMediaIngestJobsPanel />
+                  <LazyMediaLibraryStatsPanel
+                    results={displayResults}
+                    totalCount={search.activeTotalCount}
+                    storageUsage={selection.libraryStorageUsage}
+                  />
+                </React.Suspense>
               </div>
             )}
           </div>
@@ -1669,28 +1693,42 @@ const MediaPageContent: React.FC = () => {
 
         <div className="flex-1 flex min-h-0 flex-col md:flex-row">
           {showNavigationPanel ? (
-            <MediaSectionNavigator
-              nodes={navigationNodes}
-              selectedNodeId={selectedNavigationNodeId}
-              loading={isNavigationLoading}
-              error={navigationError}
-              onRetry={() => {
-                void refetchNavigation()
-              }}
-              onSelectNode={(node) => {
-                setSelectedNavigationNodeId(node.id)
-                setNavigationSelectionNonce((prev) => prev + 1)
-                pendingSectionSelectionTelemetryRef.current = {
-                  nodeId: node.id,
-                  startedAt: Date.now(),
-                  source: 'user'
-                }
-                void persistNavigationSelection(node)
-              }}
-            />
+            <React.Suspense fallback={null}>
+              <LazyMediaSectionNavigator
+                nodes={navigationNodes}
+                selectedNodeId={selectedNavigationNodeId}
+                loading={isNavigationLoading}
+                error={navigationError}
+                onRetry={() => {
+                  void refetchNavigation()
+                }}
+                onSelectNode={(node) => {
+                  setSelectedNavigationNodeId(node.id)
+                  setNavigationSelectionNonce((prev) => prev + 1)
+                  pendingSectionSelectionTelemetryRef.current = {
+                    nodeId: node.id,
+                    startedAt: Date.now(),
+                    source: 'user'
+                  }
+                  void persistNavigationSelection(node)
+                }}
+              />
+            </React.Suspense>
           ) : null}
 
           <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex items-center justify-end gap-2 border-b border-border bg-surface px-3 py-2">
+              <button
+                type="button"
+                onClick={handleCreateStudyPackFromMedia}
+                className="inline-flex items-center rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!nav.selected || !nav.selected?.title?.trim()}
+              >
+                {t("review:mediaPage.createStudyPack", {
+                  defaultValue: "Create study pack"
+                })}
+              </button>
+            </div>
             {nav.staleSelectionNotice ? (
               <div
                 className="mx-3 mt-3 rounded-md border border-border bg-surface2 px-3 py-2 text-sm text-text"
@@ -1740,6 +1778,7 @@ const MediaPageContent: React.FC = () => {
               hasNext={nav.hasNext}
               currentIndex={nav.selectedIndex >= 0 ? nav.selectedIndex : 0}
               totalResults={displayResults.length}
+              isLibraryEmpty={isEmptyLibrary}
               onChatWithMedia={handleChatWithMedia}
               onChatAboutMedia={handleChatAboutMedia}
               onGenerateFlashcardsFromContent={handleGenerateFlashcardsFromMedia}
@@ -1765,10 +1804,12 @@ const MediaPageContent: React.FC = () => {
       </div>
 
       {/* Keyboard Shortcuts Overlay */}
-      <KeyboardShortcutsOverlay
-        open={keyboard.shortcutsOverlayOpen}
-        onClose={() => keyboard.setShortcutsOverlayOpen(false)}
-      />
+      <React.Suspense fallback={null}>
+        <LazyKeyboardShortcutsOverlay
+          open={keyboard.shortcutsOverlayOpen}
+          onClose={() => keyboard.setShortcutsOverlayOpen(false)}
+        />
+      </React.Suspense>
     </div>
   )
 }

@@ -3,15 +3,21 @@ import {
   createInitialQuickIngestLastRunSummary,
   useQuickIngestStore
 } from "../quick-ingest"
+import { useQuickIngestSessionStore } from "../quick-ingest-session"
 
 describe("quick ingest store", () => {
   beforeEach(() => {
+    sessionStorage.clear()
     useQuickIngestStore.setState((prev) => ({
       ...prev,
       queuedCount: 0,
       hadRecentFailure: false,
       lastRunSummary: createInitialQuickIngestLastRunSummary()
     }))
+    useQuickIngestSessionStore.setState({
+      session: null,
+      triggerSummary: { count: 0, label: null, hadFailure: false }
+    })
   })
 
   it("records success run summary", () => {
@@ -78,5 +84,12 @@ describe("quick ingest store", () => {
 
     const summary = useQuickIngestStore.getState().lastRunSummary
     expect(summary).toEqual(createInitialQuickIngestLastRunSummary())
+  })
+
+  it("marks interrupted sessions as a recent failure in the aligned badge state", () => {
+    useQuickIngestSessionStore.getState().createDraftSession()
+    useQuickIngestSessionStore.getState().markInterrupted("Connection lost")
+
+    expect(useQuickIngestStore.getState().hadRecentFailure).toBe(true)
   })
 })

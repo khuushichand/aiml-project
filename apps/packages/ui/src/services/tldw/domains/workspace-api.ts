@@ -198,6 +198,21 @@ export const workspaceApiMethods = {
 
   // ── Workspace sub-resource methods ──
 
+  async upsertWorkspace(
+    workspaceId: string,
+    data: {
+      name: string
+      study_materials_policy?: "general" | "workspace"
+    }
+  ): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+  },
+
   async getWorkspace(workspaceId: string): Promise<any> {
     return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}`, method: "GET" })
   },

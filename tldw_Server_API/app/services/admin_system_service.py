@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -10,6 +11,11 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ActivitySummaryResponse,
     AuditLogResponse,
+    ErrorBreakdownItem,
+    ErrorBreakdownResponse,
+    RateLimitPolicyHeadroom,
+    RateLimitSummaryResponse,
+    RateLimitThrottledEntity,
     SecurityAlertSinkStatus,
     SecurityAlertStatusResponse,
     SystemLogEntry,
@@ -19,6 +25,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -231,6 +238,51 @@ async def get_system_stats(db) -> SystemStatsResponse:
         ss = _row_to_dict(storage_stats, storage_keys)
         se = _row_to_dict(session_stats, session_keys)
 
+        # Gather optional extended stats (ACP sessions, token usage)
+        active_acp = None
+        tokens_today = None
+        try:
+            from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+            store = await get_acp_session_store()
+            _records, active_count = await store.list_sessions(status="active", limit=0, offset=0)
+            active_acp = active_count
+        except Exception as exc:
+            logger.debug(f"Skipping ACP session stats in system overview: {exc}")
+
+        try:
+            if is_pg:
+                token_row = await db.fetchrow(
+                    """
+                    SELECT
+                        COALESCE(SUM(prompt_tokens), 0) as prompt,
+                        COALESCE(SUM(completion_tokens), 0) as completion,
+                        COALESCE(SUM(total_tokens), 0) as total
+                    FROM llm_usage_v2
+                    WHERE date(created_at) = CURRENT_DATE
+                    """
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(prompt_tokens), 0) as prompt,
+                        COALESCE(SUM(completion_tokens), 0) as completion,
+                        COALESCE(SUM(total_tokens), 0) as total
+                    FROM llm_usage_v2
+                    WHERE date(created_at) = date('now')
+                    """
+                )
+                token_row = await cursor.fetchone()
+            if token_row:
+                td = _row_to_dict(token_row, ["prompt", "completion", "total"])
+                tokens_today = {
+                    "prompt": int(td.get("prompt") or 0),
+                    "completion": int(td.get("completion") or 0),
+                    "total": int(td.get("total") or 0),
+                }
+        except Exception as exc:
+            logger.debug(f"Skipping token usage stats in system overview: {exc}")
+
         return SystemStatsResponse(
             users={
                 "total": int(us.get("total_users") or 0),
@@ -249,6 +301,9 @@ async def get_system_stats(db) -> SystemStatsResponse:
                 "active": int(se.get("active_sessions") or 0),
                 "unique_users": int(se.get("unique_users") or 0),
             },
+            active_acp_sessions=active_acp,
+            tokens_today=tokens_today,
+            mcp_invocations_today=None,  # MCP metrics are Prometheus-only; defer until parsed
         )
 
     except Exception as exc:
@@ -467,9 +522,19 @@ async def get_audit_log(
             params.append(user_id)
 
         if action:
-            param_count += 1
-            conditions.append(f"a.action = ${param_count}" if is_pg else "a.action = ?")
-            params.append(action)
+            if action.endswith("*"):
+                # Prefix match: e.g. "admin*" matches "admin.update", "admin.delete", etc.
+                prefix = action[:-1]
+                param_count += 1
+                if is_pg:
+                    conditions.append(f"a.action LIKE ${param_count}")
+                else:
+                    conditions.append("a.action LIKE ?")
+                params.append(f"{prefix}%")
+            else:
+                param_count += 1
+                conditions.append(f"a.action = ${param_count}" if is_pg else "a.action = ?")
+                params.append(action)
 
         if resource:
             resource_filter = resource.strip()
@@ -699,3 +764,529 @@ async def list_system_logs(
         limit=limit,
         offset=offset,
     )
+
+
+# ── Error breakdown aggregation (10.4) ──────────────────────────────────────
+
+async def get_error_breakdown(
+    *,
+    principal: AuthPrincipal,
+    db,
+    hours: int = 24,
+) -> ErrorBreakdownResponse:
+    """Aggregate recent audit-log entries that look like errors (failed/denied/error actions).
+
+    Groups by action (used as endpoint proxy) and a synthetic status_code derived
+    from the action name. This is lightweight in-memory processing over the
+    existing audit_log table.
+    """
+    try:
+        is_pg = _is_postgres_connection(db)
+        org_ids = await admin_scope_service.get_admin_org_ids(principal)
+
+        # Build time constraint
+        if is_pg:
+            time_clause = f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{hours} hours'"
+            time_params: list[Any] = []
+        else:
+            time_clause = "datetime(a.created_at) > datetime('now', ? || ' hours')"
+            time_params = [f"-{hours}"]
+
+        # Filter actions that indicate errors
+        error_actions_clause = (
+            "(LOWER(a.action) LIKE '%error%'"
+            " OR LOWER(a.action) LIKE '%fail%'"
+            " OR LOWER(a.action) LIKE '%denied%'"
+            " OR LOWER(a.action) LIKE '%reject%'"
+            " OR LOWER(a.action) LIKE '%unauthorized%')"
+        )
+
+        # Org scoping join
+        join_clause = ""
+        org_params: list[Any] = []
+        org_condition = ""
+        if org_ids is not None:
+            if len(org_ids) == 0:
+                return ErrorBreakdownResponse(items=[], total_errors=0, period=f"{hours}h")
+            join_clause = " LEFT JOIN org_members om ON om.user_id = a.user_id"
+            if is_pg:
+                org_condition = f" AND om.org_id = ANY(${len(time_params) + 1})"
+                org_params = [org_ids]
+            else:
+                placeholders = ",".join("?" for _ in org_ids)
+                org_condition = f" AND om.org_id IN ({placeholders})"
+                org_params = list(org_ids)
+
+        query = (
+            f"SELECT a.action, COUNT(*) as cnt, MAX(a.created_at) as last_at"
+            f" FROM audit_log a{join_clause}"
+            f" WHERE {time_clause} AND {error_actions_clause}{org_condition}"
+            f" GROUP BY a.action ORDER BY cnt DESC LIMIT 50"
+        )
+        params = time_params + org_params
+
+        if is_pg:
+            rows = await db.fetch(query, *params)
+        else:
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+
+        items: list[ErrorBreakdownItem] = []
+        total_errors = 0
+        for row in rows:
+            if isinstance(row, dict):
+                action = row.get("action", "unknown")
+                count = int(row.get("cnt", 0))
+                last_at = row.get("last_at")
+            else:
+                action = row[0] if len(row) > 0 else "unknown"
+                count = int(row[1]) if len(row) > 1 else 0
+                last_at = row[2] if len(row) > 2 else None
+
+            # Derive a synthetic status code from the action name
+            action_lower = str(action).lower()
+            if "unauthorized" in action_lower or "denied" in action_lower:
+                status_code = 403
+            elif "not_found" in action_lower:
+                status_code = 404
+            elif "rate_limit" in action_lower or "throttl" in action_lower:
+                status_code = 429
+            elif "timeout" in action_lower:
+                status_code = 504
+            else:
+                status_code = 500
+
+            # Parse last_at
+            last_occurred = None
+            if last_at:
+                try:
+                    if isinstance(last_at, datetime):
+                        last_occurred = last_at
+                    else:
+                        last_occurred = datetime.fromisoformat(str(last_at).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    pass
+
+            total_errors += count
+            items.append(ErrorBreakdownItem(
+                endpoint=str(action),
+                status_code=status_code,
+                count=count,
+                last_occurred=last_occurred,
+            ))
+
+        return ErrorBreakdownResponse(
+            items=items,
+            total_errors=total_errors,
+            period=f"{hours}h",
+        )
+    except Exception as exc:
+        logger.warning("Error breakdown aggregation failed: {}", exc)
+        return ErrorBreakdownResponse(items=[], total_errors=0, period=f"{hours}h")
+
+
+# ── Rate limit summary aggregation (10.5) ───────────────────────────────────
+
+async def get_rate_limit_summary(
+    *,
+    hours: int = 24,
+) -> RateLimitSummaryResponse:
+    """Aggregate rate-limit denial metrics from the metrics registry.
+
+    Uses the in-memory Prometheus-style counters (rg_denials_total,
+    rg_denials_by_entity_total) already maintained by the Resource Governor.
+    """
+    total_throttle_events = 0
+    entity_rejections: dict[str, dict[str, Any]] = {}
+    policy_stats: dict[str, dict[str, Any]] = {}
+
+    try:
+        reg = get_metrics_registry()
+        # Try to get denial metrics from the registry
+        for metric_name in ("rg_denials_total", "rg_denials_by_entity_total", "mcp_rate_limit_hits_total"):
+            try:
+                samples = reg.get_samples(metric_name)
+            except (AttributeError, KeyError, TypeError):
+                samples = []
+
+            if not samples:
+                continue
+
+            for sample in samples:
+                labels = {}
+                value = 0
+                if isinstance(sample, dict):
+                    labels = sample.get("labels", {})
+                    value = int(sample.get("value", 0))
+                elif hasattr(sample, "labels"):
+                    labels = getattr(sample, "labels", {})
+                    value = int(getattr(sample, "value", 0))
+                elif isinstance(sample, (list, tuple)) and len(sample) >= 2:
+                    labels = sample[0] if isinstance(sample[0], dict) else {}
+                    value = int(sample[1]) if len(sample) > 1 else 0
+
+                if value <= 0:
+                    continue
+
+                total_throttle_events += value
+
+                # Track by entity
+                entity = (
+                    labels.get("entity")
+                    or labels.get("scope", "unknown")
+                )
+                if entity not in entity_rejections:
+                    entity_rejections[entity] = {"rejections": 0, "last_rejected_at": None}
+                entity_rejections[entity]["rejections"] += value
+
+                # Track by policy
+                policy_id = labels.get("policy_id", "unknown")
+                if policy_id not in policy_stats:
+                    policy_stats[policy_id] = {
+                        "resource_type": labels.get("category"),
+                        "scope": labels.get("scope"),
+                        "total_denials": 0,
+                        "total_decisions": 0,
+                    }
+                policy_stats[policy_id]["total_denials"] += value
+
+        # Also try to get total decisions for utilization calculation
+        for metric_name in ("rg_decisions_total",):
+            try:
+                samples = reg.get_samples(metric_name)
+            except (AttributeError, KeyError, TypeError):
+                samples = []
+
+            if not samples:
+                continue
+
+            for sample in samples:
+                labels = {}
+                value = 0
+                if isinstance(sample, dict):
+                    labels = sample.get("labels", {})
+                    value = int(sample.get("value", 0))
+                elif hasattr(sample, "labels"):
+                    labels = getattr(sample, "labels", {})
+                    value = int(getattr(sample, "value", 0))
+                elif isinstance(sample, (list, tuple)) and len(sample) >= 2:
+                    labels = sample[0] if isinstance(sample[0], dict) else {}
+                    value = int(sample[1]) if len(sample) > 1 else 0
+
+                if value <= 0:
+                    continue
+
+                policy_id = labels.get("policy_id", "unknown")
+                if policy_id in policy_stats:
+                    policy_stats[policy_id]["total_decisions"] += value
+
+    except Exception as exc:
+        logger.warning("Rate limit summary metrics collection failed: {}", exc)
+
+    # Build top throttled entities
+    sorted_entities = sorted(entity_rejections.items(), key=lambda x: x[1]["rejections"], reverse=True)
+    top_throttled = [
+        RateLimitThrottledEntity(
+            entity=entity,
+            rejections=data["rejections"],
+            last_rejected_at=data.get("last_rejected_at"),
+        )
+        for entity, data in sorted_entities[:20]
+    ]
+
+    # Build policy headroom
+    headroom = []
+    for pid, stats in sorted(policy_stats.items(), key=lambda x: x[1]["total_denials"], reverse=True):
+        total_decisions = stats["total_decisions"]
+        total_denials = stats["total_denials"]
+        utilization = (total_denials / total_decisions * 100.0) if total_decisions > 0 else 0.0
+        headroom.append(RateLimitPolicyHeadroom(
+            policy_id=pid,
+            resource_type=stats.get("resource_type"),
+            scope=stats.get("scope"),
+            total_decisions=total_decisions,
+            total_denials=total_denials,
+            utilization_pct=round(utilization, 2),
+        ))
+
+    return RateLimitSummaryResponse(
+        total_throttle_events=total_throttle_events,
+        period=f"{hours}h",
+        top_throttled_entities=top_throttled,
+        policy_headroom=headroom[:20],
+    )
+
+
+# ── Key age stats (dev) ────────────────────────────────────────────────────
+
+async def get_key_age_stats(db) -> dict:
+    """Get API key age distribution without per-user fan-out.
+
+    Returns counts of keys in age buckets: 0-30d, 31-90d, 91-180d, 180d+.
+    """
+    try:
+        is_pg = _is_postgres_connection(db)
+        if is_pg:
+            row = await db.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days') as age_0_30,
+                    COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '90 days'
+                                     AND created_at <= CURRENT_TIMESTAMP - INTERVAL '30 days') as age_31_90,
+                    COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '180 days'
+                                     AND created_at <= CURRENT_TIMESTAMP - INTERVAL '90 days') as age_91_180,
+                    COUNT(*) FILTER (WHERE created_at <= CURRENT_TIMESTAMP - INTERVAL '180 days') as age_180_plus,
+                    COUNT(*) as total
+                FROM api_keys
+                WHERE revoked_at IS NULL
+            """)
+        else:
+            cursor = await db.execute("""
+                SELECT
+                    SUM(CASE WHEN datetime(created_at) > datetime('now', '-30 days') THEN 1 ELSE 0 END) as age_0_30,
+                    SUM(CASE WHEN datetime(created_at) > datetime('now', '-90 days')
+                              AND datetime(created_at) <= datetime('now', '-30 days') THEN 1 ELSE 0 END) as age_31_90,
+                    SUM(CASE WHEN datetime(created_at) > datetime('now', '-180 days')
+                              AND datetime(created_at) <= datetime('now', '-90 days') THEN 1 ELSE 0 END) as age_91_180,
+                    SUM(CASE WHEN datetime(created_at) <= datetime('now', '-180 days') THEN 1 ELSE 0 END) as age_180_plus,
+                    COUNT(*) as total
+                FROM api_keys
+                WHERE revoked_at IS NULL
+            """)
+            row = await cursor.fetchone()
+
+        if row is None:
+            return {"buckets": [], "total": 0}
+
+        def _val(key: str) -> int:
+            if isinstance(row, dict):
+                return int(row.get(key) or 0)
+            # tuple-like
+            idx = {"age_0_30": 0, "age_31_90": 1, "age_91_180": 2, "age_180_plus": 3, "total": 4}
+            return int(row[idx[key]] or 0) if key in idx else 0
+
+        return {
+            "buckets": [
+                {"label": "0-30 days", "count": _val("age_0_30"), "color": "green"},
+                {"label": "31-90 days", "count": _val("age_31_90"), "color": "green"},
+                {"label": "91-180 days", "count": _val("age_91_180"), "color": "yellow"},
+                {"label": "180+ days", "count": _val("age_180_plus"), "color": "red"},
+            ],
+            "total": _val("total"),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to get key age stats: {exc}")
+        return {"buckets": [], "total": 0}
+
+
+async def debug_resolve_permissions(user_id: int, db) -> dict:
+    """Resolve effective permissions for a user by querying roles + overrides."""
+    try:
+        is_pg = _is_postgres_connection(db)
+        if is_pg:
+            roles_row = await db.fetch(
+                "SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = $1",
+                user_id,
+            )
+            perms_row = await db.fetch("""
+                SELECT DISTINCT p.name
+                FROM user_roles ur
+                JOIN role_permissions rp ON ur.role_id = rp.role_id
+                JOIN permissions p ON rp.permission_id = p.id
+                WHERE ur.user_id = $1
+            """, user_id)
+        else:
+            cursor = await db.execute(
+                "SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = ?",
+                (user_id,),
+            )
+            roles_row = await cursor.fetchall()
+
+        roles = [r["name"] if isinstance(r, dict) else r[0] for r in (roles_row or [])]
+        loop = asyncio.get_running_loop()
+        permissions = await loop.run_in_executor(None, get_effective_permissions, int(user_id))
+        normalized_permissions = sorted({str(permission) for permission in permissions if str(permission).strip()})
+
+        return {
+            "user_id": user_id,
+            "roles": roles,
+            "effective_permissions": normalized_permissions,
+            "permission_count": len(normalized_permissions),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to resolve permissions for user {user_id}: {exc}")
+        return {"user_id": user_id, "roles": [], "effective_permissions": [], "error": str(exc)[:200]}
+
+
+async def debug_decode_token(token: str) -> dict:
+    """Decode a JWT token without claiming signature verification."""
+    import base64
+    import json
+
+    try:
+        # Split JWT into parts
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {"decoded": False, "signature_verified": False, "error": "Not a valid JWT format (expected 3 parts)"}
+
+        # Decode header
+        header_b64 = parts[0] + "=" * (4 - len(parts[0]) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_b64))
+
+        # Decode payload
+        payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+
+        # Check expiration
+        from datetime import datetime, timezone
+        exp = payload.get("exp")
+        is_expired = False
+        if exp:
+            exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+            is_expired = exp_dt < datetime.now(timezone.utc)
+
+        return {
+            "decoded": True,
+            "signature_verified": False,
+            "header": header,
+            "payload": {k: v for k, v in payload.items() if k not in ("password", "secret")},
+            "expired": is_expired,
+            "expires_at": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat() if exp else None,
+            "issuer": payload.get("iss"),
+            "subject": payload.get("sub"),
+        }
+    except Exception as exc:
+        return {"decoded": False, "signature_verified": False, "error": str(exc)[:200]}
+
+
+async def debug_validate_token(token: str) -> dict:
+    """Backward-compatible alias for token decoding debug logic."""
+    return await debug_decode_token(token)
+
+
+async def get_billing_analytics(db) -> dict:
+    """Compute billing analytics: MRR, active subscribers, churn rate."""
+    try:
+        is_pg = _is_postgres_connection(db)
+
+        # Count subscriptions by status
+        if is_pg:
+            row = await db.fetchrow("""
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE status = 'active') as active,
+                    COUNT(*) FILTER (WHERE status = 'trialing') as trialing,
+                    COUNT(*) FILTER (WHERE status = 'past_due') as past_due,
+                    COUNT(*) FILTER (WHERE status = 'canceled') as canceled
+                FROM subscriptions
+            """)
+        else:
+            cursor = await db.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN status = 'trialing' THEN 1 ELSE 0 END) as trialing,
+                    SUM(CASE WHEN status = 'past_due' THEN 1 ELSE 0 END) as past_due,
+                    SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled
+                FROM subscriptions
+            """)
+            row = await cursor.fetchone()
+
+        if row is None:
+            return {"analytics_available": False}
+
+        def _v(key: str) -> int:
+            if isinstance(row, dict):
+                return int(row.get(key) or 0)
+            idx = {"total": 0, "active": 1, "trialing": 2, "past_due": 3, "canceled": 4}
+            return int(row[idx.get(key, 0)] or 0) if key in idx else 0
+
+        active = _v("active")
+        canceled = _v("canceled")
+        total = _v("total")
+        churn_rate = round(canceled / max(total, 1) * 100, 1)
+
+        return {
+            "analytics_available": True,
+            "total_subscriptions": total,
+            "active_subscriptions": active,
+            "trialing": _v("trialing"),
+            "past_due": _v("past_due"),
+            "canceled": canceled,
+            "churn_rate_pct": churn_rate,
+            "trial_conversion_rate_pct": None,  # Would need historical data
+            "mrr_cents": None,  # Would need plan price join
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to get billing analytics: {exc}")
+        return {"analytics_available": False}
+
+
+async def get_all_dependencies_health() -> dict:
+    """Probe all external service dependencies and return combined health status.
+
+    Calls the existing health endpoints for each service and returns a unified view.
+    """
+    import asyncio
+    import time
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
+    services = []
+
+    # Database health
+    async def _check_db() -> dict:
+        start = time.monotonic()
+        try:
+            pool = await get_db_pool()
+            if pool:
+                services.append(True)  # Just mark as checked
+            return {
+                "name": "Database",
+                "status": "healthy",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+            }
+        except Exception as exc:
+            return {
+                "name": "Database",
+                "status": "down",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+                "error": str(exc)[:200],
+            }
+
+    # ACP Session Store health
+    async def _check_acp() -> dict:
+        start = time.monotonic()
+        try:
+            from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+            store = await get_acp_session_store()
+            _records, total = await store.list_sessions(limit=0, offset=0)
+            return {
+                "name": "ACP Sessions",
+                "status": "healthy",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+                "detail": f"{total} sessions",
+            }
+        except Exception as exc:
+            return {
+                "name": "ACP Sessions",
+                "status": "down",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+                "error": str(exc)[:200],
+            }
+
+    results = await asyncio.gather(
+        _check_db(),
+        _check_acp(),
+        return_exceptions=True,
+    )
+
+    deps = []
+    for r in results:
+        if isinstance(r, dict):
+            deps.append(r)
+        elif isinstance(r, Exception):
+            deps.append({"name": "Unknown", "status": "error", "error": str(r)[:200]})
+
+    overall = "healthy" if all(d.get("status") == "healthy" for d in deps) else "degraded"
+    from datetime import datetime, timezone
+    return {"status": overall, "dependencies": deps, "checked_at": datetime.now(timezone.utc).isoformat()}

@@ -4,6 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from tldw_Server_API.app.api.v1.schemas.study_packs import (
+    FlashcardCitationResponse,
+    FlashcardDeepDiveTarget,
+    StudyPackSummaryResponse,
+)
+
 
 DeckSchedulerType = Literal["sm2_plus", "fsrs"]
 
@@ -42,6 +48,7 @@ def _coerce_scheduler_settings_envelope(raw: Any) -> Any:
 class DeckCreate(BaseModel):
     name: str = Field(..., description="Deck name (unique)")
     description: Optional[str] = Field(None, description="Deck description")
+    workspace_id: Optional[str] = Field(None, description="Canonical owning workspace ID; null means general scope")
     scheduler_type: DeckSchedulerType = "sm2_plus"
     scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
 
@@ -57,6 +64,7 @@ class DeckCreate(BaseModel):
 class DeckUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    workspace_id: Optional[str] = None
     scheduler_type: Optional[DeckSchedulerType] = None
     scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
     expected_version: Optional[int] = Field(None, ge=1)
@@ -74,6 +82,7 @@ class Deck(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    workspace_id: Optional[str] = None
     created_at: Optional[str] = None
     last_modified: Optional[str] = None
     deleted: bool
@@ -203,6 +212,20 @@ class FlashcardReviewResponse(BaseModel):
     step_index: Optional[int] = None
     suspended_reason: Optional[Literal["manual", "leech"]] = None
     next_intervals: FlashcardReviewIntervalPreviews
+    review_session_id: int | None = None
+
+
+class FlashcardReviewSessionSummary(BaseModel):
+    id: int
+    deck_id: Optional[int] = None
+    review_mode: str
+    tag_filter: Optional[str] = None
+    scope_key: str
+    status: str
+    started_at: Optional[str] = None
+    last_activity_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    client_id: str
 
 
 class FlashcardNextReviewResponse(BaseModel):
@@ -391,6 +414,22 @@ class StudyAssistantContextResponse(BaseModel):
     messages: list[StudyAssistantMessage] = Field(default_factory=list)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     available_actions: list[StudyAssistantAction] = Field(default_factory=list)
+    citations: list[FlashcardCitationResponse] = Field(
+        default_factory=list,
+        description="Persisted provenance citations for the flashcard, empty for legacy cards.",
+    )
+    primary_citation: Optional[FlashcardCitationResponse] = Field(
+        default=None,
+        description="The citation mirrored by the legacy source_ref summary fields.",
+    )
+    deep_dive_target: Optional[FlashcardDeepDiveTarget] = Field(
+        default=None,
+        description="The preferred source target for remediation deep-dive actions.",
+    )
+    study_pack: Optional[StudyPackSummaryResponse] = Field(
+        default=None,
+        description="The owning study pack when the flashcard belongs to one.",
+    )
 
 
 class StudyAssistantRespondResponse(BaseModel):
@@ -399,6 +438,20 @@ class StudyAssistantRespondResponse(BaseModel):
     assistant_message: StudyAssistantMessage
     structured_payload: dict[str, Any] = Field(default_factory=dict)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
+class FlashcardTagSuggestionItem(BaseModel):
+    """A single tag suggestion and the number of flashcards using it."""
+
+    tag: str
+    count: int
+
+
+class FlashcardTagSuggestionsResponse(BaseModel):
+    """Global flashcard tag suggestions with item details and total result count."""
+
+    items: list[FlashcardTagSuggestionItem] = Field(default_factory=list)
+    count: int
 
 
 class FlashcardTagsUpdate(BaseModel):

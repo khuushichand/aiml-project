@@ -118,17 +118,28 @@ vi.mock("../hooks/useLayoutMode", () => ({
 }))
 
 vi.mock("../SearchBar", () => ({
-  SearchBar: () => (
+  SearchBar: ({ widthMode }: { widthMode?: "compact" | "wide" }) => (
     <input
       id="knowledge-search-input"
       aria-label="Search your knowledge base"
       data-testid="knowledge-search-bar"
+      data-width-mode={widthMode ?? "compact"}
     />
   )
 }))
 
+vi.mock("../context/CompactToolbar", () => ({
+  CompactToolbar: ({ className }: { className?: string }) => (
+    <div data-testid="knowledge-compact-toolbar" data-class-name={className ?? ""} />
+  ),
+}))
+
 vi.mock("../HistorySidebar", () => ({
   HistorySidebar: () => <div data-testid="knowledge-history-sidebar" />
+}))
+
+vi.mock("../history/HistoryPane", () => ({
+  HistoryPane: () => <div data-testid="knowledge-history-sidebar" />
 }))
 
 vi.mock("../AnswerPanel", () => ({
@@ -234,9 +245,12 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("flex-1")
-    expect(screen.getByTestId("knowledge-search-shell").className).toContain("justify-center")
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("mx-auto")
-    expect(screen.getByTestId("knowledge-search-shell").className).toContain("max-w-3xl")
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("max-w-5xl")
+    expect(screen.getByTestId("knowledge-search-shell").firstElementChild?.className).toContain("items-center")
+    expect(screen.getByTestId("knowledge-search-shell").firstElementChild?.className).toContain("max-w-5xl")
+    expect(screen.getByTestId("knowledge-compact-toolbar")).toHaveAttribute("data-class-name", "justify-center")
+    expect(screen.getByTestId("knowledge-search-bar")).toHaveAttribute("data-width-mode", "wide")
     expect(
       screen.queryByTestId("knowledge-answer-panel")
     ).not.toBeInTheDocument()
@@ -246,13 +260,17 @@ describe("KnowledgeQA golden layout guardrails", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("shows history sidebar in research mode empty state", () => {
+  it("shows history sidebar in research mode empty state", async () => {
     setResearchMode()
 
     renderKnowledgeQa()
 
-    expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
+    expect(screen.getByTestId("knowledge-search-shell").className).not.toContain("max-w-3xl")
+    expect(screen.getByTestId("knowledge-search-shell").firstElementChild?.className).not.toContain(
+      "max-w-4xl"
+    )
   })
 
   it("shows onboarding guide and no-source recovery copy on first run", () => {
@@ -397,17 +415,21 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.queryByText("Ask Your Library")).not.toBeInTheDocument()
   })
 
-  it("shows history sidebar alongside results in research mode", () => {
+  it("shows history sidebar alongside results in research mode", async () => {
     setResearchMode()
     state.results = [{ id: "r1" }]
 
     renderKnowledgeQa()
 
-    expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-answer-panel")).toBeInTheDocument()
+    expect(screen.getByTestId("knowledge-results-shell").className).not.toContain("max-w-3xl")
+    expect(
+      screen.getByTestId("knowledge-results-shell").firstElementChild?.className
+    ).not.toContain("max-w-4xl")
   })
 
-  it("shows explicit no-results guidance after an empty completed search", () => {
+  it("shows explicit no-results guidance after an empty completed search", async () => {
     state.hasSearched = true
     state.results = []
     state.answer = null
@@ -415,8 +437,10 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     renderKnowledgeQa()
 
-    expect(screen.getByText("No results found")).toBeInTheDocument()
-    expect(screen.getByText(/Confirm your sources were ingested and indexed/i)).toBeInTheDocument()
+    expect(await screen.findByText("No results found")).toBeInTheDocument()
+    expect(
+      screen.getByText(/Confirm your sources were ingested and indexed/i)
+    ).toBeInTheDocument()
   })
 
   it("keeps results shell visible during active search to support queued follow-ups", () => {

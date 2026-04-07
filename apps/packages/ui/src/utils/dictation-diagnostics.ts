@@ -4,6 +4,7 @@ import type {
   DictationResolvedMode,
   DictationToggleIntent
 } from "@/hooks/useDictationStrategy"
+import type { AudioSourceKind } from "@/audio"
 
 export const DICTATION_DIAGNOSTICS_EVENT = "tldw:dictation:diagnostics"
 
@@ -14,12 +15,14 @@ export type DictationDiagnosticsKind =
   | "server_success"
 
 export type DictationDiagnosticsPayload = {
-  version: 1
+  version: 2
   at: string
   surface: DictationDiagnosticsSurface
   kind: DictationDiagnosticsKind
   requested_mode: DictationModePreference | "unknown"
   resolved_mode: DictationResolvedMode | "unknown"
+  requested_source_kind: AudioSourceKind | "unknown"
+  resolved_source_kind: AudioSourceKind | "unknown"
   speech_available: boolean
   speech_uses_server: boolean
   toggle_intent: DictationToggleIntent | null
@@ -33,6 +36,8 @@ export type DictationDiagnosticsInput = {
   kind: DictationDiagnosticsKind
   requestedMode?: DictationModePreference | null
   resolvedMode?: DictationResolvedMode | null
+  requestedSourceKind?: AudioSourceKind | null
+  resolvedSourceKind?: AudioSourceKind | null
   speechAvailable?: boolean
   speechUsesServer?: boolean
   toggleIntent?: DictationToggleIntent | null
@@ -53,6 +58,13 @@ const RESOLVED_MODES: Set<DictationResolvedMode> = new Set([
   "server",
   "browser",
   "unavailable"
+])
+
+const SOURCE_KINDS: Set<AudioSourceKind> = new Set([
+  "default_mic",
+  "mic_device",
+  "tab_audio",
+  "system_audio"
 ])
 
 const TOGGLE_INTENTS: Set<DictationToggleIntent> = new Set([
@@ -105,6 +117,14 @@ const normalizeResolvedMode = (
   return "unknown"
 }
 
+const normalizeSourceKind = (value: unknown): AudioSourceKind | "unknown" => {
+  const normalized = normalizeText(value)
+  if (SOURCE_KINDS.has(normalized as AudioSourceKind)) {
+    return normalized as AudioSourceKind
+  }
+  return "unknown"
+}
+
 const normalizeToggleIntent = (value: unknown): DictationToggleIntent | null => {
   const normalized = normalizeText(value)
   if (TOGGLE_INTENTS.has(normalized as DictationToggleIntent)) {
@@ -132,7 +152,7 @@ const normalizeTimestamp = (value: unknown): string => {
 export const sanitizeDictationDiagnosticsPayload = (
   input: DictationDiagnosticsInput
 ): DictationDiagnosticsPayload => ({
-  version: 1,
+  version: 2,
   at: normalizeTimestamp(input.at),
   surface: input.surface === "sidepanel" ? "sidepanel" : "playground",
   kind:
@@ -141,6 +161,8 @@ export const sanitizeDictationDiagnosticsPayload = (
       : "toggle",
   requested_mode: normalizeRequestedMode(input.requestedMode),
   resolved_mode: normalizeResolvedMode(input.resolvedMode),
+  requested_source_kind: normalizeSourceKind(input.requestedSourceKind),
+  resolved_source_kind: normalizeSourceKind(input.resolvedSourceKind),
   speech_available: Boolean(input.speechAvailable),
   speech_uses_server: Boolean(input.speechUsesServer),
   toggle_intent: normalizeToggleIntent(input.toggleIntent),

@@ -7,11 +7,13 @@ from typing import Any, Callable
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_media_transcripts,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     upsert_transcript,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 class CloneService:
@@ -158,7 +160,8 @@ class CloneService:
     def _copy_media_item(self, media_id: str) -> str | None:
         """Copy a single media item (with chunks and transcripts) from source to target Media DB."""
         try:
-            media = self._src_media.get_media_by_id(media_id)
+            source_media_id = int(media_id)
+            media = self._src_media.get_media_by_id(source_media_id)
             if not media:
                 return None
 
@@ -192,14 +195,65 @@ class CloneService:
 
             # Deep copy transcripts
             try:
-                transcripts = get_media_transcripts(self._src_media, int(media_id))
-                for t in transcripts:
+                transcripts = get_media_transcripts(self._src_media, source_media_id)
+                source_latest_run_id = media.get("latest_transcription_run_id")
+                try:
+                    source_latest_run_id_int = (
+                        int(source_latest_run_id) if source_latest_run_id is not None else None
+                    )
+                except (TypeError, ValueError):
+                    logger.debug(f"Malformed latest_transcription_run_id={source_latest_run_id!r}, treating as None")
+                    source_latest_run_id_int = None
+                def _safe_int(val: object, default: int = 0) -> int:
+                    try:
+                        return int(val) if val is not None else default
+                    except (TypeError, ValueError):
+                        return default
+
+                ordered_transcripts = sorted(
+                    transcripts,
+                    key=lambda row: (
+                        row.get("transcription_run_id") is None,
+                        _safe_int(row.get("transcription_run_id")),
+                        str(row.get("created_at") or ""),
+                        _safe_int(row.get("id")),
+                    ),
+                )
+                has_matching_latest_run = (
+                    source_latest_run_id_int is not None
+                    and any(
+                        row.get("transcription_run_id") is not None
+                        and _safe_int(row.get("transcription_run_id"), -1)
+                        == source_latest_run_id_int
+                        for row in ordered_transcripts
+                    )
+                )
+                fallback_to_last_transcript = (
+                    source_latest_run_id_int is None or not has_matching_latest_run
+                )
+                for index, t in enumerate(ordered_transcripts):
+                    run_id = t.get("transcription_run_id")
+                    is_latest_run = False
+                    if source_latest_run_id_int is not None and run_id is not None:
+                        try:
+                            is_latest_run = int(run_id) == source_latest_run_id_int
+                        except (TypeError, ValueError):
+                            is_latest_run = False
+                    if (
+                        not is_latest_run
+                        and fallback_to_last_transcript
+                        and index == len(ordered_transcripts) - 1
+                    ):
+                        is_latest_run = True
                     upsert_transcript(
                         self._tgt_media,
                         new_media_id,
                         transcription=t.get("transcription", ""),
                         whisper_model=t.get("whisper_model", "cloned"),
                         created_at=t.get("created_at"),
+                        transcription_run_id=run_id,
+                        idempotency_key=t.get("idempotency_key"),
+                        set_as_latest=is_latest_run,
                     )
             except Exception as exc:
                 logger.warning(f"Failed to copy transcripts for media {media_id}: {exc}")

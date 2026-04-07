@@ -106,13 +106,17 @@ except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive guard f
     PromptsDatabase = None  # type: ignore
 
 try:
-    from ..DB_Management.media_db.api import create_media_database  # type: ignore
-    from ..DB_Management.media_db.legacy_reads import (  # type: ignore
+    from ..DB_Management.media_db.api import (  # type: ignore
+        create_media_database,
+        get_media_by_id,
         get_media_prompts,
         get_media_transcripts,
+        get_media_by_uuid,
     )
 except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     create_media_database = None  # type: ignore
+    get_media_by_id = None  # type: ignore
+    get_media_by_uuid = None  # type: ignore
     get_media_transcripts = None  # type: ignore
     get_media_prompts = None  # type: ignore
 
@@ -790,12 +794,12 @@ class ChatbookService:
         """Retrieve a media row by integer id or uuid."""
         record: dict[str, Any] | None = None
         try:
-            record = media_db.get_media_by_id(int(identifier))
+            record = get_media_by_id(media_db, int(identifier))
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             record = None
         if not record:
             try:
-                record = media_db.get_media_by_uuid(str(identifier))
+                record = get_media_by_uuid(media_db, str(identifier))
             except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 record = None
         if record and isinstance(record, dict):

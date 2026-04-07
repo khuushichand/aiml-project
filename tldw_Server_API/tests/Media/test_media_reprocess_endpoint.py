@@ -3,8 +3,10 @@ from typing import AsyncGenerator
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 from tldw_Server_API.tests.test_utils import create_test_media
 
 
@@ -37,7 +39,7 @@ def _principal_override():
     return _override
 
 
-def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
+def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch, managed_test_media_db):
 
 
     from tldw_Server_API.app.main import app as fastapi_app
@@ -48,19 +50,23 @@ def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_MODE", "1")
 
     db_path = tmp_path / "media.db"
-    seed_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-    media_id = create_test_media(seed_db, title="Test Doc", content="One two three four five.")
-    seed_db.close_connection()
+    with managed_test_media_db(
+        "test_client",
+        db_path=str(db_path),
+        initialize=False,
+    ) as seed_db:
+        media_id = create_test_media(seed_db, title="Test Doc", content="One two three four five.")
 
     async def _override_user() -> User:
         return User(id=1, username="tester", email=None, is_active=True)
 
-    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
-        override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-        try:
+    async def _override_db() -> AsyncGenerator[MediaDbLike, None]:
+        with managed_test_media_db(
+            "test_client",
+            db_path=str(db_path),
+            initialize=False,
+        ) as override_db:
             yield override_db
-        finally:
-            override_db.close_connection()
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
@@ -89,17 +95,20 @@ def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
         fastapi_app.dependency_overrides.pop(get_auth_principal, None)
         fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
 
-    check_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-    row = check_db.execute_query(
-        "SELECT count(*) AS c FROM UnvectorizedMediaChunks WHERE media_id = ?",
-        (media_id,),
-    ).fetchone()
-    check_db.close_connection()
+    with managed_test_media_db(
+        "test_client",
+        db_path=str(db_path),
+        initialize=False,
+    ) as check_db:
+        row = check_db.execute_query(
+            "SELECT count(*) AS c FROM UnvectorizedMediaChunks WHERE media_id = ?",
+            (media_id,),
+        ).fetchone()
     count_val = row["c"] if isinstance(row, dict) else row[0]
     assert count_val >= 1
 
 
-def test_reprocess_missing_media_returns_404(tmp_path):
+def test_reprocess_missing_media_returns_404(tmp_path, managed_test_media_db):
 
 
     from tldw_Server_API.app.main import app as fastapi_app
@@ -108,7 +117,63 @@ def test_reprocess_missing_media_returns_404(tmp_path):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     db_path = tmp_path / "media.db"
+    with managed_test_media_db(
+        "test_client",
+        db_path=str(db_path),
+        initialize=False,
+    ):
+        pass
+
+    async def _override_user() -> User:
+        return User(id=1, username="tester", email=None, is_active=True)
+
+    async def _override_db() -> AsyncGenerator[MediaDbLike, None]:
+        with managed_test_media_db(
+            "test_client",
+            db_path=str(db_path),
+            initialize=False,
+        ) as override_db:
+            yield override_db
+
+    fastapi_app.dependency_overrides[get_request_user] = _override_user
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
+    fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
+
+    try:
+        with TestClient(fastapi_app) as client:
+            resp = client.post(
+                "/api/v1/media/9999/reprocess",
+                json={"perform_chunking": True},
+            )
+            assert resp.status_code == 404, resp.text
+    finally:
+        fastapi_app.dependency_overrides.pop(get_request_user, None)
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)
+        fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
+
+
+def test_reprocess_embeddings_marks_vector_processed(tmp_path, monkeypatch):
+    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+    from tldw_Server_API.app.api.v1.endpoints.media import reprocess as reprocess_endpoint
+
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    async def _fake_generate_embeddings_for_media(**_kwargs):
+        return {"status": "success", "embedding_count": 1, "chunks_processed": 1}
+
+    monkeypatch.setattr(
+        reprocess_endpoint.embeddings_endpoint,
+        "generate_embeddings_for_media",
+        _fake_generate_embeddings_for_media,
+    )
+    monkeypatch.setattr(reprocess_endpoint, "invalidate_rag_caches", lambda *_, **__: None)
+
+    db_path = tmp_path / "media.db"
     seed_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
+    media_id = create_test_media(seed_db, title="Embeddings Doc", content="Embeddings should flip ready state.")
     seed_db.close_connection()
 
     async def _override_user() -> User:
@@ -128,11 +193,110 @@ def test_reprocess_missing_media_returns_404(tmp_path):
     try:
         with TestClient(fastapi_app) as client:
             resp = client.post(
-                "/api/v1/media/9999/reprocess",
-                json={"perform_chunking": True},
+                f"/api/v1/media/{media_id}/reprocess",
+                json={
+                    "perform_chunking": False,
+                    "generate_embeddings": True,
+                    "chunk_size": 50,
+                    "chunk_overlap": 10,
+                },
             )
-            assert resp.status_code == 404, resp.text
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["status"] == "completed"
     finally:
         fastapi_app.dependency_overrides.pop(get_request_user, None)
         fastapi_app.dependency_overrides.pop(get_auth_principal, None)
         fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
+
+    check_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
+    row = check_db.execute_query(
+        "SELECT vector_processing FROM Media WHERE id = ?",
+        (media_id,),
+    ).fetchone()
+    check_db.close_connection()
+    vector_status = row["vector_processing"] if isinstance(row, dict) else row[0]
+    assert vector_status == 1
+
+
+def test_reprocess_embeddings_retries_mark_processed_conflicts(tmp_path, monkeypatch):
+    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+    from tldw_Server_API.app.api.v1.endpoints.media import reprocess as reprocess_endpoint
+
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    async def _fake_generate_embeddings_for_media(**_kwargs):
+        return {"status": "success", "embedding_count": 1, "chunks_processed": 1}
+
+    monkeypatch.setattr(
+        reprocess_endpoint.embeddings_endpoint,
+        "generate_embeddings_for_media",
+        _fake_generate_embeddings_for_media,
+    )
+    monkeypatch.setattr(reprocess_endpoint, "invalidate_rag_caches", lambda *_, **__: None)
+
+    original_mark_media_as_processed = reprocess_endpoint.mark_media_as_processed
+    attempts = {"processed": 0}
+
+    def _flaky_mark_media_as_processed(*, db_instance, media_id):  # noqa: ANN001
+        attempts["processed"] += 1
+        if attempts["processed"] == 1:
+            raise ConflictError("Media", media_id)
+        return original_mark_media_as_processed(db_instance=db_instance, media_id=media_id)
+
+    monkeypatch.setattr(
+        reprocess_endpoint,
+        "mark_media_as_processed",
+        _flaky_mark_media_as_processed,
+    )
+
+    db_path = tmp_path / "media.db"
+    seed_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
+    media_id = create_test_media(seed_db, title="Embeddings Conflict Doc", content="Embeddings should survive a mark conflict.")
+    seed_db.close_connection()
+
+    async def _override_user() -> User:
+        return User(id=1, username="tester", email=None, is_active=True)
+
+    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+        override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
+        try:
+            yield override_db
+        finally:
+            override_db.close_connection()
+
+    fastapi_app.dependency_overrides[get_request_user] = _override_user
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
+    fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
+
+    try:
+        with TestClient(fastapi_app) as client:
+            resp = client.post(
+                f"/api/v1/media/{media_id}/reprocess",
+                json={
+                    "perform_chunking": False,
+                    "generate_embeddings": True,
+                    "chunk_size": 50,
+                    "chunk_overlap": 10,
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["status"] == "completed"
+    finally:
+        fastapi_app.dependency_overrides.pop(get_request_user, None)
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)
+        fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
+
+    check_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
+    row = check_db.execute_query(
+        "SELECT vector_processing, chunking_status FROM Media WHERE id = ?",
+        (media_id,),
+    ).fetchone()
+    check_db.close_connection()
+    vector_status = row["vector_processing"] if isinstance(row, dict) else row[0]
+    chunking_status = row["chunking_status"] if isinstance(row, dict) else row[1]
+    assert attempts["processed"] == 2
+    assert vector_status == 1
+    assert not str(chunking_status).startswith("embeddings_error: ConflictError")

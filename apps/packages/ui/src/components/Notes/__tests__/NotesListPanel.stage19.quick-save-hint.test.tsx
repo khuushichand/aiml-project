@@ -28,7 +28,7 @@ vi.mock("@/hooks/useConnectionState", () => ({
 }))
 
 describe("NotesListPanel stage 19 quick-save discoverability hint", () => {
-  it("shows chat quick-save guidance in the active-notes empty state", () => {
+  it("shows chat quick-save guidance in the active-notes empty state", async () => {
     render(
       <NotesListPanel
         listMode="active"
@@ -56,7 +56,7 @@ describe("NotesListPanel stage 19 quick-save discoverability hint", () => {
     )
 
     expect(
-      screen.getByText("You can also create notes directly from chat messages using quick save.")
+      await screen.findByText("You can also create notes directly from chat messages using quick save.")
     ).toBeInTheDocument()
   })
 })

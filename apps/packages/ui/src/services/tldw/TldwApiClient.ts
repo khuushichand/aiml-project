@@ -5,16 +5,27 @@ import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import { createJsonResponseLike } from "@/services/tldw/json-response-like"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
 import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
 import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
+import { toTrimmedStringArray } from "@/services/tldw/client-utils"
+import { getTldwTTSModel, getTldwTTSVoice } from "@/services/tts"
 import {
   DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
   normalizeDefaultCharacterPreferenceId
 } from "@/utils/default-character-preference"
+import {
+  normalizePersonaBuddySummary,
+  type PersonaBuddySummary
+} from "@/types/persona-buddy"
+import {
+  resolveWebUiQuickstartServerUrl,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
 import {
   buildContentPayload,
   mapApiDetailToUi,
@@ -48,7 +59,39 @@ const CHAT_COMPLETION_ERROR_MESSAGE = "Chat completion failed."
 const CHAT_COMPLETION_ERRORS_MESSAGE =
   "One or more internal errors were suppressed."
 
+const isSuspiciousChatCompletionString = (value: string): boolean =>
+  /traceback|stack(?:\s*trace)?|exception|error|\/Users\/|[A-Za-z]:\\|\.py:\d+/i.test(
+    value
+  )
+
+const normalizeChatCompletionResponseBody = (
+  value: unknown
+): Record<string, unknown> | unknown[] => {
+  if (typeof value === "string") {
+    if (isSuspiciousChatCompletionString(value)) {
+      return {
+        error: CHAT_COMPLETION_ERROR_MESSAGE,
+        errors: [CHAT_COMPLETION_ERRORS_MESSAGE]
+      }
+    }
+    return { content: value }
+  }
+  const sanitized = sanitizeChatCompletionPayload(value)
+  if (Array.isArray(sanitized)) {
+    return sanitized
+  }
+  if (sanitized && typeof sanitized === "object") {
+    return sanitized as Record<string, unknown>
+  }
+  return { content: sanitized ?? "" }
+}
+
 const sanitizeChatCompletionPayload = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return isSuspiciousChatCompletionString(value)
+      ? CHAT_COMPLETION_ERROR_MESSAGE
+      : value
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeChatCompletionPayload(item))
   }
@@ -146,15 +189,6 @@ const toOptionalNumber = (value: unknown): number | null => {
     }
   }
   return null
-}
-
-const toStringArray = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return []
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => entry.trim())
 }
 
 export const normalizeIngestionSourceSyncSummary = (
@@ -308,6 +342,41 @@ export interface OpenAICredentialSourceSwitchResponse {
   updated_at?: string | null
 }
 
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin:
+        typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
+    })
+  } catch {
+    return null
+  }
+}
+
 export type PresentationStudioSlide = {
   order: number
   layout: string
@@ -322,6 +391,10 @@ export type PresentationVisualStyleSnapshot = {
   scope: string
   name: string
   description?: string | null
+  category?: string | null
+  guide_number?: number | null
+  tags?: string[]
+  best_for?: string[]
   generation_rules?: Record<string, any>
   artifact_preferences?: string[]
   appearance_defaults?: Record<string, any>
@@ -334,6 +407,10 @@ export type VisualStyleRecord = {
   name: string
   scope: string
   description?: string | null
+  category?: string | null
+  guide_number?: number | null
+  tags: string[]
+  best_for: string[]
   generation_rules: Record<string, any>
   artifact_preferences: string[]
   appearance_defaults: Record<string, any>
@@ -392,6 +469,10 @@ export const clonePresentationVisualStyleSnapshot = (
     scope: snapshot.scope,
     name: snapshot.name,
     description: snapshot.description ?? null,
+    category: snapshot.category ?? null,
+    guide_number: snapshot.guide_number ?? null,
+    tags: [...(snapshot.tags || [])],
+    best_for: [...(snapshot.best_for || [])],
     generation_rules: cloneVisualStyleObject(snapshot.generation_rules),
     artifact_preferences: [...(snapshot.artifact_preferences || [])],
     appearance_defaults: cloneVisualStyleObject(snapshot.appearance_defaults),
@@ -407,6 +488,10 @@ export const buildPresentationVisualStyleSnapshot = (
     | "scope"
     | "name"
     | "description"
+    | "category"
+    | "guide_number"
+    | "tags"
+    | "best_for"
     | "generation_rules"
     | "artifact_preferences"
     | "appearance_defaults"
@@ -419,6 +504,10 @@ export const buildPresentationVisualStyleSnapshot = (
     scope: style.scope,
     name: style.name,
     description: style.description ?? null,
+    category: style.category ?? null,
+    guide_number: style.guide_number ?? null,
+    tags: [...(style.tags || [])],
+    best_for: [...(style.best_for || [])],
     generation_rules: cloneVisualStyleObject(style.generation_rules),
     artifact_preferences: [...(style.artifact_preferences || [])],
     appearance_defaults: cloneVisualStyleObject(style.appearance_defaults),
@@ -498,8 +587,12 @@ const normalizeVisualStyleSnapshot = (
     scope,
     name,
     description: toOptionalString(snapshot.description),
+    category: toOptionalString(snapshot.category),
+    guide_number: toOptionalNumber(snapshot.guide_number),
+    tags: toTrimmedStringArray(snapshot.tags),
+    best_for: toTrimmedStringArray(snapshot.best_for),
     generation_rules: toRecord(snapshot.generation_rules),
-    artifact_preferences: toStringArray(snapshot.artifact_preferences),
+    artifact_preferences: toTrimmedStringArray(snapshot.artifact_preferences),
     appearance_defaults: toRecord(snapshot.appearance_defaults),
     fallback_policy: toRecord(snapshot.fallback_policy),
     version: toOptionalNumber(snapshot.version)
@@ -515,8 +608,12 @@ const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
     name: String(record.name ?? ""),
     scope: String(record.scope ?? ""),
     description: toOptionalString(record.description),
+    category: toOptionalString(record.category),
+    guide_number: toOptionalNumber(record.guide_number),
+    tags: toTrimmedStringArray(record.tags),
+    best_for: toTrimmedStringArray(record.best_for),
     generation_rules: toRecord(record.generation_rules),
-    artifact_preferences: toStringArray(record.artifact_preferences),
+    artifact_preferences: toTrimmedStringArray(record.artifact_preferences),
     appearance_defaults: toRecord(record.appearance_defaults),
     fallback_policy: toRecord(record.fallback_policy),
     version: toOptionalNumber(record.version),
@@ -822,7 +919,8 @@ export interface PersonaProfileSummary {
   name?: string | null
   character_card_id?: number | null
   origin_character_id?: number | null
-  [key: string]: unknown
+  buddy_summary?: PersonaBuddySummary | null
+  metadata?: Record<string, unknown> | null
 }
 
 export interface PersonaProfile extends PersonaProfileSummary {
@@ -942,9 +1040,16 @@ export const normalizePersonaProfile = <T extends Record<string, unknown>>(
   input: T | null | undefined
 ): PersonaProfile => {
   const candidate = input && typeof input === "object" ? input : ({} as T)
+  const rawBuddySummary = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "buddy_summary"
+  )
+    ? candidate.buddy_summary
+    : candidate?.buddySummary
   return {
     ...candidate,
-    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+    id: String(candidate?.id ?? candidate?.persona_id ?? ""),
+    buddy_summary: normalizePersonaBuddySummary(rawBuddySummary)
   }
 }
 
@@ -1073,10 +1178,24 @@ export type FileCreateResponse = {
   artifact: FileArtifact
 }
 
+export type ReferenceImageCandidate = {
+  file_id: number
+  title: string
+  mime_type: string
+  width?: number | null
+  height?: number | null
+  created_at: string
+}
+
+export type ReferenceImageListResponse = {
+  items: ReferenceImageCandidate[]
+}
+
 export type ImageArtifactRequest = {
   backend: string
   prompt: string
   negativePrompt?: string
+  referenceFileId?: number
   width?: number
   height?: number
   steps?: number
@@ -1369,7 +1488,7 @@ export class TldwApiClient {
   }
 
   private getPlaceholderApiKeyMessage(): string {
-    return "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings → tldw server before continuing."
+    return "tldw server API key is still set to a placeholder value. Replace it with your real API key in Settings → tldw server before continuing."
   }
 
   async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
@@ -1511,6 +1630,7 @@ export class TldwApiClient {
       }
     }
     const envApiKey = this.getEnvApiKey()
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
 
     if (!stored) {
       // True first-run: leave config null so callers (like the connection
@@ -1523,7 +1643,7 @@ export class TldwApiClient {
         // Default authMode but do not silently inject a server URL if none
         // has been configured yet.
         authMode: stored.authMode || "single-user",
-        serverUrl: stored.serverUrl || ""
+        serverUrl: quickstartWebUiServerUrl || stored.serverUrl || ""
       }
       if (!hydrated.apiKey && envApiKey) {
         hydrated.apiKey = envApiKey
@@ -1536,7 +1656,7 @@ export class TldwApiClient {
     const hostedMode = isHostedTldwDeployment()
     const nextBaseUrl = hostedMode
       ? String(config?.serverUrl || "").replace(/\/$/, "")
-      : (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
+      : (quickstartWebUiServerUrl || config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
     if (this.baseUrl && this.baseUrl !== nextBaseUrl) {
       this.openApiPathSet = null
       this.openApiPathSetPromise = null
@@ -1678,6 +1798,87 @@ export class TldwApiClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: { auth_source: authSource }
+    })
+  }
+
+  // ── BYOK Provider Keys ──────────────────────────────────────────────
+
+  async listUserProviderKeys(): Promise<{
+    items: Array<{
+      provider: string
+      has_key: boolean
+      source: string
+      key_hint: string | null
+      auth_source: string | null
+      last_used_at: string | null
+    }>
+  }> {
+    return await this.request<{
+      items: Array<{
+        provider: string
+        has_key: boolean
+        source: string
+        key_hint: string | null
+        auth_source: string | null
+        last_used_at: string | null
+      }>
+    }>({
+      path: "/api/v1/users/keys",
+      method: "GET"
+    })
+  }
+
+  async upsertUserProviderKey(
+    provider: string,
+    apiKey: string,
+    opts?: { credential_fields?: Record<string, unknown>; metadata?: Record<string, unknown> }
+  ): Promise<{
+    provider: string
+    status: string
+    key_hint: string
+    updated_at: string
+  }> {
+    return await this.request<{
+      provider: string
+      status: string
+      key_hint: string
+      updated_at: string
+    }>({
+      path: "/api/v1/users/keys",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        provider,
+        api_key: apiKey,
+        ...opts,
+      }
+    })
+  }
+
+  async testUserProviderKey(
+    provider: string,
+    model?: string
+  ): Promise<{
+    provider: string
+    status: string
+    model: string | null
+  }> {
+    return await this.request<{
+      provider: string
+      status: string
+      model: string | null
+    }>({
+      path: "/api/v1/users/keys/test",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { provider, model }
+    })
+  }
+
+  async deleteUserProviderKey(provider: string): Promise<void> {
+    await this.request<void>({
+      path: `/api/v1/users/keys/${encodeURIComponent(provider)}`,
+      method: "DELETE"
     })
   }
 
@@ -1923,6 +2124,23 @@ export class TldwApiClient {
 
   async getProviders(): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
+  }
+
+  /**
+   * Check which LLM providers are configured on the server.
+   * Returns `{ providers: [...], any_configured: boolean }`.
+   */
+  async getProvidersStatus(): Promise<{
+    providers: Array<{
+      name: string
+      configured: boolean
+      requires_api_key: boolean
+      key_hint?: string | null
+      key_source?: string | null
+    }>
+    any_configured: boolean
+  }> {
+    return await bgRequest<any>({ path: '/api/v1/config/providers', method: 'GET' })
   }
 
   async getModelsMetadata(options?: {
@@ -2209,8 +2427,8 @@ export class TldwApiClient {
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
-    const safeData = typeof data === "string" ? data : sanitizeChatCompletionPayload(data)
-    return new Response(typeof safeData === 'string' ? safeData : JSON.stringify(safeData), { status: 200, headers: { 'content-type': typeof safeData === 'string' ? 'text/plain' : 'application/json' } })
+    const safeData = normalizeChatCompletionResponseBody(data)
+    return createJsonResponseLike(safeData, { status: 200 })
   }
 
   async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
@@ -6208,6 +6426,9 @@ export class TldwApiClient {
       prompt: request.prompt
     }
     if (request.negativePrompt) payload.negative_prompt = request.negativePrompt
+    if (typeof request.referenceFileId === "number") {
+      payload.reference_file_id = request.referenceFileId
+    }
     if (typeof request.width === "number") payload.width = request.width
     if (typeof request.height === "number") payload.height = request.height
     if (typeof request.steps === "number") payload.steps = request.steps
@@ -6669,17 +6890,20 @@ export class TldwApiClient {
 
   async generateReadingItemTts(
     itemId: string,
-    options?: { voice?: string }
+    options?: { model?: string; voice?: string }
   ): Promise<{ audio_url: string }> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/tts` as const
+    const model = options?.model || (await getTldwTTSModel())
+    const voice = options?.voice || (await getTldwTTSVoice())
     const data = await bgRequest<ArrayBuffer>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: {
+        model,
+        voice,
         response_format: "mp3",
         stream: false,
-        ...(options || {})
       },
       responseType: "arrayBuffer"
     })
@@ -7373,6 +7597,7 @@ import { collectionsMethods } from "./domains/collections"
 import { modelsAudioMethods } from "./domains/models-audio"
 import { presentationsMethods } from "./domains/presentations"
 import { workspaceApiMethods } from "./domains/workspace-api"
+import { webClipperMethods } from "./domains/web-clipper"
 
 // Declaration merging: extend the class type with all domain methods
 export interface TldwApiClient
@@ -7384,7 +7609,8 @@ export interface TldwApiClient
     Omit<typeof collectionsMethods, never>,
     Omit<typeof modelsAudioMethods, never>,
     Omit<typeof presentationsMethods, never>,
-    Omit<typeof workspaceApiMethods, never> {}
+    Omit<typeof workspaceApiMethods, never>,
+    Omit<typeof webClipperMethods, never> {}
 
 // Apply domain methods to the prototype
 Object.assign(
@@ -7396,7 +7622,8 @@ Object.assign(
   collectionsMethods,
   modelsAudioMethods,
   presentationsMethods,
-  workspaceApiMethods
+  workspaceApiMethods,
+  webClipperMethods
 )
 
 // Also expose core helpers that domain files reference via `this`

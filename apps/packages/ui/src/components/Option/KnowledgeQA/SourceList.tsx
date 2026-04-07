@@ -2,11 +2,10 @@
  * SourceList - List of retrieved source documents
  */
 
-import React, { useCallback, useMemo, useEffect } from "react"
+import React, { useCallback, useMemo, useEffect, useState } from "react"
 import { FileText, Keyboard, X } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { SourceCard, type SourceAskTemplate } from "./SourceCard"
-import { SourceViewerModal } from "./SourceViewerModal"
 import { cn } from "@/libs/utils"
 import type { RagResult } from "./types"
 import { getFeedbackSessionId, submitExplicitFeedback } from "@/services/feedback"
@@ -54,8 +53,13 @@ const SOURCE_CONTENT_FACETS: SourceContentFacet[] = [
   "other",
 ]
 
+const LazySourceViewerModal = React.lazy(() =>
+  import("./SourceViewerModal").then((module) => ({ default: module.SourceViewerModal })),
+)
+
 type SourceListProps = {
   className?: string
+  layout?: "main" | "rail"
 }
 
 type SourceFeedbackState = {
@@ -221,7 +225,7 @@ function resolvePinnedSourceTarget(result: RagResult): PinnedSourceTarget {
   }
 }
 
-export function SourceList({ className }: SourceListProps) {
+export function SourceList({ className, layout = "main" }: SourceListProps) {
   const {
     results = [],
     citations = [],
@@ -718,12 +722,24 @@ export function SourceList({ className }: SourceListProps) {
     setFeedbackBySource({})
   }, [answerSessionKey, results])
 
+  const [showFiltersOverride, setShowFiltersOverride] = useState(false)
+  const isRailLayout = layout === "rail"
+  const density: "compact" | "default" | "full" =
+    results.length <= 3 ? "compact" : results.length <= 9 ? "default" : "full"
+  const showFilters = density === "full" || showFiltersOverride
+  const showExtendedFilters = density === "full" || (showFiltersOverride && density !== "full")
+
+  // Reset filter override when results count changes
+  useEffect(() => {
+    setShowFiltersOverride(false)
+  }, [results.length])
+
   if (results.length === 0) {
     return null
   }
 
   return (
-    <div className={cn("space-y-4", className)}>
+    <div className={cn(isRailLayout ? "space-y-3" : "space-y-4", className)}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -736,111 +752,131 @@ export function SourceList({ className }: SourceListProps) {
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2">
-          <label htmlFor="knowledge-source-date-filter" className="sr-only">
-            Filter sources by date range
-          </label>
-          <select
-            id="knowledge-source-date-filter"
-            value={dateFilter}
-            onChange={(event) => setDateFilter(event.target.value as SourceDateFilter)}
-            className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-text"
-          >
-            <option value="all">Any date</option>
-            <option value="last_30d">Last 30 days</option>
-            <option value="last_365d">Last 12 months</option>
-            <option value="older_365d">Older than 1 year</option>
-          </select>
-
-          <label htmlFor="knowledge-source-keyword-filter" className="sr-only">
-            Filter sources by keyword
-          </label>
-          <input
-            id="knowledge-source-keyword-filter"
-            type="search"
-            value={keywordFilter}
-            onChange={(event) => setKeywordFilter(event.target.value)}
-            placeholder="Filter in results"
-            className="w-40 rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text placeholder:text-text-muted sm:w-52"
-          />
-
-          <label htmlFor="knowledge-source-sort" className="sr-only">
-            Sort sources
-          </label>
-          <select
-            id="knowledge-source-sort"
-            value={sortMode}
-            onChange={(event) => setSortMode(event.target.value as SourceSortMode)}
-            className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-text"
-          >
-            <option value="relevance">By Relevance</option>
-            <option value="title">By Title</option>
-            <option value="date">By Date</option>
-            <option value="cited">Cited First</option>
-          </select>
-
-          <button
-            type="button"
-            onClick={resetFilters}
-            disabled={!hasActiveFilters}
-            className={cn(
-              "rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors",
-              hasActiveFilters
-                ? "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
-                : "border-border bg-surface text-text-muted opacity-60 cursor-not-allowed"
+        {(density !== "compact" || showFilters) && (
+          <div className="flex items-center gap-2">
+            {showExtendedFilters && (
+              <>
+                <label htmlFor="knowledge-source-date-filter" className="sr-only">
+                  Filter sources by date range
+                </label>
+                <select
+                  id="knowledge-source-date-filter"
+                  value={dateFilter}
+                  onChange={(event) => setDateFilter(event.target.value as SourceDateFilter)}
+                  className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-text"
+                >
+                  <option value="all">Any date</option>
+                  <option value="last_30d">Last 30 days</option>
+                  <option value="last_365d">Last 12 months</option>
+                  <option value="older_365d">Older than 1 year</option>
+                </select>
+              </>
             )}
-            aria-label="Reset source filters"
-          >
-            Reset filters
-          </button>
-          {hasActiveFilters ? (
-            <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
-              {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"} active
-            </span>
-          ) : null}
-        </div>
+
+            <label htmlFor="knowledge-source-keyword-filter" className="sr-only">
+              Filter sources by keyword
+            </label>
+            <input
+              id="knowledge-source-keyword-filter"
+              type="search"
+              value={keywordFilter}
+              onChange={(event) => setKeywordFilter(event.target.value)}
+              placeholder="Filter in results"
+              className="w-40 rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text placeholder:text-text-muted sm:w-52"
+            />
+
+            <label htmlFor="knowledge-source-sort" className="sr-only">
+              Sort sources
+            </label>
+            <select
+              id="knowledge-source-sort"
+              value={sortMode}
+              onChange={(event) => setSortMode(event.target.value as SourceSortMode)}
+              className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-text"
+            >
+              <option value="relevance">By Relevance</option>
+              <option value="title">By Title</option>
+              <option value="date">By Date</option>
+              <option value="cited">Cited First</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={resetFilters}
+              disabled={!hasActiveFilters}
+              className={cn(
+                "rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                hasActiveFilters
+                  ? "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
+                  : "border-border bg-surface text-text-muted opacity-60 cursor-not-allowed"
+              )}
+              aria-label="Reset source filters"
+            >
+              Reset filters
+            </button>
+            {hasActiveFilters ? (
+              <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
+                {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"} active
+              </span>
+            ) : null}
+          </div>
+        )}
       </div>
+
+      {density !== "full" && (
+        <button
+          type="button"
+          onClick={() => setShowFiltersOverride((prev) => !prev)}
+          className="text-xs font-medium text-primary hover:text-primaryStrong transition-colors"
+        >
+          {showFilters ? "Hide filters" : density === "compact" ? "Show filters" : "More filters"}
+        </button>
+      )}
 
       {/* Source type filters */}
-      <div className="flex flex-wrap items-center gap-2" aria-label="Source type filters">
-        {sourceTypeFilters.map((filter) => (
-          <button
-            key={filter.key}
-            type="button"
-            onClick={() => setActiveSourceType(filter.key)}
-            aria-pressed={activeSourceType === filter.key}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
-              activeSourceType === filter.key
-                ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
-            )}
-          >
-            {filter.label}
-            <span className="text-[11px] opacity-80">{filter.count}</span>
-          </button>
-        ))}
-      </div>
+      {showExtendedFilters && (
+        <div className="flex flex-wrap items-center gap-2" aria-label="Source type filters">
+          {sourceTypeFilters.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setActiveSourceType(filter.key)}
+              aria-pressed={activeSourceType === filter.key}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                activeSourceType === filter.key
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
+              )}
+            >
+              {filter.label}
+              <span className="text-[11px] opacity-80">{filter.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
-      <div className="flex flex-wrap items-center gap-2" aria-label="Content type filters">
-        {contentFacetFilters.map((filter) => (
-          <button
-            key={filter.key}
-            type="button"
-            onClick={() => setActiveContentFacet(filter.key)}
-            aria-pressed={activeContentFacet === filter.key}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
-              activeContentFacet === filter.key
-                ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
-            )}
-          >
-            {filter.label}
-            <span className="text-[11px] opacity-80">{filter.count}</span>
-          </button>
-        ))}
-      </div>
+      {showExtendedFilters && (
+        <div className="flex flex-wrap items-center gap-2" aria-label="Content type filters">
+          {contentFacetFilters.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setActiveContentFacet(filter.key)}
+              aria-pressed={activeContentFacet === filter.key}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                activeContentFacet === filter.key
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
+              )}
+            >
+              {filter.label}
+              <span className="text-[11px] opacity-80">{filter.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Keyboard hint + visible count */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-text-muted">
@@ -850,8 +886,18 @@ export function SourceList({ className }: SourceListProps) {
         </span>
         <div className="flex items-center gap-2">
           <span>
-            Press <kbd className="px-1 py-0.5 bg-bg-subtle text-text rounded font-mono">1-9</kbd> to jump,
-            <kbd className="ml-1 px-1 py-0.5 bg-bg-subtle text-text rounded font-mono">Tab</kbd> to cycle
+            {isRailLayout ? (
+              <>
+                Jump: <kbd className="px-1 py-0.5 bg-bg-subtle text-text rounded font-mono">1-9</kbd>
+                {" • "}
+                <kbd className="px-1 py-0.5 bg-bg-subtle text-text rounded font-mono">Tab</kbd> cycles
+              </>
+            ) : (
+              <>
+                Press <kbd className="px-1 py-0.5 bg-bg-subtle text-text rounded font-mono">1-9</kbd> to jump,
+                <kbd className="ml-1 px-1 py-0.5 bg-bg-subtle text-text rounded font-mono">Tab</kbd> to cycle
+              </>
+            )}
           </span>
           <button
             type="button"
@@ -872,7 +918,15 @@ export function SourceList({ className }: SourceListProps) {
       ) : (
         <>
           {/* Source cards - consistent 2-column layout above md breakpoint */}
-          <div className="grid gap-4 md:grid-cols-2" role="list" aria-label="Retrieved sources">
+          <div
+            data-testid="knowledge-source-grid"
+            className={cn(
+              "grid gap-4",
+              isRailLayout ? "grid-cols-1 gap-3" : "md:grid-cols-2"
+            )}
+            role="list"
+            aria-label="Retrieved sources"
+          >
             {visibleItems.map((item) => {
               const sourceKey = getResultFeedbackKey(item.result, item.originalIndex)
               const feedbackState = feedbackBySource[sourceKey] ?? {
@@ -894,6 +948,7 @@ export function SourceList({ className }: SourceListProps) {
                   }}
                   highlightTerms={highlightTerms}
                   citationUsages={citationUsageByIndex[item.originalIndex + 1] || []}
+                  density={isRailLayout ? "compact" : "default"}
                   onAskAbout={handleAskAbout}
                   onViewFull={handleViewFull}
                   onSourceFeedback={(value, sourceIndex, thumb) => {
@@ -929,12 +984,14 @@ export function SourceList({ className }: SourceListProps) {
         </>
       )}
 
-      <SourceViewerModal
-        open={Boolean(viewerState.result)}
-        result={viewerState.result}
-        index={viewerState.index}
-        onClose={closeViewer}
-      />
+      <React.Suspense fallback={null}>
+        <LazySourceViewerModal
+          open={Boolean(viewerState.result)}
+          result={viewerState.result}
+          index={viewerState.index}
+          onClose={closeViewer}
+        />
+      </React.Suspense>
 
       {shortcutsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

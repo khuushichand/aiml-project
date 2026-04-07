@@ -14,12 +14,14 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ExportMenu } from '@/components/ui/export-menu';
 import { RefreshCw, Wallet, Pencil } from 'lucide-react';
+import { exportBudgets, type ExportFormat } from '@/lib/export';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useUrlMultiState } from '@/lib/use-url-state';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
 
@@ -33,6 +35,11 @@ type BudgetEnforcementMode = {
   per_metric?: Record<string, 'none' | 'soft' | 'hard'>;
 };
 
+type ProviderBudget = {
+  month_usd?: number | null;
+  day_usd?: number | null;
+};
+
 type BudgetSettings = {
   budget_day_usd?: number | null;
   budget_month_usd?: number | null;
@@ -40,6 +47,7 @@ type BudgetSettings = {
   budget_month_tokens?: number | null;
   alert_thresholds?: BudgetAlertThresholds | null;
   enforcement_mode?: BudgetEnforcementMode | null;
+  provider_budgets?: Record<string, ProviderBudget | null> | null;
 };
 
 type BudgetMetricKey =
@@ -73,9 +81,21 @@ type BudgetEditErrorsState = {
   thresholds: BudgetEditValidationErrors;
 };
 
+type ProviderBudgetDraft = {
+  month_usd: string;
+  day_usd: string;
+};
+
 type NotificationChannelSummary = {
   configuredChannels: string[];
   minSeverity: 'info' | 'warning' | 'error' | 'critical';
+};
+
+type BudgetSpend = {
+  spend_day_usd?: number | null;
+  spend_month_usd?: number | null;
+  spend_day_tokens?: number | null;
+  spend_month_tokens?: number | null;
 };
 
 type OrgBudgetItem = {
@@ -85,7 +105,9 @@ type OrgBudgetItem = {
   plan_name: string;
   plan_display_name: string;
   budgets: BudgetSettings;
+  spend?: BudgetSpend;
   updated_at?: string | null;
+  period_start?: string | null;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -193,7 +215,17 @@ const parseOrgBudgetItems = (value: unknown): OrgBudgetItem[] => {
 
     const orgSlug = typeof item.org_slug === 'string' || item.org_slug === null ? item.org_slug : undefined;
     const updatedAt = typeof item.updated_at === 'string' || item.updated_at === null ? item.updated_at : undefined;
+    const periodStart = typeof item.period_start === 'string' || item.period_start === null ? item.period_start : undefined;
     const budgets = parseBudgetSettings(item.budgets);
+
+    // Spend data may be nested under item.spend or flattened into the item itself
+    const spendRaw = isRecord(item.spend) ? item.spend : (isRecord(item) ? item : null);
+    const spend: BudgetSpend = {
+      spend_day_usd: typeof spendRaw?.spend_day_usd === 'number' ? spendRaw.spend_day_usd : undefined,
+      spend_month_usd: typeof spendRaw?.spend_month_usd === 'number' ? spendRaw.spend_month_usd : undefined,
+      spend_day_tokens: typeof spendRaw?.spend_day_tokens === 'number' ? spendRaw.spend_day_tokens : undefined,
+      spend_month_tokens: typeof spendRaw?.spend_month_tokens === 'number' ? spendRaw.spend_month_tokens : undefined,
+    };
 
     acc.push({
       org_id: orgId,
@@ -202,7 +234,9 @@ const parseOrgBudgetItems = (value: unknown): OrgBudgetItem[] => {
       plan_name: planName,
       plan_display_name: planDisplayName,
       budgets,
+      spend,
       updated_at: updatedAt,
+      period_start: periodStart,
     });
 
     return acc;
@@ -470,8 +504,116 @@ const formatEnforcement = (mode?: BudgetEnforcementMode | null) => {
   return parts.length > 0 ? parts.join(' | ') : '—';
 };
 
+const computeExhaustionLabel = (
+  currentSpend: number,
+  cap: number,
+  periodDays: number,
+  periodStart?: string | null
+): string => {
+  if (cap <= 0 || currentSpend <= 0) return 'On track';
+  if (currentSpend >= cap) return 'Exhausted';
+
+  const startDate = periodStart ? new Date(periodStart) : new Date();
+  const now = new Date();
+  const elapsedMs = Math.max(now.getTime() - startDate.getTime(), 1);
+  const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
+  if (elapsedDays < 0.01) return 'On track';
+
+  const burnRate = currentSpend / elapsedDays;
+  if (burnRate <= 0) return 'On track';
+
+  const remaining = cap - currentSpend;
+  const daysRemaining = remaining / burnRate;
+  if (daysRemaining > periodDays * 2) return 'On track';
+
+  const exhaustionDate = new Date(now.getTime() + daysRemaining * 24 * 60 * 60 * 1000);
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `Projected: ${monthNames[exhaustionDate.getMonth()]} ${exhaustionDate.getDate()}`;
+};
+
+const SpendProgressBar = ({
+  label,
+  cap,
+  spend,
+  formatValue,
+  periodDays,
+  periodStart,
+}: {
+  label: string;
+  cap: number | null | undefined;
+  spend: number | null | undefined;
+  formatValue: (v?: number | null) => string;
+  periodDays: number;
+  periodStart?: string | null;
+}) => {
+  if (cap === null || cap === undefined) {
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono text-muted-foreground">--</span>
+      </div>
+    );
+  }
+
+  const currentSpend = typeof spend === 'number' ? spend : 0;
+  const hasSpendData = typeof spend === 'number';
+  const pct = cap > 0 ? Math.min((currentSpend / cap) * 100, 100) : 0;
+
+  const barColor =
+    pct >= 95 ? 'bg-red-500' :
+    pct >= 80 ? 'bg-yellow-500' :
+    'bg-green-500';
+
+  const exhaustionLabel = hasSpendData
+    ? computeExhaustionLabel(currentSpend, cap, periodDays, periodStart)
+    : null;
+
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono">
+          {hasSpendData ? `${formatValue(currentSpend)} / ` : ''}{formatValue(cap)}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <div
+          className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-label={`${label} usage`}
+          aria-valuenow={Math.round(pct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div
+            className={`h-full rounded-full transition-all ${barColor}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className={`text-[10px] font-medium ${
+          pct >= 95 ? 'text-red-600' :
+          pct >= 80 ? 'text-yellow-600' :
+          'text-green-600'
+        }`}>
+          {Math.round(pct)}%
+        </span>
+      </div>
+      {exhaustionLabel && (
+        <div className={`text-[10px] ${
+          exhaustionLabel === 'Exhausted' ? 'text-red-600 font-medium' :
+          exhaustionLabel === 'On track' ? 'text-muted-foreground' :
+          'text-yellow-600'
+        }`}>
+          {exhaustionLabel}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const renderBudgetCaps = (item: OrgBudgetItem) => {
   const settings = item.budgets || {};
+  const spend = item.spend || {};
   const hasAny = [
     settings.budget_day_usd,
     settings.budget_month_usd,
@@ -482,29 +624,62 @@ const renderBudgetCaps = (item: OrgBudgetItem) => {
     return <span className="text-muted-foreground text-sm">No caps set</span>;
   }
   return (
-    <div className="space-y-1 text-xs">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-muted-foreground">Daily USD</span>
-        <span className="font-mono">{formatCurrency(settings.budget_day_usd)}</span>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-muted-foreground">Monthly USD</span>
-        <span className="font-mono">{formatCurrency(settings.budget_month_usd)}</span>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-muted-foreground">Daily tokens</span>
-        <span className="font-mono">{formatTokens(settings.budget_day_tokens)}</span>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-muted-foreground">Monthly tokens</span>
-        <span className="font-mono">{formatTokens(settings.budget_month_tokens)}</span>
-      </div>
+    <div className="space-y-2 text-xs min-w-[180px]">
+      <SpendProgressBar
+        label="Daily USD"
+        cap={settings.budget_day_usd}
+        spend={spend.spend_day_usd}
+        formatValue={formatCurrency}
+        periodDays={1}
+        periodStart={item.period_start}
+      />
+      <SpendProgressBar
+        label="Monthly USD"
+        cap={settings.budget_month_usd}
+        spend={spend.spend_month_usd}
+        formatValue={formatCurrency}
+        periodDays={30}
+        periodStart={item.period_start}
+      />
+      <SpendProgressBar
+        label="Daily tokens"
+        cap={settings.budget_day_tokens}
+        spend={spend.spend_day_tokens}
+        formatValue={formatTokens}
+        periodDays={1}
+        periodStart={item.period_start}
+      />
+      <SpendProgressBar
+        label="Monthly tokens"
+        cap={settings.budget_month_tokens}
+        spend={spend.spend_month_tokens}
+        formatValue={formatTokens}
+        periodDays={30}
+        periodStart={item.period_start}
+      />
+      {settings.provider_budgets && Object.keys(settings.provider_budgets).length > 0 && (
+        <>
+          <div className="border-t my-1 pt-1">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide">Per-Provider</span>
+          </div>
+          {Object.entries(settings.provider_budgets).map(([provider, budget]) => (
+            <div key={provider} className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">{provider}</span>
+              <span className="font-mono">
+                {budget?.month_usd != null ? `$${budget.month_usd}/mo` : ''}
+                {budget?.month_usd != null && budget?.day_usd != null ? ' · ' : ''}
+                {budget?.day_usd != null ? `$${budget.day_usd}/day` : ''}
+              </span>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 };
 
 function BudgetsPageContent() {
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
   const defaultPage = 1;
@@ -531,6 +706,9 @@ function BudgetsPageContent() {
   const [editForm, setEditForm] = useState<BudgetEditFormState | null>(null);
   const [editErrors, setEditErrors] = useState<BudgetEditErrorsState>({ caps: {}, thresholds: {} });
   const [savingBudget, setSavingBudget] = useState(false);
+  const [providerBudgets, setProviderBudgets] = useState<Record<string, ProviderBudgetDraft>>({});
+  const [newProviderName, setNewProviderName] = useState('');
+  const [showAddProviderInput, setShowAddProviderInput] = useState(false);
 
   const budgetParams = useMemo(() => {
     const params: Record<string, string> = {
@@ -603,6 +781,17 @@ function BudgetsPageContent() {
     setEditingBudget(item);
     setEditForm(buildBudgetEditFormState(item.budgets || {}));
     setEditErrors({ caps: {}, thresholds: {} });
+    const existing = (item.budgets || {}).provider_budgets || {};
+    const draft: Record<string, ProviderBudgetDraft> = {};
+    for (const [provider, budget] of Object.entries(existing)) {
+      draft[provider] = {
+        month_usd: budget?.month_usd != null ? String(budget.month_usd) : '',
+        day_usd: budget?.day_usd != null ? String(budget.day_usd) : '',
+      };
+    }
+    setProviderBudgets(draft);
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   const closeEditDialog = () => {
@@ -610,6 +799,9 @@ function BudgetsPageContent() {
     setEditForm(null);
     setEditErrors({ caps: {}, thresholds: {} });
     setSavingBudget(false);
+    setProviderBudgets({});
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   const updateEditCap = (key: keyof Pick<BudgetEditFormState, 'budget_day_usd' | 'budget_month_usd' | 'budget_day_tokens' | 'budget_month_tokens'>, value: string) => {
@@ -675,19 +867,36 @@ function BudgetsPageContent() {
 
     const hardModeChanges = summarizeHardModeChanges(editingBudget.budgets || {}, editForm);
     if (hardModeChanges.length > 0) {
-      const confirmed = await confirm({
+      const result = await promptPrivilegedAction({
         title: 'Enable hard enforcement?',
         message: `Hard enforcement can block requests when budgets are reached for: ${hardModeChanges.join(', ')}.`,
         confirmText: 'Enable hard enforcement',
-        variant: 'danger',
-        icon: 'warning',
+        requirePassword: false,
       });
-      if (!confirmed) return;
+      if (!result) return;
     }
 
     try {
       setSavingBudget(true);
       const budgetsPayload = buildBudgetUpdatePayload(editForm);
+      // Include provider budgets in the payload
+      const providerBudgetsPayload: Record<string, ProviderBudget | null> = {};
+      for (const [provider, draft] of Object.entries(providerBudgets)) {
+        const monthValue = draft.month_usd.trim();
+        const dayValue = draft.day_usd.trim();
+        const monthRaw = monthValue ? Number(monthValue) : null;
+        const dayRaw = dayValue ? Number(dayValue) : null;
+        const monthUsd = monthRaw != null && Number.isFinite(monthRaw) ? monthRaw : null;
+        const dayUsd = dayRaw != null && Number.isFinite(dayRaw) ? dayRaw : null;
+        if (monthUsd === null && dayUsd === null) {
+          providerBudgetsPayload[provider] = null; // Remove provider
+        } else {
+          providerBudgetsPayload[provider] = { month_usd: monthUsd, day_usd: dayUsd };
+        }
+      }
+      if (Object.keys(providerBudgetsPayload).length > 0) {
+        budgetsPayload.provider_budgets = providerBudgetsPayload;
+      }
       await api.updateBudget(String(editingBudget.org_id), {
         budgets: budgetsPayload,
       });
@@ -705,6 +914,17 @@ function BudgetsPageContent() {
     }
   };
 
+  const addProviderBudgetDraft = () => {
+    const providerName = newProviderName.trim().toLowerCase();
+    if (!providerName) return;
+    setProviderBudgets((prev) => ({
+      ...prev,
+      [providerName]: prev[providerName] ?? { month_usd: '', day_usd: '' },
+    }));
+    setNewProviderName('');
+    setShowAddProviderInput(false);
+  };
+
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
@@ -717,6 +937,10 @@ function BudgetsPageContent() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportBudgets(budgets, format)}
+                disabled={budgets.length === 0}
+              />
               <Button variant="outline" onClick={loadBudgets} disabled={loading}>
                 <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
@@ -788,7 +1012,7 @@ function BudgetsPageContent() {
                         <TableRow>
                           <TableHead>Organization</TableHead>
                           <TableHead>Plan</TableHead>
-                          <TableHead>Budget caps</TableHead>
+                          <TableHead>Budget caps & spend</TableHead>
                           <TableHead>Alert thresholds</TableHead>
                           <TableHead>Enforcement</TableHead>
                           <TableHead>Updated</TableHead>
@@ -934,6 +1158,120 @@ function BudgetsPageContent() {
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  {/* Provider Budgets */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium">Per-Provider Budgets</h3>
+                      {showAddProviderInput ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            autoFocus
+                            value={newProviderName}
+                            onChange={(e) => setNewProviderName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addProviderBudgetDraft();
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setNewProviderName('');
+                                setShowAddProviderInput(false);
+                              }
+                            }}
+                            placeholder="openai"
+                            className="w-40"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            type="button"
+                            onClick={addProviderBudgetDraft}
+                            disabled={!newProviderName.trim()}
+                          >
+                            Add
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            type="button"
+                            onClick={() => {
+                              setNewProviderName('');
+                              setShowAddProviderInput(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => setShowAddProviderInput(true)}
+                        >
+                          + Add Provider
+                        </Button>
+                      )}
+                    </div>
+                    {Object.keys(providerBudgets).length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No per-provider budgets configured.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {Object.entries(providerBudgets).map(([provider, draft]) => (
+                          <div key={provider} className="flex items-end gap-3 rounded-md border p-3">
+                            <div className="min-w-[100px]">
+                              <Label className="text-xs text-muted-foreground">{provider}</Label>
+                            </div>
+                            <div className="space-y-1 flex-1">
+                              <Label htmlFor={`pb-month-${provider}`} className="text-xs">Monthly USD</Label>
+                              <Input
+                                id={`pb-month-${provider}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="No limit"
+                                value={draft.month_usd}
+                                onChange={(e) => setProviderBudgets((prev) => ({
+                                  ...prev,
+                                  [provider]: { ...prev[provider], month_usd: e.target.value },
+                                }))}
+                              />
+                            </div>
+                            <div className="space-y-1 flex-1">
+                              <Label htmlFor={`pb-day-${provider}`} className="text-xs">Daily USD</Label>
+                              <Input
+                                id={`pb-day-${provider}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="No limit"
+                                value={draft.day_usd}
+                                onChange={(e) => setProviderBudgets((prev) => ({
+                                  ...prev,
+                                  [provider]: { ...prev[provider], day_usd: e.target.value },
+                                }))}
+                              />
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              type="button"
+                              className="text-destructive"
+                              onClick={() => setProviderBudgets((prev) => {
+                                const next = { ...prev };
+                                delete next[provider];
+                                return next;
+                              })}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>

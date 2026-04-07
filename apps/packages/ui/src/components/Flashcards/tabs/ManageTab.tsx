@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  Form,
   Drawer,
   Empty,
   Input,
@@ -39,6 +40,7 @@ import {
   useManageQuery,
   useUpdateFlashcardMutation,
   useUpdateFlashcardsBulkMutation,
+  useUpdateDeckMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
@@ -47,12 +49,19 @@ import {
   type DueStatus,
   type ManageSortBy
 } from "../hooks"
-import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
+import {
+  FlashcardActionsMenu,
+  FlashcardCreateDrawer,
+  FlashcardEditDrawer,
+  MarkdownWithBoundary,
+  FlashcardMarkdownSnippet
+} from "../components"
 import { FlashcardDocumentView } from "../components/FlashcardDocumentView"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
 import { FlashcardQueueStateBadge } from "../utils/queue-state-badges"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
+import { formatDeckDisplayName } from "../utils/deck-display"
 import {
   formatFlashcardsUiErrorMessage,
   mapFlashcardsUiError
@@ -93,7 +102,19 @@ interface ManageTabProps {
   onReviewCard: (card: Flashcard) => void
   openCreateSignal?: number
   isActive: boolean
+  initialDeckId?: number
+  initialShowWorkspaceDecks?: boolean
 }
+
+export const buildFlashcardsWorkspaceVisibilityOptions = (
+  showWorkspaceDecks: boolean,
+  selectedWorkspaceId?: string | null
+) => ({
+  workspaceId: selectedWorkspaceId ?? null,
+  workspace_id: selectedWorkspaceId ?? null,
+  includeWorkspaceItems: selectedWorkspaceId == null ? showWorkspaceDecks : false,
+  include_workspace_items: selectedWorkspaceId == null ? showWorkspaceDecks : false
+})
 
 /**
  * Cards tab for browsing, filtering, creating, editing, and bulk operations on flashcards.
@@ -103,7 +124,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   onNavigateToImport,
   onReviewCard,
   openCreateSignal,
-  isActive
+  isActive,
+  initialDeckId,
+  initialShowWorkspaceDecks = false
 }) => {
   const { t } = useTranslation(["option", "common"])
   const qc = useQueryClient()
@@ -144,12 +167,21 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [focusedIndex, setFocusedIndex] = React.useState<number>(-1)
   const [viewMode, setViewMode] = React.useState<"cards" | "trash">("cards")
   const [nowMs, setNowMs] = React.useState(() => Date.now())
+  const [showWorkspaceDecks, setShowWorkspaceDecks] = React.useState(initialShowWorkspaceDecks)
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = React.useState<string | null>(null)
+  const [deckScopeOpen, setDeckScopeOpen] = React.useState(false)
+  const [deckScopeForm] = Form.useForm()
 
   // Shared: decks
-  const decksQuery = useDecksQuery()
+  const workspaceVisibilityOptions = React.useMemo(
+    () => buildFlashcardsWorkspaceVisibilityOptions(showWorkspaceDecks, selectedWorkspaceId),
+    [selectedWorkspaceId, showWorkspaceDecks]
+  ) as any
+  const decksQuery = useDecksQuery(workspaceVisibilityOptions)
+  const updateDeckMutation = useUpdateDeckMutation()
 
   // Filter state
-  const [mDeckId, setMDeckId] = React.useState<number | null | undefined>(undefined)
+  const [mDeckId, setMDeckId] = React.useState<number | null | undefined>(initialDeckId)
   const [mQuery, setMQuery] = React.useState("")
   const [mQueryInput, setMQueryInput] = React.useState("")
   const [mTags, setMTags] = React.useState<string[]>([])
@@ -266,7 +298,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setPage(1)
   }, [])
 
-  const tagSuggestionsQuery = useTagSuggestionsQuery(mDeckId)
+  const tagSuggestionsQuery = useTagSuggestionsQuery(mDeckId, workspaceVisibilityOptions)
 
   const filteredTagSuggestions = React.useMemo(() => {
     const selected = new Set(mTags.map((tag) => tag.toLowerCase()))
@@ -276,6 +308,51 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       .filter((tag) => (input ? tag.toLowerCase().includes(input) : true))
       .slice(0, 8)
   }, [mTags, mTagInput, tagSuggestionsQuery.data])
+
+  const selectedDeck = React.useMemo(
+    () => {
+      const decks = decksQuery.data || []
+      if (mDeckId != null) {
+        return decks.find((deck) => deck.id === mDeckId) ?? null
+      }
+      if (decks.length === 1) {
+        return decks[0] ?? null
+      }
+      return null
+    },
+    [decksQuery.data, mDeckId]
+  )
+  const deckMap = React.useMemo(
+    () => new Map((decksQuery.data || []).map((deck) => [deck.id, deck])),
+    [decksQuery.data]
+  )
+  const resolveDeckLabel = React.useCallback(
+    (deckId: number | null | undefined) => {
+      if (deckId == null) {
+        return t("option:flashcards.noDeck", { defaultValue: "No deck" })
+      }
+      return formatDeckDisplayName(deckMap.get(deckId), `Deck ${deckId}`)
+    },
+    [deckMap, t]
+  )
+  const workspaceFilterOptions = React.useMemo(() => {
+    const workspaceIds = new Set<string>()
+    ;(decksQuery.data || []).forEach((deck) => {
+      const workspaceId = deck.workspace_id?.trim()
+      if (workspaceId) {
+        workspaceIds.add(workspaceId)
+      }
+    })
+    if (selectedWorkspaceId) {
+      workspaceIds.add(selectedWorkspaceId)
+    }
+    return Array.from(workspaceIds)
+      .sort((left, right) => left.localeCompare(right))
+      .map((workspaceId) => ({
+        label: workspaceId,
+        value: workspaceId
+      }))
+  }, [decksQuery.data, selectedWorkspaceId])
 
   // Selection state
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
@@ -327,7 +404,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     sortBy: mSort,
     page,
     pageSize
-  })
+  }, workspaceVisibilityOptions)
 
   const documentQuery = useFlashcardDocumentQuery(
     {
@@ -335,7 +412,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       query: mQuery,
       tags: mTags,
       dueStatus: mDue,
-      sortBy: documentSort
+      sortBy: documentSort,
+      includeWorkspaceItems: selectedWorkspaceId == null ? showWorkspaceDecks : false,
+      workspaceId: selectedWorkspaceId
     },
     {
       enabled: viewMode === "cards" && listDensity === "document"
@@ -347,9 +426,11 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       query: mQuery,
       tags: mTags,
       dueStatus: mDue,
-      sortBy: documentSort
+      sortBy: documentSort,
+      workspaceId: selectedWorkspaceId,
+      includeWorkspaceItems: selectedWorkspaceId == null ? showWorkspaceDecks : false
     }),
-    [documentSort, mDeckId, mDue, mQuery, mTags]
+    [documentSort, mDeckId, mDue, mQuery, mTags, selectedWorkspaceId, showWorkspaceDecks]
   )
   const documentQueryKey = React.useMemo(
     () =>
@@ -359,14 +440,18 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           query: mQuery,
           tags: mTags,
           dueStatus: mDue,
-          sortBy: documentSort
+          sortBy: documentSort,
+          workspaceId: selectedWorkspaceId,
+          includeWorkspaceItems: selectedWorkspaceId == null ? showWorkspaceDecks : false
         },
         {
           sortBy: documentSort,
-          dueStatus: mDue
+          dueStatus: mDue,
+          workspaceId: selectedWorkspaceId,
+          includeWorkspaceItems: selectedWorkspaceId == null ? showWorkspaceDecks : false
         }
       ),
-    [documentSort, mDeckId, mDue, mQuery, mTags]
+    [documentSort, mDeckId, mDue, mQuery, mTags, selectedWorkspaceId, showWorkspaceDecks]
   )
 
   React.useEffect(() => {
@@ -438,7 +523,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const pageItems = (manageQuery.data?.items || []).filter(
     (item) => !pendingDeletions[item.uuid]
   )
-  const documentItems = documentQuery.items.filter((item) => !pendingDeletions[item.uuid])
+  const documentItems = documentQuery.items.filter(
+    (item) => !pendingDeletions[item.uuid]
+  )
   const visibleItems = isDocumentMode ? documentItems : pageItems
   const documentTotalCount =
     documentQuery.data && documentQuery.data.pages.length > 0
@@ -536,9 +623,11 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         q: mQuery || undefined,
         tag: primaryTag,
         due_status: mDue,
+        workspace_id: selectedWorkspaceId ?? undefined,
         limit: maxPerPage,
         offset,
-        order_by: getManageServerOrderBy(mSort)
+        order_by: getManageServerOrderBy(mSort),
+        include_workspace_items: selectedWorkspaceId == null ? showWorkspaceDecks : false
       })
       const chunkItems = res.items || []
       if (remainingTags.size === 0) {
@@ -584,11 +673,54 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setMoveOpen(true)
   }
 
+  const openDeckScopeEditor = () => {
+    if (!selectedDeck) return
+    deckScopeForm.setFieldsValue({
+      workspaceId: selectedDeck.workspace_id ?? ""
+    })
+    setDeckScopeOpen(true)
+  }
+
+  const closeDeckScopeEditor = () => {
+    setDeckScopeOpen(false)
+    deckScopeForm.resetFields()
+  }
+
   const openBulkTagEditor = (mode: "add" | "remove") => {
     if (!anySelection) return
     setBulkTagMode(mode)
     setBulkTagInput("")
     setBulkTagOpen(true)
+  }
+
+  const submitDeckScopeEdit = async () => {
+    if (!selectedDeck) return
+    try {
+      const values = await deckScopeForm.validateFields()
+      const workspaceId = typeof values.workspaceId === "string" ? values.workspaceId.trim() : ""
+      await updateDeckMutation.mutateAsync({
+        deckId: selectedDeck.id,
+        update: {
+          workspace_id: workspaceId.length > 0 ? workspaceId : null,
+          expected_version: selectedDeck.version
+        }
+      })
+      message.success(
+        t("option:flashcards.deckScopeUpdated", {
+          defaultValue: "Deck scope updated."
+        })
+      )
+      closeDeckScopeEditor()
+    } catch (error: unknown) {
+      if (typeof error === "object" && error && "errorFields" in error) return
+      reportUiError(
+        error,
+        "updating deck scope",
+        t("option:flashcards.deckScopeUpdateFailed", {
+          defaultValue: "Failed to update deck scope."
+        })
+      )
+    }
   }
 
   const submitBulkTagEdit = async () => {
@@ -1506,9 +1638,50 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               className="min-w-44"
               data-testid="flashcards-manage-deck-select"
               options={(decksQuery.data || []).map((d) => ({
-                label: d.name,
+                label: formatDeckDisplayName(d, `Deck ${d.id}`),
                 value: d.id
               }))}
+            />
+            <Button
+              onClick={openDeckScopeEditor}
+              disabled={!selectedDeck}
+              data-testid="flashcards-manage-move-scope"
+            >
+              {t("option:flashcards.moveScope", { defaultValue: "Move scope" })}
+            </Button>
+            <Checkbox
+              checked={showWorkspaceDecks}
+              onChange={(event) => {
+                setShowWorkspaceDecks(event.target.checked)
+                if (!event.target.checked) {
+                  setSelectedWorkspaceId(null)
+                }
+                setPage(1)
+              }}
+              aria-label={t("option:flashcards.showWorkspaceDecks", {
+                defaultValue: "Show workspace decks"
+              })}
+              data-testid="flashcards-manage-show-workspace-decks"
+            >
+              {t("option:flashcards.showWorkspaceDecks", {
+                defaultValue: "Show workspace decks"
+              })}
+            </Checkbox>
+            <Select<string>
+              allowClear
+              showSearch
+              placeholder={t("option:flashcards.filterWorkspace", {
+                defaultValue: "Filter workspace"
+              })}
+              value={selectedWorkspaceId ?? undefined}
+              onChange={(value) => {
+                setSelectedWorkspaceId(value ?? null)
+                setPage(1)
+              }}
+              disabled={!showWorkspaceDecks && selectedWorkspaceId == null}
+              options={workspaceFilterOptions}
+              className="min-w-44"
+              data-testid="flashcards-manage-workspace-filter"
             />
             {/* Tag filter in popover */}
             <Popover
@@ -1900,7 +2073,13 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                           <span className="inline-block w-2 h-2 rounded-full bg-success" />
                         </Tooltip>
                       )}
-                      <Text className="flex-1 truncate">{item.front}</Text>
+                      <div className="min-w-0 flex-1 text-sm text-text">
+                        <div className="line-clamp-1">
+                          <FlashcardMarkdownSnippet
+                            content={item.front}
+                          />
+                        </div>
+                      </div>
                     </div>
                   }
                   description={
@@ -1908,7 +2087,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       <div className="flex items-center gap-2">
                         {item.deck_id != null && (
                           <span className="text-text-muted">
-                            {(decksQuery.data || []).find((d) => d.id === item.deck_id)?.name || `Deck ${item.deck_id}`}
+                            {resolveDeckLabel(item.deck_id)}
                           </span>
                         )}
                         {item.due_at && (
@@ -1973,19 +2152,29 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                 <>
                   <List.Item.Meta
                     title={
-                      <div className="flex items-center gap-2">
-                        <Text strong>{item.front.slice(0, 80)}</Text>
+                      <div className="flex min-w-0 items-start gap-2">
+                        <div className="min-w-0 flex-1 text-sm font-semibold text-text">
+                          <div className="line-clamp-1">
+                            <FlashcardMarkdownSnippet
+                              content={item.front}
+                            />
+                          </div>
+                        </div>
                         <span className="text-text-subtle">-</span>
-                        <Text type="secondary">{item.back.slice(0, 80)}</Text>
+                        <div className="min-w-0 flex-1 text-sm text-text-muted">
+                          <div className="line-clamp-1">
+                            <FlashcardMarkdownSnippet
+                              content={item.back}
+                            />
+                          </div>
+                        </div>
                       </div>
                     }
                     description={
                       <div className="flex items-center gap-2 flex-wrap">
                         {item.deck_id != null && (
                           <Tag color="blue">
-                            {(decksQuery.data || []).find(
-                              (d) => d.id === item.deck_id
-                            )?.name || `Deck ${item.deck_id}`}
+                            {resolveDeckLabel(item.deck_id)}
                           </Tag>
                         )}
                         <Tag>{formatCardType(item, t)}</Tag>
@@ -2247,6 +2436,33 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         </Space>
       </Modal>
 
+      <Modal
+        open={deckScopeOpen}
+        title={t("option:flashcards.deckScopeTitle", {
+          defaultValue: "Move deck scope"
+        })}
+        onCancel={closeDeckScopeEditor}
+        onOk={() => {
+          void submitDeckScopeEdit()
+        }}
+        okText={t("common:save", { defaultValue: "Save" })}
+        cancelText={t("common:cancel", { defaultValue: "Cancel" })}
+        confirmLoading={updateDeckMutation.isPending}
+      >
+        <Form form={deckScopeForm} layout="vertical">
+          <Form.Item
+            name="workspaceId"
+            label={t("option:flashcards.workspaceId", { defaultValue: "Workspace ID" })}
+          >
+            <Input
+              placeholder={t("option:flashcards.workspaceIdPlaceholder", {
+                defaultValue: "Leave blank for general scope"
+              })}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
       {/* Move Drawer */}
       <Drawer
         title={
@@ -2320,6 +2536,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         onClose={() => setCreateOpen(false)}
         decks={decksQuery.data || []}
         decksLoading={decksQuery.isLoading}
+        includeWorkspaceItems={workspaceVisibilityOptions.includeWorkspaceItems}
+        workspaceId={workspaceVisibilityOptions.workspaceId}
       />
 
       {/* Floating Action Button for creating cards */}

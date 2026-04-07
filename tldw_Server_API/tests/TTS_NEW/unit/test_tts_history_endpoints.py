@@ -2,7 +2,7 @@ import pytest
 from fastapi import Depends, Request, status
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.TTS.utils import compute_tts_history_text_hash
 from tldw_Server_API.app.core.config import settings

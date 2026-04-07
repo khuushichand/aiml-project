@@ -295,6 +295,7 @@ type ResolveDictationModeInput = {
   requestedMode: DictationModePreference
   canUseServerStt: boolean
   browserSupportsSpeechRecognition: boolean
+  browserDictationCompatible?: boolean
   forceAutoBrowserFallback?: boolean
 }
 
@@ -302,25 +303,36 @@ export const resolveDictationMode = ({
   requestedMode,
   canUseServerStt,
   browserSupportsSpeechRecognition,
+  browserDictationCompatible = true,
   forceAutoBrowserFallback = false
 }: ResolveDictationModeInput): DictationResolvedMode => {
   if (requestedMode === "server") {
     return canUseServerStt ? "server" : "unavailable"
   }
   if (requestedMode === "browser") {
-    return browserSupportsSpeechRecognition ? "browser" : "unavailable"
+    return browserSupportsSpeechRecognition && browserDictationCompatible
+      ? "browser"
+      : "unavailable"
   }
-  if (forceAutoBrowserFallback && browserSupportsSpeechRecognition) {
+  if (
+    forceAutoBrowserFallback &&
+    browserSupportsSpeechRecognition &&
+    browserDictationCompatible
+  ) {
     return "browser"
   }
   if (canUseServerStt) return "server"
-  if (browserSupportsSpeechRecognition) return "browser"
+  if (browserSupportsSpeechRecognition && browserDictationCompatible) {
+    return "browser"
+  }
   return "unavailable"
 }
 
 export type UseDictationStrategyOptions = {
   canUseServerStt: boolean
   browserSupportsSpeechRecognition: boolean
+  browserDictationCompatible?: boolean
+  resolvedModeOverride?: DictationResolvedMode | null
   isServerDictating: boolean
   isBrowserDictating: boolean
   modeOverride?: DictationModePreference | null
@@ -349,6 +361,7 @@ export type DictationServerErrorTransition = {
   speechAvailableBeforeError: boolean
   speechUsesServerBeforeError: boolean
   browserSupportsSpeechRecognition: boolean
+  browserDictationCompatible: boolean
   autoFallbackEnabled: boolean
 }
 
@@ -358,6 +371,8 @@ export const useDictationStrategy = (
   const {
     canUseServerStt,
     browserSupportsSpeechRecognition,
+    browserDictationCompatible = true,
+    resolvedModeOverride = null,
     isServerDictating,
     isBrowserDictating,
     modeOverride = null,
@@ -382,20 +397,25 @@ export const useDictationStrategy = (
     requestedMode === "auto" &&
     autoFallbackEnabled &&
     autoFallbackErrorClass !== null &&
-    browserSupportsSpeechRecognition
+    browserSupportsSpeechRecognition &&
+    browserDictationCompatible
 
   const resolvedMode = React.useMemo(
     () =>
+      resolvedModeOverride ??
       resolveDictationMode({
         requestedMode,
         canUseServerStt,
         browserSupportsSpeechRecognition,
+        browserDictationCompatible,
         forceAutoBrowserFallback: autoFallbackActive
       }),
     [
       autoFallbackActive,
+      browserDictationCompatible,
       browserSupportsSpeechRecognition,
       canUseServerStt,
+      resolvedModeOverride,
       requestedMode
     ]
   )
@@ -435,6 +455,7 @@ export const useDictationStrategy = (
         requestedMode === "auto" &&
         autoFallbackEnabled &&
         browserSupportsSpeechRecognition &&
+        browserDictationCompatible &&
         dictationErrorAllowsAutoFallback(errorClass)
       if (allowFallback) {
         setAutoFallbackErrorClass(errorClass)
@@ -447,11 +468,13 @@ export const useDictationStrategy = (
         speechAvailableBeforeError: speechAvailable,
         speechUsesServerBeforeError: speechUsesServer,
         browserSupportsSpeechRecognition,
+        browserDictationCompatible,
         autoFallbackEnabled
       }
     },
     [
       autoFallbackEnabled,
+      browserDictationCompatible,
       browserSupportsSpeechRecognition,
       requestedMode,
       resolvedMode,

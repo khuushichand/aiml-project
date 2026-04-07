@@ -1,4 +1,5 @@
 import React from "react"
+import { useQuery } from "@tanstack/react-query"
 import {
   getImageBackendConfigs,
   normalizeImageBackendConfig,
@@ -114,6 +115,8 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
   const [imageGenerateModel, setImageGenerateModel] = React.useState("")
   const [imageGenerateExtraParams, setImageGenerateExtraParams] =
     React.useState("")
+  const [imageGenerateReferenceFileId, setImageGenerateReferenceFileId] =
+    React.useState<number | undefined>(undefined)
   const [imageGenerateSyncPolicy, setImageGenerateSyncPolicy] =
     React.useState<ImageGenerationEventSyncPolicy>("inherit")
   const [imagePromptContextBreakdown, setImagePromptContextBreakdown] =
@@ -153,6 +156,14 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
   }, [imageBackendOptions])
 
   const imageGenerateBusy = imageGenerateSubmitting || imagePromptRefineSubmitting
+  const referenceImageCandidatesQuery = useQuery({
+    queryKey: ["reference-image-candidates"],
+    queryFn: async () => (await tldwClient.listReferenceImageCandidates()).items,
+    enabled: imageGenerateModalOpen,
+    staleTime: 60_000
+  })
+  const referenceImageCandidates = referenceImageCandidatesQuery.data ?? []
+  const referenceImageCandidatesLoading = referenceImageCandidatesQuery.isLoading
 
   const imageEventSyncBaselineMode = React.useMemo(
     () =>
@@ -225,6 +236,7 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
     setToolsPopoverOpen(false)
     setImagePromptContextBreakdown([])
     clearImagePromptRefineState()
+    setImageGenerateReferenceFileId(undefined)
     setImageGenerateSyncPolicy("inherit")
     const defaultBackend =
       imageBackendDefaultTrimmed ||
@@ -248,8 +260,14 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
     imageBackendDefaultTrimmed,
     imageGenerateBackendOptions,
     imageGeneratePrompt,
+    setImageGenerateReferenceFileId,
     setToolsPopoverOpen
   ])
+
+  const closeImageGenerateModal = React.useCallback(() => {
+    setImageGenerateReferenceFileId(undefined)
+    setImageGenerateModalOpen(false)
+  }, [])
 
   const handleCreateImagePromptDraft = React.useCallback(() => {
     const rawContext = deriveImagePromptRawContext({
@@ -478,6 +496,11 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
       backend,
       format: imageGenerateFormat,
       negativePrompt: imageGenerateNegativePrompt.trim() || undefined,
+      referenceFileId:
+        typeof imageGenerateReferenceFileId === "number" &&
+        Number.isFinite(imageGenerateReferenceFileId)
+          ? imageGenerateReferenceFileId
+          : undefined,
       width:
         typeof imageGenerateWidth === "number" && Number.isFinite(imageGenerateWidth)
           ? imageGenerateWidth
@@ -519,7 +542,7 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
         imageGenerationSource: "generate-modal",
         imageEventSyncPolicy: imageGenerateSyncPolicy
       })
-      setImageGenerateModalOpen(false)
+      closeImageGenerateModal()
       textAreaFocus()
     } catch (error: any) {
       notificationApi.error({
@@ -545,11 +568,13 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
     imageGeneratePromptMode,
     imageGenerateSyncPolicy,
     imageGeneratePrompt,
+    imageGenerateReferenceFileId,
     imageGenerateSampler,
     imageGenerateSeed,
     imageGenerateSteps,
     imageGenerateWidth,
     imageGenerateRefineMetadata,
+    closeImageGenerateModal,
     notificationApi,
     sendMessage,
     t,
@@ -585,9 +610,13 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
     imageGenerateModel,
     setImageGenerateModel,
     imageGenerateExtraParams,
+    imageGenerateReferenceFileId,
+    setImageGenerateReferenceFileId,
     setImageGenerateExtraParams,
     imageGenerateSyncPolicy,
     setImageGenerateSyncPolicy,
+    referenceImageCandidates,
+    referenceImageCandidatesLoading,
     imagePromptContextBreakdown,
     imagePromptRefineSubmitting,
     imagePromptRefineBaseline,
@@ -606,6 +635,7 @@ export function usePlaygroundImageGen(deps: UsePlaygroundImageGenDeps) {
     imageGenerateResolvedSyncMode,
     // callbacks
     clearImagePromptRefineState,
+    closeImageGenerateModal,
     hydrateImageGenerateSettings,
     openImageGenerateModal,
     handleCreateImagePromptDraft,

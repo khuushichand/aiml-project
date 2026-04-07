@@ -68,9 +68,9 @@ describe("SettingsPanel behavior and copy guardrails", () => {
       target: { value: "sources" },
     })
 
-    expect(screen.getByText("Documents & Media")).toBeInTheDocument()
-    expect(screen.getByText("Character Cards")).toBeInTheDocument()
-    expect(screen.getByText("Chat History")).toBeInTheDocument()
+    expect(screen.getByText("Your Documents")).toBeInTheDocument()
+    expect(screen.getByText("Characters & Profiles")).toBeInTheDocument()
+    expect(screen.getByText("Conversations")).toBeInTheDocument()
   })
 
   it("shows scope note, balanced-reset copy, and preserves drawer focus trap/backdrop behavior", () => {

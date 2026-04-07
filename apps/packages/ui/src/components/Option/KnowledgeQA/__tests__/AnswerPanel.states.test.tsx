@@ -12,11 +12,18 @@ const state = {
   citations: [] as Array<{ index: number }>,
   isSearching: false,
   error: null as string | null,
-  results: [] as Array<{ id: string; metadata?: { title?: string } }>,
+  results: [] as Array<{ id: string; score?: number; metadata?: { title?: string } }>,
   setSettingsPanelOpen: vi.fn(),
+  updateSetting: vi.fn(),
   settings: {
     max_generation_tokens: 800,
-  } as { max_generation_tokens: number },
+    strip_min_relevance: 0.3,
+    enable_web_fallback: false,
+  } as {
+    max_generation_tokens: number
+    strip_min_relevance: number
+    enable_web_fallback: boolean
+  },
   preset: "balanced" as "fast" | "balanced" | "thorough" | "custom",
   rerunWithTokenLimit: vi.fn(),
   searchDetails: null as
@@ -78,6 +85,7 @@ vi.mock("../KnowledgeQAProvider", () => ({
     currentThreadId: state.currentThreadId,
     messages: state.messages,
     setSettingsPanelOpen: state.setSettingsPanelOpen,
+    updateSetting: state.updateSetting,
     settings: state.settings,
     preset: state.preset,
     rerunWithTokenLimit: state.rerunWithTokenLimit,
@@ -95,7 +103,10 @@ describe("AnswerPanel state guardrails", () => {
     state.error = null
     state.results = []
     state.setSettingsPanelOpen = vi.fn()
+    state.updateSetting = vi.fn()
     state.settings.max_generation_tokens = 800
+    state.settings.strip_min_relevance = 0.3
+    state.settings.enable_web_fallback = false
     state.preset = "balanced"
     state.rerunWithTokenLimit = vi.fn().mockResolvedValue(undefined)
     state.searchDetails = null
@@ -184,7 +195,7 @@ describe("AnswerPanel state guardrails", () => {
 
     render(<AnswerPanel />)
 
-    expect(screen.getByText("Grounding: 50% cited")).toBeInTheDocument()
+    expect(screen.getByText("50% of answer cites sources")).toBeInTheDocument()
     expect(screen.getByText("This sentence has no citation.").className).toContain(
       "bg-amber-500/10"
     )
@@ -202,8 +213,8 @@ describe("AnswerPanel state guardrails", () => {
 
     render(<AnswerPanel />)
 
-    expect(screen.getByText("Verified: High")).toBeInTheDocument()
-    expect(screen.getByText("Verification report (3 claims)")).toBeInTheDocument()
+    expect(screen.getByText("Source support: Strong")).toBeInTheDocument()
+    expect(screen.getByText("Claim check (3 claims)")).toBeInTheDocument()
   })
 
   it("uses verification rate as trust badge fallback when faithfulness is missing", () => {
@@ -217,8 +228,51 @@ describe("AnswerPanel state guardrails", () => {
 
     render(<AnswerPanel />)
 
-    expect(screen.getByText("Verified: Medium")).toBeInTheDocument()
-    expect(screen.getByText("Verification report")).toBeInTheDocument()
+    expect(screen.getByText("Source support: Partial")).toBeInTheDocument()
+    expect(screen.getByText("Claim check")).toBeInTheDocument()
+  })
+
+  it("places answer-length controls in the header and keeps feedback in the footer", () => {
+    state.answer = "Claim [1]."
+    state.citations = [{ index: 1 }]
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+
+    render(<AnswerPanel />)
+
+    const headerActions = screen.getByTestId("knowledge-answer-header-actions")
+    const feedbackRow = screen.getByTestId("knowledge-answer-feedback")
+
+    expect(headerActions).toContainElement(screen.getByRole("button", { name: "Summarize" }))
+    expect(headerActions).toContainElement(screen.getByRole("button", { name: "Show more" }))
+    expect(feedbackRow).toContainElement(screen.getByText("Was this answer helpful?"))
+    expect(feedbackRow).not.toHaveTextContent("Need a different answer length?")
+  })
+
+  it("surfaces integrated recovery actions when answer confidence is weak", () => {
+    state.answer = "This answer is not grounded."
+    state.results = [{ id: "r1", score: 0.1, metadata: { title: "Doc 1" } }]
+    state.citations = []
+
+    render(
+      <>
+        <input id="knowledge-search-input" />
+        <AnswerPanel />
+      </>
+    )
+
+    expect(screen.getByText("Low answer confidence")).toBeInTheDocument()
+    expect(
+      screen.getByText(/This answer does not cite the retrieved sources/i)
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Refine search" }))
+    expect(document.getElementById("knowledge-search-input")).toHaveFocus()
+
+    fireEvent.click(screen.getByRole("button", { name: "Include web sources" }))
+    expect(state.updateSetting).toHaveBeenCalledWith("enable_web_fallback", true)
+
+    fireEvent.click(screen.getByRole("button", { name: "Adjust sources" }))
+    expect(state.setSettingsPanelOpen).toHaveBeenCalledWith(true)
   })
 
   it("collapses very long answers with a show-more toggle", () => {

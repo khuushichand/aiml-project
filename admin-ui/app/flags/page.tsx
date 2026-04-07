@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
@@ -191,7 +191,7 @@ const getFlagId = (flag: FeatureFlagItem) =>
   `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
 
 export default function FlagsPage() {
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError, warning } = useToast();
 
   const [maintenance, setMaintenance] = useState<MaintenanceState | null>(null);
@@ -221,6 +221,9 @@ export default function FlagsPage() {
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
   const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
+  const [togglingFlagId, setTogglingFlagId] = useState<string | null>(null);
+  const [togglingFlags, setTogglingFlags] = useState<Record<string, boolean>>({});
+  const togglingFlagsRef = useRef<Set<string>>(new Set());
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -285,15 +288,15 @@ export default function FlagsPage() {
     if (!maintenance) return;
     const changed = maintenanceEnabled !== maintenance.enabled;
     if (changed) {
-      const confirmed = await confirm({
+      const result = await promptPrivilegedAction({
         title: maintenanceEnabled ? 'Enable maintenance mode?' : 'Disable maintenance mode?',
         message: maintenanceEnabled
           ? 'This will block non-allowlisted users.'
           : 'Service traffic will resume for all users.',
         confirmText: maintenanceEnabled ? 'Enable' : 'Disable',
-        variant: 'danger',
+        requirePassword: false,
       });
-      if (!confirmed) return;
+      if (!result) return;
     }
     try {
       setMaintenanceSaving(true);
@@ -401,16 +404,60 @@ export default function FlagsPage() {
     }
   };
 
+  const handleToggleFlag = async (flag: FeatureFlagItem) => {
+    const flagId = getFlagId(flag);
+    if (togglingFlagId === flagId || togglingFlagsRef.current.has(flagId)) return;
+    const previousEnabled = flag.enabled;
+    const nextEnabled = !previousEnabled;
+
+    // Optimistic update: toggle immediately in UI
+    togglingFlagsRef.current.add(flagId);
+    setTogglingFlags((prev) => ({ ...prev, [flagId]: true }));
+    setFlags((prev) =>
+      prev.map((f) => (getFlagId(f) === flagId ? { ...f, enabled: nextEnabled } : f))
+    );
+    setTogglingFlagId(flagId);
+
+    try {
+      await api.upsertFeatureFlag(flag.key, {
+        scope: flag.scope,
+        enabled: nextEnabled,
+        org_id: flag.org_id ?? undefined,
+        user_id: flag.user_id ?? undefined,
+        description: flag.description ?? undefined,
+        target_user_ids: flag.target_user_ids ?? undefined,
+        rollout_percent: flag.rollout_percent ?? undefined,
+        variant_value: flag.variant_value ?? undefined,
+        note: `Toggled ${nextEnabled ? 'on' : 'off'} via quick toggle`,
+      });
+      success(`Flag "${flag.key}" ${nextEnabled ? 'enabled' : 'disabled'}`);
+    } catch (err: unknown) {
+      // Revert on error
+      setFlags((prev) =>
+        prev.map((f) => (getFlagId(f) === flagId ? { ...f, enabled: previousEnabled } : f))
+      );
+      const message = err instanceof Error && err.message ? err.message : 'Failed to toggle flag';
+      showError(message);
+    } finally {
+      setTogglingFlagId((prev) => (prev === flagId ? null : prev));
+      togglingFlagsRef.current.delete(flagId);
+      setTogglingFlags((prev) => {
+        const { [flagId]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
     const flagId = getFlagId(flag);
     if (deletingFlagId === flagId) return;
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: `Delete flag ${flag.key}?`,
       message: 'This removes the flag override for the selected scope.',
       confirmText: 'Delete',
-      variant: 'danger',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!result) return;
     try {
       setDeletingFlagId(flagId);
       const params: Record<string, string> = { scope: flag.scope };
@@ -507,10 +554,13 @@ export default function FlagsPage() {
             </CardContent>
           </Card>
 
+          <hr className="my-2 border-border" />
           <Card>
             <CardHeader>
               <CardTitle>Feature Flags</CardTitle>
-              <CardDescription>Manage feature overrides by scope.</CardDescription>
+              <CardDescription>
+                Manage feature overrides by scope. This is a feature flag system, not an A/B testing platform — for experiments, use a dedicated experimentation tool.
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-3">
@@ -660,7 +710,7 @@ export default function FlagsPage() {
               </div>
 
               {flagLoading ? (
-                <div className="py-8 text-center text-muted-foreground">Loading flags...</div>
+                <div className="py-8 text-center text-muted-foreground" role="status" aria-live="polite">Loading flags...</div>
               ) : flags.length === 0 ? (
                 <EmptyState
                   title="No flags found."
@@ -710,9 +760,19 @@ export default function FlagsPage() {
                           <TableCell className="font-medium">{flag.key}</TableCell>
                           <TableCell>{flag.scope}</TableCell>
                           <TableCell>
-                            <Badge variant={flag.enabled ? 'default' : 'outline'}>
-                              {flag.enabled ? 'Enabled' : 'Disabled'}
-                            </Badge>
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleFlag(flag)}
+                              disabled={togglingFlagId === flagId || Boolean(togglingFlags[flagId])}
+                              className="cursor-pointer border-0 bg-transparent p-0 hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                              title={`Click to ${flag.enabled ? 'disable' : 'enable'} flag`}
+                              aria-label={`Toggle flag ${flag.key} ${flag.enabled ? 'off' : 'on'}`}
+                              aria-pressed={flag.enabled}
+                            >
+                              <Badge variant={flag.enabled ? 'default' : 'outline'}>
+                                {togglingFlagId === flagId ? 'Toggling...' : (flag.enabled ? 'Enabled' : 'Disabled')}
+                              </Badge>
+                            </button>
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
@@ -747,9 +807,12 @@ export default function FlagsPage() {
                           </TableCell>
                           <TableCell>{formatFlagDate(flag.updated_at)}</TableCell>
                           <TableCell>
-                            <details className="text-xs text-muted-foreground">
-                              <summary className="cursor-pointer">
-                                {flag.history?.length || 0} changes
+                            <details className="text-xs text-muted-foreground group">
+                              <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded px-1.5 py-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                <span className="inline-flex items-center gap-1">
+                                  <span className="transition-transform group-open:rotate-90" aria-hidden="true">&#9654;</span>
+                                  {flag.history?.length || 0} changes
+                                </span>
                               </summary>
                               <div className="mt-2 space-y-2">
                                 {(flag.history || []).map((entry, entryIndex) => {

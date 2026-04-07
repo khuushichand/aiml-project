@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_latest_transcription,
 )
 

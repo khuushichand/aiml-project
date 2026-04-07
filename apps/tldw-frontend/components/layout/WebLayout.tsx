@@ -1,6 +1,6 @@
-import React, { lazy, Suspense, useState, useContext } from "react"
+import React, { lazy, Suspense, useState, useContext, useEffect, useCallback } from "react"
 
-import { Button, Drawer, Modal, Tooltip } from "antd"
+import { Drawer, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
 import { IconButton } from "@/components/Common/IconButton"
 import { useLocation, useNavigate } from "react-router-dom"
@@ -22,6 +22,10 @@ import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockHost } from "@/components/Common/NotesDock"
+import {
+  BuddyShellHost,
+  BuddyShellRenderContextProvider
+} from "@/components/Common/PersonaBuddy"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { Sidebar } from "@/components/Option/Sidebar"
 import { Header } from "@/components/Layouts/Header"
@@ -50,6 +54,9 @@ import {
   BACKEND_UNREACHABLE_EVENT,
   type BackendUnreachableDetail
 } from "@/services/request-events"
+import { useBackendRecoveryUi } from "@/components/Common/BackendRecoveryUiContext"
+import { BackendUnavailableModalGate } from "@web/components/layout/BackendUnavailableModalGate"
+import { getUnreadCount } from "@web/lib/api/notifications"
 import { CommandPalette } from "@/components/Common/CommandPalette"
 import {
   useConnectionActions,
@@ -105,6 +112,22 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const [showChatSidebar] = useChatSidebar()
   const isMobileViewport = useMobile()
   useServerOnline()
+
+  // Notification unread count for header bell
+  const [notificationCount, setNotificationCount] = useState(0)
+  useEffect(() => {
+    if (demoEnabled) return
+    let cancelled = false
+    const poll = () => {
+      getUnreadCount()
+        .then((res) => { if (!cancelled) setNotificationCount(res?.unread_count ?? 0) })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, 30_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [demoEnabled])
+  const handleOpenNotifications = useCallback(() => navigate("/notifications"), [navigate])
   const location = useLocation()
   const { historyId, serverChatId } = useStoreMessageOption((state) => ({
     historyId: state.historyId,
@@ -114,8 +137,17 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { phase, isConnected } = useConnectionState()
   const { checkOnce } = useConnectionActions()
   const { isChecking } = useConnectionUxState()
+  const { fatalBackendRecoveryActive } = useBackendRecoveryUi()
   const [backendUnavailableDetail, setBackendUnavailableDetail] =
     useState<BackendUnreachableDetail | null>(null)
+  const suppressBackendUnavailableModal = React.useMemo(() => {
+    if (typeof window === "undefined") return false
+    try {
+      return window.localStorage.getItem("__tldw_test_bypass") === "true"
+    } catch {
+      return false
+    }
+  }, [])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
   const isViewportConstrainedRoute = (VIEWPORT_CONSTRAINED_PATHS as readonly string[]).includes(location.pathname)
@@ -168,6 +200,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const onBackendUnreachable = (event: Event) => {
+      if (suppressBackendUnavailableModal) return
       const detail = (event as CustomEvent<BackendUnreachableDetail | undefined>)
         ?.detail
       if (!detail || typeof detail !== "object") return
@@ -185,7 +218,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         onBackendUnreachable as EventListener
       )
     }
-  }, [checkOnce])
+  }, [checkOnce, suppressBackendUnavailableModal])
 
   React.useEffect(() => {
     if (isConnected && phase === ConnectionPhase.CONNECTED) {
@@ -330,13 +363,14 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 
   return (
-    <div
-      className={classNames(
-        "relative flex w-full",
-        isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
-      )}
-      style={chatScreenBackgroundStyle}
-    >
+    <BuddyShellRenderContextProvider>
+      <div
+        className={classNames(
+          "relative flex w-full",
+          isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
+        )}
+        style={chatScreenBackgroundStyle}
+      >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && !hideSidebar && !isMobileViewport && (
         <ChatSidebar
@@ -366,6 +400,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                     ? !sidebarOpen
                     : chatSidebarCollapsed
                 }
+                notificationCount={notificationCount}
+                onOpenNotifications={handleOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -383,6 +419,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                     ? !sidebarOpen
                     : chatSidebarCollapsed
                 }
+                notificationCount={notificationCount}
+                onOpenNotifications={handleOpenNotifications}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -531,55 +569,27 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         {/* Notes Dock Host - floating notes panel */}
         <NotesDockHost />
 
+        <BuddyShellHost root="web" />
+
         {/* Ensure event-driven modals are available even when the header is hidden */}
         {hideHeader && <EventOnlyHosts commandPaletteProps={commandPaletteProps} />}
 
         {/* Workflow landing modal + active workflow overlay */}
         <WorkflowIntegrationHost autoShowPaths={["/"]} />
 
-        <Modal
-          title={t(
-            "sidepanel:connectionBanner.unreachableTitle",
-            "Can't reach your tldw server"
-          )}
-          open={Boolean(backendUnavailableDetail)}
-          onCancel={closeBackendUnavailableModal}
-          maskClosable={false}
-          destroyOnHidden
-          footer={[
-            <Button key="dismiss" onClick={closeBackendUnavailableModal}>
-              {t("common:dismiss", "Dismiss")}
-            </Button>,
-            <Button key="health" onClick={openHealthDiagnostics}>
-              {t(
-                "settings:healthSummary.diagnostics",
-                "Health & diagnostics"
-              )}
-            </Button>,
-            <Button
-              key="retry"
-              type="primary"
-              loading={isChecking}
-              onClick={retryConnectionCheck}
-            >
-              {t("common:retry", "Retry")}
-            </Button>
-          ]}
-        >
-          <p className="text-sm text-text">
-            {t(
-              "sidepanel:connectionBanner.unreachableBody",
-              "Check that your server is running and accessible."
-            )}
-          </p>
-          {backendUnavailableDetail && (
-            <p className="mt-2 break-all text-xs text-text-subtle">
-              {`${backendUnavailableDetail.message} (${backendUnavailableDetail.method} ${backendUnavailableDetail.path})`}
-            </p>
-          )}
-        </Modal>
+        <BackendUnavailableModalGate
+          backendUnavailableDetail={backendUnavailableDetail}
+          fatalBackendRecoveryActive={fatalBackendRecoveryActive}
+          isChecking={isChecking}
+          onClose={closeBackendUnavailableModal}
+          onConsumeHiddenDetail={closeBackendUnavailableModal}
+          onOpenHealth={openHealthDiagnostics}
+          onRetry={retryConnectionCheck}
+          t={t}
+        />
       </main>
     </div>
+    </BuddyShellRenderContextProvider>
   )
 }
 

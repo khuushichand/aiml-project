@@ -1,7 +1,7 @@
 /**
  * Common test helpers for E2E tests
  */
-import { type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
 
 /**
  * Environment configuration for tests
@@ -13,6 +13,18 @@ export const TEST_CONFIG = {
   allowOffline: process.env.TLDW_E2E_ALLOW_OFFLINE !== '0',
 };
 
+const normalizeOrigin = (value: string): string => value.replace(/\/$/, '');
+
+const resolveSeedServerUrl = (cfg: Partial<typeof TEST_CONFIG>): string => {
+  if (typeof cfg.serverUrl === 'string' && cfg.serverUrl.trim().length > 0) {
+    return normalizeOrigin(cfg.serverUrl.trim());
+  }
+  if (typeof cfg.webUrl === 'string' && cfg.webUrl.trim().length > 0) {
+    return normalizeOrigin(cfg.webUrl.trim());
+  }
+  return normalizeOrigin(TEST_CONFIG.serverUrl);
+};
+
 /**
  * Seed authentication config in localStorage before page loads
  */
@@ -20,7 +32,11 @@ export async function seedAuth(
   page: Page,
   config: Partial<typeof TEST_CONFIG> = {}
 ): Promise<void> {
-  const finalConfig = { ...TEST_CONFIG, ...config };
+  const finalConfig = {
+    ...TEST_CONFIG,
+    ...config,
+    serverUrl: resolveSeedServerUrl(config),
+  };
   await page.addInitScript((cfg) => {
     const readStorageValue = (key: string) => {
       try {
@@ -229,6 +245,7 @@ export async function seedAuth(
     try {
       localStorage.setItem("serverUrl", cfg.serverUrl);
       localStorage.setItem("tldwServerUrl", cfg.serverUrl);
+      localStorage.setItem("tldw-api-host", cfg.serverUrl);
       localStorage.setItem("authMode", "single-user");
       localStorage.setItem("apiKey", cfg.apiKey);
     } catch {}
@@ -345,6 +362,17 @@ export async function waitForVisualSettle(page: Page, timeoutMs = 5000): Promise
       });
     })
     .catch(() => {});
+}
+
+export function getAntdSelectTrigger(
+  page: Page,
+  options: {
+    ariaLabel: string | RegExp;
+  }
+): Locator {
+  // The ARIA combobox is the stable interactive target across Ant Design
+  // render variants; the wrapper classes can disappear in some E2E builds.
+  return page.getByRole('combobox', { name: options.ariaLabel }).first();
 }
 
 /**

@@ -98,6 +98,7 @@ def test_list_image_models_configured(monkeypatch, tmp_path):
     assert entry["id"] == "image/stable_diffusion_cpp"
     assert entry["type"] == "image"
     assert entry["is_configured"] is True
+    assert entry["capabilities"]["image_reference_input"] is False
     assert "supported_formats" in entry
     assert "png" in entry["supported_formats"]
 
@@ -126,6 +127,7 @@ def test_list_image_models_swarmui_configured(monkeypatch):
     entry = models[0]
     assert entry["id"] == "image/swarmui"
     assert entry["is_configured"] is True
+    assert entry["capabilities"]["image_reference_input"] is False
 
 
 def test_list_image_models_swarmui_unconfigured(monkeypatch):
@@ -205,7 +207,11 @@ def test_list_image_models_remote_backend_unconfigured_without_api_key(
 def test_list_image_models_modelstudio_configured_via_qwen_env(monkeypatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.setenv("QWEN_API_KEY", "sk-qwen")
-    cfg = _make_config(enabled_backends=["modelstudio"], modelstudio_image_api_key=None)
+    cfg = _make_config(
+        enabled_backends=["modelstudio"],
+        modelstudio_image_api_key=None,
+        modelstudio_image_default_model="foo-model",
+    )
 
     monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
     monkeypatch.setattr(listing, "get_registry", lambda: _FakeRegistry(["modelstudio"]))
@@ -215,3 +221,21 @@ def test_list_image_models_modelstudio_configured_via_qwen_env(monkeypatch):
     entry = models[0]
     assert entry["id"] == "image/modelstudio"
     assert entry["is_configured"] is True
+    assert entry["capabilities"]["image_reference_input"] is True
+
+
+def test_list_image_models_reference_capability_follows_config_override(monkeypatch):
+    cfg = _make_config(
+        enabled_backends=["modelstudio"],
+        modelstudio_image_default_model="foo-model",
+        reference_image_supported_models={"modelstudio": []},
+    )
+
+    monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setattr(listing, "get_registry", lambda: _FakeRegistry(["modelstudio"]))
+
+    models = listing.list_image_models_for_catalog()
+    assert len(models) == 1
+    entry = models[0]
+    assert entry["id"] == "image/modelstudio"
+    assert entry["capabilities"]["image_reference_input"] is False

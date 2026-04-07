@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react"
+import React, { Suspense, useState, useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Headphones,
@@ -21,11 +21,6 @@ import {
   MessageCircle,
   StickyNote,
   Pencil,
-  Plus,
-  Save,
-  Search,
-  ZoomIn,
-  ZoomOut,
   Trash2,
   ChevronDown,
   ChevronUp,
@@ -42,8 +37,7 @@ import {
   Slider,
   Select,
   Dropdown,
-  Switch,
-  Table as AntTable
+  Switch
 } from "antd"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useWorkspaceStore } from "@/store/workspace"
@@ -55,8 +49,6 @@ import type {
 } from "@/types/workspace"
 import { useStoreMessageOption } from "@/store/option"
 import { useStoreChatModelSettings } from "@/store/model"
-import Mermaid from "@/components/Common/Mermaid"
-import { QuickNotesSection } from "./QuickNotesSection"
 import { getWorkspaceStudioNoSourcesHint } from "../source-location-copy"
 import {
   useArtifactGeneration,
@@ -68,30 +60,15 @@ import {
 import {
   estimateGenerationSeconds,
   encodeSlidesVisualStyleValue,
-  extractMermaidCode,
-  isLikelyMermaidDiagram,
-  parseMarkdownTable,
-  markdownTableToCsv,
-  type MarkdownTableData,
 } from "./hooks/useArtifactGeneration"
 import {
   TTS_PROVIDERS,
   AUDIO_FORMATS,
 } from "./hooks/useAudioTtsSettings"
 import {
-  downloadBlobFile,
   getResponsiveArtifactModalProps,
   SLIDES_EXPORT_FORMATS,
 } from "./hooks/useArtifactExport"
-import type {
-  FlashcardDraft,
-  QuizQuestionDraft,
-} from "./hooks/useQuizParsing"
-import {
-  WORKSPACE_UNDO_WINDOW_MS,
-  scheduleWorkspaceUndoAction,
-  undoWorkspaceAction
-} from "../undo-manager"
 
 // Re-export for external consumers
 export { estimateGenerationSeconds, estimateGenerationTokens, estimateGenerationCostUsd } from "./hooks/useArtifactGeneration"
@@ -250,6 +227,191 @@ import {
 
 const RECENT_OUTPUT_TYPES_COUNT = 3
 
+const MindMapArtifactViewer = React.lazy(() =>
+  import("./ArtifactModalContent").then((module) => ({
+    default: module.MindMapArtifactViewer
+  }))
+)
+
+const DataTableArtifactViewer = React.lazy(() =>
+  import("./ArtifactModalContent").then((module) => ({
+    default: module.DataTableArtifactViewer
+  }))
+)
+
+const FlashcardArtifactEditor = React.lazy(() =>
+  import("./ArtifactModalContent").then((module) => ({
+    default: module.FlashcardArtifactEditor
+  }))
+)
+
+const QuizArtifactEditor = React.lazy(() =>
+  import("./ArtifactModalContent").then((module) => ({
+    default: module.QuizArtifactEditor
+  }))
+)
+
+const QuickNotesSection = React.lazy(() =>
+  import("./QuickNotesSection").then((module) => ({
+    default: module.QuickNotesSection
+  }))
+)
+
+const renderArtifactModalContent = (node: React.ReactNode) => (
+  <Suspense
+    fallback={
+      <div className="flex min-h-[200px] items-center justify-center text-sm text-text-muted">
+        Loading artifact viewer...
+      </div>
+    }
+  >
+    {node}
+  </Suspense>
+)
+
+type BrowserSpeechArtifactViewerProps = {
+  content: string
+  playbackRate?: number
+}
+
+const BrowserSpeechArtifactViewer: React.FC<BrowserSpeechArtifactViewerProps> = ({
+  content,
+  playbackRate = 1
+}) => {
+  const { t } = useTranslation(["playground", "common"])
+  const [speechState, setSpeechState] = useState<
+    "idle" | "speaking" | "paused" | "unavailable"
+  >(
+    typeof window === "undefined" || !("speechSynthesis" in window)
+      ? "unavailable"
+      : "idle"
+  )
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        utteranceRef.current
+      ) {
+        window.speechSynthesis.cancel()
+      }
+      utteranceRef.current = null
+    }
+  }, [])
+
+  const handlePlay = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeechState("unavailable")
+      return
+    }
+
+    const synthesis = window.speechSynthesis
+    if (speechState === "paused" && synthesis.paused) {
+      synthesis.resume()
+      setSpeechState("speaking")
+      return
+    }
+
+    synthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(content)
+    utterance.rate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1
+    utterance.onstart = () => setSpeechState("speaking")
+    utterance.onpause = () => setSpeechState("paused")
+    utterance.onresume = () => setSpeechState("speaking")
+    utterance.onend = () => setSpeechState("idle")
+    utterance.onerror = () => setSpeechState("idle")
+    utteranceRef.current = utterance
+    synthesis.speak(utterance)
+    setSpeechState("speaking")
+  }
+
+  const handlePauseToggle = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeechState("unavailable")
+      return
+    }
+
+    const synthesis = window.speechSynthesis
+    if (synthesis.paused) {
+      synthesis.resume()
+      setSpeechState("speaking")
+      return
+    }
+
+    if (synthesis.speaking) {
+      synthesis.pause()
+      setSpeechState("paused")
+    }
+  }
+
+  const handleStop = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeechState("unavailable")
+      return
+    }
+
+    window.speechSynthesis.cancel()
+    utteranceRef.current = null
+    setSpeechState("idle")
+  }
+
+  const statusText =
+    speechState === "speaking"
+      ? t("playground:studio.browserAudioSpeaking", "Speaking in your browser.")
+      : speechState === "paused"
+        ? t("playground:studio.browserAudioPaused", "Browser speech is paused.")
+        : speechState === "unavailable"
+          ? t(
+              "playground:studio.browserAudioUnavailable",
+              "Browser speech playback is unavailable in this environment."
+            )
+          : t(
+              "playground:studio.browserAudioReady",
+              "Use your browser to play this audio summary."
+            )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="primary" onClick={handlePlay}>
+          {speechState === "paused"
+            ? t("common:resume", "Resume")
+            : t("common:play", "Play")}
+        </Button>
+        <Button
+          onClick={handlePauseToggle}
+          disabled={speechState !== "speaking" && speechState !== "paused"}
+        >
+          {speechState === "paused"
+            ? t("common:resume", "Resume")
+            : t("common:pause", "Pause")}
+        </Button>
+        <Button onClick={handleStop} disabled={speechState === "idle"}>
+          {t("common:stop", "Stop")}
+        </Button>
+      </div>
+      <p className="text-sm text-text-muted">{statusText}</p>
+      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded bg-surface2 p-3 text-sm">
+        {content}
+      </div>
+    </div>
+  )
+}
+
+const renderQuickNotesSection = (onCollapse: () => void) => (
+  <Suspense
+    fallback={
+      <div className="flex min-h-[220px] flex-1 items-center justify-center border-t border-border px-4 py-3 text-sm text-text-muted">
+        Loading notes...
+      </div>
+    }
+  >
+    <QuickNotesSection onCollapse={onCollapse} />
+  </Suspense>
+)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -282,7 +444,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const workspaceName = useWorkspaceStore((s) => s.workspaceName)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
+  const studyMaterialsPolicy = useWorkspaceStore((s) => s.studyMaterialsPolicy)
   const audioSettings = useWorkspaceStore((s) => s.audioSettings)
   const noteFocusTarget = useWorkspaceStore((s) => s.noteFocusTarget)
 
@@ -438,6 +603,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     resolvedSummaryInstruction,
     slidesVisualStyleValue,
     selectedFlashcardDeck,
+    workspaceId,
+    workspaceName,
+    studyMaterialsPolicy,
     ragAdvancedOptions: normalizedRagAdvancedOptions,
     t,
   })
@@ -625,10 +793,28 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       return
     }
 
-    if (artifact.type === "mindmap" && artifact.content) {
+    if (
+      artifact.type === "audio_overview" &&
+      artifact.audioFormat === "browser" &&
+      artifact.content
+    ) {
       Modal.info({
         title: artifact.title,
         content: (
+          <BrowserSpeechArtifactViewer
+            content={artifact.content}
+            playbackRate={audioSettings.speed}
+          />
+        ),
+        ...responsiveModalProps(560)
+      })
+      return
+    }
+
+    if (artifact.type === "mindmap" && artifact.content) {
+      Modal.info({
+        title: artifact.title,
+        content: renderArtifactModalContent(
           <MindMapArtifactViewer title={artifact.title} content={artifact.content} />
         ),
         ...responsiveModalProps(960),
@@ -641,7 +827,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     if (artifact.type === "data_table" && artifact.content) {
       Modal.info({
         title: artifact.title,
-        content: (
+        content: renderArtifactModalContent(
           <DataTableArtifactViewer title={artifact.title} content={artifact.content} />
         ),
         ...responsiveModalProps(980),
@@ -655,7 +841,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       const initialCards = getArtifactFlashcards(artifact)
       const modal = Modal.info({
         title: artifact.title,
-        content: (
+        content: renderArtifactModalContent(
           <FlashcardArtifactEditor
             cards={initialCards}
             onSave={(cards) => {
@@ -688,7 +874,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       const initialQuestions = getArtifactQuizQuestions(artifact)
       const modal = Modal.info({
         title: artifact.title,
-        content: (
+        content: renderArtifactModalContent(
           <QuizArtifactEditor
             questions={initialQuestions}
             onSave={(questions) => {
@@ -1463,7 +1649,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                       value: "auto",
                       label: t(
                         "playground:studio.flashcardDeckAuto",
-                        "Auto (first deck or create new)"
+                        "Auto (create new deck)"
                       )
                     },
                     ...availableDecks.map((deck) => ({
@@ -1832,7 +2018,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       {/* Quick Notes Section - Collapsible, fills remaining height */}
       <div className="flex min-h-[220px] flex-1 flex-col">
         {notesExpanded ? (
-          <QuickNotesSection onCollapse={() => setNotesExpanded(false)} />
+          renderQuickNotesSection(() => setNotesExpanded(false))
         ) : (
           <button
             type="button"
@@ -1845,519 +2031,6 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <ChevronDown className="h-4 w-4 text-text-muted" />
           </button>
         )}
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-components (kept inline as they are tightly coupled to the pane)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const MindMapArtifactViewer: React.FC<{
-  title: string
-  content: string
-}> = ({ title, content }) => {
-  const [zoom, setZoom] = useState(1)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const mermaidCode = React.useMemo(() => extractMermaidCode(content), [content])
-  const canRenderMermaid = React.useMemo(
-    () => isLikelyMermaidDiagram(mermaidCode),
-    [mermaidCode]
-  )
-
-  const handleExportSvg = () => {
-    const svg = containerRef.current?.querySelector("svg")
-    if (!svg) return
-    const svgBlob = new Blob([svg.outerHTML], {
-      type: "image/svg+xml;charset=utf-8"
-    })
-    downloadBlobFile(svgBlob, `${title || "mind-map"}.svg`)
-  }
-
-  const handleExportPng = async () => {
-    if (!containerRef.current) return
-    const html2canvas = (await import("html2canvas")).default
-    const canvas = await html2canvas(containerRef.current, {
-      backgroundColor: "#ffffff",
-      scale: 2
-    })
-    canvas.toBlob((blob) => {
-      if (!blob) return
-      downloadBlobFile(blob, `${title || "mind-map"}.png`)
-    }, "image/png")
-  }
-
-  if (!canRenderMermaid) {
-    return (
-      <div className="flex max-h-[70vh] flex-col gap-3">
-        <div className="rounded border border-warning/40 bg-warning/10 p-3 text-sm text-text">
-          Unable to render this mind map as a diagram. Showing raw output instead.
-        </div>
-        <div className="max-h-[56vh] overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-4 text-sm">
-          {content}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex max-h-[70vh] flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="small"
-          icon={<ZoomOut className="h-3.5 w-3.5" />}
-          onClick={() => setZoom((prev) => Math.max(0.5, Number((prev - 0.1).toFixed(2))))}
-        >
-          Zoom out
-        </Button>
-        <span className="text-xs text-text-muted">{Math.round(zoom * 100)}%</span>
-        <Button
-          size="small"
-          icon={<ZoomIn className="h-3.5 w-3.5" />}
-          onClick={() => setZoom((prev) => Math.min(2.5, Number((prev + 0.1).toFixed(2))))}
-        >
-          Zoom in
-        </Button>
-        <Button size="small" onClick={() => setZoom(1)}>
-          Reset
-        </Button>
-        <Button size="small" onClick={handleExportSvg}>
-          Export SVG
-        </Button>
-        <Button size="small" onClick={() => void handleExportPng()}>
-          Export PNG
-        </Button>
-      </div>
-
-      <div className="rounded border border-border bg-surface2/40 p-2 text-xs text-text-muted">
-        Scroll to pan the diagram when zoomed in.
-      </div>
-
-      <div className="max-h-[56vh] overflow-auto rounded border border-border bg-surface p-4">
-        <div
-          ref={containerRef}
-          style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }}
-          className="inline-block min-w-full"
-        >
-          <Mermaid code={mermaidCode} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const DataTableArtifactViewer: React.FC<{
-  title: string
-  content: string
-}> = ({ title, content }) => {
-  const [query, setQuery] = useState("")
-  const tableData = React.useMemo(() => parseMarkdownTable(content), [content])
-
-  const filteredRows = React.useMemo(() => {
-    if (!tableData) return []
-    const normalized = query.trim().toLowerCase()
-    if (!normalized) return tableData.rows
-    return tableData.rows.filter((row) =>
-      row.some((cell) => cell.toLowerCase().includes(normalized))
-    )
-  }, [query, tableData])
-
-  const columns = React.useMemo(() => {
-    if (!tableData) return []
-    return tableData.headers.map((header, index) => ({
-      title: header || `Column ${index + 1}`,
-      dataIndex: `col_${index}`,
-      key: `col_${index}`,
-      sorter: (a: Record<string, string>, b: Record<string, string>) =>
-        String(a[`col_${index}`] || "").localeCompare(
-          String(b[`col_${index}`] || ""),
-          undefined,
-          { sensitivity: "base", numeric: true }
-        )
-    }))
-  }, [tableData])
-
-  const dataSource = React.useMemo(() => {
-    return filteredRows.map((row, rowIndex) => {
-      const record: Record<string, string> = { key: String(rowIndex) }
-      row.forEach((cell, cellIndex) => {
-        record[`col_${cellIndex}`] = cell
-      })
-      return record
-    })
-  }, [filteredRows])
-
-  const handleDownloadCsv = () => {
-    if (!tableData) return
-    const csv = markdownTableToCsv(tableData)
-    const csvBlob = new Blob([csv], { type: "text/csv;charset=utf-8" })
-    downloadBlobFile(csvBlob, `${title || "data-table"}.csv`)
-  }
-
-  if (!tableData) {
-    return (
-      <div className="max-h-[70vh] overflow-y-auto whitespace-pre-wrap rounded border border-border bg-surface p-3 text-sm">
-        {content}
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex max-h-[70vh] flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter table rows"
-          prefix={<Search className="h-4 w-4 text-text-muted" />}
-          className="w-72"
-        />
-        <Button size="small" onClick={handleDownloadCsv}>
-          Export CSV
-        </Button>
-      </div>
-      <AntTable
-        columns={columns}
-        dataSource={dataSource}
-        pagination={{ pageSize: 10, size: "small" }}
-        size="small"
-        scroll={{ x: true, y: 420 }}
-      />
-    </div>
-  )
-}
-
-const FlashcardArtifactEditor: React.FC<{
-  cards: FlashcardDraft[]
-  onSave: (cards: FlashcardDraft[]) => void
-}> = ({ cards, onSave }) => {
-  const { t } = useTranslation(["playground", "common"])
-  const [messageApi, messageContextHolder] = message.useMessage()
-  const [draftCards, setDraftCards] = useState<FlashcardDraft[]>(cards)
-
-  const updateCard = (
-    index: number,
-    patch: Partial<FlashcardDraft>
-  ) => {
-    setDraftCards((previous) =>
-      previous.map((card, cardIndex) =>
-        cardIndex === index ? { ...card, ...patch } : card
-      )
-    )
-  }
-
-  const removeCard = React.useCallback(
-    (index: number) => {
-      const removedCard = draftCards[index]
-      if (!removedCard) return
-      const nextCards = draftCards.filter(
-        (_card, cardIndex) => cardIndex !== index
-      )
-      const undoHandle = scheduleWorkspaceUndoAction({
-        apply: () => {
-          setDraftCards(nextCards)
-        },
-        undo: () => {
-          setDraftCards((previous) => {
-            const restored = [...previous]
-            const insertionIndex = Math.max(0, Math.min(index, restored.length))
-            restored.splice(insertionIndex, 0, removedCard)
-            return restored
-          })
-        }
-      })
-
-      const undoMessageKey = `workspace-flashcard-remove-undo-${undoHandle.id}`
-      const maybeOpen = (
-        messageApi as { open?: (config: unknown) => void }
-      ).open
-      const messageConfig = {
-        key: undoMessageKey,
-        type: "warning",
-        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
-        content: t(
-          "playground:studio.flashcardRemoved",
-          "Flashcard removed."
-        ),
-        btn: (
-          <Button
-            size="small"
-            type="link"
-            onClick={() => {
-              if (undoWorkspaceAction(undoHandle.id)) {
-                messageApi.success(
-                  t(
-                    "playground:studio.flashcardRestored",
-                    "Flashcard restored"
-                  )
-                )
-              }
-              messageApi.destroy(undoMessageKey)
-            }}
-          >
-            {t("common:undo", "Undo")}
-          </Button>
-        )
-      }
-
-      if (typeof maybeOpen === "function") {
-        maybeOpen(messageConfig)
-      } else {
-        const maybeWarning = (
-          messageApi as { warning?: (content: string) => void }
-        ).warning
-        if (typeof maybeWarning === "function") {
-          maybeWarning(t("playground:studio.flashcardRemoved", "Flashcard removed."))
-        }
-      }
-    },
-    [draftCards, messageApi, t]
-  )
-
-  return (
-    <div className="flex max-h-[70vh] flex-col gap-3">
-      {messageContextHolder}
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-text-muted">
-          Edit generated flashcards before reusing them.
-        </p>
-        <Button
-          size="small"
-          icon={<Plus className="h-3.5 w-3.5" />}
-          onClick={() =>
-            setDraftCards((previous) => [...previous, { front: "", back: "" }])
-          }
-        >
-          Add card
-        </Button>
-      </div>
-
-      <div className="max-h-[54vh] space-y-3 overflow-y-auto pr-1">
-        {draftCards.map((card, index) => (
-          <div key={`flashcard-${index}`} className="rounded border border-border bg-surface2/30 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-text-muted">Card {index + 1}</span>
-              <Button danger size="small" onClick={() => removeCard(index)}>
-                Remove
-              </Button>
-            </div>
-            <Input.TextArea
-              value={card.front}
-              onChange={(event) => updateCard(index, { front: event.target.value })}
-              rows={2}
-              placeholder="Front (question or term)"
-              className="mb-2"
-            />
-            <Input.TextArea
-              value={card.back}
-              onChange={(event) => updateCard(index, { back: event.target.value })}
-              rows={3}
-              placeholder="Back (answer or definition)"
-            />
-          </div>
-        ))}
-      </div>
-
-      <div className="flex justify-end">
-        <Button
-          type="primary"
-          icon={<Save className="h-3.5 w-3.5" />}
-          onClick={() =>
-            onSave(
-              draftCards.filter(
-                (card) => card.front.trim().length > 0 && card.back.trim().length > 0
-              )
-            )
-          }
-        >
-          Save changes
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-const QuizArtifactEditor: React.FC<{
-  questions: QuizQuestionDraft[]
-  onSave: (questions: QuizQuestionDraft[]) => void
-}> = ({ questions, onSave }) => {
-  const { t } = useTranslation(["playground", "common"])
-  const [messageApi, messageContextHolder] = message.useMessage()
-  const [draftQuestions, setDraftQuestions] = useState<QuizQuestionDraft[]>(questions)
-
-  const updateQuestion = (
-    index: number,
-    patch: Partial<QuizQuestionDraft>
-  ) => {
-    setDraftQuestions((previous) =>
-      previous.map((question, questionIndex) =>
-        questionIndex === index ? { ...question, ...patch } : question
-      )
-    )
-  }
-
-  const removeQuestion = React.useCallback(
-    (index: number) => {
-      const removedQuestion = draftQuestions[index]
-      if (!removedQuestion) return
-      const nextQuestions = draftQuestions.filter(
-        (_question, questionIndex) => questionIndex !== index
-      )
-      const undoHandle = scheduleWorkspaceUndoAction({
-        apply: () => {
-          setDraftQuestions(nextQuestions)
-        },
-        undo: () => {
-          setDraftQuestions((previous) => {
-            const restored = [...previous]
-            const insertionIndex = Math.max(0, Math.min(index, restored.length))
-            restored.splice(insertionIndex, 0, removedQuestion)
-            return restored
-          })
-        }
-      })
-
-      const undoMessageKey = `workspace-quiz-remove-undo-${undoHandle.id}`
-      const maybeOpen = (
-        messageApi as { open?: (config: unknown) => void }
-      ).open
-      const messageConfig = {
-        key: undoMessageKey,
-        type: "warning",
-        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
-        content: t(
-          "playground:studio.quizQuestionRemoved",
-          "Question removed."
-        ),
-        btn: (
-          <Button
-            size="small"
-            type="link"
-            onClick={() => {
-              if (undoWorkspaceAction(undoHandle.id)) {
-                messageApi.success(
-                  t(
-                    "playground:studio.quizQuestionRestored",
-                    "Question restored"
-                  )
-                )
-              }
-              messageApi.destroy(undoMessageKey)
-            }}
-          >
-            {t("common:undo", "Undo")}
-          </Button>
-        )
-      }
-
-      if (typeof maybeOpen === "function") {
-        maybeOpen(messageConfig)
-      } else {
-        const maybeWarning = (
-          messageApi as { warning?: (content: string) => void }
-        ).warning
-        if (typeof maybeWarning === "function") {
-          maybeWarning(
-            t("playground:studio.quizQuestionRemoved", "Question removed.")
-          )
-        }
-      }
-    },
-    [draftQuestions, messageApi, t]
-  )
-
-  return (
-    <div className="flex max-h-[70vh] flex-col gap-3">
-      {messageContextHolder}
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-text-muted">
-          Edit generated quiz questions and answers.
-        </p>
-        <Button
-          size="small"
-          icon={<Plus className="h-3.5 w-3.5" />}
-          onClick={() =>
-            setDraftQuestions((previous) => [
-              ...previous,
-              { question: "", options: [], answer: "", explanation: "" }
-            ])
-          }
-        >
-          Add question
-        </Button>
-      </div>
-
-      <div className="max-h-[54vh] space-y-3 overflow-y-auto pr-1">
-        {draftQuestions.map((question, index) => (
-          <div key={`quiz-${index}`} className="rounded border border-border bg-surface2/30 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-text-muted">
-                Question {index + 1}
-              </span>
-              <Button danger size="small" onClick={() => removeQuestion(index)}>
-                Remove
-              </Button>
-            </div>
-            <Input.TextArea
-              value={question.question}
-              onChange={(event) =>
-                updateQuestion(index, { question: event.target.value })
-              }
-              rows={2}
-              placeholder="Question prompt"
-              className="mb-2"
-            />
-            <Input.TextArea
-              value={question.options.join("\n")}
-              onChange={(event) =>
-                updateQuestion(index, {
-                  options: event.target.value
-                    .split("\n")
-                    .map((option) => option.trim())
-                    .filter(Boolean)
-                })
-              }
-              rows={3}
-              placeholder="Options (one per line)"
-              className="mb-2"
-            />
-            <Input
-              value={question.answer}
-              onChange={(event) =>
-                updateQuestion(index, { answer: event.target.value })
-              }
-              placeholder="Correct answer"
-              className="mb-2"
-            />
-            <Input.TextArea
-              value={question.explanation || ""}
-              onChange={(event) =>
-                updateQuestion(index, { explanation: event.target.value })
-              }
-              rows={2}
-              placeholder="Explanation (optional)"
-            />
-          </div>
-        ))}
-      </div>
-
-      <div className="flex justify-end">
-        <Button
-          type="primary"
-          icon={<Save className="h-3.5 w-3.5" />}
-          onClick={() =>
-            onSave(
-              draftQuestions.filter(
-                (question) =>
-                  question.question.trim().length > 0 &&
-                  question.answer.trim().length > 0
-              )
-            )
-          }
-        >
-          Save changes
-        </Button>
       </div>
     </div>
   )

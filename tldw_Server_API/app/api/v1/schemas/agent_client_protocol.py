@@ -432,6 +432,12 @@ class ACPSessionInfo(BaseModel):
         default=None, description="Last ACP policy snapshot refresh error, if any"
     )
     forked_from: str | None = Field(default=None, description="Source session ID when this session was forked")
+    model: str | None = Field(default=None, description="LLM model used in this session (for cost estimation)")
+    estimated_cost_usd: float | None = Field(default=None, description="Estimated cost in USD based on token usage and model pricing")
+    token_budget: int | None = Field(default=None, description="Maximum token count for this session (NULL = no limit)")
+    auto_terminate_at_budget: bool = Field(default=False, description="Whether the session auto-terminates when budget is exceeded")
+    budget_exhausted: bool = Field(default=False, description="Whether the session was terminated due to budget exhaustion")
+    budget_remaining: int | None = Field(default=None, description="Tokens remaining before budget is hit (NULL if no budget set)")
 
 
 class ACPSessionListResponse(BaseModel):
@@ -474,6 +480,49 @@ class ACPSessionUsageResponse(BaseModel):
     message_count: int = 0
     created_at: str = ""
     last_activity_at: str | None = None
+    model: str | None = Field(default=None, description="LLM model used in this session")
+    estimated_cost_usd: float | None = Field(default=None, description="Estimated cost in USD")
+
+
+# -----------------------------------------------------------------------------
+# Agent Metrics (Admin aggregation)
+# -----------------------------------------------------------------------------
+
+
+class ACPAgentMetrics(BaseModel):
+    """Aggregated runtime metrics for a single agent type."""
+    agent_type: str = Field(..., description="Agent type identifier")
+    session_count: int = Field(default=0, description="Total number of sessions")
+    active_sessions: int = Field(default=0, description="Currently active sessions")
+    total_prompt_tokens: int = Field(default=0, description="Sum of prompt tokens across all sessions")
+    total_completion_tokens: int = Field(default=0, description="Sum of completion tokens across all sessions")
+    total_tokens: int = Field(default=0, description="Sum of total tokens across all sessions")
+    total_messages: int = Field(default=0, description="Sum of messages across all sessions")
+    last_used_at: str | None = Field(default=None, description="ISO 8601 timestamp of most recent activity")
+    total_estimated_cost_usd: float | None = Field(default=None, description="Total estimated cost in USD across all sessions for this agent")
+
+
+class ACPAgentMetricsListResponse(BaseModel):
+    """Response for the agent metrics aggregation endpoint."""
+    items: list[ACPAgentMetrics] = Field(default_factory=list)
+
+
+class ACPAgentUsageItem(BaseModel):
+    """Aggregated usage statistics for a single agent type."""
+    agent_type: str
+    invocation_count: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    error_count: int = 0
+    estimated_cost_usd: float = 0.0
+    avg_tokens_per_session: float = 0.0
+
+
+class ACPAgentUsageResponse(BaseModel):
+    """Response for aggregated per-agent token usage."""
+    agents: list[ACPAgentUsageItem]
+    range_days: int
 
 
 # -----------------------------------------------------------------------------
@@ -497,6 +546,15 @@ class ACPAgentConfigCreate(BaseModel):
     org_id: int | None = Field(default=None, description="Restrict to specific organization")
     team_id: int | None = Field(default=None, description="Restrict to specific team")
     enabled: bool = Field(default=True, description="Whether the agent is enabled")
+    default_token_budget: int | None = Field(
+        default=None,
+        description="Default token budget for new sessions using this agent (NULL = no limit)",
+    )
+    default_auto_terminate_at_budget: bool = Field(
+        default=True,
+        description="Whether new sessions using this agent auto-terminate when budget is exceeded",
+    )
+    max_token_budget: int | None = Field(default=None, description="Maximum total tokens per session (null = unlimited)")
 
 
 class ACPAgentConfigResponse(ACPAgentConfigCreate):
@@ -552,12 +610,45 @@ class ACPPermissionPolicyListResponse(BaseModel):
 # -----------------------------------------------------------------------------
 
 
+class ACPSessionBudgetRequest(BaseModel):
+    """Request to set or update the token budget for an ACP session."""
+    token_budget: int | None = Field(
+        default=None,
+        description="Maximum token count for this session. NULL removes the budget.",
+    )
+    auto_terminate_at_budget: bool = Field(
+        default=True,
+        description="Whether to auto-terminate the session when the budget is exceeded.",
+    )
+
+
+class ACPSessionBudgetResponse(BaseModel):
+    """Response after updating a session's token budget."""
+    session_id: str = Field(..., description="Session identifier")
+    token_budget: int | None = Field(default=None, description="Current token budget")
+    auto_terminate_at_budget: bool = Field(default=False, description="Auto-terminate enabled")
+    budget_exhausted: bool = Field(default=False, description="Whether the budget has been exhausted")
+    total_tokens: int = Field(default=0, description="Current total token usage")
+    budget_remaining: int | None = Field(default=None, description="Tokens remaining in budget")
+
+
+class ACPHealthRouteStatus(BaseModel):
+    """Route-gating status for ACP endpoints."""
+    stable_only: bool = Field(..., description="Whether the server is in stable-only route mode")
+    acp_enabled: bool = Field(..., description="Whether ACP routes are currently enabled")
+    note: str | None = Field(
+        default=None,
+        description="Helpful note when ACP might be hidden by route gating",
+    )
+
+
 class ACPHealthResponse(BaseModel):
     """ACP dependency chain health check response."""
     timestamp: str = Field(..., description="ISO 8601 timestamp")
     runner: dict[str, Any] = Field(default_factory=dict, description="Runner binary status")
     agents: list[dict[str, Any]] = Field(default_factory=list, description="Downstream agent statuses")
     runner_probe: dict[str, Any] = Field(default_factory=dict, description="Runner process probe result")
+    routes: ACPHealthRouteStatus | None = Field(default=None, description="Route-gating status")
     overall: str = Field(default="unknown", description="ok | degraded | unavailable")
     message: str | None = Field(default=None, description="Human-readable status message")
 

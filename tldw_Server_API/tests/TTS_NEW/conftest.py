@@ -21,6 +21,11 @@ import numpy as np
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
+# TTS integration tests hit /api/v1/audio routes. Opt this suite into mounting
+# audio and audio-jobs routers even when pytest uses the minimal test app.
+os.environ.setdefault("MINIMAL_TEST_INCLUDE_AUDIO", "1")
+os.environ.setdefault("MINIMAL_TEST_INCLUDE_AUDIO_JOBS", "1")
+
 # Import actual TTS components for integration tests
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.adapters.base import (

@@ -29,7 +29,7 @@ import {
 import { useShortcutConfig } from "@/hooks/keyboard/useShortcutConfig"
 import type { KeyboardShortcut as ConfiguredKeyboardShortcut } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { WORKSPACE_PLAYGROUND_PATH } from "@/routes/route-paths"
-import { searchSettings, type SettingDefinition } from "@/data/settings-index"
+import { searchSettings } from "@/data/settings-index"
 import { cn } from "@/libs/utils"
 
 type CommandShortcut = { key: string; modifiers: ShortcutModifier[] }
@@ -63,6 +63,7 @@ export interface CommandItem {
   icon: React.ReactNode
   shortcut?: CommandShortcut
   action: () => void
+  targetPath?: string
   category: "navigation" | "action" | "setting" | "recent" | "prompt"
   keywords?: string[]
 }
@@ -81,6 +82,9 @@ export interface CommandPaletteProps {
   onSwitchChat?: (chatId: string) => void
   sidepanelChats?: { id: string; label: string }[]
   scope?: "global" | "sidepanel"
+  openSignal?: number
+  registerGlobalOpenShortcut?: boolean
+  listenForOpenEvents?: boolean
 }
 
 export function CommandPalette({
@@ -95,12 +99,16 @@ export function CommandPalette({
   onSwitchChat,
   sidepanelChats,
   scope = "global",
+  openSignal,
+  registerGlobalOpenShortcut = true,
+  listenForOpenEvents = true,
 }: CommandPaletteProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => (openSignal ?? 0) > 0)
   const [query, setQuery] = useState("")
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const lastOpenSignalRef = useRef(openSignal ?? 0)
   const location = useLocation()
   const navigate = useNavigate()
   const { t } = useTranslation(["common", "settings"])
@@ -108,14 +116,27 @@ export function CommandPalette({
   const shortcutEnabled = location.pathname !== WORKSPACE_PLAYGROUND_PATH
   const { shortcuts: configuredShortcuts } = useShortcutConfig()
 
-  // Register ⌘K shortcut to open
+  const openPalette = useCallback(() => {
+    setOpen(true)
+  }, [])
+
+  // Register Cmd/Ctrl+K shortcut to open
   useShortcut({
     key: "k",
     modifiers: ["meta"],
-    action: () => setOpen(true),
+    action: openPalette,
     description: "Open command palette",
-    enabled: shortcutEnabled,
-    allowInInput: false,
+    enabled: registerGlobalOpenShortcut && shortcutEnabled,
+    allowInInput: true,
+  })
+
+  useShortcut({
+    key: "k",
+    modifiers: ["ctrl"],
+    action: openPalette,
+    description: "Open command palette",
+    enabled: registerGlobalOpenShortcut && shortcutEnabled,
+    allowInInput: true,
   })
 
   // Also allow Escape to close
@@ -128,12 +149,23 @@ export function CommandPalette({
   })
 
   useEffect(() => {
+    if (!listenForOpenEvents) {
+      return
+    }
     const handleOpen = () => setOpen(true)
     window.addEventListener("tldw:open-command-palette", handleOpen)
     return () => {
       window.removeEventListener("tldw:open-command-palette", handleOpen)
     }
-  }, [])
+  }, [listenForOpenEvents])
+
+  useEffect(() => {
+    const currentOpenSignal = openSignal ?? 0
+    if (currentOpenSignal > lastOpenSignalRef.current) {
+      setOpen(true)
+    }
+    lastOpenSignalRef.current = currentOpenSignal
+  }, [openSignal])
 
   // Build default commands
   const defaultCommands: CommandItem[] = useMemo(() => {
@@ -144,6 +176,7 @@ export function CommandPalette({
         label: t("common:commandPalette.goToChat", "Go to Chat"),
         icon: <MessageSquare className="size-4" />,
         action: () => { navigate("/"); setOpen(false) },
+        targetPath: "/",
         category: "navigation",
         keywords: ["playground", "conversation"],
       },
@@ -153,6 +186,7 @@ export function CommandPalette({
           label: t("common:commandPalette.goToKnowledge", "Go to Knowledge QA"),
           icon: <CombineIcon className="size-4" />,
           action: () => { navigate("/knowledge"); setOpen(false) },
+          targetPath: "/knowledge",
           category: "navigation" as const,
           keywords: ["knowledge", "qa", "rag", "search"],
         },
@@ -161,6 +195,7 @@ export function CommandPalette({
           label: t("common:commandPalette.goToMedia", "Go to Media"),
           icon: <BookText className="size-4" />,
           action: () => { navigate("/media"); setOpen(false) },
+          targetPath: "/media",
           category: "navigation" as const,
           keywords: ["documents", "files", "library"],
         },
@@ -169,6 +204,7 @@ export function CommandPalette({
           label: t("common:commandPalette.goToNotes", "Go to Notes"),
           icon: <StickyNote className="size-4" />,
           action: () => { navigate("/notes"); setOpen(false) },
+          targetPath: "/notes",
           category: "navigation" as const,
           keywords: ["notes", "notebook"],
         },
@@ -177,6 +213,7 @@ export function CommandPalette({
           label: t("common:commandPalette.goToPrompts", "Go to Prompts"),
           icon: <NotebookPen className="size-4" />,
           action: () => { navigate("/prompts"); setOpen(false) },
+          targetPath: "/prompts",
           category: "navigation" as const,
           keywords: ["prompts", "template", "studio"],
         },
@@ -185,6 +222,7 @@ export function CommandPalette({
           label: t("common:commandPalette.goToFlashcards", "Go to Flashcards"),
           icon: <Layers className="size-4" />,
           action: () => { navigate("/flashcards"); setOpen(false) },
+          targetPath: "/flashcards",
           category: "navigation" as const,
           keywords: ["study", "cards", "learn"],
         },
@@ -196,6 +234,7 @@ export function CommandPalette({
           ),
           icon: <BookOpen className="size-4" />,
           action: () => { navigate("/documentation"); setOpen(false) },
+          targetPath: "/documentation",
           category: "navigation" as const,
           keywords: ["docs", "documentation", "guide", "help", "reference"],
         },
@@ -205,8 +244,18 @@ export function CommandPalette({
         label: t("common:commandPalette.goToSettings", "Go to Settings"),
         icon: <Settings className="size-4" />,
         action: () => { navigate("/settings"); setOpen(false) },
+        targetPath: "/settings",
         category: "navigation",
         keywords: ["preferences", "config", "options"],
+      },
+      {
+        id: "nav-mcp-hub",
+        label: t("common:commandPalette.goToMcpHub", "Go to MCP Hub"),
+        icon: <Settings className="size-4" />,
+        action: () => { navigate("/settings/mcp-hub"); setOpen(false) },
+        targetPath: "/settings/mcp-hub",
+        category: "navigation",
+        keywords: ["mcp", "hub", "acp", "policy", "server"],
       },
       ...(!isSidepanel ? ([
         {
@@ -217,6 +266,7 @@ export function CommandPalette({
           ),
           icon: <Activity className="size-4" />,
           action: () => { navigate("/settings/health"); setOpen(false) },
+          targetPath: "/settings/health",
           category: "navigation" as const,
           keywords: ["status", "connection", "diagnostic"],
         }
@@ -408,6 +458,7 @@ export function CommandPalette({
         : setting.defaultDescription,
       icon: <Settings className="size-4" />,
       action: () => { navigate(setting.route); setOpen(false) },
+      targetPath: setting.route,
       category: "setting" as const,
       keywords: setting.keywords,
     }))
@@ -418,21 +469,56 @@ export function CommandPalette({
     return [...defaultCommands, ...additionalCommands, ...settingCommands]
   }, [defaultCommands, additionalCommands, settingCommands])
 
+  const dedupeByTargetPath = useCallback((commands: CommandItem[]) => {
+    const dedupedCommands: CommandItem[] = []
+    const targetPathIndex = new Map<string, number>()
+
+    for (const command of commands) {
+      if (!command.targetPath) {
+        dedupedCommands.push(command)
+        continue
+      }
+
+      const existingIndex = targetPathIndex.get(command.targetPath)
+      if (existingIndex === undefined) {
+        targetPathIndex.set(command.targetPath, dedupedCommands.length)
+        dedupedCommands.push(command)
+        continue
+      }
+
+      const existingCommand = dedupedCommands[existingIndex]
+      if (existingCommand.category === "setting" && command.category === "setting") {
+        dedupedCommands.push(command)
+        continue
+      }
+
+      if (existingCommand.category === "setting" && command.category !== "setting") {
+        dedupedCommands[existingIndex] = command
+      }
+    }
+
+    return dedupedCommands
+  }, [])
+
   // Filter commands based on query
   const filteredCommands = useMemo(() => {
+    let commands: CommandItem[]
+
     if (!query) {
       // Show all non-setting commands when no query
-      return allCommands.filter(c => c.category !== "setting")
+      commands = allCommands.filter(c => c.category !== "setting")
+      return dedupeByTargetPath(commands)
     }
 
     const q = query.toLowerCase()
-    return allCommands.filter((cmd) => {
+    commands = allCommands.filter((cmd) => {
       const labelMatch = cmd.label.toLowerCase().includes(q)
       const descMatch = cmd.description?.toLowerCase().includes(q)
       const keywordMatch = cmd.keywords?.some((kw) => kw.toLowerCase().includes(q))
       return labelMatch || descMatch || keywordMatch
     })
-  }, [allCommands, query])
+    return dedupeByTargetPath(commands)
+  }, [allCommands, dedupeByTargetPath, query])
 
   // Clamp selection when filtered commands change
   useEffect(() => {

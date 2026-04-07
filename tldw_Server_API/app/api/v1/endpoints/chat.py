@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import math
 import os
@@ -238,6 +239,13 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
+    assemble_persona_exemplar_prompt,
+)
+from tldw_Server_API.app.core.Persona.exemplar_runtime import (
+    append_persona_exemplar_sections,
+)
+from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.testing import (
@@ -296,6 +304,7 @@ conversations_alias_router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
+router.include_router(chat_grammars.router)
 
 # Backward-compatible endpoint re-exports for unit tests and legacy imports
 # that still reference dictionary handlers from this module.
@@ -320,6 +329,11 @@ list_dictionary_versions = chat_dictionaries.list_dictionary_versions
 get_dictionary_version = chat_dictionaries.get_dictionary_version
 revert_dictionary_version = chat_dictionaries.revert_dictionary_version
 get_dictionary_statistics = chat_dictionaries.get_dictionary_statistics
+create_chat_grammar = chat_grammars.create_chat_grammar
+list_chat_grammars = chat_grammars.list_chat_grammars
+get_chat_grammar = chat_grammars.get_chat_grammar
+update_chat_grammar = chat_grammars.update_chat_grammar
+delete_chat_grammar = chat_grammars.delete_chat_grammar
 
 def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
@@ -655,6 +669,119 @@ def _extract_latest_user_turn_text(messages: list[Any]) -> str:
     return ""
 
 
+def _build_test_mode_mermaid_response() -> str:
+    """Return deterministic Mermaid content for workspace-style mind map prompts."""
+    return (
+        "mindmap\n"
+        "  root((Research Workspace))\n"
+        "    Governance\n"
+        "      Review Board\n"
+        "      Escalation Paths\n"
+        "    Evidence Review\n"
+        "      Citations\n"
+        "      Freshness Checks\n"
+        "    Delivery\n"
+        "      Milestones\n"
+        "      Rollout Plan\n"
+    )
+
+
+def _build_test_mode_markdown_table_response(user_text: str) -> str:
+    """Return deterministic markdown table content for workspace table prompts."""
+    source_hint = "Program Alpha"
+    if "beta" in user_text.lower():
+        source_hint = "Program Alpha and Program Beta"
+    return (
+        "| Topic | Detail | Source |\n"
+        "| --- | --- | --- |\n"
+        f"| Governance | Review board, named owners, and escalation paths | {source_hint} |\n"
+        f"| Evidence | Citations, contradiction checks, and freshness reviews | {source_hint} |\n"
+        f"| Delivery | Milestones, staged rollout checkpoints, and operator training | {source_hint} |\n"
+    )
+
+
+def _get_message_role(message: Any) -> Any:
+    """Return message role for dict and object payloads."""
+    if isinstance(message, dict):
+        return message.get("role")
+    return getattr(message, "role", None)
+
+
+def _get_message_content(message: Any) -> Any:
+    """Return message content for dict and object payloads."""
+    if isinstance(message, dict):
+        return message.get("content")
+    return getattr(message, "content", None)
+
+
+def _build_test_mode_chat_response(
+    messages_payload: list[Any],
+    *,
+    system_message: str | None = None,
+) -> str:
+    """Return deterministic content for test-mode mock provider calls."""
+    system_parts: list[str] = []
+    if isinstance(system_message, str) and system_message.strip():
+        system_parts.append(system_message.strip())
+    system_parts.extend(
+        _extract_text_from_message_content(_get_message_content(msg))
+        for msg in messages_payload
+        if _get_message_role(msg) == "system"
+    )
+    system_text = "\n".join(part for part in system_parts if part).lower()
+    user_text = _extract_latest_user_turn_text(messages_payload)
+
+    if "mermaid mindmap syntax" in system_text or "mind map generator" in system_text:
+        return _build_test_mode_mermaid_response()
+
+    if "markdown table" in system_text and "pipe delimiters" in system_text:
+        return _build_test_mode_markdown_table_response(user_text)
+
+    if user_text:
+        return f"Mock response: {user_text}"
+    return "Mock response from test mode"
+
+
+async def _build_context_and_messages_compat(
+    *,
+    chat_db: Any,
+    request_data: Any,
+    loop: asyncio.AbstractEventLoop,
+    metrics: Any,
+    default_save_to_db: bool,
+    final_conversation_id: str | None,
+    save_message_fn: Callable[..., Any],
+    runtime_state: dict[str, Any],
+) -> tuple[Any, Any, Any, Any, Any, Any]:
+    """Call build_context_and_messages with backward-compatible kwargs.
+
+    Some tests still monkeypatch the older helper signature that predates the
+    optional runtime_state parameter. Retry without that kwarg when needed so
+    legacy test doubles continue to work.
+    """
+    call_kwargs = {
+        "chat_db": chat_db,
+        "request_data": request_data,
+        "loop": loop,
+        "metrics": metrics,
+        "default_save_to_db": default_save_to_db,
+        "final_conversation_id": final_conversation_id,
+        "save_message_fn": save_message_fn,
+    }
+    try:
+        signature = inspect.signature(build_context_and_messages)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is None or "runtime_state" in signature.parameters:
+        return await build_context_and_messages(
+            **call_kwargs,
+            runtime_state=runtime_state,
+        )
+
+    return await build_context_and_messages(**call_kwargs)
+
+
 def _request_uses_vision_input(messages: list[Any]) -> bool:
     """Return True when the request includes image content parts."""
     for message in messages or []:
@@ -899,6 +1026,63 @@ def _format_persona_exemplar_guidance(
     return "\n".join(lines).strip()
 
 
+def _assemble_persona_runtime_guidance(
+    *,
+    system_message: str,
+    assistant_context: dict[str, Any] | None,
+    exemplars: list[dict[str, Any]],
+    requested_scenario_tags: list[str] | None = None,
+    requested_tone: str | None = None,
+    current_turn_text: str | None = None,
+    conflicting_capability_tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Append shared persona exemplar guidance for persona-backed ordinary chat."""
+    if not isinstance(assistant_context, dict):
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    if assistant_context.get("assistant_kind") != "persona":
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    persona_id = str(assistant_context.get("assistant_id") or "").strip()
+    if not persona_id:
+        return {
+            "applied": False,
+            "system_message": system_message,
+            "sections": [],
+            "selected_exemplars": [],
+            "rejected_exemplars": [],
+        }
+
+    assembly = assemble_persona_exemplar_prompt(
+        persona_id=persona_id,
+        exemplars=exemplars,
+        requested_scenario_tags=requested_scenario_tags,
+        requested_tone=requested_tone,
+        current_turn_text=current_turn_text,
+        conflicting_capability_tags=conflicting_capability_tags,
+    )
+
+    return {
+        "applied": bool(assembly.sections),
+        "system_message": append_persona_exemplar_sections(system_message, assembly.sections),
+        "sections": assembly.sections,
+        "selected_exemplars": assembly.selected_exemplars,
+        "rejected_exemplars": assembly.rejected_exemplars,
+    }
+
+
 def _resolve_persona_strategy(raw_strategy: str | None) -> str:
     """Normalize persona exemplar strategy from request."""
     normalized = (raw_strategy or "default").strip().lower()
@@ -1016,6 +1200,58 @@ def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> 
     if not isinstance(message_block, dict):
         return ""
     return _extract_text_from_message_content(message_block.get("content"))
+
+
+def _persona_memory_write_enabled(assistant_context: dict[str, Any] | None) -> bool:
+    if not isinstance(assistant_context, dict):
+        return False
+    return (
+        assistant_context.get("assistant_kind") == "persona"
+        and bool(assistant_context.get("assistant_id"))
+        and assistant_context.get("persona_memory_mode") == "read_write"
+    )
+
+
+async def _persist_persona_chat_reply_if_enabled(
+    *,
+    assistant_context: dict[str, Any] | None,
+    user_id: str | None,
+    conversation_id: str | None,
+    assistant_text: str,
+) -> bool:
+    """Persist assistant replies for persona-backed chats when writeback is enabled."""
+    if not _persona_memory_write_enabled(assistant_context):
+        return False
+    if not conversation_id:
+        return False
+    content = str(assistant_text or "").strip()
+    if not content:
+        return False
+
+    persona_id = str(assistant_context.get("assistant_id") or "").strip()
+    if not persona_id:
+        return False
+
+    loop = asyncio.get_running_loop()
+    return bool(
+        await loop.run_in_executor(
+            None,
+            partial(
+                persist_persona_turn,
+                user_id=user_id,
+                session_id=conversation_id,
+                persona_id=persona_id,
+                role="assistant",
+                content=content,
+                turn_type="assistant_delta",
+                metadata={
+                    "source": "chat_completions",
+                    "conversation_id": conversation_id,
+                },
+                store_as_memory=True,
+            ),
+        )
+    )
 
 
 def _record_persona_telemetry_hooks(
@@ -1396,6 +1632,32 @@ def _config_default_llm_provider() -> str | None:
         return None
 
     return _extract("llm_api_settings") or _extract("API")
+
+
+def _any_cloud_provider_has_key() -> bool:
+    """Return True if at least one cloud LLM provider has an API key configured.
+
+    This is used to distinguish "no providers configured at all" (new install)
+    from "this specific provider's key is missing."
+    """
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        # If we can't import the metadata, assume providers might be configured
+        return True
+
+    try:
+        all_keys = get_api_keys() or {}
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return True  # If key loading fails, don't block with a misleading error
+
+    for provider_name, requires_key in PROVIDER_REQUIRES_KEY.items():
+        if not requires_key:
+            continue
+        key_val = all_keys.get(provider_name)
+        if key_val and str(key_val).strip():
+            return True
+    return False
 
 
 def _get_default_provider() -> str:
@@ -2004,8 +2266,10 @@ async def create_chat_completion(
     enforce_image_size = _resolve_base64_image_limit_enforcement()
     max_image_bytes = get_max_base64_bytes() if enforce_image_size else None
 
-    # Capture raw model input before any normalization for later decisions
+    # Capture raw model/provider input before any normalization for later decisions
     raw_model_input = request_data.model
+    raw_api_provider_input = getattr(request_data, "api_provider", None)
+    explicit_provider_requested = bool(str(raw_api_provider_input or "").strip())
     auto_model_requested = str(raw_model_input or "").strip().lower() == "auto"
     explicit_model_requested = bool(str(raw_model_input or "").strip()) and not auto_model_requested
     strict_model_selection = _should_enforce_strict_model_selection()
@@ -2106,6 +2370,8 @@ async def create_chat_completion(
             )
         if str((routing_debug or {}).get("policy", {}).get("boundary_mode") or "").strip().lower() == "pinned_provider":
             allow_provider_fallback_for_request = False
+
+    request_model_was_explicit = bool(str(getattr(request_data, "model", None) or "").strip())
 
     (
         metrics_provider,
@@ -2750,6 +3016,41 @@ async def create_chat_completion(
         provider = selected_provider
         model = selected_model or model
 
+        def _get_default_model_for_provider_name(target_provider: str) -> str | None:
+            override_default = get_override_default_model(target_provider)
+            if override_default:
+                return override_default
+            override = get_llm_provider_override(target_provider)
+            if override and override.allowed_models:
+                return override.allowed_models[0]
+            normalized = target_provider.replace(".", "_").replace("-", "_")
+            env_key = f"DEFAULT_MODEL_{normalized.upper()}"
+            env_val = os.getenv(env_key)
+            if env_val:
+                return env_val
+            config_key = f"default_model_{normalized.lower()}"
+            if _chat_config:
+                cfg_val = _chat_config.get(config_key)
+                if cfg_val:
+                    return cfg_val
+            return None
+
+        if not request_model_was_explicit:
+            default_model_for_provider = _get_default_model_for_provider_name(provider)
+            if default_model_for_provider:
+                model = default_model_for_provider
+                request_data.model = default_model_for_provider
+        if not model:
+            # Fail fast with a clear client error instead of cascading into a 500
+            # when downstream provider adapters require an explicit model.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Model is required for provider '{provider}'. Please select a model in the WebUI "
+                    f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
+                ),
+            )
+
         override_error = validate_provider_override(provider, model)
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
@@ -2853,8 +3154,31 @@ async def create_chat_completion(
             _force_mock = _shared_is_truthy(os.getenv("CHAT_FORCE_MOCK", ""))
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             if provider_requires_api_key(target_api_provider) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
-                logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 record_byok_missing_credentials(target_api_provider, operation="chat")
+
+                # Distinguish "no LLM providers configured at all" (fresh install) from
+                # "this specific provider's key is missing" (user picked a provider that
+                # lacks credentials).  The former gets a dedicated error code so the
+                # frontend can show onboarding-style guidance.
+                if not explicit_provider_requested and not _any_cloud_provider_has_key():
+                    logger.error(
+                        "No LLM provider API keys are configured on this server. "
+                        "At least one provider key (e.g. OPENAI_API_KEY) must be set."
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "error": "no_provider_configured",
+                            "message": (
+                                "No LLM provider is configured. "
+                                "Contact your administrator or check the provider configuration."
+                            ),
+                            "docs_url": "/docs#section/LLM-Providers",
+                            "admin_url": "/admin/providers",
+                        },
+                    )
+
+                logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
@@ -2886,7 +3210,7 @@ async def create_chat_completion(
                 conversation_created_this_turn,
                 llm_payload_messages,
                 should_persist,
-            ) = await build_context_and_messages(
+            ) = await _build_context_and_messages_compat(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,
@@ -2904,6 +3228,11 @@ async def create_chat_completion(
             assistant_parent_message_id = (
                 str(continuation_runtime.get("assistant_parent_message_id"))
                 if continuation_runtime.get("assistant_parent_message_id")
+                else None
+            )
+            assistant_context = (
+                continuation_runtime.get("assistant_context")
+                if isinstance(continuation_runtime.get("assistant_context"), dict)
                 else None
             )
 
@@ -2938,7 +3267,76 @@ async def create_chat_completion(
                     "reason": "not_run",
                 }
 
-            if persona_strategy != "off" and character_db_id_for_context is not None:
+            persona_assistant_id = (
+                str(assistant_context.get("assistant_id") or "").strip()
+                if isinstance(assistant_context, dict)
+                else ""
+            )
+            is_persona_backed_chat = (
+                isinstance(assistant_context, dict)
+                and assistant_context.get("assistant_kind") == "persona"
+                and bool(persona_assistant_id)
+            )
+
+            if persona_strategy != "off" and is_persona_backed_chat:
+                persona_exemplars = await asyncio.to_thread(
+                    chat_db.list_persona_exemplars,
+                    user_id=str(user_id),
+                    persona_id=persona_assistant_id,
+                    include_disabled=False,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0,
+                )
+                runtime_guidance = _assemble_persona_runtime_guidance(
+                    system_message=final_system_message,
+                    assistant_context=assistant_context,
+                    exemplars=persona_exemplars,
+                    current_turn_text=_extract_latest_user_turn_text(templated_llm_payload),
+                )
+                final_system_message = runtime_guidance["system_message"]
+                persona_selected_exemplars = list(runtime_guidance["selected_exemplars"])
+
+                if persona_debug_meta is not None:
+                    persona_debug_meta["source"] = "persona_profile"
+                    persona_debug_meta["applied"] = bool(runtime_guidance["applied"])
+                    persona_debug_meta["reason"] = (
+                        "selected"
+                        if runtime_guidance["applied"]
+                        else ("no_exemplars_selected" if persona_exemplars else "no_enabled_exemplars")
+                    )
+                    persona_debug_meta["selection"] = {
+                        "selected_count": len(runtime_guidance["selected_exemplars"]),
+                        "selected_exemplar_ids": [
+                            str(item.get("id"))
+                            for item in runtime_guidance["selected_exemplars"]
+                            if item.get("id")
+                        ],
+                        "budget_tokens_used": sum(int(section[2]) for section in runtime_guidance["sections"]),
+                        "coverage": {
+                            "boundary": sum(
+                                1
+                                for item in runtime_guidance["selected_exemplars"]
+                                if str(item.get("kind") or "") == "boundary"
+                            ),
+                            "style_like": sum(
+                                1
+                                for item in runtime_guidance["selected_exemplars"]
+                                if str(item.get("kind") or "") != "boundary"
+                            ),
+                        },
+                    }
+                    persona_debug_meta["assembly_sections"] = [
+                        str(name) for name, _, _ in runtime_guidance["sections"]
+                    ]
+                    persona_debug_meta["rejected_exemplars"] = [
+                        {
+                            "id": str(item.get("id") or ""),
+                            "reason": str(item.get("reason") or ""),
+                        }
+                        for item in runtime_guidance["rejected_exemplars"]
+                    ]
+            elif persona_strategy != "off" and character_db_id_for_context is not None:
                 user_turn_text = _extract_latest_user_turn_text(getattr(request_data, "messages", []))
                 if user_turn_text:
                     budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
@@ -3074,50 +3472,10 @@ async def create_chat_completion(
                 final_system_message=llm_final_system_message,
                 app_config=app_config_override,
                 grammar_record=llamacpp_grammar_record,
+                resolved_model=model,
             )
             cleaned_args["request"] = request
-
-            def _get_default_model_for_provider_name(target_provider: str) -> str | None:
-                override_default = get_override_default_model(target_provider)
-                if override_default:
-                    return override_default
-                override = get_llm_provider_override(target_provider)
-                if override and override.allowed_models:
-                    return override.allowed_models[0]
-                normalized = target_provider.replace(".", "_").replace("-", "_")
-                env_key = f"DEFAULT_MODEL_{normalized.upper()}"
-                env_val = os.getenv(env_key)
-                if env_val:
-                    return env_val
-                config_key = f"default_model_{normalized.lower()}"
-                if _chat_config:
-                    cfg_val = _chat_config.get(config_key)
-                    if cfg_val:
-                        return cfg_val
-                return None
-
-            if not cleaned_args.get("model"):
-                default_model_for_provider = _get_default_model_for_provider_name(provider)
-                if default_model_for_provider:
-                    cleaned_args["model"] = default_model_for_provider
-                    if not request_data.model:
-                        request_data.model = default_model_for_provider
-                    model = default_model_for_provider
-                else:
-                    # Fail fast with a clear client error instead of cascading into a 500
-                    # when downstream provider adapters require an explicit model.
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=(
-                            f"Model is required for provider '{provider}'. Please select a model in the WebUI "
-                            f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
-                        ),
-                    )
-
-            # Re-validate provider override after applying a default model.
-            override_error = validate_provider_override(provider, cleaned_args.get("model") or request_data.model)
-            if override_error:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
+            cleaned_args["model"] = cleaned_args.get("model") or model
 
             async def rebuild_call_params_for_provider(
                 target_provider: str,
@@ -3149,6 +3507,7 @@ async def create_chat_completion(
                     templated_llm_payload=llm_templated_payload,
                     final_system_message=llm_final_system_message,
                     app_config=refreshed_resolution.app_config,
+                    grammar_record=_resolve_llamacpp_grammar_record(target_provider),
                 )
                 refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")
@@ -3347,19 +3706,14 @@ async def create_chat_completion(
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
-            def _build_mock_response(messages_payload: list[dict[str, Any]]) -> str:
-                for msg in reversed(messages_payload):
-                    if isinstance(msg, dict) and msg.get("role") == "user":
-                        content = msg.get("content")
-                        if isinstance(content, str) and content.strip():
-                            return f"Mock response: {content.strip()}"
-                return "Mock response from test mode"
-
             def _mock_chat_call(**kwargs):
                 messages_payload = kwargs.get("messages_payload") or []
                 streaming_flag = bool(kwargs.get("streaming"))
                 model_name = kwargs.get("model") or request_data.model or "mock-model"
-                content = _build_mock_response(messages_payload)
+                content = _build_test_mode_chat_response(
+                    messages_payload,
+                    system_message=kwargs.get("system_message"),
+                )
 
                 if streaming_flag:
                     chunk_text = content
@@ -3387,7 +3741,7 @@ async def create_chat_completion(
                 total_tokens = min(MAX_TOKEN_CAP * 2, prompt_tokens + completion_tokens)
 
                 return {
-                    "id": f"mock-{provider}-{uuid.uuid4().hex[:8]}",
+                    "id": f"mock-{target_api_provider}-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion",
                     "created": int(time.time()),
                     "model": model_name,
@@ -3507,31 +3861,38 @@ async def create_chat_completion(
                     return base
 
             async def _on_stream_full_reply_for_persona_telemetry(full_reply: str) -> None:
-                if character_db_id_for_context is None:
-                    return
-                persona_telemetry = compute_persona_exemplar_telemetry(
-                    output_text=str(full_reply or ""),
-                    selected_exemplars=persona_selected_exemplars,
-                )
-                debug_id_for_logs = (
-                    str(persona_debug_meta.get("debug_id"))
-                    if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
-                    else None
-                )
-                logger.debug(
-                    "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
-                    debug_id_for_logs or "n/a",
-                    persona_telemetry.get("ioo"),
-                    persona_telemetry.get("ior"),
-                    persona_telemetry.get("lcs"),
-                )
-                _record_persona_telemetry_hooks(
-                    telemetry=persona_telemetry,
-                    provider=provider,
-                    model=model,
+                assistant_text = str(full_reply or "")
+                if character_db_id_for_context is not None:
+                    persona_telemetry = compute_persona_exemplar_telemetry(
+                        output_text=assistant_text,
+                        selected_exemplars=persona_selected_exemplars,
+                    )
+                    debug_id_for_logs = (
+                        str(persona_debug_meta.get("debug_id"))
+                        if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                        else None
+                    )
+                    logger.debug(
+                        "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
+                        debug_id_for_logs or "n/a",
+                        persona_telemetry.get("ioo"),
+                        persona_telemetry.get("ior"),
+                        persona_telemetry.get("lcs"),
+                    )
+                    _record_persona_telemetry_hooks(
+                        telemetry=persona_telemetry,
+                        provider=provider,
+                        model=model,
+                        user_id=user_id,
+                        character_id=character_db_id_for_context,
+                        debug_id=debug_id_for_logs,
+                    )
+
+                await _persist_persona_chat_reply_if_enabled(
+                    assistant_context=assistant_context,
                     user_id=user_id,
-                    character_id=character_db_id_for_context,
-                    debug_id=debug_id_for_logs,
+                    conversation_id=final_conversation_id,
+                    assistant_text=assistant_text,
                 )
 
             if request_data.stream:
@@ -3616,10 +3977,14 @@ async def create_chat_completion(
                     continuation_metadata=continuation_meta,
                 )
                 persona_telemetry: dict[str, Any] | None = None
+                assistant_reply_text = (
+                    _extract_assistant_text_from_completion_payload(encoded_payload)
+                    if isinstance(encoded_payload, dict)
+                    else ""
+                )
                 if isinstance(encoded_payload, dict) and character_db_id_for_context is not None:
-                    assistant_text = _extract_assistant_text_from_completion_payload(encoded_payload)
                     persona_telemetry = compute_persona_exemplar_telemetry(
-                        output_text=assistant_text,
+                        output_text=assistant_reply_text,
                         selected_exemplars=persona_selected_exemplars,
                     )
                     debug_id_for_logs = (
@@ -3662,6 +4027,14 @@ async def create_chat_completion(
                         meta_payload = {}
                         encoded_payload["meta"] = meta_payload
                     meta_payload["persona"] = persona_debug_meta
+
+                if isinstance(encoded_payload, dict):
+                    await _persist_persona_chat_reply_if_enabled(
+                        assistant_context=assistant_context,
+                        user_id=user_id,
+                        conversation_id=final_conversation_id,
+                        assistant_text=assistant_reply_text,
+                    )
                 # Track response size and return
                 if isinstance(encoded_payload, dict):
                     response_size = len(json.dumps(encoded_payload))

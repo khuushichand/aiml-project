@@ -24,6 +24,7 @@ export interface PlaygroundModeLauncherProps {
 
   voiceChatEnabled: boolean
   voiceChatAvailable: boolean
+  voiceChatUnavailableReason?: string | null
   isSending: boolean
   onVoiceChatToggle: () => void
 
@@ -53,6 +54,7 @@ export const PlaygroundModeLauncher: React.FC<PlaygroundModeLauncherProps> =
       onToggleKnowledgePanel,
       voiceChatEnabled,
       voiceChatAvailable,
+      voiceChatUnavailableReason,
       isSending,
       onVoiceChatToggle,
       webSearch,
@@ -171,6 +173,11 @@ export const PlaygroundModeLauncher: React.FC<PlaygroundModeLauncherProps> =
             onOpenChange(false)
           }}
           disabled={!voiceChatAvailable || isSending}
+          title={
+            !voiceChatAvailable
+              ? voiceChatUnavailableReason ?? undefined
+              : undefined
+          }
           className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span>

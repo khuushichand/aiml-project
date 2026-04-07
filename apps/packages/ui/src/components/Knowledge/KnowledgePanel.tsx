@@ -349,6 +349,14 @@ const KnowledgePanelBase: React.FC<KnowledgePanelProps> = ({
             onSourcesChange={(sources) =>
               settings.updateSetting("sources", sources)
             }
+            generationProvider={settings.draftSettings.generation_provider}
+            onGenerationProviderChange={(provider) =>
+              settings.updateSetting("generation_provider", provider)
+            }
+            generationModel={settings.draftSettings.generation_model ?? ""}
+            onGenerationModelChange={(model) =>
+              settings.updateSetting("generation_model", model || null)
+            }
             onSearch={qaSearch.runQASearch}
             loading={qaSearch.loading}
             queryError={qaSearch.queryError}

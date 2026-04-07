@@ -5,6 +5,13 @@ import { KnowledgeContextBar } from "../context/KnowledgeContextBar"
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
+    initialize: vi.fn().mockResolvedValue(undefined),
+    getProviders: vi.fn().mockResolvedValue({
+      default_provider: "openai",
+      providers: [
+        { name: "openai", display_name: "OpenAI", models: ["gpt-4o-mini"] },
+      ],
+    }),
     listMedia: vi.fn().mockResolvedValue({ items: [] }),
     listNotes: vi.fn().mockResolvedValue({ items: [] }),
   },
@@ -34,6 +41,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -57,6 +68,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -83,6 +98,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -113,6 +132,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -146,6 +169,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -176,6 +203,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />
@@ -213,6 +244,10 @@ describe("KnowledgeContextBar", () => {
         onIncludeNoteIdsChange={vi.fn()}
         webEnabled={true}
         onToggleWeb={vi.fn()}
+        generationProvider={null}
+        generationModel={null}
+        onGenerationProviderChange={vi.fn()}
+        onGenerationModelChange={vi.fn()}
         contextChangedSinceLastRun={false}
         onOpenSettings={vi.fn()}
       />

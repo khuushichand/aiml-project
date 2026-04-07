@@ -32,6 +32,7 @@ import {
   useChatSurfaceCoordinatorStore
 } from "@/store/chat-surface-coordinator"
 import { cn } from "@/libs/utils"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { ServerChatList } from "./ChatSidebar/ServerChatList"
 import { FolderChatList } from "./ChatSidebar/FolderChatList"
 import {
@@ -191,9 +192,7 @@ export function ChatSidebar({
   }
 
   const handleIngest = () => {
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
-    }
+    requestQuickIngestOpen()
   }
 
   const navigateWithLoading = React.useCallback(
@@ -350,9 +349,10 @@ export function ChatSidebar({
     <div
       data-testid="chat-sidebar"
       className={cn(
-        "flex flex-col h-screen w-64 border-r border-border bg-surface2",
+        "flex flex-col h-screen border-r border-border bg-surface2",
         className
       )}
+      style={{ width: "var(--sidebar-width)" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border">

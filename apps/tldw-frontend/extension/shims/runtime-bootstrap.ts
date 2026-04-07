@@ -13,6 +13,10 @@ import {
   THEME_SETTING,
   UI_MODE_SETTING
 } from "@/services/settings/ui-settings"
+import {
+  resolveWebUiQuickstartServerUrl,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null
@@ -71,6 +75,121 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
   return raw.replace(/\/$/, "")
 }
 
+const getCurrentBrowserOrigin = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return normalizeBaseUrl(window.location?.origin)
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin: getCurrentBrowserOrigin(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
+    })
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserHostname = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const hostname = String(window.location?.hostname || "").trim().toLowerCase()
+    return hostname || null
+  } catch {
+    return null
+  }
+}
+
+const isLocalhostLikeHostname = (value?: string | null): boolean => {
+  const normalized = String(value || "").trim().toLowerCase()
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  )
+}
+
+const parsePrivateIpv4Host = (value?: string | null): number[] | null => {
+  const normalized = String(value || "").trim().toLowerCase()
+  const match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!match) return null
+
+  const parts = match.slice(1).map((raw) => Number(raw))
+  if (parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return null
+  }
+
+  const [a, b] = parts
+  if (a === 10) return parts
+  if (a === 192 && b === 168) return parts
+  if (a === 172 && b >= 16 && b <= 31) return parts
+  return null
+}
+
+const formatHostnameForUrl = (value: string): string => {
+  return value.includes(":") && !value.startsWith("[") ? `[${value}]` : value
+}
+
+const deriveCurrentHostRecoveryServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
+  if (!configuredServerUrl) return null
+
+  const browserHostname = getCurrentBrowserHostname()
+  if (!browserHostname) return null
+
+  try {
+    const parsed = new URL(String(configuredServerUrl))
+    const configuredHost = String(parsed.hostname || "").trim().toLowerCase()
+    if (!configuredHost || configuredHost === browserHostname) return null
+
+    const configuredPrivateIp = parsePrivateIpv4Host(configuredHost)
+    const browserPrivateIp = parsePrivateIpv4Host(browserHostname)
+    const configuredIsLocal = isLocalhostLikeHostname(configuredHost)
+    const browserIsLocal = isLocalhostLikeHostname(browserHostname)
+
+    const shouldRecover =
+      (configuredPrivateIp && browserIsLocal) ||
+      (configuredIsLocal && browserPrivateIp) ||
+      (configuredPrivateIp && browserPrivateIp)
+    if (!shouldRecover) return null
+
+    const port = parsed.port || "8000"
+    return `${parsed.protocol}//${formatHostnameForUrl(browserHostname)}:${port}`
+  } catch {
+    return null
+  }
+}
+
 const DEFAULT_TLDW_SERVER_URL = "http://127.0.0.1:8000"
 
 const seedTldwConfigFromEnv = async (): Promise<void> => {
@@ -83,18 +202,24 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
       return null
     }
   })()
-  const serverUrl =
-    explicitWebHost ||
-    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) ||
-    DEFAULT_TLDW_SERVER_URL
+  const repairedExplicitWebHost =
+    deriveCurrentHostRecoveryServerUrl(explicitWebHost) || explicitWebHost
+  const envDefaultServerUrl =
+    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) || DEFAULT_TLDW_SERVER_URL
+  const repairedEnvDefaultServerUrl =
+    deriveCurrentHostRecoveryServerUrl(envDefaultServerUrl) ||
+    envDefaultServerUrl
+  const initialQuickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+  const initialServerUrl =
+    initialQuickstartWebUiServerUrl ||
+    repairedExplicitWebHost ||
+    repairedEnvDefaultServerUrl
   const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
   const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
 
-  if (!serverUrl && !apiKey && !apiBearer) return
-
-  if (!explicitWebHost && serverUrl) {
+  if (initialServerUrl && explicitWebHost !== initialServerUrl) {
     try {
-      window.localStorage.setItem("tldw-api-host", serverUrl)
+      window.localStorage.setItem("tldw-api-host", initialServerUrl)
     } catch {
       // Best-effort only; ignore storage failures in web contexts.
     }
@@ -103,6 +228,23 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
   try {
     const storage = createSafeStorage()
     const existing = (await storage.get<TldwConfig>("tldwConfig").catch(() => null)) || null
+    const storedServerUrl =
+      (await storage.get<string>("tldwServerUrl").catch(() => null)) || null
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    const serverUrl =
+      quickstartWebUiServerUrl ||
+      repairedExplicitWebHost ||
+      repairedEnvDefaultServerUrl
+
+    if (!serverUrl && !apiKey && !apiBearer) return
+
+    if (serverUrl && initialServerUrl !== serverUrl) {
+      try {
+        window.localStorage.setItem("tldw-api-host", serverUrl)
+      } catch {
+        // Best-effort only; ignore storage failures in web contexts.
+      }
+    }
 
     const next: TldwConfig = {
       ...(existing || {}),
@@ -111,10 +253,14 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
     }
 
     let changed = false
+    let shouldSyncStoredServerUrl = false
 
     if (serverUrl && next.serverUrl !== serverUrl) {
       next.serverUrl = serverUrl
       changed = true
+    }
+    if (next.serverUrl && storedServerUrl !== next.serverUrl) {
+      shouldSyncStoredServerUrl = true
     }
 
     if (!next.apiKey && !next.accessToken) {
@@ -129,7 +275,7 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
       }
     }
 
-    if (changed) {
+    if (changed || shouldSyncStoredServerUrl) {
       await storage.set("tldwConfig", next)
       if (next.serverUrl) {
         await storage.set("tldwServerUrl", next.serverUrl)
@@ -145,6 +291,8 @@ void seedTldwConfigFromEnv()
 const WEB_DEFAULTS_MIRRORED_KEY = "tldw:web-defaults:mirrored"
 const WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY =
   "tldw:web-defaults:header-shortcuts-document-workspace:v1"
+const WEB_HEADER_SHORTCUT_MCP_HUB_BACKFILL_KEY =
+  "tldw:web-defaults:header-shortcuts-mcp-hub:v1"
 
 const isWebRuntime = () => {
   if (typeof window === "undefined") return false
@@ -238,15 +386,18 @@ const mirrorWebDefaultsFromExtension = () => {
   writeLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY, "true")
 }
 
-const backfillDocumentWorkspaceHeaderShortcutForWeb = () => {
+const backfillHeaderShortcutForWeb = (
+  shortcutId: string,
+  markerKey: string
+) => {
   if (!isWebRuntime()) return
-  if (getLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY) === "true") {
+  if (getLocalStorageValue(markerKey) === "true") {
     return
   }
 
   const rawSelection = getLocalStorageValue(HEADER_SHORTCUT_SELECTION_SETTING.key)
   if (rawSelection === null) {
-    writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+    writeLocalStorageValue(markerKey, "true")
     return
   }
 
@@ -254,12 +405,12 @@ const backfillDocumentWorkspaceHeaderShortcutForWeb = () => {
   try {
     parsedSelection = JSON.parse(rawSelection)
   } catch {
-    writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+    writeLocalStorageValue(markerKey, "true")
     return
   }
 
   if (!Array.isArray(parsedSelection)) {
-    writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+    writeLocalStorageValue(markerKey, "true")
     return
   }
 
@@ -268,14 +419,18 @@ const backfillDocumentWorkspaceHeaderShortcutForWeb = () => {
       (entry): entry is string => typeof entry === "string"
     )
   )
-  selectedIds.add("document-workspace")
+  selectedIds.add(shortcutId)
 
   const nextSelection = DEFAULT_HEADER_SHORTCUT_SELECTION.filter((id) =>
     selectedIds.has(id)
   )
   writeLocalStorageValue(HEADER_SHORTCUT_SELECTION_SETTING.key, nextSelection)
-  writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+  writeLocalStorageValue(markerKey, "true")
 }
 
 mirrorWebDefaultsFromExtension()
-backfillDocumentWorkspaceHeaderShortcutForWeb()
+backfillHeaderShortcutForWeb(
+  "document-workspace",
+  WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY
+)
+backfillHeaderShortcutForWeb("mcp-hub", WEB_HEADER_SHORTCUT_MCP_HUB_BACKFILL_KEY)

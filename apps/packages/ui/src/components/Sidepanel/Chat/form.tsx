@@ -58,6 +58,9 @@ import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { useComposerEvents } from "@/hooks/useComposerEvents"
 import { useTemporaryChatToggle } from "@/hooks/useTemporaryChatToggle"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import {
   COMPOSER_CONSTANTS,
   SPACING,
@@ -95,12 +98,19 @@ import { ConnectionPhase } from "@/types/connection"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import {
+  normalizeVoiceConversationRuntimeError,
+  resolveVoiceConversationAvailability,
+  resolveVoiceConversationTtsConfig,
+  shouldProbeVoiceConversationAudioHealth
+} from "@/services/tldw/voice-conversation"
 import { fetchChatModels } from "@/services/tldw-server"
 import { getProviderDisplayName } from "@/utils/provider-registry"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useSetting } from "@/hooks/useSetting"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { useQuickIngestStore } from "@/store/quick-ingest"
+import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
@@ -114,6 +124,7 @@ import { formatPinnedResults } from "@/utils/rag-format"
 import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 import { useQueuedRequests } from "@/hooks/chat/useQueuedRequests"
+import { resolveAudioCapturePlan, type AudioCaptureRequestedSource } from "@/audio"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -131,6 +142,7 @@ import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 import { browser } from "wxt/browser"
 import type { Character } from "@/types/character"
 import type { QueuedRequest } from "@/utils/chat-request-queue"
+import { AudioSourcePicker } from "@/components/Common/AudioSourcePicker"
 
 type Props = {
   dropedFile: File | undefined
@@ -258,6 +270,18 @@ export const SidepanelForm = ({
     setVoiceChatTtsMode
   } = useVoiceChatSettings()
   const voiceChatMessages = useVoiceChatMessages()
+  const { config: canonicalConnectionConfig, loading: canonicalConnectionLoading } =
+    useCanonicalConnectionConfig()
+  const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
+  const [tldwTtsVoice] = useStorage("tldwTtsVoice", "af_heart")
+  const [tldwTtsSpeed] = useStorage("tldwTtsSpeed", 1)
+  const [tldwTtsResponseFormat] = useStorage("tldwTtsResponseFormat", "mp3")
+  const [openAITTSModel] = useStorage("openAITTSModel", "tts-1")
+  const [openAITTSVoice] = useStorage("openAITTSVoice", "alloy")
+  const [elevenLabsModel] = useStorage("elevenLabsModel", "")
+  const [elevenLabsVoiceId] = useStorage("elevenLabsVoiceId", "")
+  const [speechPlaybackSpeed] = useStorage("speechPlaybackSpeed", 1)
   const [voiceChatTriggerInput, setVoiceChatTriggerInput] = React.useState(
     voiceChatTriggerPhrases.join(", ")
   )
@@ -368,6 +392,16 @@ export const SidepanelForm = ({
     "dictationModeOverride",
     null
   )
+  const {
+    preference: dictationAudioSourcePreference,
+    isLoading: dictationSourceLoading,
+    setPreference: setDictationAudioSourcePreference
+  } = useAudioSourcePreferences("dictation")
+  const {
+    devices: audioInputDevices,
+    isSettled: hasAudioCatalogSettled
+  } = useAudioSourceCatalog()
+  const [pendingDictationStart, setPendingDictationStart] = React.useState(false)
 
   const {
     tabMentionsEnabled,
@@ -459,6 +493,21 @@ export const SidepanelForm = ({
   const [ingestOpen, setIngestOpen] = React.useState(false)
   const [autoProcessQueuedIngest, setAutoProcessQueuedIngest] =
     React.useState(false)
+  const {
+    quickIngestSession,
+    createDraftQuickIngestSession,
+    showQuickIngestSession,
+    hideQuickIngestSession
+  } = useQuickIngestSessionStore(
+    (state) => ({
+      quickIngestSession: state.session,
+      createDraftQuickIngestSession: state.createDraftSession,
+      showQuickIngestSession: state.showSession,
+      hideQuickIngestSession: state.hideSession
+    }),
+    shallow
+  )
+  const shouldRenderQuickIngest = ingestOpen || Boolean(quickIngestSession)
   const quickIngestBtnRef = React.useRef<HTMLButtonElement>(null)
   const { phase, isConnected, serverUrl } = useConnectionState()
   const { uxState } = useConnectionUxState()
@@ -472,15 +521,162 @@ export const SidepanelForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
-    enabled: audioHealthEnabled
+  const shouldProbeAudioHealth = React.useMemo(
+    () =>
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady,
+        hasServerVoiceChat,
+        hasServerStt,
+        optionalAudioHealthEnabled: audioHealthEnabled
+      }),
+    [
+      audioHealthEnabled,
+      hasServerStt,
+      hasServerVoiceChat,
+      isConnectionReady
+    ]
+  )
+  const {
+    healthState: audioHealthState,
+    sttHealthState,
+    hasVoiceConversationTransport
+  } = useTldwAudioStatus({
+    enabled: shouldProbeAudioHealth,
+    ttsProvider,
+    tldwTtsModel
   })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
   const hasVoiceInputControls =
     browserSupportsSpeechRecognition || hasServerStt || hasServerVoiceChat
-  const voiceChatAvailable = canUseServerAudio
+  const voiceConversationTtsConfig = React.useMemo(
+    () =>
+      resolveVoiceConversationTtsConfig({
+        ttsProvider,
+        tldwTtsModel,
+        tldwTtsVoice,
+        tldwTtsSpeed,
+        tldwTtsResponseFormat,
+        openAITTSModel,
+        openAITTSVoice,
+        elevenLabsModel,
+        elevenLabsVoiceId,
+        speechPlaybackSpeed,
+        voiceChatTtsMode
+      }),
+    [
+      elevenLabsModel,
+      elevenLabsVoiceId,
+      openAITTSModel,
+      openAITTSVoice,
+      speechPlaybackSpeed,
+      tldwTtsModel,
+      tldwTtsResponseFormat,
+      tldwTtsSpeed,
+      tldwTtsVoice,
+      ttsProvider,
+      voiceChatTtsMode
+    ]
+  )
+  const voiceConversationAvailability = React.useMemo(
+    () =>
+      resolveVoiceConversationAvailability({
+        isConnectionReady: isConnectionReady && !canonicalConnectionLoading,
+        hasVoiceConversationTransport,
+        authReady: Boolean(
+          canonicalConnectionConfig?.serverUrl &&
+            (canonicalConnectionConfig?.authMode === "multi-user"
+              ? canonicalConnectionConfig.accessToken
+              : canonicalConnectionConfig.apiKey)
+        ),
+        sttHealthState,
+        ttsHealthState: audioHealthState,
+        selectedModel: String(voiceChatModel || "").trim(),
+        allowBackendDefaultModel: true,
+        ttsConfigReady: voiceConversationTtsConfig.ok
+      }),
+    [
+      audioHealthState,
+      canonicalConnectionConfig?.apiKey,
+      canonicalConnectionConfig?.authMode,
+      canonicalConnectionConfig?.accessToken,
+      canonicalConnectionConfig?.serverUrl,
+      canonicalConnectionLoading,
+      hasVoiceConversationTransport,
+      isConnectionReady,
+      sttHealthState,
+      voiceChatModel,
+      voiceConversationTtsConfig.ok
+    ]
+  )
+  const voiceChatAvailable = voiceConversationAvailability.available
+  const dictationCapturePlan = React.useMemo(
+    () =>
+      resolveAudioCapturePlan({
+        featureGroup: "dictation",
+        requestedSource: dictationAudioSourcePreference,
+        requestedSpeechPath:
+          dictationModeOverride === "browser"
+            ? "browser_dictation"
+            : "server_dictation",
+        capabilities: {
+          browserDictationSupported: browserSupportsSpeechRecognition,
+          serverDictationSupported: canUseServerStt,
+          liveVoiceSupported: false,
+          secureContextAvailable:
+            typeof window === "undefined" ? true : window.isSecureContext
+        }
+      }),
+    [
+      browserSupportsSpeechRecognition,
+      canUseServerStt,
+      dictationAudioSourcePreference,
+      dictationModeOverride
+    ]
+  )
+  const dictationSourceReady = hasAudioCatalogSettled && !dictationSourceLoading
+  const resolvedDictationSourcePreference = React.useMemo(() => {
+    if (!dictationSourceReady) {
+      return dictationAudioSourcePreference
+    }
+
+    if (dictationAudioSourcePreference.sourceKind !== "mic_device") {
+      return dictationAudioSourcePreference
+    }
+
+    const requestedDeviceId = String(dictationAudioSourcePreference.deviceId || "").trim()
+    const deviceStillAvailable = audioInputDevices.some(
+      (device) => device.deviceId === requestedDeviceId
+    )
+
+    if (deviceStillAvailable) {
+      return dictationAudioSourcePreference
+    }
+
+    return {
+      featureGroup: "dictation" as const,
+      sourceKind: "default_mic" as const,
+      deviceId: null,
+      lastKnownLabel: null
+    }
+  }, [audioInputDevices, dictationAudioSourcePreference, dictationSourceReady])
+  const resolvedDictationSourceKind = resolvedDictationSourcePreference.sourceKind
+  const browserDictationCompatible =
+    resolvedDictationSourcePreference.sourceKind === "default_mic"
+  const resolvedModeOverride =
+    dictationModeOverride === "browser" && !browserDictationCompatible
+      ? (canUseServerStt ? ("server" as const) : ("unavailable" as const))
+      : null
+  const requestedServerDictationSource = React.useMemo<
+    AudioCaptureRequestedSource | undefined
+  >(
+    () =>
+      resolvedDictationSourcePreference.sourceKind === "mic_device"
+        ? resolvedDictationSourcePreference
+        : undefined,
+    [resolvedDictationSourcePreference]
+  )
 
   const voiceChat = useVoiceChatStream({
     active: voiceChatEnabled && voiceChatAvailable,
@@ -494,11 +690,12 @@ export const SidepanelForm = ({
       void voiceChatMessages.finalizeAssistant(text)
     },
     onError: (msg) => {
+      const runtimeError = normalizeVoiceConversationRuntimeError(msg)
       notification.error({
         message: t("playground:voiceChat.errorTitle", "Voice chat error"),
-        description: msg
+        description: runtimeError.message
       })
-      voiceChatMessages.abandonTurn()
+      void voiceChatMessages.failTurn(runtimeError.reason)
       setVoiceChatEnabled(false)
     },
     onWarning: (msg) => {
@@ -746,12 +943,16 @@ export const SidepanelForm = ({
   const dictationDiagnosticsSnapshotRef = React.useRef<{
     requestedMode: DictationModePreference
     resolvedMode: DictationResolvedMode
+    requestedSourceKind: "default_mic" | "mic_device" | "tab_audio" | "system_audio"
+    resolvedSourceKind: "default_mic" | "mic_device" | "tab_audio" | "system_audio"
     speechAvailable: boolean
     speechUsesServer: boolean
     fallbackReason: DictationErrorClass | null
   }>({
     requestedMode: "auto",
     resolvedMode: "unavailable",
+    requestedSourceKind: "default_mic",
+    resolvedSourceKind: "default_mic",
     speechAvailable: false,
     speechUsesServer: false,
     fallbackReason: null
@@ -773,11 +974,14 @@ export const SidepanelForm = ({
   const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
   const handleServerDictationError = React.useCallback((error: unknown) => {
     const transition = serverDictationErrorBridgeRef.current(error)
+    const snapshot = dictationDiagnosticsSnapshotRef.current
     emitDictationDiagnostics({
       surface: "sidepanel",
       kind: "server_error",
       requestedMode: transition.requestedMode,
       resolvedMode: transition.resolvedModeBeforeError,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: transition.speechAvailableBeforeError,
       speechUsesServer: transition.speechUsesServerBeforeError,
       errorClass: transition.errorClass,
@@ -793,6 +997,8 @@ export const SidepanelForm = ({
       kind: "server_success",
       requestedMode: snapshot.requestedMode,
       resolvedMode: snapshot.resolvedMode,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
       fallbackReason: snapshot.fallbackReason
@@ -816,6 +1022,8 @@ export const SidepanelForm = ({
   const dictationStrategy = useDictationStrategy({
     canUseServerStt,
     browserSupportsSpeechRecognition,
+    browserDictationCompatible,
+    resolvedModeOverride,
     isServerDictating,
     isBrowserDictating: isListening,
     modeOverride: dictationModeOverride,
@@ -826,6 +1034,8 @@ export const SidepanelForm = ({
   dictationDiagnosticsSnapshotRef.current = {
     requestedMode: dictationStrategy.requestedMode,
     resolvedMode: dictationStrategy.resolvedMode,
+    requestedSourceKind: dictationCapturePlan.requestedSourceKind,
+    resolvedSourceKind: resolvedDictationSourceKind,
     speechAvailable: dictationStrategy.speechAvailable,
     speechUsesServer: dictationStrategy.speechUsesServer,
     fallbackReason: dictationStrategy.autoFallbackErrorClass
@@ -836,11 +1046,20 @@ export const SidepanelForm = ({
   // Composer window events hook
   const handleOpenQuickIngest = React.useCallback(() => {
     setAutoProcessQueuedIngest(false)
+    if (quickIngestSession) {
+      showQuickIngestSession()
+    } else {
+      createDraftQuickIngestSession()
+    }
     setIngestOpen(true)
     requestAnimationFrame(() => {
       quickIngestBtnRef.current?.focus()
     })
-  }, [])
+  }, [
+    createDraftQuickIngestSession,
+    quickIngestSession,
+    showQuickIngestSession
+  ])
 
   const {
     openActorSettings,
@@ -1672,19 +1891,51 @@ export const SidepanelForm = ({
       lang: speechToTextLanguage
     })
   }, [resetTranscript, speechToTextLanguage, startListening])
-
-  const handleDictationToggle = React.useCallback(() => {
+  const runPendingDictationStart = React.useCallback(() => {
     switch (dictationStrategy.toggleIntent) {
       case "start_server":
-        void startServerDictation()
+        void startServerDictation(requestedServerDictationSource)
+        return true
+      case "start_browser":
+        startBrowserDictation()
+        return true
+      default:
+        return false
+    }
+  }, [
+    dictationStrategy.toggleIntent,
+    requestedServerDictationSource,
+    startBrowserDictation,
+    startServerDictation
+  ])
+
+  const handleDictationToggle = React.useCallback(() => {
+    if (pendingDictationStart) {
+      setPendingDictationStart(false)
+      return
+    }
+
+    switch (dictationStrategy.toggleIntent) {
+      case "start_server":
+        if (!dictationSourceReady) {
+          setPendingDictationStart(true)
+          return
+        }
+        void startServerDictation(requestedServerDictationSource)
         break
       case "stop_server":
+        setPendingDictationStart(false)
         stopServerDictation()
         break
       case "start_browser":
+        if (!dictationSourceReady) {
+          setPendingDictationStart(true)
+          return
+        }
         startBrowserDictation()
         break
       case "stop_browser":
+        setPendingDictationStart(false)
         stopListening()
         break
       default:
@@ -1696,18 +1947,33 @@ export const SidepanelForm = ({
       kind: "toggle",
       requestedMode: snapshot.requestedMode,
       resolvedMode: snapshot.resolvedMode,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
       toggleIntent: dictationStrategy.toggleIntent,
       fallbackReason: snapshot.fallbackReason
     })
   }, [
+    dictationSourceReady,
     dictationStrategy.toggleIntent,
+    pendingDictationStart,
+    requestedServerDictationSource,
     startBrowserDictation,
     startServerDictation,
     stopListening,
     stopServerDictation
   ])
+
+  React.useEffect(() => {
+    if (!pendingDictationStart) return
+    if (!dictationSourceReady) return
+    if (!runPendingDictationStart()) {
+      setPendingDictationStart(false)
+      return
+    }
+    setPendingDictationStart(false)
+  }, [dictationSourceReady, pendingDictationStart, runPendingDictationStart])
 
   const voiceChatStatusLabel = React.useMemo(() => {
     switch (voiceChat.state) {
@@ -1736,14 +2002,21 @@ export const SidepanelForm = ({
     return "border-border text-text-muted"
   }, [voiceChat.state, voiceChatEnabled])
 
+  const voiceChatUnavailableMessage = React.useMemo(() => {
+    const fallback = t(
+      "playground:voiceChat.unavailableBody",
+      "Connect to a tldw server with audio chat streaming enabled."
+    )
+    return voiceConversationAvailability.message
+      ? t(voiceConversationAvailability.message, fallback)
+      : fallback
+  }, [t, voiceConversationAvailability.message])
+
   const handleVoiceChatToggle = React.useCallback(() => {
     if (!voiceChatAvailable) {
       notification.error({
         message: t("playground:voiceChat.unavailableTitle", "Voice chat unavailable"),
-        description: t(
-          "playground:voiceChat.unavailableBody",
-          "Connect to a tldw server with audio chat streaming enabled."
-        )
+        description: voiceChatUnavailableMessage
       })
       return
     }
@@ -1765,7 +2038,8 @@ export const SidepanelForm = ({
     stopListening,
     stopServerDictation,
     t,
-    voiceChatMessages
+    voiceChatMessages,
+    voiceChatUnavailableMessage
   ])
 
   const handleLiveCaptionsToggle = React.useCallback(async () => {
@@ -1876,6 +2150,30 @@ export const SidepanelForm = ({
           </Radio.Button>
         </Radio.Group>
       </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] text-text-muted">
+          {t("playground:voiceChat.sourceLabel", "Input source")}
+        </span>
+        <AudioSourcePicker
+          ariaLabel={t(
+            "playground:voiceChat.sourcePickerLabel",
+            "Dictation input source"
+          )}
+          devices={audioInputDevices}
+          requestedSourceKind={dictationAudioSourcePreference.sourceKind}
+          resolvedSourceKind={resolvedDictationSourceKind}
+          requestedDeviceId={dictationAudioSourcePreference.deviceId}
+          lastKnownLabel={dictationAudioSourcePreference.lastKnownLabel}
+          onChange={(nextValue) =>
+            setDictationAudioSourcePreference({
+              featureGroup: "dictation",
+              sourceKind: nextValue.sourceKind,
+              deviceId: nextValue.deviceId ?? null,
+              lastKnownLabel: nextValue.lastKnownLabel ?? null
+            })
+          }
+        />
+      </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">
           {t("playground:voiceChat.autoResume", "Auto resume")}
@@ -1913,8 +2211,17 @@ export const SidepanelForm = ({
 
   const handleQuickIngestOpen = React.useCallback(() => {
     setAutoProcessQueuedIngest(false)
+    if (quickIngestSession) {
+      showQuickIngestSession()
+    } else {
+      createDraftQuickIngestSession()
+    }
     setIngestOpen(true)
-  }, [])
+  }, [
+    createDraftQuickIngestSession,
+    quickIngestSession,
+    showQuickIngestSession
+  ])
 
   const handleProcessQueuedIngest = React.useCallback(() => {
     if (!isConnectionReady) return
@@ -1923,13 +2230,29 @@ export const SidepanelForm = ({
     // render and click, we still open the modal but skip auto-processing.
     if (queuedQuickIngestCount <= 0) {
       setAutoProcessQueuedIngest(false)
+      if (quickIngestSession) {
+        showQuickIngestSession()
+      } else {
+        createDraftQuickIngestSession()
+      }
       setIngestOpen(true)
       return
     }
 
     setAutoProcessQueuedIngest(true)
+    if (quickIngestSession) {
+      showQuickIngestSession()
+    } else {
+      createDraftQuickIngestSession()
+    }
     setIngestOpen(true)
-  }, [isConnectionReady, queuedQuickIngestCount])
+  }, [
+    createDraftQuickIngestSession,
+    isConnectionReady,
+    queuedQuickIngestCount,
+    quickIngestSession,
+    showQuickIngestSession
+  ])
 
   React.useEffect(() => {
     if (!sttError) return
@@ -2864,10 +3187,7 @@ export const SidepanelForm = ({
                                         title={
                                           voiceChatAvailable
                                             ? voiceChatStatusLabel
-                                            : t(
-                                                "playground:voiceChat.unavailableTitle",
-                                                "Voice chat unavailable"
-                                              )
+                                            : voiceChatUnavailableMessage
                                         }
                                       >
                                         <button
@@ -3177,10 +3497,7 @@ export const SidepanelForm = ({
                                     title={
                                       voiceChatAvailable
                                         ? voiceChatStatusLabel
-                                        : t(
-                                            "playground:voiceChat.unavailableTitle",
-                                            "Voice chat unavailable"
-                                          )
+                                        : voiceChatUnavailableMessage
                                     }
                                   >
                                     <button
@@ -3364,11 +3681,12 @@ export const SidepanelForm = ({
           seedMessageId={documentGeneratorSeed?.messageId ?? null}
         />
       )}
-        {ingestOpen && (
+        {shouldRenderQuickIngest && (
           <QuickIngestModal
             open={ingestOpen}
             autoProcessQueued={autoProcessQueuedIngest}
             onClose={() => {
+              hideQuickIngestSession()
               setIngestOpen(false)
               setAutoProcessQueuedIngest(false)
               requestAnimationFrame(() => quickIngestBtnRef.current?.focus())

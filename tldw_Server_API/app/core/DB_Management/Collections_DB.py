@@ -308,6 +308,9 @@ class UserNotificationRow:
     created_at: str
     read_at: str | None
     dismissed_at: str | None
+    snooze_task_id: str | None = None
+    delivery_status: str = "pending"
+    delivered_at: str | None = None
 
 
 @dataclass
@@ -438,7 +441,7 @@ class CollectionsDatabase:
         if not self._owns_backend:
             return
         try:
-            self.backend.close_all()
+            self.backend.get_pool().close_all()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections_db: failed to close backend for user {}: {}", self.user_id, exc)
 
@@ -528,6 +531,15 @@ class CollectionsDatabase:
             if name:
                 columns.add(str(name))
         return columns
+
+    def _table_columns(self, table: str) -> set[str]:
+        if self.backend.backend_type == BackendType.SQLITE:
+            return self._sqlite_columns(table)
+        return {
+            str(row["name"])
+            for row in self.backend.get_table_info(table)
+            if row.get("name")
+        }
 
     def _backfill_audiobook_project_ids(self) -> None:
         try:
@@ -704,7 +716,10 @@ class CollectionsDatabase:
                 archived_at TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
-                dismissed_at TEXT
+                dismissed_at TEXT,
+                snooze_task_id TEXT,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                delivered_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
@@ -953,7 +968,10 @@ class CollectionsDatabase:
                 archived_at TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
-                dismissed_at TEXT
+                dismissed_at TEXT,
+                snooze_task_id TEXT,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                delivered_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
@@ -1551,6 +1569,45 @@ class CollectionsDatabase:
                     logger.debug("collections backfill: content_items.{} already exists or skipped", column)
                 else:
                     raise
+        # Backfill user_notifications columns
+        notif_columns: set[str] = set()
+        if self.backend.table_exists("user_notifications"):
+            with contextlib.suppress(*_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                notif_columns = self._table_columns("user_notifications")
+        if notif_columns and "delivery_status" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'pending'",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.delivery_status already exists or skipped")
+                else:
+                    raise
+        if notif_columns and "delivered_at" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN delivered_at TEXT",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.delivered_at already exists or skipped")
+                else:
+                    raise
+        if notif_columns and "snooze_task_id" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN snooze_task_id TEXT",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.snooze_task_id already exists or skipped")
+                else:
+                    raise
+
         self._fts_available = fts_available
         self._refresh_fts_capabilities()
 
@@ -4365,6 +4422,9 @@ class CollectionsDatabase:
             created_at=str(row.get("created_at") or ""),
             read_at=row.get("read_at"),
             dismissed_at=row.get("dismissed_at"),
+            snooze_task_id=row.get("snooze_task_id"),
+            delivery_status=str(row.get("delivery_status") or "pending"),
+            delivered_at=row.get("delivered_at"),
         )
 
     def create_user_notification(
@@ -4390,8 +4450,8 @@ class CollectionsDatabase:
             "INSERT INTO user_notifications ("
             "user_id, kind, title, message, severity, source_task_id, source_task_run_id, source_job_id, "
             "source_domain, source_job_type, link_type, link_id, link_url, dedupe_key, retention_until, archived_at, "
-            "created_at, read_at, dismissed_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "created_at, read_at, dismissed_at, delivery_status, delivered_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             self.user_id,
@@ -4413,10 +4473,27 @@ class CollectionsDatabase:
             now,
             None,
             None,
+            "pending",
+            None,
         )
-        res = self._execute_insert(q, params)
-        new_id = self._extract_lastrowid(res)
-        if not new_id and dedupe_key:
+        duplicate_dedupe_error = False
+        try:
+            res = self._execute_insert(q, params)
+        except DatabaseError as exc:
+            duplicate_dedupe_error = bool(
+                dedupe_key
+                and (
+                    "unique constraint failed: user_notifications.user_id, user_notifications.dedupe_key"
+                    in str(exc).lower()
+                    or "duplicate key value violates unique constraint" in str(exc).lower()
+                    or "ux_user_notifications_user_dedupe" in str(exc).lower()
+                )
+            )
+            if not duplicate_dedupe_error:
+                raise
+            res = None
+        new_id = self._extract_lastrowid(res) if res is not None else None
+        if (duplicate_dedupe_error or not new_id) and dedupe_key:
             existing = self.backend.execute(
                 "SELECT * FROM user_notifications WHERE user_id = ? AND dedupe_key = ? ORDER BY id DESC LIMIT 1",
                 (self.user_id, dedupe_key),
@@ -4433,6 +4510,25 @@ class CollectionsDatabase:
             raise KeyError("user_notification_not_found")
         return self._notification_row_from_db(row)
 
+    def update_notification_delivery_status(
+        self,
+        notification_id: int,
+        status: str,
+        delivered_at: str | None = None,
+    ) -> bool:
+        """Update the delivery_status (and optionally delivered_at) of a notification."""
+        if delivered_at is not None:
+            cursor = self.backend.execute(
+                "UPDATE user_notifications SET delivery_status = ?, delivered_at = ? WHERE id = ? AND user_id = ?",
+                (status, delivered_at, notification_id, self.user_id),
+            )
+        else:
+            cursor = self.backend.execute(
+                "UPDATE user_notifications SET delivery_status = ?, delivered_at = NULL WHERE id = ? AND user_id = ?",
+                (status, notification_id, self.user_id),
+            )
+        return bool(cursor.rowcount and cursor.rowcount > 0)
+
     def list_user_notifications(
         self,
         *,
@@ -4447,6 +4543,22 @@ class CollectionsDatabase:
         q = f"SELECT * FROM user_notifications WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"  # nosec B608
         params.extend([limit, offset])
         rows = self.backend.execute(q, tuple(params)).rows
+        return [self._notification_row_from_db(row) for row in rows]
+
+    def list_user_dismissed_notifications(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserNotificationRow]:
+        rows = self.backend.execute(
+            (
+                "SELECT * FROM user_notifications "
+                "WHERE user_id = ? AND dismissed_at IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            ),
+            (self.user_id, limit, offset),
+        ).rows
         return [self._notification_row_from_db(row) for row in rows]
 
     def list_user_notifications_after_id(
@@ -4545,6 +4657,13 @@ class CollectionsDatabase:
             "WHERE id = ? AND user_id = ? AND dismissed_at IS NULL"
         )
         res = self.backend.execute(q, (_utcnow_iso(), notification_id, self.user_id))
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def set_user_notification_snooze_task(self, notification_id: int, task_id: str | None) -> bool:
+        res = self.backend.execute(
+            "UPDATE user_notifications SET snooze_task_id = ? WHERE id = ? AND user_id = ?",
+            (task_id, notification_id, self.user_id),
+        )
         return bool(res.rowcount and res.rowcount > 0)
 
     def delete_user_notifications_by_link(

@@ -9,71 +9,97 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
+from pydantic import BaseModel
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_owner, get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
     DeckCreate,
     DeckUpdate,
-    FlashcardGenerateRequest,
-    FlashcardGenerateResponse,
+    Flashcard,
     FlashcardAnalyticsSummaryResponse,
     FlashcardAssetMetadata,
-    Flashcard,
     FlashcardBulkUpdateError,
     FlashcardBulkUpdateItem,
     FlashcardBulkUpdateResponse,
     FlashcardBulkUpdateResult,
     FlashcardCreate,
+    FlashcardGenerateRequest,
+    FlashcardGenerateResponse,
     FlashcardListResponse,
     FlashcardNextReviewResponse,
+    FlashcardResetSchedulingRequest,
     FlashcardReviewRequest,
     FlashcardReviewResponse,
-    FlashcardResetSchedulingRequest,
+    FlashcardReviewSessionSummary,
+    FlashcardTagSuggestionsResponse,
     FlashcardsImportRequest,
     FlashcardTagsUpdate,
+    FlashcardUpdate,
+    StructuredQaImportPreviewRequest,
+    StructuredQaImportPreviewResponse,
     StudyAssistantContextResponse,
     StudyAssistantRespondRequest,
     StudyAssistantRespondResponse,
-    StructuredQaImportPreviewRequest,
-    StructuredQaImportPreviewResponse,
-    FlashcardUpdate,
+)
+from tldw_Server_API.app.api.v1.schemas.study_packs import (
+    StudyPackCreateJobRequest,
+    StudyPackJobAcceptedResponse,
+    StudyPackJobStatusResponse,
+    StudyPackSummaryResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
+from tldw_Server_API.app.core.Flashcards.apkg_importer import (
+    APKGImportError,
+    import_rows_from_apkg_bytes,
+)
 from tldw_Server_API.app.core.Flashcards.asset_refs import (
     build_flashcard_asset_markdown,
     build_flashcard_asset_reference,
     extract_flashcard_asset_uuids,
+)
+from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (
+    FsrsSettingsError,
+    build_fsrs_next_interval_previews,
 )
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (
     SchedulerSettingsError,
     build_next_interval_previews,
     get_default_scheduler_settings_envelope,
 )
-from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (
-    FsrsSettingsError,
-    build_fsrs_next_interval_previews,
-)
-from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
-from tldw_Server_API.app.core.Flashcards.apkg_importer import (
-    APKGImportError,
-    import_rows_from_apkg_bytes,
-)
 from tldw_Server_API.app.core.Flashcards.structured_qa_import import parse_structured_qa_preview
 from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_flashcard_assistant_context,
     generate_study_assistant_reply,
 )
-from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.StudyPacks.jobs import (
+    STUDY_PACKS_DOMAIN,
+    STUDY_PACKS_JOB_TYPE,
+    build_study_pack_job_payload,
+    extract_study_pack_source_items,
+    study_pack_jobs_queue,
+)
+from tldw_Server_API.app.core.StudySuggestions.jobs import (
+    STUDY_SUGGESTIONS_DOMAIN,
+    STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+    build_study_suggestions_job_payload,
+    study_suggestions_jobs_queue,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.image_validation import (
     get_max_flashcard_asset_bytes,
@@ -86,6 +112,13 @@ _FLASHCARDS_INT_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
 )
+
+
+def _ensure_workspace_exists(db: CharactersRAGDB, workspace_id: Optional[str]) -> None:
+    if workspace_id is None:
+        return
+    if db.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
 
 
 def _coerce_scheduler_type(value: Any) -> str:
@@ -106,6 +139,55 @@ def _parse_scheduler_settings_envelope(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _truncate_test_mode_flashcard_text(text: str, limit: int = 220) -> str:
+    normalized = " ".join(str(text or "").split()).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 1].rstrip()}…"
+
+
+def _build_test_mode_flashcards(payload: FlashcardGenerateRequest) -> list[dict[str, Any]]:
+    normalized_text = _truncate_test_mode_flashcard_text(payload.text) or "Workspace study aid coverage."
+    card_type = str(payload.card_type or "basic").strip().lower() or "basic"
+    if card_type not in ("basic", "basic_reverse", "cloze"):
+        card_type = "basic"
+
+    tags = [str(topic).strip() for topic in (payload.focus_topics or []) if str(topic).strip()]
+    if not tags:
+        tags = ["workspace", "study"]
+
+    cards: list[dict[str, Any]] = []
+    for index in range(max(1, int(payload.num_cards or 1))):
+        if card_type == "cloze":
+            front = f"{{{{c1::Study point {index + 1}}}}}: {normalized_text}"
+            back = f"Study point {index + 1}"
+        else:
+            front = f"What study point {index + 1} should you remember?"
+            back = normalized_text
+
+        cards.append(
+            {
+                "front": front,
+                "back": back,
+                "tags": tags,
+                "model_type": card_type,
+                "notes": "Deterministic test-mode flashcard.",
+            }
+        )
+    return cards
+
+
+def _should_return_test_mode_flashcards(error: object) -> bool:
+    normalized = str(error or "").lower()
+    if not normalized:
+        return False
+    return (
+        "llm provider is required" in normalized
+        or "requires an api key" in normalized
+        or "didn't provide an api key" in normalized
+    )
+
+
 def _attach_scheduler_preview(card: dict[str, Any], deck: dict[str, Any] | None) -> dict[str, Any]:
     scheduler_type = _coerce_scheduler_type(deck.get("scheduler_type") if deck else None)
     card["scheduler_type"] = scheduler_type
@@ -118,6 +200,14 @@ def _attach_scheduler_preview(card: dict[str, Any], deck: dict[str, Any] | None)
     else:
         card["next_intervals"] = build_next_interval_previews(card, raw_settings)
     return card
+
+
+def _build_review_scope_key(*, review_mode: str, deck_id: int | None, tag_filter: str | None = None) -> str:
+    scope_parts = [str(review_mode or "due").strip().lower() or "due"]
+    scope_parts.append(f"deck:{deck_id}" if deck_id is not None else "global")
+    if tag_filter:
+        scope_parts.append(f"tag:{tag_filter}")
+    return ":".join(scope_parts)
 _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     CharactersRAGDBError,
@@ -130,6 +220,17 @@ _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
 )
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+_STUDY_PACK_JOB_STATUS_MAP = {
+    "queued": "queued",
+    "processing": "running",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "cancelled",
+}
+
+
+class ReviewSessionEndRequest(BaseModel):
+    review_session_id: int
 
 
 def _int_env(name: str, default: int) -> int:
@@ -178,6 +279,108 @@ def _resolve_flashcard_generation_provider(request_provider: str | None) -> str:
 
     fallback = str(DEFAULT_LLM_PROVIDER or "openai").strip().lower()
     return fallback or "openai"
+
+
+def _is_admin_principal(principal: AuthPrincipal) -> bool:
+    perms = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    return bool("admin" in roles or perms & _ADMIN_CLAIM_PERMISSIONS or FLASHCARDS_ADMIN.lower() in perms)
+
+
+def _serialize_study_pack(pack: dict[str, Any]) -> dict[str, Any]:
+    return StudyPackSummaryResponse.model_validate(pack).model_dump(mode="json")
+
+
+def _serialize_study_pack_job(job: dict[str, Any]) -> dict[str, Any]:
+    raw_status = str(job.get("status") or "").strip().lower()
+    return {
+        "id": int(job["id"]),
+        "status": _STUDY_PACK_JOB_STATUS_MAP.get(raw_status, "queued"),
+        "domain": str(job.get("domain") or ""),
+        "queue": str(job.get("queue") or ""),
+        "job_type": str(job.get("job_type") or ""),
+    }
+
+
+def _ensure_study_pack_job_access(job: dict[str, Any], *, current_user: User, principal: AuthPrincipal) -> None:
+    if _is_admin_principal(principal):
+        return
+    owner_user_id = str(job.get("owner_user_id") or "").strip()
+    if owner_user_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Study-pack job not found")
+
+
+def _study_pack_from_job_result(db: CharactersRAGDB, job: dict[str, Any]) -> dict[str, Any] | None:
+    result = job.get("result") or {}
+    pack_id = result.get("pack_id") if isinstance(result, dict) else None
+    if pack_id is None:
+        return None
+    pack = db.get_study_pack(int(pack_id))
+    return _serialize_study_pack(pack) if pack else None
+
+
+def _public_study_pack_job_error(job: dict[str, Any]) -> str | None:
+    raw_status = str(job.get("status") or "").strip().lower()
+    if raw_status == "cancelled":
+        reason = str(job.get("cancellation_reason") or "").strip()
+        return reason or "Study pack generation was cancelled."
+    if raw_status != "failed":
+        return None
+
+    raw_error = str(job.get("last_error") or job.get("error_message") or "").strip()
+    if raw_error:
+        logger.warning("Study-pack job {} failed: {}", int(job["id"]), raw_error)
+    return "Study pack generation failed."
+
+
+def _enqueue_study_suggestions_refresh(
+    *,
+    jm: JobManager,
+    current_user: User,
+    anchor_type: str,
+    anchor_id: int,
+) -> None:
+    try:
+        jm.create_job(
+            domain=STUDY_SUGGESTIONS_DOMAIN,
+            queue=study_suggestions_jobs_queue(),
+            job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+            payload=build_study_suggestions_job_payload(
+                job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+                anchor_type=anchor_type,
+                anchor_id=anchor_id,
+            ),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=1,
+        )
+    except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Study-suggestions refresh enqueue skipped for {}:{}: {}", anchor_type, anchor_id, exc)
+
+
+async def _study_pack_db_for_job(
+    job: dict[str, Any],
+    *,
+    request_db: CharactersRAGDB,
+    current_user: User,
+    principal: AuthPrincipal,
+) -> CharactersRAGDB:
+    if not _is_admin_principal(principal):
+        return request_db
+
+    owner_user_id = str(job.get("owner_user_id") or "").strip()
+    if not owner_user_id or owner_user_id == str(current_user.id):
+        return request_db
+
+    return await get_chacha_db_for_owner(int(owner_user_id))
 
 
 def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
@@ -458,11 +661,13 @@ def _get_flashcards_apkg_max_media_bytes() -> int:
 @router.post("/decks", response_model=Deck)
 def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
+        _ensure_workspace_exists(db, payload.workspace_id)
         deck_id = db.add_deck(
             payload.name,
             payload.description,
             payload.scheduler_settings.model_dump() if payload.scheduler_settings else None,
             scheduler_type=payload.scheduler_type,
+            workspace_id=payload.workspace_id,
         )
         # Return the exact deck row by id
         deck = db.get_deck(deck_id)
@@ -473,6 +678,7 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
             "id": deck_id,
             "name": payload.name,
             "description": payload.description,
+            "workspace_id": payload.workspace_id,
             "created_at": None,
             "last_modified": None,
             "deleted": False,
@@ -496,10 +702,22 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
 
 
 @router.get("/decks", response_model=list[Deck])
-def list_decks(db: CharactersRAGDB = Depends(get_chacha_db_for_user), include_deleted: bool = False,
-               limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
+def list_decks(
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    include_deleted: bool = False,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
     try:
-        return db.list_decks(limit=limit, offset=offset, include_deleted=include_deleted)
+        return db.list_decks(
+            limit=limit,
+            offset=offset,
+            include_deleted=include_deleted,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list decks: {e}")
         raise HTTPException(status_code=500, detail="Failed to list decks") from e
@@ -515,13 +733,17 @@ def update_deck(
     expected_version = data.pop("expected_version", None)
     scheduler_settings = data.pop("scheduler_settings", None)
     scheduler_type = data.pop("scheduler_type", None)
+    workspace_id = data.pop("workspace_id", ...)
     try:
+        if workspace_id is not ...:
+            _ensure_workspace_exists(db, workspace_id)
         ok = db.update_deck(
             deck_id,
             name=data.get("name"),
             description=data.get("description"),
             scheduler_settings=scheduler_settings,
             scheduler_type=scheduler_type,
+            workspace_id=workspace_id,
             expected_version=expected_version,
         )
         if not ok:
@@ -816,6 +1038,8 @@ def update_flashcards_bulk(
 @router.get("", response_model=FlashcardListResponse)
 def list_flashcards(
     deck_id: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     tag: Optional[str] = None,
     due_status: Optional[str] = Query('all', pattern="^(new|learning|due|all)$"),
     q: Optional[str] = None,
@@ -825,22 +1049,74 @@ def list_flashcards(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     try:
-        items = db.list_flashcards(deck_id=deck_id, tag=tag, due_status=due_status or 'all', q=q,
-                                   include_deleted=False, limit=limit, offset=offset, order_by=order_by or 'due_at')
-        total = db.count_flashcards(deck_id=deck_id, tag=tag, due_status=due_status or 'all', q=q, include_deleted=False)
+        items = db.list_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            due_status=due_status or 'all',
+            q=q,
+            include_deleted=False,
+            limit=limit,
+            offset=offset,
+            order_by=order_by or 'due_at',
+        )
+        total = db.count_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            due_status=due_status or 'all',
+            q=q,
+            include_deleted=False,
+        )
         return {"items": items, "count": len(items), "total": int(total)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcards") from e
 
 
+@router.get(
+    "/tags",
+    response_model=FlashcardTagSuggestionsResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+def list_flashcard_tag_suggestions(
+    q: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=100),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> FlashcardTagSuggestionsResponse:
+    """List global flashcard tag suggestions.
+
+    Args:
+        q: Optional trimmed substring filter applied case-insensitively to tag names.
+        limit: Maximum number of suggestions to return.
+        db: Flashcards database dependency for the current user.
+
+    Returns:
+        A typed response containing matching tag suggestions and the number returned.
+    """
+    try:
+        items = db.list_flashcard_tag_suggestions(q=q, limit=limit)
+        return FlashcardTagSuggestionsResponse(items=items, count=len(items))
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to list flashcard tag suggestions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list flashcard tag suggestions") from e
+
+
 @router.get("/analytics/summary", response_model=FlashcardAnalyticsSummaryResponse)
 def get_flashcard_analytics_summary(
     deck_id: Optional[int] = Query(None, ge=1),
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     try:
-        return db.get_flashcard_analytics_summary(deck_id=deck_id)
+        return db.get_flashcard_analytics_summary(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
     except CharactersRAGDBError as e:
         logger.error(f"Failed to get flashcard analytics summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get flashcard analytics summary") from e
@@ -1043,7 +1319,10 @@ def import_flashcards(
         # Build or cache decks by name
         decks_cache: dict[str, int] = {}
         # Preload existing decks once
-        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        existing_decks = {
+            d.get('name'): d.get('id')
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
+        }
         default_deck_name = 'Default'
         # Ensure default deck exists in cache
         if default_deck_name not in existing_decks:
@@ -1242,7 +1521,10 @@ async def import_flashcards_json(
             raise HTTPException(status_code=400, detail="JSON content must be a list of objects or {'items': [...]} ")
 
         # Deck cache
-        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        existing_decks = {
+            d.get('name'): d.get('id')
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
+        }
         decks_cache: dict[str, int] = dict(existing_decks)
         default_deck_name = 'Default'
         if default_deck_name not in decks_cache:
@@ -1408,7 +1690,7 @@ async def import_flashcards_apkg(
 
         existing_decks = {
             d.get("name"): d.get("id")
-            for d in db.list_decks(limit=10000, offset=0, include_deleted=False)
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
         }
         decks_cache: dict[str, int] = dict(existing_decks)
         if "Default" not in decks_cache:
@@ -1482,7 +1764,22 @@ async def import_flashcards_apkg(
 @router.post("/review", response_model=FlashcardReviewResponse)
 def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
-        updated = db.review_flashcard(payload.card_uuid, payload.rating, payload.answer_time_ms)
+        card = db.get_flashcard(payload.card_uuid)
+        if not card:
+            raise HTTPException(status_code=404, detail=f"Flashcard not found ({payload.card_uuid})")
+        deck_id = int(card["deck_id"]) if card.get("deck_id") is not None else None
+        session = db.get_or_create_flashcard_review_session(
+            deck_id=deck_id,
+            review_mode="due",
+            tag_filter=None,
+            scope_key=_build_review_scope_key(review_mode="due", deck_id=deck_id),
+        )
+        updated = db.review_flashcard(
+            payload.card_uuid,
+            payload.rating,
+            payload.answer_time_ms,
+            review_session_id=session["id"],
+        )
         return updated
     except (SchedulerSettingsError, FsrsSettingsError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1493,13 +1790,64 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
         raise HTTPException(status_code=500, detail="Failed to review flashcard") from e
 
 
-@router.get("/review/next", response_model=FlashcardNextReviewResponse)
-def get_next_review_card(
+@router.get("/review-sessions", response_model=list[FlashcardReviewSessionSummary])
+def list_review_sessions(
     deck_id: Optional[int] = Query(None, ge=1),
+    scope_key: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=200),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     try:
-        card, selection_reason = db.get_next_review_card(deck_id=deck_id)
+        return db.list_flashcard_review_sessions(
+            deck_id=deck_id,
+            scope_key=scope_key,
+            status=status,
+            limit=limit,
+        )
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to list flashcard review sessions: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list flashcard review sessions") from exc
+
+
+@router.post("/review-sessions/end", response_model=FlashcardReviewSessionSummary)
+def end_review_session(
+    payload: ReviewSessionEndRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    try:
+        session = db.mark_flashcard_review_session_completed(int(payload.review_session_id))
+        _enqueue_study_suggestions_refresh(
+            jm=jm,
+            current_user=current_user,
+            anchor_type="flashcard_review_session",
+            anchor_id=int(session["id"]),
+        )
+        return session
+    except ConflictError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to complete flashcard review session: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to complete flashcard review session") from exc
+
+
+@router.get("/review/next", response_model=FlashcardNextReviewResponse)
+def get_next_review_card(
+    deck_id: Optional[int] = Query(None, ge=1),
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        card, selection_reason = db.get_next_review_card(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
         if not card:
             return {"card": None, "selection_reason": "none"}
         deck = db.get_deck(int(card["deck_id"])) if card.get("deck_id") is not None else None
@@ -1510,6 +1858,110 @@ def get_next_review_card(
     except CharactersRAGDBError as e:
         logger.error(f"Failed to fetch next review card: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch next review card") from e
+
+
+@router.post("/study-packs/jobs", response_model=StudyPackJobAcceptedResponse, status_code=202)
+def create_study_pack_job(
+    payload: StudyPackCreateJobRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    try:
+        _ensure_workspace_exists(db, payload.workspace_id)
+        job = jm.create_job(
+            domain=STUDY_PACKS_DOMAIN,
+            queue=study_pack_jobs_queue(),
+            job_type=STUDY_PACKS_JOB_TYPE,
+            payload=build_study_pack_job_payload(payload),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=2,
+        )
+        return {"job": _serialize_study_pack_job(job)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/study-packs/jobs/{job_id}", response_model=StudyPackJobStatusResponse)
+async def get_study_pack_job_status(
+    job_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+):
+    job = jm.get_job(job_id)
+    if not job or str(job.get("domain") or "").strip().lower() != STUDY_PACKS_DOMAIN:
+        raise HTTPException(status_code=404, detail="Study-pack job not found")
+    _ensure_study_pack_job_access(job, current_user=current_user, principal=principal)
+
+    study_pack = None
+    raw_status = str(job.get("status") or "").strip().lower()
+    if raw_status == "completed":
+        study_pack_db = await _study_pack_db_for_job(
+            job,
+            request_db=db,
+            current_user=current_user,
+            principal=principal,
+        )
+        study_pack = _study_pack_from_job_result(study_pack_db, job)
+    error = _public_study_pack_job_error(job)
+    return {
+        "job": _serialize_study_pack_job(job),
+        "study_pack": study_pack,
+        "error": error,
+    }
+
+
+@router.get("/study-packs/{pack_id}", response_model=StudyPackSummaryResponse)
+def get_study_pack_detail(
+    pack_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    pack = db.get_study_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Study pack not found")
+    return _serialize_study_pack(pack)
+
+
+@router.post("/study-packs/{pack_id}/regenerate", response_model=StudyPackJobAcceptedResponse, status_code=202)
+def regenerate_study_pack(
+    pack_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
+    pack = db.get_study_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Study pack not found")
+
+    source_items = extract_study_pack_source_items(pack.get("source_bundle_json"))
+    if not source_items:
+        raise HTTPException(status_code=400, detail="Study pack source bundle is empty")
+
+    request = StudyPackCreateJobRequest.model_validate(
+        {
+            "title": pack.get("title"),
+            "workspace_id": pack.get("workspace_id"),
+            "deck_mode": "new",
+            "source_items": source_items,
+        }
+    )
+    job = jm.create_job(
+        domain=STUDY_PACKS_DOMAIN,
+        queue=study_pack_jobs_queue(),
+        job_type=STUDY_PACKS_JOB_TYPE,
+        payload=build_study_pack_job_payload(
+            request,
+            regenerate_from_pack_id=pack_id,
+            expected_version=int(pack["version"]) if pack.get("version") is not None else None,
+        ),
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=2,
+    )
+    return {"job": _serialize_study_pack_job(job)}
 
 
 @router.get("/{card_uuid}/assistant", response_model=StudyAssistantContextResponse)
@@ -1525,6 +1977,10 @@ def get_flashcard_assistant(
             "messages": context["history"],
             "context_snapshot": _build_assistant_context_snapshot(context),
             "available_actions": context["available_actions"],
+            "citations": context.get("citations") or [],
+            "primary_citation": context.get("primary_citation"),
+            "deep_dive_target": context.get("deep_dive_target"),
+            "study_pack": context.get("study_pack"),
         }
     except HTTPException:
         raise
@@ -1625,6 +2081,12 @@ async def generate_flashcards(payload: FlashcardGenerateRequest):
 
         error = result.get("error") if isinstance(result, dict) else None
         if error:
+            if is_test_mode() and _should_return_test_mode_flashcards(error):
+                generated_cards = _build_test_mode_flashcards(payload)
+                return {
+                    "flashcards": generated_cards,
+                    "count": len(generated_cards),
+                }
             raise HTTPException(status_code=400, detail=str(error))
 
         raw_flashcards = result.get("flashcards") if isinstance(result, dict) else []
@@ -1677,9 +2139,11 @@ async def generate_flashcards(payload: FlashcardGenerateRequest):
 @router.get("/export")
 def export_flashcards(
     deck_id: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     tag: Optional[str] = None,
     q: Optional[str] = None,
-    format: Optional[str] = Query("csv", pattern="^(csv|apkg)$"),
+    export_format: Optional[str] = Query("csv", alias="format", pattern="^(csv|apkg|json)$"),
     include_reverse: Optional[bool] = False,
     delimiter: Optional[str] = Query('\t', description="CSV/TSV delimiter; default tab"),
     include_header: Optional[bool] = Query(False, description="Include header row for CSV/TSV"),
@@ -1687,8 +2151,59 @@ def export_flashcards(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     try:
-        items = db.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
-        if format == 'apkg':
+        items = db.list_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            q=q,
+            due_status='all',
+            include_deleted=False,
+            limit=100000,
+            offset=0,
+        )
+        if export_format == 'json':
+            def _parse_tags(raw) -> list:
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, list):
+                            return [str(t).strip() for t in parsed if str(t).strip()]
+                        return []
+                    except (json.JSONDecodeError, TypeError):
+                        return []
+                if isinstance(raw, list):
+                    return [str(t).strip() for t in raw if str(t).strip()]
+                return []
+
+            def _stream_json():
+                yield "[\n"
+                first = True
+                for item in items:
+                    row = {
+                        "front": item.get("front", ""),
+                        "back": item.get("back", ""),
+                        "notes": item.get("notes", ""),
+                        "tags": _parse_tags(item.get("tags_json")),
+                        "deck": item.get("deck_name", ""),
+                        "model_type": item.get("model_type", "basic"),
+                        "extra": item.get("extra", ""),
+                        "reverse": bool(item.get("reverse")),
+                        "is_cloze": bool(item.get("is_cloze")),
+                    }
+                    chunk = json.dumps(row, ensure_ascii=False)
+                    if not first:
+                        yield ",\n"
+                    first = False
+                    yield "  " + chunk
+                yield "\n]\n"
+
+            return StreamingResponse(
+                _stream_json(),
+                media_type="application/json; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=flashcards.json"},
+            )
+        if export_format == 'apkg':
             apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
 
             def asset_loader(asset_uuid: str) -> dict[str, Any]:
@@ -1714,7 +2229,16 @@ def export_flashcards(
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv
         dlm = delimiter or '\t'
-        data = db.export_flashcards_csv(deck_id=deck_id, tag=tag, q=q, delimiter=dlm, include_header=bool(include_header), extended_header=bool(extended_header))
+        data = db.export_flashcards_csv(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            q=q,
+            delimiter=dlm,
+            include_header=bool(include_header),
+            extended_header=bool(extended_header),
+        )
         media_type = "text/tab-separated-values; charset=utf-8" if dlm == '\t' else "text/csv; charset=utf-8"
         filename = "flashcards.tsv" if dlm == '\t' else "flashcards.csv"
         return StreamingResponse(iter([data]), media_type=media_type,

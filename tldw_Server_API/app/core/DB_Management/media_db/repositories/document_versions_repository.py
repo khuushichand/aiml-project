@@ -283,6 +283,97 @@ class DocumentVersionsRepository:
             )
             raise DatabaseError(f"Unexpected error retrieving version: {exc}") from exc  # noqa: TRY003
 
+    def list(
+        self,
+        media_id: int,
+        *,
+        include_content: bool = False,
+        include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int | None = 0,
+    ) -> list[dict[str, Any]]:
+        db = self.session
+        if not isinstance(media_id, int):
+            raise TypeError("media_id must be an integer.")  # noqa: TRY003
+        if not isinstance(include_content, bool):
+            raise TypeError("include_content must be a boolean.")  # noqa: TRY003
+        if not isinstance(include_deleted, bool):
+            raise TypeError("include_deleted must be a boolean.")  # noqa: TRY003
+        if limit is not None and (not isinstance(limit, int) or limit < 1):
+            raise ValueError("Limit must be a positive integer.")  # noqa: TRY003
+        if offset is not None and (not isinstance(offset, int) or offset < 0):
+            raise ValueError("Offset must be a non-negative integer.")  # noqa: TRY003
+
+        logger.debug(
+            "Listing {} document versions for media_id={} from DB: {}",
+            "all" if include_deleted else "active",
+            media_id,
+            db.db_path_str,
+        )
+        try:
+            select_cols_list = [
+                "dv.id",
+                "dv.uuid",
+                "dv.media_id",
+                "dv.version_number",
+                "dv.created_at",
+                "dv.prompt",
+                "dv.analysis_content",
+                "dv.safe_metadata",
+                "dv.last_modified",
+                "dv.version",
+                "dv.client_id",
+                "dv.deleted",
+            ]
+            if include_content:
+                select_cols_list.append("dv.content")
+            select_clause = ", ".join(select_cols_list)
+
+            params: list[Any] = [media_id]
+            where_conditions = ["dv.media_id = ?", "m.deleted = 0"]
+            if not include_deleted:
+                where_conditions.append("dv.deleted = 0")
+
+            limit_offset_clause = ""
+            if limit is not None:
+                limit_offset_clause += " LIMIT ?"
+                params.append(limit)
+                if offset is not None and offset > 0:
+                    limit_offset_clause += " OFFSET ?"
+                    params.append(offset)
+
+            query_parts = [
+                f"SELECT {select_clause}",
+                "FROM DocumentVersions dv",
+                "JOIN Media m ON dv.media_id = m.id",
+                f"WHERE {' AND '.join(where_conditions)}",
+                "ORDER BY dv.version_number DESC",
+            ]
+            if limit_offset_clause:
+                query_parts.append(limit_offset_clause)
+            final_query = " ".join(query_parts)
+
+            cursor = db.execute_query(final_query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as exc:
+            logger.error(
+                "SQLite error retrieving versions for media_id {} from {}: {}",
+                media_id,
+                db.db_path_str,
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"Failed to retrieve document versions: {exc}") from exc  # noqa: TRY003
+        except Exception as exc:
+            logger.error(
+                "Unexpected error retrieving versions for media_id {} from {}: {}",
+                media_id,
+                db.db_path_str,
+                exc,
+                exc_info=True,
+            )
+            raise DatabaseError(f"An unexpected error occurred: {exc}") from exc  # noqa: TRY003
+
     def soft_delete(self, version_uuid: str) -> bool:
         if not version_uuid:
             raise InputError("Version UUID required.")  # noqa: TRY003

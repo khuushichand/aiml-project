@@ -17,6 +17,8 @@ import type {
   ACPWSServerMessage,
 } from "./types"
 import { shouldRetryACPWebSocketClose } from "./constants"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
+import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -56,10 +58,14 @@ export class ACPRestClient {
     path: string,
     options: RequestInit = {}
   ): Promise<T> {
-    const url = `${this.config.serverUrl}${path}`
-    const headers = await this.config.getAuthHeaders()
+    const transport = resolveBrowserRequestTransport({
+      config: { serverUrl: this.config.serverUrl },
+      path
+    })
+    const headers =
+      transport.mode === "hosted" ? {} : await this.config.getAuthHeaders()
 
-    const response = await fetch(url, {
+    const response = await fetch(transport.url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -216,7 +222,7 @@ export class ACPWebSocketClient {
     const authParams = await this.config.getAuthParams()
 
     // Build WebSocket URL
-    const wsUrl = this.config.serverUrl.replace(/^http/i, "ws")
+    const wsUrl = resolveBrowserWebSocketBase(this.config.serverUrl)
     const params = new URLSearchParams()
     if (authParams.token) params.set("token", authParams.token)
     if (authParams.api_key) params.set("api_key", authParams.api_key)

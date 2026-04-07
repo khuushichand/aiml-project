@@ -5,7 +5,7 @@ import json
 import os
 import secrets
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -75,26 +75,21 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
-def _resolve_redirect_base(request: Request | None, conn) -> str:
-    """Resolve connector redirect base, allowing request to be optional for tests.
+def _extract_request_base(request: Request | None) -> str:
+    if request is None:
+        return ""
+    try:
+        return str(request.base_url).rstrip("/")
+    except (AttributeError, TypeError, ValueError) as e:
+        logger.debug(f"Failed to resolve base_url from request: {e}")
+        return ""
 
-    Priority: CONNECTOR_REDIRECT_BASE_URL env var > request.base_url > connector.redirect_base.
-    Returns empty string only in test scenarios where the OAuth flow is mocked.
-    """
-    base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
-    if base:
-        return base.rstrip("/")
-    if request is not None:
-        try:
-            return str(request.base_url).rstrip("/")
-        except (AttributeError, TypeError, ValueError) as e:
-            logger.debug(f"Failed to resolve base_url from request: {e}")
-    resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
-    if not resolved and request is not None:
-        logger.warning(
-            "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
-        )
-    return resolved
+
+def _is_connector_test_mode() -> bool:
+    return (
+        os.getenv("TEST_MODE", "").strip().lower() == "true"
+        or os.getenv("TESTING", "").strip().lower() == "true"
+    )
 
 
 def _is_local_callback_base(base_url: str) -> bool:
@@ -105,17 +100,91 @@ def _is_local_callback_base(base_url: str) -> bool:
     return host in {"localhost", "127.0.0.1", "testserver"} or host.endswith(".localhost")
 
 
-def _resolve_webhook_callback_base(request: Request | None, conn) -> str:
-    configured_base = (os.getenv("CONNECTOR_REDIRECT_BASE_URL") or getattr(conn, "redirect_base", "") or "").rstrip("/")
+def _validate_redirect_base(base_url: str, *, setting_name: str = "CONNECTOR_REDIRECT_BASE_URL") -> str:
+    normalized = str(base_url or "").strip().rstrip("/")
+    if not normalized:
+        return ""
+    try:
+        parsed = urlparse(normalized)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{setting_name} must be a valid absolute URL",
+        ) from exc
+    scheme = str(parsed.scheme or "").strip().lower()
+    host = str(parsed.hostname or "").strip().lower()
+    if not scheme or not host:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{setting_name} must be a valid absolute URL",
+        )
+    if scheme == "https":
+        return normalized
+    if scheme == "http" and _is_local_callback_base(normalized):
+        return normalized
+    raise HTTPException(
+        status_code=500,
+        detail=f"{setting_name} must use https unless it targets localhost",
+    )
+
+
+def _resolve_redirect_base(request: Request | None, conn) -> str:
+    """Resolve connector redirect base for OAuth flows.
+
+    Non-test mode requires an explicit CONNECTOR_REDIRECT_BASE_URL so request host
+    headers cannot influence OAuth callback construction. Test mode keeps the
+    local request/fixture fallback for isolated integration tests.
+    """
+    configured_base = _validate_redirect_base(os.getenv("CONNECTOR_REDIRECT_BASE_URL") or "")
     if configured_base:
         return configured_base
-    request_base = _resolve_redirect_base(request, conn)
-    if request_base and (
-        os.getenv("TEST_MODE", "").strip().lower() == "true"
-        or os.getenv("TESTING", "").strip().lower() == "true"
-        or _is_local_callback_base(request_base)
-    ):
-        return request_base
+
+    request_base = _extract_request_base(request)
+    if not _is_connector_test_mode():
+        if request_base:
+            logger.warning(
+                "Rejecting request-derived base_url for connector OAuth redirect base in non-test mode: {}",
+                request_base,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="CONNECTOR_REDIRECT_BASE_URL must be configured before enabling OAuth connectors",
+        )
+
+    if request_base and _is_local_callback_base(request_base):
+        return _validate_redirect_base(request_base)
+
+    resolved = _validate_redirect_base(
+        getattr(conn, "redirect_base", "") or "",
+        setting_name="connector redirect base",
+    )
+    if request_base and resolved and request_base != resolved:
+        logger.warning(
+            "Ignoring untrusted request base_url for connector OAuth redirect base: {}",
+            request_base,
+        )
+    if resolved:
+        return resolved
+    if request is not None:
+        logger.warning(
+            "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
+        )
+    return ""
+
+
+def _resolve_webhook_callback_base(request: Request | None, conn) -> str:
+    configured_base = _validate_redirect_base(os.getenv("CONNECTOR_REDIRECT_BASE_URL") or "")
+    if configured_base:
+        return configured_base
+    connector_base = _validate_redirect_base(
+        getattr(conn, "redirect_base", "") or "",
+        setting_name="connector redirect base",
+    )
+    if connector_base:
+        return connector_base
+    request_base = _extract_request_base(request)
+    if request_base and (_is_connector_test_mode() or _is_local_callback_base(request_base)):
+        return _validate_redirect_base(request_base)
     raise HTTPException(
         status_code=500,
         detail="CONNECTOR_REDIRECT_BASE_URL must be configured before enabling webhook subscriptions",
@@ -227,6 +296,8 @@ def _build_source_sync_summary(
         active_job_id=str(sync_state.get("active_job_id") or "").strip() or None,
         tracked_item_count=int(binding_health.get("tracked_item_count") or 0),
         degraded_item_count=int(binding_health.get("degraded_item_count") or 0),
+        duplicate_count=int(binding_health.get("duplicate_count") or 0),
+        metadata_only_count=int(binding_health.get("metadata_only_count") or 0),
     )
 
 
@@ -339,11 +410,33 @@ def _manual_sync_job_type(source: dict[str, Any], sync_state: dict[str, Any] | N
 
 def _ensure_connector_provider_enabled(provider: str) -> str:
     normalized = str(provider or "").strip().lower()
-    if normalized not in {"drive", "notion", "gmail", "onedrive"}:
+    if normalized not in {"drive", "notion", "gmail", "onedrive", "zotero"}:
         raise HTTPException(status_code=404, detail=f"Unknown connector provider: {provider}")
     if normalized == "gmail" and not _gmail_connector_enabled():
         raise HTTPException(status_code=404, detail="Connector provider 'gmail' is disabled.")
     return normalized
+
+
+def _option_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _normalize_source_options_for_provider(provider: str, options: dict[str, Any] | None) -> dict[str, Any]:
+    normalized_options = dict(options or {})
+    if provider == "zotero":
+        if _option_enabled(normalized_options.get("recursive")):
+            raise HTTPException(
+                status_code=422,
+                detail="Zotero collection sync is flat in v1; link child collections separately.",
+            )
+        normalized_options["recursive"] = False
+    return normalized_options
 
 
 @router.get("/providers", response_model=list[ConnectorProvider])
@@ -352,6 +445,7 @@ async def list_providers() -> list[ConnectorProvider]:
         ConnectorProvider(name="drive", scopes_required=["drive.readonly"], auth_type="oauth2"),
         ConnectorProvider(name="onedrive", scopes_required=["Files.Read"], auth_type="oauth2"),
         ConnectorProvider(name="notion", scopes_required=[], auth_type="oauth2"),
+        ConnectorProvider(name="zotero", scopes_required=["library_access=1", "write_access=0", "notes_access=0"], auth_type="oauth1"),
     ]
     if _gmail_connector_enabled():
         providers.append(
@@ -380,8 +474,22 @@ async def start_authorize(
         conn.redirect_base = redirect_base
     state = state or secrets.token_urlsafe(32)
     user_id = _get_user_id(principal)
-    await create_oauth_state(db, user_id, provider, state)
     scopes_list = [s for s in (scopes or "").split(",") if s]
+    oauth_state_metadata: dict[str, Any] | None = None
+    if provider == "zotero":
+        callback_params = urlencode({"state": state})
+        callback_url = f"{redirect_base}/api/v1/connectors/providers/{provider}/callback?{callback_params}" if redirect_base else ""
+        temporary_credentials = await conn.request_temporary_credential(callback_url)
+        oauth_token = str((temporary_credentials or {}).get("oauth_token") or "").strip()
+        oauth_token_secret = str((temporary_credentials or {}).get("oauth_token_secret") or "").strip()
+        if not oauth_token or not oauth_token_secret:
+            raise HTTPException(status_code=502, detail="Zotero authorization handshake failed.")
+        oauth_state_metadata = {
+            "oauth_token": oauth_token,
+            "oauth_token_secret": oauth_token_secret,
+        }
+        scopes_list = [*scopes_list, f"oauth_token={oauth_token}"]
+    await create_oauth_state(db, user_id, provider, state, metadata=oauth_state_metadata)
     url = conn.authorize_url(state=state, scopes=scopes_list or None, redirect_path=f"/api/v1/connectors/providers/{provider}/callback")
     return AuthorizeURLResponse(auth_url=url, state=state)
 
@@ -389,8 +497,10 @@ async def start_authorize(
 @router.get("/providers/{provider}/callback", response_model=ConnectorAccount)
 async def oauth_callback(
     provider: str,
-    code: str,
     request: Request,
+    code: str | None = None,
+    oauth_token: str | None = None,
+    oauth_verifier: str | None = None,
     state: str | None = None,
     db=Depends(get_db_transaction),
     principal: AuthPrincipal = Depends(get_auth_principal),
@@ -428,14 +538,14 @@ async def oauth_callback(
             default_ttl_minutes,
         )
         ttl_minutes = default_ttl_minutes
-    ok_state = await consume_oauth_state(
+    oauth_state = await consume_oauth_state(
         db,
         user_id=user_id,
         provider=provider,
         state=state,
         max_age_minutes=ttl_minutes,
     )
-    if not ok_state:
+    if not oauth_state:
         raise HTTPException(status_code=403, detail="Invalid or expired OAuth state")
 
     # Enforce org-level account linking role based on org policy; single-user
@@ -458,6 +568,26 @@ async def oauth_callback(
     # Exchange code with redirect derived from env base + this path
     base = _resolve_redirect_base(request, conn)
     redirect_uri = f"{base.rstrip('/')}/api/v1/connectors/providers/{provider}/callback" if base else ""
+    if provider == "zotero":
+        state_metadata = oauth_state if isinstance(oauth_state, dict) else {}
+        stored_oauth_token = str(state_metadata.get("oauth_token") or "").strip()
+        oauth_token_secret = str(state_metadata.get("oauth_token_secret") or "").strip()
+        if not oauth_token or not oauth_verifier:
+            raise HTTPException(status_code=400, detail="Missing Zotero OAuth callback parameters")
+        if stored_oauth_token and stored_oauth_token != oauth_token:
+            raise HTTPException(status_code=403, detail="Zotero OAuth callback token mismatch")
+        if not oauth_token_secret:
+            raise HTTPException(status_code=400, detail="Missing Zotero OAuth temporary credential")
+        code = json.dumps(
+            {
+                "oauth_token": oauth_token,
+                "oauth_token_secret": oauth_token_secret,
+                "oauth_verifier": oauth_verifier,
+            },
+            sort_keys=True,
+        )
+    elif not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth code")
     tokens = await conn.exchange_code(code, redirect_uri)
     # Optional email/workspace fetch for policy enforcement
     acct_email: str | None = None
@@ -555,19 +685,30 @@ async def browse_provider_sources(
     provider = _ensure_connector_provider_enabled(provider)
     user_id = _get_user_id(principal)
     tokens = await get_account_tokens(db, user_id, account_id)
+    acct = await get_account_for_user(db, user_id, account_id) or {}
     if not tokens:
         raise HTTPException(status_code=404, detail="Account not found")
+    acct_provider = str(acct.get("provider") or "").lower()
+    if acct_provider and acct_provider != provider:
+        raise HTTPException(status_code=400, detail="Account provider mismatch")
     email = await get_account_email(db, user_id, account_id)
     conn = get_connector_by_name(provider)
+    account_payload = {**acct, "tokens": tokens, "email": email}
+    if provider == "zotero" and not str(account_payload.get("provider_user_id") or "").strip():
+        provider_user_id = str(tokens.get("provider_user_id") or tokens.get("userID") or tokens.get("user_id") or "").strip()
+        if provider_user_id:
+            account_payload["provider_user_id"] = provider_user_id
     # For Drive, parent_remote_id None implies root
     try:
         if provider == "drive":
-            items, next_cursor = await conn.list_files({"tokens": tokens, "email": email}, parent_remote_id or "root", page_size=page_size, cursor=cursor)
+            items, next_cursor = await conn.list_files(account_payload, parent_remote_id or "root", page_size=page_size, cursor=cursor)
         elif provider == "onedrive":
-            items, next_cursor = await conn.list_files({"tokens": tokens, "email": email}, parent_remote_id or "root", page_size=page_size, cursor=cursor)
+            items, next_cursor = await conn.list_files(account_payload, parent_remote_id or "root", page_size=page_size, cursor=cursor)
         elif provider == "notion":
             # Notion: treat parent_remote_id as workspace hint; we search globally for now
-            items, next_cursor = await conn.list_sources({"tokens": tokens, "email": email}, parent_remote_id=parent_remote_id, page_size=page_size, cursor=cursor)
+            items, next_cursor = await conn.list_sources(account_payload, parent_remote_id=parent_remote_id, page_size=page_size, cursor=cursor)
+        elif provider == "zotero":
+            items, next_cursor = await conn.list_collections(account_payload, cursor=cursor, page_size=page_size)
         else:
             items, next_cursor = [], None
     except Exception as e:
@@ -591,7 +732,7 @@ async def add_source(
     remote_id = str(payload.remote_id)
     type_ = str(payload.type)
     path = payload.path
-    options = payload.options or {}
+    options = _normalize_source_options_for_provider(provider, payload.options)
 
     user_id = _get_user_id(principal)
     acct = await get_account_for_user(db, user_id, account_id)
@@ -726,6 +867,12 @@ async def patch_source(
     enabled = payload.enabled
     options = payload.options
     user_id = _get_user_id(principal)
+    source = await get_source_by_id(db, user_id, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    provider = str(source.get("provider") or "").strip().lower()
+    if options is not None:
+        options = _normalize_source_options_for_provider(provider, options)
     row = await update_source(db, user_id, source_id, enabled=enabled, options=options)
     if not row:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -799,6 +946,8 @@ async def get_source_sync_status(
         active_job=_summarize_job(active_job),
         tracked_item_count=int(binding_health.get("tracked_item_count") or 0),
         degraded_item_count=int(binding_health.get("degraded_item_count") or 0),
+        duplicate_count=int(binding_health.get("duplicate_count") or 0),
+        metadata_only_count=int(binding_health.get("metadata_only_count") or 0),
     )
 
 

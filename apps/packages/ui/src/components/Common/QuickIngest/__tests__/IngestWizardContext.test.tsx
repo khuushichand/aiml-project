@@ -54,6 +54,9 @@ function TestHarness() {
       <span data-testid="presetAnalysis">
         {String(state.presetConfig.common.perform_analysis)}
       </span>
+      <span data-testid="presetAudioLanguage">
+        {state.presetConfig.typeDefaults.audio?.language || ""}
+      </span>
 
       <button onClick={goNext}>goNext</button>
       <button onClick={goBack}>goBack</button>
@@ -97,6 +100,19 @@ function TestHarness() {
       >
         setCustomOpts
       </button>
+      <button
+        onClick={() =>
+          setCustomOptions({
+            typeDefaults: {
+              audio: {
+                language: "fr",
+              },
+            },
+          })
+        }
+      >
+        setAudioLanguage
+      </button>
       <button onClick={skipToProcessing}>skipToProcessing</button>
       <button onClick={cancelProcessing}>cancelProcessing</button>
       <button onClick={() => cancelItem("a")}>cancelItemA</button>
@@ -115,11 +131,104 @@ function renderWithProvider() {
   )
 }
 
+function renderWithInitialState(initialState: Parameters<typeof IngestWizardProvider>[0]["initialState"]) {
+  return render(
+    <IngestWizardProvider initialState={initialState}>
+      <TestHarness />
+    </IngestWizardProvider>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("IngestWizardContext", () => {
+  describe("hydration", () => {
+    it("hydrates the provider from an explicit initial state", () => {
+      renderWithInitialState({
+        currentStep: 5,
+        highestStep: 5,
+        queueItems: [
+          {
+            id: "persisted-url",
+            url: "https://example.com/article",
+            detectedType: "web",
+            icon: "Globe",
+            fileSize: 0,
+            validation: { valid: true },
+          },
+        ],
+        selectedPreset: "deep",
+        customBasePreset: "deep",
+        presetConfig: {
+          common: {
+            perform_analysis: true,
+            perform_chunking: true,
+            overwrite_existing: true,
+          },
+          storeRemote: true,
+          reviewBeforeStorage: false,
+          typeDefaults: {},
+          advancedValues: {},
+        },
+        customOptions: {},
+        processingState: {
+          status: "complete",
+          perItemProgress: [
+            {
+              id: "persisted-url",
+              status: "complete",
+              progressPercent: 100,
+              currentStage: "Complete",
+              estimatedRemaining: 0,
+            },
+          ],
+          elapsed: 8,
+          estimatedRemaining: 0,
+        },
+        results: [
+          {
+            id: "persisted-url",
+            status: "ok",
+            url: "https://example.com/article",
+            type: "html",
+          },
+        ],
+        isMinimized: true,
+      })
+
+      expect(screen.getByTestId("currentStep").textContent).toBe("5")
+      expect(screen.getByTestId("highestStep").textContent).toBe("5")
+      expect(screen.getByTestId("preset").textContent).toBe("deep")
+      expect(screen.getByTestId("queueLen").textContent).toBe("1")
+      expect(screen.getByTestId("status").textContent).toBe("complete")
+      expect(screen.getByTestId("isMinimized").textContent).toBe("true")
+    })
+
+    it("publishes state transitions through onStateChange", async () => {
+      const onStateChange = vi.fn()
+
+      render(
+        <IngestWizardProvider onStateChange={onStateChange}>
+          <TestHarness />
+        </IngestWizardProvider>
+      )
+
+      await act(async () => {
+        await userEvent.click(screen.getByText("goNext"))
+      })
+
+      expect(onStateChange).toHaveBeenCalled()
+      expect(onStateChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          currentStep: 2,
+          highestStep: 2,
+        })
+      )
+    })
+  })
+
   // -- Navigation -----------------------------------------------------------
 
   describe("navigation", () => {
@@ -223,6 +332,34 @@ describe("IngestWizardContext", () => {
         await userEvent.click(screen.getByText("setCustomOpts"))
       })
       expect(screen.getByTestId("presetAnalysis").textContent).toBe("false")
+    })
+
+    it("setCustomOptions switches to a custom configuration when changing a preset", async () => {
+      renderWithProvider()
+
+      expect(screen.getByTestId("preset").textContent).toBe("standard")
+      expect(screen.getByTestId("presetAnalysis").textContent).toBe("true")
+
+      await act(async () => {
+        await userEvent.click(screen.getByText("setCustomOpts"))
+      })
+
+      expect(screen.getByTestId("preset").textContent).toBe("custom")
+      expect(screen.getByTestId("presetAnalysis").textContent).toBe("false")
+    })
+
+    it("treats audio language changes as a custom deviation from the preset", async () => {
+      renderWithProvider()
+
+      expect(screen.getByTestId("preset").textContent).toBe("standard")
+      expect(screen.getByTestId("presetAudioLanguage").textContent).toBe("")
+
+      await act(async () => {
+        await userEvent.click(screen.getByText("setAudioLanguage"))
+      })
+
+      expect(screen.getByTestId("preset").textContent).toBe("custom")
+      expect(screen.getByTestId("presetAudioLanguage").textContent).toBe("fr")
     })
   })
 

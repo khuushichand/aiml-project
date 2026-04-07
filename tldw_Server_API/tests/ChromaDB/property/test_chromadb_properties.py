@@ -17,7 +17,7 @@ import uuid
 import threading
 
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager, validate_user_id
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 # Configure Hypothesis to keep resource usage low in CI
 from hypothesis import settings as _hyp_settings

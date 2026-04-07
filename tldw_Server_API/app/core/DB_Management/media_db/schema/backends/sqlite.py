@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from tldw_Server_API.app.core.DB_Management.media_db.schema.backends import (
+    sqlite_helpers as sqlite_helpers_module,
+)
 
 
-class SupportsSqliteSchemaBootstrap(Protocol):
-    """Protocol for legacy DB objects that still own SQLite bootstrap logic."""
+def initialize_sqlite_schema(
+    db: sqlite_helpers_module.SupportsSqlitePostCoreStructures,
+) -> None:
+    """Initialize or migrate the SQLite schema through the package coordinator."""
 
-    def _initialize_schema_sqlite(self) -> None: ...
-
-
-def initialize_sqlite_schema(db: SupportsSqliteSchemaBootstrap) -> None:
-    """Initialize or migrate the SQLite schema using the legacy implementation.
-
-    This remains a transitional bridge to the legacy private schema bootstrap
-    method until the SQLite bootstrap logic is fully extracted from the
-    compatibility class.
-    """
-
-    db._initialize_schema_sqlite()
+    sqlite_helpers_module.bootstrap_sqlite_schema(db)

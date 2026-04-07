@@ -9,6 +9,7 @@ const {
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
+  mockGenerateFlashcardsService,
   mockListVisualStyles,
   mockAddArtifact,
   mockUpdateArtifactStatus,
@@ -17,6 +18,11 @@ const {
   mockSetAudioSettings,
   mockListDecks,
   mockGetChatModels,
+  mockGetMediaDetails,
+  mockUpsertWorkspace,
+  mockCreateDeck,
+  mockCreateFlashcard,
+  mockCreateFlashcardsBulk,
   mockSetSelectedModel,
   mockSetRagSearchMode,
   mockSetRagTopK,
@@ -38,6 +44,7 @@ const {
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
+  const generateFlashcardsService = vi.fn()
   const listVisualStyles = vi.fn()
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
@@ -47,6 +54,11 @@ const {
   const setAudioSettings = vi.fn()
   const listDecks = vi.fn()
   const getChatModels = vi.fn()
+  const getMediaDetails = vi.fn()
+  const upsertWorkspace = vi.fn()
+  const createDeck = vi.fn()
+  const createFlashcard = vi.fn()
+  const createFlashcardsBulk = vi.fn()
   const messageSuccess = vi.fn()
   const messageError = vi.fn()
   const messageInfo = vi.fn()
@@ -64,11 +76,15 @@ const {
 
   const state = {
     selectedSourceIds: ["source-1"],
+    sources: [] as Array<any>,
+    workspaceId: "workspace-a",
+    workspaceName: "Workspace A",
     getSelectedMediaIds: () => [101],
     generatedArtifacts: [] as Array<any>,
     isGeneratingOutput: false,
     generatingOutputType: null as any,
     workspaceTag: "workspace:test",
+    studyMaterialsPolicy: "workspace",
     audioSettings: {
       provider: "tldw" as const,
       model: "kokoro",
@@ -155,6 +171,7 @@ const {
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
+    mockGenerateFlashcardsService: generateFlashcardsService,
     mockListVisualStyles: listVisualStyles,
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
@@ -163,6 +180,11 @@ const {
     mockSetAudioSettings: setAudioSettings,
     mockListDecks: listDecks,
     mockGetChatModels: getChatModels,
+    mockGetMediaDetails: getMediaDetails,
+    mockUpsertWorkspace: upsertWorkspace,
+    mockCreateDeck: createDeck,
+    mockCreateFlashcard: createFlashcard,
+    mockCreateFlashcardsBulk: createFlashcardsBulk,
     mockSetSelectedModel: setSelectedModel,
     mockSetRagSearchMode: setRagSearchMode,
     mockSetRagTopK: setRagTopK,
@@ -216,9 +238,15 @@ vi.mock("../source-location-copy", () => ({
   getWorkspaceStudioNoSourcesHint: () => "Select sources first"
 }))
 
-vi.mock("@/types/workspace", () => ({
-  OUTPUT_TYPES: []
-}))
+vi.mock("@/types/workspace", async () => {
+  const actual = await vi.importActual<typeof import("@/types/workspace")>(
+    "@/types/workspace"
+  )
+  return {
+    ...actual,
+    OUTPUT_TYPES: []
+  }
+})
 
 vi.mock("@/services/tldw/audio-voices", () => ({
   fetchTldwVoiceCatalog: vi.fn().mockResolvedValue([])
@@ -233,9 +261,11 @@ vi.mock("@/services/quizzes", () => ({
 }))
 
 vi.mock("@/services/flashcards", () => ({
+  generateFlashcards: mockGenerateFlashcardsService,
   listDecks: mockListDecks,
-  createDeck: vi.fn(),
-  createFlashcard: vi.fn()
+  createDeck: mockCreateDeck,
+  createFlashcard: mockCreateFlashcard,
+  createFlashcardsBulk: mockCreateFlashcardsBulk
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -243,6 +273,8 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    getMediaDetails: mockGetMediaDetails,
+    upsertWorkspace: mockUpsertWorkspace,
     listVisualStyles: mockListVisualStyles,
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
@@ -344,6 +376,9 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     workspaceStoreState.isGeneratingOutput = false
     workspaceStoreState.generatingOutputType = null
     workspaceStoreState.noteFocusTarget = null
+    workspaceStoreState.workspaceId = "workspace-a"
+    workspaceStoreState.workspaceName = "Workspace A"
+    workspaceStoreState.studyMaterialsPolicy = "workspace"
     workspaceStoreState.audioSettings = {
       provider: "tldw",
       model: "kokoro",
@@ -402,6 +437,26 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     )
 
     mockListDecks.mockResolvedValue([])
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "ATP powers cellular respiration in cells."
+      }
+    })
+    mockCreateDeck.mockResolvedValue({
+      id: 7,
+      name: "Workspace A - DSPy Prompting Talk"
+    })
+    mockUpsertWorkspace.mockResolvedValue({
+      id: "workspace-a",
+      name: "Workspace A",
+      study_materials_policy: "workspace"
+    })
+    mockCreateFlashcardsBulk.mockResolvedValue({
+      items: [{ uuid: "card-1", deck_id: 7 }],
+      count: 1,
+      total: 1
+    })
     mockGetChatModels.mockResolvedValue([
       { id: "gpt-4o-mini", name: "GPT-4o Mini", provider: "openai", type: "chat" },
       { id: "llama-3.1-8b", name: "Llama 3.1 8B", provider: "ollama", type: "chat" }
@@ -487,6 +542,194 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
         })
       )
     })
+  })
+
+  it("creates one workspace-owned deck and bulk saves flashcards for a run", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-1"]
+    workspaceStoreState.getSelectedMediaIds = () => [101]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.workspaceId = "workspace-a"
+    workspaceStoreState.workspaceName = "Workspace A"
+    workspaceStoreState.studyMaterialsPolicy = "workspace"
+
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [{ front: "ATP", back: "Cellular energy" }],
+      count: 1
+    })
+    mockCreateDeck.mockResolvedValue({
+      id: 7,
+      name: "Workspace A - DSPy Prompting Talk"
+    })
+    mockCreateFlashcardsBulk.mockResolvedValue({
+      items: [{ uuid: "card-1", deck_id: 7 }],
+      count: 1,
+      total: 1
+    })
+
+    renderExpandedStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+      expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "gpt-4o-mini",
+          provider: "openai",
+          text: expect.stringContaining("DSPy Prompting Talk")
+        })
+      )
+    })
+
+    expect(mockUpsertWorkspace).toHaveBeenCalledWith("workspace-a", {
+      name: "Workspace A",
+      study_materials_policy: "workspace"
+    })
+    expect(mockCreateDeck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: expect.stringContaining("Workspace A"),
+        workspace_id: "workspace-a"
+      }),
+      expect.any(Object)
+    )
+    expect(mockCreateFlashcardsBulk).toHaveBeenCalledWith([
+      expect.objectContaining({
+        deck_id: 7,
+        front: "ATP",
+        back: "Cellular energy",
+        source_ref_id: "101"
+      })
+    ], expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(mockCreateFlashcard).not.toHaveBeenCalled()
+    expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/^artifact-/),
+      "completed",
+      expect.objectContaining({
+        serverId: 7,
+        data: expect.objectContaining({
+          deckId: 7,
+          sourceMediaIds: [101]
+        })
+      })
+    )
+  }, 15000)
+
+  it("retries flashcard generation once when the first draft response has no usable cards", async () => {
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.workspaceId = "workspace-a"
+    workspaceStoreState.workspaceName = "Workspace A"
+    workspaceStoreState.studyMaterialsPolicy = "workspace"
+
+    mockGenerateFlashcardsService
+      .mockResolvedValueOnce({
+        flashcards: [{ front: "", back: "Missing front" }],
+        count: 1
+      })
+      .mockResolvedValueOnce({
+        flashcards: [{ front: "ATP", back: "Cellular energy" }],
+        count: 1
+      })
+    mockCreateDeck.mockResolvedValue({
+      id: 7,
+      name: "Workspace A - DSPy Prompting Talk"
+    })
+    mockCreateFlashcardsBulk.mockResolvedValue({
+      items: [{ uuid: "card-1", deck_id: 7 }],
+      count: 1,
+      total: 1
+    })
+
+    renderExpandedStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+      expect(mockGenerateFlashcardsService).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockGenerateFlashcardsService).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        num_cards: 8,
+        difficulty: "easy"
+      })
+    )
+    expect(mockCreateFlashcardsBulk).toHaveBeenCalledWith([
+      expect.objectContaining({
+        deck_id: 7,
+        front: "ATP",
+        back: "Cellular energy",
+        source_ref_id: "101"
+      })
+    ], expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  }, 15000)
+
+  it("round-trips studyMaterialsPolicy through workspace snapshots", async () => {
+    const workspaceModule = await vi.importActual<typeof import("@/store/workspace")>(
+      "@/store/workspace"
+    )
+
+    const snapshotState = {
+      ...workspaceStoreState,
+      workspaceId: "workspace-a",
+      workspaceName: "Workspace A",
+      workspaceTag: "workspace:workspace-a",
+      workspaceCreatedAt: new Date("2026-02-18T00:00:00.000Z"),
+      workspaceChatReferenceId: "workspace-a",
+      sources: [],
+      selectedSourceIds: [],
+      sourceFolders: [],
+      sourceFolderMemberships: [],
+      selectedSourceFolderIds: [],
+      activeFolderId: null,
+      generatedArtifacts: [],
+      notes: "",
+      workspaceBanner: {
+        title: "Workspace A",
+        subtitle: "Study materials",
+        image: null
+      },
+      currentNote: {
+        id: undefined,
+        title: "",
+        content: "",
+        keywords: [],
+        version: 1,
+        isDirty: false
+      },
+      studyMaterialsPolicy: "workspace" as const
+    }
+
+    const builtSnapshot = workspaceModule.buildWorkspaceSnapshot(
+      snapshotState as Parameters<typeof workspaceModule.buildWorkspaceSnapshot>[0]
+    )
+    expect(builtSnapshot.studyMaterialsPolicy).toBe("workspace")
+
+    const revivedSnapshot = workspaceModule.reviveWorkspaceSnapshot(
+      builtSnapshot.workspaceId,
+      builtSnapshot
+    )
+    expect(revivedSnapshot.studyMaterialsPolicy).toBe("workspace")
+
+    const appliedState = workspaceModule.applyWorkspaceSnapshot(revivedSnapshot)
+    expect(appliedState.studyMaterialsPolicy).toBe("workspace")
   })
 
   it("shows dynamic ETA text while generation is running", async () => {
@@ -864,5 +1107,89 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Regenerate options" }))
     expect(await screen.findByText("Replace existing")).toBeInTheDocument()
+  })
+
+  it("opens browser audio summaries with browser speech controls", async () => {
+    const speak = vi.fn()
+    const pause = vi.fn()
+    const resume = vi.fn()
+    const cancel = vi.fn()
+    const speechSynthesisDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "speechSynthesis"
+    )
+    const utteranceDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "SpeechSynthesisUtterance"
+    )
+
+    try {
+      Object.defineProperty(window, "speechSynthesis", {
+        configurable: true,
+        value: {
+          speaking: false,
+          paused: false,
+          speak,
+          pause,
+          resume,
+          cancel
+        }
+      })
+      Object.defineProperty(globalThis, "SpeechSynthesisUtterance", {
+        configurable: true,
+        value: class {
+          text: string
+          rate = 1
+          onstart: (() => void) | null = null
+          onpause: (() => void) | null = null
+          onresume: (() => void) | null = null
+          onend: (() => void) | null = null
+          onerror: (() => void) | null = null
+
+          constructor(text: string) {
+            this.text = text
+          }
+        }
+      })
+
+      workspaceStoreState.generatedArtifacts = [
+        {
+          id: "artifact-browser-audio",
+          type: "audio_overview",
+          title: "Browser Audio Summary",
+          status: "completed",
+          content: "Browser spoken summary text.",
+          audioFormat: "browser",
+          createdAt: new Date("2026-02-18T08:00:00.000Z")
+        }
+      ]
+
+      renderExpandedStudioPane()
+
+      fireEvent.click(screen.getByRole("button", { name: "View" }))
+
+      expect(
+        await screen.findByText("Use your browser to play this audio summary.")
+      ).toBeInTheDocument()
+      expect(screen.getByText("Browser spoken summary text.")).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole("button", { name: "Play" }))
+      expect(speak).toHaveBeenCalledTimes(1)
+
+      fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+      expect(cancel).toHaveBeenCalled()
+    } finally {
+      if (speechSynthesisDescriptor) {
+        Object.defineProperty(window, "speechSynthesis", speechSynthesisDescriptor)
+      } else {
+        delete (window as { speechSynthesis?: unknown }).speechSynthesis
+      }
+
+      if (utteranceDescriptor) {
+        Object.defineProperty(globalThis, "SpeechSynthesisUtterance", utteranceDescriptor)
+      } else {
+        delete (globalThis as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance
+      }
+    }
   })
 })

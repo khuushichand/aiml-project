@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 import { TakeQuizTab } from "../TakeQuizTab"
 import {
   useAttemptsQuery,
@@ -8,6 +9,10 @@ import {
   useStartAttemptMutation,
   useSubmitAttemptMutation
 } from "../../hooks"
+
+vi.mock("react-router-dom", () => ({
+  Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>
+}))
 
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
@@ -135,15 +140,26 @@ describe("TakeQuizTab list controls and default passing policy", () => {
       _params: params
     } as any))
 
-    vi.mocked(useQuizQuery).mockReturnValue({
-      data: {
-        id: 7,
-        name: "Biology Basics",
-        total_questions: 1,
-        time_limit_seconds: 900,
-        passing_score: null
-      }
-    } as any)
+    vi.mocked(useQuizQuery).mockImplementation((quizId: any) => ({
+      data:
+        quizId === 42
+          ? {
+              id: 42,
+              name: "Workspace Biology",
+              description: "Scoped quiz",
+              workspace_id: "workspace-1",
+              total_questions: 2,
+              time_limit_seconds: 600,
+              passing_score: 80
+            }
+          : {
+              id: 7,
+              name: "Biology Basics",
+              total_questions: 1,
+              time_limit_seconds: 900,
+              passing_score: null
+            }
+    } as any))
 
     vi.mocked(useStartAttemptMutation).mockReturnValue({
       mutateAsync: vi.fn(async () => ({
@@ -193,10 +209,12 @@ describe("TakeQuizTab list controls and default passing policy", () => {
 
   it("forwards search query to quiz list hook", async () => {
     render(
-      <TakeQuizTab
-        onNavigateToGenerate={() => {}}
-        onNavigateToCreate={() => {}}
-      />
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+        />
+      </MemoryRouter>
     )
 
     const input = screen.getByPlaceholderText("Search quizzes...")
@@ -211,10 +229,12 @@ describe("TakeQuizTab list controls and default passing policy", () => {
 
   it("shows explicit default passing score policy when quiz has no passing score", async () => {
     render(
-      <TakeQuizTab
-        onNavigateToGenerate={() => {}}
-        onNavigateToCreate={() => {}}
-      />
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+        />
+      </MemoryRouter>
     )
 
     fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
@@ -238,10 +258,12 @@ describe("TakeQuizTab list controls and default passing policy", () => {
     } as any)
 
     render(
-      <TakeQuizTab
-        onNavigateToGenerate={() => {}}
-        onNavigateToCreate={() => {}}
-      />
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+        />
+      </MemoryRouter>
     )
 
     expect(screen.getByTestId("take-loading-skeleton")).toBeInTheDocument()
@@ -249,10 +271,12 @@ describe("TakeQuizTab list controls and default passing policy", () => {
 
   it("shows source badges for mixed-source quizzes", async () => {
     render(
-      <TakeQuizTab
-        onNavigateToGenerate={() => {}}
-        onNavigateToCreate={() => {}}
-      />
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+        />
+      </MemoryRouter>
     )
 
     await waitFor(() => {
@@ -263,5 +287,58 @@ describe("TakeQuizTab list controls and default passing policy", () => {
     expect(screen.getByText("Media 1")).toBeInTheDocument()
     expect(screen.getByText("Notes 1")).toBeInTheDocument()
     expect(screen.getByText("Flashcards 2")).toBeInTheDocument()
+  })
+
+  it("force-shows a direct workspace quiz without changing the general list default", async () => {
+    vi.mocked(useQuizzesQuery).mockImplementation((params: any) => ({
+      data: {
+        items: params?.include_workspace_items
+          ? [
+              {
+                id: 42,
+                name: "Workspace Biology",
+                description: "Scoped quiz",
+                workspace_id: "workspace-1",
+                total_questions: 2,
+                time_limit_seconds: 600,
+                passing_score: 80,
+                media_id: null,
+                created_at: "2026-02-16T12:00:00Z"
+              }
+            ]
+          : [],
+        count: 0
+      },
+      isLoading: false,
+      _params: params
+    } as any))
+
+    render(
+      <MemoryRouter>
+        <TakeQuizTab
+          onNavigateToGenerate={() => {}}
+          onNavigateToCreate={() => {}}
+          startQuizId={42}
+          highlightQuizId={42}
+        />
+      </MemoryRouter>
+    )
+
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Workspace Biology")).toBeInTheDocument()
+    expect(within(dialog).getByText("Questions")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Begin Quiz" })).toBeInTheDocument()
+
+    expect(vi.mocked(useQuizzesQuery)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: undefined
+      })
+    )
+    expect(vi.mocked(useQuizQuery)).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        enabled: true
+      })
+    )
   })
 })

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react"
+import React, { Suspense, useCallback, useEffect, useMemo, useRef } from "react"
 import { Alert, Button, Drawer, Modal, Select, Switch, Tabs, Tooltip } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileOutput,
   FileText,
+  HelpCircle,
   LayoutDashboard,
   Newspaper,
   Play,
@@ -24,14 +25,6 @@ import { fetchWatchlistRuns, triggerWatchlistRun } from "@/services/watchlists"
 import { useWatchlistsStore } from "@/store/watchlists"
 import type { WatchlistRun } from "@/types/watchlists"
 import type { WatchlistTab } from "@/types/watchlists"
-import { OverviewTab } from "./OverviewTab/OverviewTab"
-import { SourcesTab } from "./SourcesTab/SourcesTab"
-import { JobsTab } from "./JobsTab/JobsTab"
-import { RunsTab } from "./RunsTab/RunsTab"
-import { OutputsTab } from "./OutputsTab/OutputsTab"
-import { TemplatesTab } from "./TemplatesTab/TemplatesTab"
-import { SettingsTab } from "./SettingsTab/SettingsTab"
-import { ItemsTab } from "./ItemsTab/ItemsTab"
 import {
   WATCHLISTS_ISSUE_REPORT_URL,
   WATCHLISTS_MAIN_DOCS_URL,
@@ -70,6 +63,31 @@ const ORIENTATION_DISMISSED_STORAGE_KEY = "watchlists:orientation-dismissed:v1"
 const SHOW_ALL_VIEWS_STORAGE_KEY = "watchlists:show-all-views:v1"
 const SECONDARY_EXPANDED_STORAGE_KEY = "watchlists:secondary-expanded:v1"
 const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
+
+const OverviewTab = React.lazy(() =>
+  import("./OverviewTab/OverviewTab").then((module) => ({ default: module.OverviewTab }))
+)
+const SourcesTab = React.lazy(() =>
+  import("./SourcesTab/SourcesTab").then((module) => ({ default: module.SourcesTab }))
+)
+const JobsTab = React.lazy(() =>
+  import("./JobsTab/JobsTab").then((module) => ({ default: module.JobsTab }))
+)
+const RunsTab = React.lazy(() =>
+  import("./RunsTab/RunsTab").then((module) => ({ default: module.RunsTab }))
+)
+const ItemsTab = React.lazy(() =>
+  import("./ItemsTab/ItemsTab").then((module) => ({ default: module.ItemsTab }))
+)
+const OutputsTab = React.lazy(() =>
+  import("./OutputsTab/OutputsTab").then((module) => ({ default: module.OutputsTab }))
+)
+const TemplatesTab = React.lazy(() =>
+  import("./TemplatesTab/TemplatesTab").then((module) => ({ default: module.TemplatesTab }))
+)
+const SettingsTab = React.lazy(() =>
+  import("./SettingsTab/SettingsTab").then((module) => ({ default: module.SettingsTab }))
+)
 
 /** Primary tabs in the progressive disclosure layout */
 const PROGRESSIVE_PRIMARY_TABS = ["sources", "items", "outputs"] as const
@@ -1190,6 +1208,65 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       </span>
     ) : null
 
+  const tabPanelFallback = (
+    <div className="py-6 text-sm text-text-muted" data-testid="watchlists-tab-loading" />
+  )
+
+  const renderWatchlistsTab = useCallback((tab: WatchlistsTabKey): React.ReactNode => {
+    switch (tab) {
+      case "overview":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <OverviewTab />
+          </Suspense>
+        )
+      case "sources":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <SourcesTab />
+          </Suspense>
+        )
+      case "jobs":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <JobsTab />
+          </Suspense>
+        )
+      case "runs":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <RunsTab />
+          </Suspense>
+        )
+      case "items":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <ItemsTab />
+          </Suspense>
+        )
+      case "outputs":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <OutputsTab />
+          </Suspense>
+        )
+      case "templates":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <TemplatesTab />
+          </Suspense>
+        )
+      case "settings":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <SettingsTab />
+          </Suspense>
+        )
+      default:
+        return null
+    }
+  }, [])
+
   // Full 8-tab items (used in "show all views" mode)
   const allTabItems: TabsProps["items"] = [
     {
@@ -1200,49 +1277,57 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.overview", "Overview")}
         </span>
       ),
-      children: <OverviewTab />
+      children: renderWatchlistsTab("overview")
     },
     {
       key: "sources",
       label: (
-        <span className="flex items-center gap-2">
-          <Rss className="h-4 w-4" />
-          {t("watchlists:tabs.sources", "Feeds")}
-          {tabAttentionBadge(overviewBadges.sources)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.sourcesTooltip", "RSS feeds, websites, or forums you want to monitor")}>
+          <span className="flex items-center gap-2">
+            <Rss className="h-4 w-4" />
+            {t("watchlists:tabs.sources", "Feeds")}
+            {tabAttentionBadge(overviewBadges.sources)}
+          </span>
+        </Tooltip>
       ),
-      children: <SourcesTab />
+      children: renderWatchlistsTab("sources")
     },
     {
       key: "jobs",
       label: (
-        <span className="flex items-center gap-2">
-          <CalendarClock className="h-4 w-4" />
-          {t("watchlists:tabs.jobs", "Monitors")}
-        </span>
+        <Tooltip title={t("watchlists:tabs.jobsTooltip", "Scheduled tasks that check your sources for new content")}>
+          <span className="flex items-center gap-2">
+            <CalendarClock className="h-4 w-4" />
+            {t("watchlists:tabs.jobs", "Monitors")}
+          </span>
+        </Tooltip>
       ),
-      children: <JobsTab />
+      children: renderWatchlistsTab("jobs")
     },
     {
       key: "runs",
       label: (
-        <span className="flex items-center gap-2">
-          <Play className="h-4 w-4" />
-          {t("watchlists:tabs.runs", "Activity")}
-          {tabAttentionBadge(overviewBadges.runs)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.runsTooltip", "Individual execution records of your monitors")}>
+          <span className="flex items-center gap-2">
+            <Play className="h-4 w-4" />
+            {t("watchlists:tabs.runs", "Activity")}
+            {tabAttentionBadge(overviewBadges.runs)}
+          </span>
+        </Tooltip>
       ),
-      children: <RunsTab />
+      children: renderWatchlistsTab("runs")
     },
     {
       key: "items",
       label: (
-        <span className="flex items-center gap-2">
-          <Newspaper className="h-4 w-4" />
-          {t("watchlists:tabs.items", "Articles")}
-        </span>
+        <Tooltip title={t("watchlists:tabs.itemsTooltip", "Articles and posts collected from your sources")}>
+          <span className="flex items-center gap-2">
+            <Newspaper className="h-4 w-4" />
+            {t("watchlists:tabs.items", "Articles")}
+          </span>
+        </Tooltip>
       ),
-      children: <ItemsTab />
+      children: renderWatchlistsTab("items")
     },
     {
       key: "outputs",
@@ -1253,7 +1338,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {tabAttentionBadge(overviewBadges.outputs)}
         </span>
       ),
-      children: <OutputsTab />
+      children: renderWatchlistsTab("outputs")
     },
     {
       key: "templates",
@@ -1263,7 +1348,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.templates", "Templates")}
         </span>
       ),
-      children: <TemplatesTab />
+      children: renderWatchlistsTab("templates")
     },
     {
       key: "settings",
@@ -1273,7 +1358,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.settings", "Settings")}
         </span>
       ),
-      children: <SettingsTab />
+      children: renderWatchlistsTab("settings")
     }
   ]
 
@@ -1282,22 +1367,24 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     {
       key: "sources",
       label: (
-        <span className="flex items-center gap-2">
-          <Rss className="h-4 w-4" />
-          {t("watchlists:tabs.sources", "Feeds")}
-          {tabAttentionBadge(overviewBadges.sources)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.sourcesTooltip", "RSS feeds, websites, or forums you want to monitor")}>
+          <span className="flex items-center gap-2">
+            <Rss className="h-4 w-4" />
+            {t("watchlists:tabs.sources", "Feeds")}
+            {tabAttentionBadge(overviewBadges.sources)}
+          </span>
+        </Tooltip>
       ),
       children: (
         <>
-          <SourcesTab />
+          {renderWatchlistsTab("sources")}
           <InlineSecondarySection
             sectionKey="monitors"
             title={t("watchlists:tabs.jobs", "Monitors")}
             expanded={Boolean(secondaryExpanded.monitors)}
             onToggle={toggleSecondaryExpanded}
           >
-            <JobsTab />
+            {renderWatchlistsTab("jobs")}
           </InlineSecondarySection>
         </>
       )
@@ -1305,10 +1392,12 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     {
       key: "items",
       label: (
-        <span className="flex items-center gap-2">
-          <Newspaper className="h-4 w-4" />
-          {t("watchlists:tabs.items", "Articles")}
-        </span>
+        <Tooltip title={t("watchlists:tabs.itemsTooltip", "Articles and posts collected from your sources")}>
+          <span className="flex items-center gap-2">
+            <Newspaper className="h-4 w-4" />
+            {t("watchlists:tabs.items", "Articles")}
+          </span>
+        </Tooltip>
       ),
       children: (
         <>
@@ -1319,31 +1408,33 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             expanded={Boolean(secondaryExpanded.activity)}
             onToggle={toggleSecondaryExpanded}
           >
-            <RunsTab />
+            {renderWatchlistsTab("runs")}
           </InlineSecondarySection>
-          <ItemsTab />
+          {renderWatchlistsTab("items")}
         </>
       )
     },
     {
       key: "outputs",
       label: (
-        <span className="flex items-center gap-2">
-          <FileOutput className="h-4 w-4" />
-          {t("watchlists:tabs.outputs", "Reports")}
-          {tabAttentionBadge(overviewBadges.outputs)}
-        </span>
+        <Tooltip title={t("watchlists:tabs.outputsTooltip", "Generated reports and summaries from your sources")}>
+          <span className="flex items-center gap-2">
+            <FileOutput className="h-4 w-4" />
+            {t("watchlists:tabs.outputs", "Reports")}
+            {tabAttentionBadge(overviewBadges.outputs)}
+          </span>
+        </Tooltip>
       ),
       children: (
         <>
-          <OutputsTab />
+          {renderWatchlistsTab("outputs")}
           <InlineSecondarySection
             sectionKey="templates"
             title={t("watchlists:tabs.templates", "Templates")}
             expanded={Boolean(secondaryExpanded.templates)}
             onToggle={toggleSecondaryExpanded}
           >
-            <TemplatesTab />
+            {renderWatchlistsTab("templates")}
           </InlineSecondarySection>
         </>
       )
@@ -1414,8 +1505,20 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     >
       <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-text">
+        <h1 className="text-2xl font-semibold text-text flex items-center gap-2">
           {t("watchlists:title", "Watchlists")}
+          <Tooltip title={t("watchlists:help.docsTooltip", "Open watchlists documentation")}>
+            <a
+              href={WATCHLISTS_MAIN_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t("watchlists:help.docsTooltip", "Open watchlists documentation")}
+              data-testid="watchlists-help-icon"
+              className="text-text-muted hover:text-primary"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </a>
+          </Tooltip>
         </h1>
         <p className="mt-1 text-sm text-text-muted">
           {t(
@@ -1689,6 +1792,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           onChange={navigateToTab}
           items={renderedTabItems}
           className="watchlists-tabs"
+          destroyOnHidden
         />
       )}
 
@@ -1700,7 +1804,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         size={isMobile ? "100%" : 520}
         data-testid="watchlists-settings-drawer"
       >
-        <SettingsTab />
+        {renderWatchlistsTab("settings")}
       </Drawer>
 
       <Modal

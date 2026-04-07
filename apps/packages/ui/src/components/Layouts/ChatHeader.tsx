@@ -2,6 +2,7 @@ import React from "react"
 import type { TFunction } from "i18next"
 import { Tooltip, Input } from "antd"
 import {
+  Bell,
   CogIcon,
   Menu,
   Moon,
@@ -44,6 +45,10 @@ type ChatHeaderProps = {
   shortcutsExpanded: boolean
   onToggleShortcuts: (next?: boolean) => void
   commandKeyLabel: string
+  /** Unread notification count (0 or undefined hides badge) */
+  notificationCount?: number
+  /** Callback when notification bell is clicked */
+  onOpenNotifications?: () => void
 }
 
 const toText = (value: unknown): string =>
@@ -77,7 +82,9 @@ export function ChatHeader({
   showSessionModeBadge = true,
   shortcutsExpanded,
   onToggleShortcuts,
-  commandKeyLabel
+  commandKeyLabel,
+  notificationCount,
+  onOpenNotifications
 }: ChatHeaderProps) {
   const logoSrc =
     typeof logoImage === "string"
@@ -315,6 +322,24 @@ export function ChatHeader({
               <CogIcon className="size-4" aria-hidden="true" />
             </button>
           </Tooltip>
+          {onOpenNotifications && (
+            <Tooltip title={t("option:header.notifications", "Notifications")}>
+              <button
+                type="button"
+                onClick={onOpenNotifications}
+                aria-label={t("option:header.notificationsAria", "Open notifications") as string}
+                className={`relative inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+                data-testid="chat-header-notifications-bell"
+              >
+                <Bell className="size-4" aria-hidden="true" />
+                {(notificationCount ?? 0) > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-white">
+                    {notificationCount! > 99 ? "99+" : notificationCount}
+                  </span>
+                )}
+              </button>
+            </Tooltip>
+          )}
           {onToggleTheme && (
             <Tooltip title={themeToggleLabel}>
               <button

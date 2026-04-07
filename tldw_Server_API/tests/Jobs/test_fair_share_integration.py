@@ -179,3 +179,55 @@ class TestFairSharePriorityAdjustment:
 
         assert job is not None
         assert next_job is not None
+
+
+def test_cached_scheduler_refreshes_after_env_cleanup(tmp_path, monkeypatch):
+    """A stale fair-share singleton should not survive env cleanup into later managers."""
+
+    import tldw_Server_API.app.core.Jobs.manager as mgr_mod
+
+    monkeypatch.delenv("JOBS_DISABLE_LEASE_ENFORCEMENT", raising=False)
+
+    first_db = tmp_path / "jobs_fs_first.db"
+    ensure_jobs_tables(first_db)
+    monkeypatch.setenv("JOBS_MAX_PER_USER", "1")
+    mgr_mod._fair_share = None
+
+    first_manager = JobManager(first_db)
+    first_manager.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={},
+        owner_user_id="1",
+    )
+    with pytest.raises(BadRequestError, match="maximum concurrent job limit"):
+        first_manager.create_job(
+            domain="chatbooks",
+            queue="default",
+            job_type="export",
+            payload={},
+            owner_user_id="1",
+        )
+
+    monkeypatch.delenv("JOBS_MAX_PER_USER", raising=False)
+
+    second_db = tmp_path / "jobs_fs_second.db"
+    ensure_jobs_tables(second_db)
+    second_manager = JobManager(second_db)
+    second_manager.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={},
+        owner_user_id="1",
+    )
+    second_job = second_manager.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={},
+        owner_user_id="1",
+    )
+
+    assert second_job is not None

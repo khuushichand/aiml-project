@@ -5,10 +5,6 @@ import { AdvancedFilters } from "./components/AdvancedFilters"
 import { FileTree } from "./components/FileTree"
 import { OutputPanel } from "./components/OutputPanel"
 import { ProviderSelector } from "./components/ProviderSelector"
-import { fetchFilesWithConcurrency } from "./fetchFilesWithConcurrency"
-import { Formatter } from "./formatter/Formatter"
-import { GitHubProvider } from "./providers/GitHubProvider"
-import { LocalProvider } from "./providers/LocalProvider"
 import type { IProvider, RepoTreeNode } from "./providers/types"
 import { createRepo2TxtStore } from "./store"
 
@@ -20,6 +16,20 @@ const toDisplayTree = (nodes: RepoTreeNode[]) =>
     path: node.path,
     type: node.type === "blob" ? "file" : "directory"
   }))
+
+const loadGitHubProvider = () =>
+  import("./providers/GitHubProvider").then((module) => module.GitHubProvider)
+
+const loadLocalProvider = () =>
+  import("./providers/LocalProvider").then((module) => module.LocalProvider)
+
+const loadFetchFilesWithConcurrency = () =>
+  import("./fetchFilesWithConcurrency").then(
+    (module) => module.fetchFilesWithConcurrency
+  )
+
+const loadFormatter = () =>
+  import("./formatter/Formatter").then((module) => module.Formatter)
 
 export function Repo2TxtPage() {
   const { t } = useTranslation(["option"])
@@ -60,6 +70,7 @@ export function Repo2TxtPage() {
     setBusy(true)
     setStatusMessage("")
     try {
+      const GitHubProvider = await loadGitHubProvider()
       const githubProvider = new GitHubProvider()
       if (!githubProvider.validateUrl(githubUrl)) {
         throw new Error(
@@ -98,6 +109,7 @@ export function Repo2TxtPage() {
     setBusy(true)
     setStatusMessage("")
     try {
+      const LocalProvider = await loadLocalProvider()
       const localProvider = new LocalProvider()
       const firstFile = files[0]
       const looksLikeZip = files.length === 1 && /\.zip$/i.test(firstFile?.name ?? "")
@@ -163,6 +175,7 @@ export function Repo2TxtPage() {
     setBusy(true)
     setStatusMessage("")
     try {
+      const fetchFilesWithConcurrency = await loadFetchFilesWithConcurrency()
       const fileContents = await fetchFilesWithConcurrency({
         nodes: selectedNodes,
         provider,
@@ -177,6 +190,7 @@ export function Repo2TxtPage() {
           )
         }
       })
+      const Formatter = await loadFormatter()
       const formatted = await Formatter.formatAsync(
         toDisplayTree(selectedNodes),
         fileContents

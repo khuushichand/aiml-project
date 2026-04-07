@@ -71,7 +71,7 @@ describe("AnswerPanel workspace handoff", () => {
   it("queues workspace prefill payload and navigates to workspace route", async () => {
     render(<AnswerPanel />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in Workspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "Continue in editor" }))
 
     await waitFor(() =>
       expect(queueWorkspacePlaygroundPrefillMock).toHaveBeenCalledWith(

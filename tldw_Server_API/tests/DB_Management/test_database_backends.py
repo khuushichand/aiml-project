@@ -319,6 +319,37 @@ class TestPostgreSQLBackend:
         assert backend is not None
         assert backend.backend_type == BackendType.POSTGRESQL
 
+    def test_postgresql_table_exists_falls_back_to_folded_lowercase(self, monkeypatch):
+        """Mixed-case lookup names should still find unquoted folded Postgres tables."""
+        from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
+
+        backend = PostgreSQLBackend(DatabaseConfig(backend_type=BackendType.POSTGRESQL))
+        conn = object()
+        calls: list[tuple[str, tuple[str, ...], object]] = []
+
+        def _fake_execute(query: str, params=None, connection=None):
+            calls.append((query, params, connection))
+            table_name = params[0]
+            return MagicMock(scalar=(table_name == "mediafiles"))
+
+        monkeypatch.setattr(backend, "execute", _fake_execute)
+
+        assert backend.table_exists("MediaFiles", connection=conn) is True
+        assert calls == [
+            (
+                "SELECT EXISTS ( SELECT FROM information_schema.tables"
+                " WHERE table_schema = 'public' AND table_name = %s)",
+                ("MediaFiles",),
+                conn,
+            ),
+            (
+                "SELECT EXISTS ( SELECT FROM information_schema.tables"
+                " WHERE table_schema = 'public' AND table_name = %s)",
+                ("mediafiles",),
+                conn,
+            ),
+        ]
+
     def test_postgresql_features(self, pg_config):
         """Test PostgreSQL feature detection."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend

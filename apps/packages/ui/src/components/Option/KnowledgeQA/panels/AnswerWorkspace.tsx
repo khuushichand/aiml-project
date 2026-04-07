@@ -17,7 +17,7 @@ const STAGE_COPY: Record<QueryStage, string> = {
   searching: "Searching selected sources",
   ranking: "Ranking best evidence",
   generating: "Generating answer",
-  verifying: "Verifying citations",
+  verifying: "Checking source citations",
   complete: "Answer complete",
   error: "Search needs attention",
 }
@@ -26,7 +26,7 @@ const LIVE_STAGE_COPY: Partial<Record<QueryStage, string>> = {
   searching: "Searching your selected sources.",
   ranking: "Ranking retrieved sources.",
   generating: "Generating answer.",
-  verifying: "Verifying answer grounding.",
+  verifying: "Checking source citations.",
 }
 
 type TurnPreview = {
@@ -42,8 +42,13 @@ function truncatePreview(value: string, maxLength = 140): string {
 }
 
 export function AnswerWorkspace({ queryStage, className }: AnswerWorkspaceProps) {
-  const { results = [], error = null, messages = [], currentThreadId = null } =
-    useKnowledgeQA()
+  const {
+    results = [],
+    error = null,
+    messages = [],
+    citations = [],
+    settings,
+  } = useKnowledgeQA()
   const isActiveStage =
     queryStage !== "idle" && queryStage !== "complete" && queryStage !== "error"
   const [politeAnnouncement, setPoliteAnnouncement] = useState("")
@@ -97,7 +102,7 @@ export function AnswerWorkspace({ queryStage, className }: AnswerWorkspaceProps)
     () => (turnPreviews.length > 1 ? turnPreviews.slice(0, -1) : []),
     [turnPreviews]
   )
-  const hasThreadContext = Boolean(currentThreadId) || displayedTurnCount > 0
+  const hasThreadContext = displayedTurnCount > 1
   const contextSummary = useMemo(() => {
     if (priorTurnPreviews.length === 0) {
       return "The next question starts from the current answer context."
@@ -107,6 +112,23 @@ export function AnswerWorkspace({ queryStage, className }: AnswerWorkspaceProps)
     }
     return `Using context from turns 1-${priorTurnPreviews.length}.`
   }, [priorTurnPreviews.length])
+
+  const isLowQualityResult = useMemo(() => {
+    if (queryStage !== "complete") return false
+    if (results.length === 0) return false
+    const threshold = settings?.strip_min_relevance ?? 0.3
+    const hasScoredResults = results.some(
+      (result: { score?: number }) => typeof result.score === "number"
+    )
+    const allLowRelevance =
+      hasScoredResults &&
+      results.every(
+        (result: { score?: number }) =>
+          typeof result.score === "number" && result.score < threshold
+      )
+    const noCitations = (citations?.length ?? 0) === 0
+    return allLowRelevance || (noCitations && results.length > 0)
+  }, [queryStage, results, citations, settings?.strip_min_relevance])
 
   useEffect(() => {
     if (queryStage === previousStageRef.current) return
@@ -159,43 +181,31 @@ export function AnswerWorkspace({ queryStage, className }: AnswerWorkspaceProps)
           </p>
           <p className="mt-1">{contextSummary}</p>
           {priorTurnPreviews.length > 0 ? (
-            <details className="mt-2 rounded-md border border-border bg-muted/20 px-2 py-1.5">
-              <summary className="cursor-pointer text-[11px] font-medium text-text">
-                Context previews ({priorTurnPreviews.length})
-              </summary>
-              <div className="mt-2 space-y-2">
-                {priorTurnPreviews.slice(-3).map((turn) => (
-                  <article
-                    key={`context-preview-${turn.turnNumber}`}
-                    className="rounded bg-surface px-2 py-1.5"
-                  >
-                    <p className="text-[11px] font-medium text-text">
-                      Turn {turn.turnNumber}
-                    </p>
-                    <p className="mt-1 text-[11px] leading-relaxed">
-                      <span className="font-medium text-text">Q:</span>{" "}
-                      {turn.question}
-                    </p>
-                    <p className="mt-1 text-[11px] leading-relaxed">
-                      <span className="font-medium text-text">A:</span>{" "}
-                      {turn.answer || "No answer recorded."}
-                    </p>
-                  </article>
-                ))}
-                {priorTurnPreviews.length > 3 ? (
-                  <p className="text-[11px] text-text-muted">
-                    Showing 3 of {priorTurnPreviews.length} prior turns.
-                  </p>
-                ) : null}
-              </div>
-            </details>
+            <article className="mt-2 rounded-md border border-border bg-muted/20 px-2 py-2">
+              <p className="text-[11px] font-medium text-text">Previous turn</p>
+              <p className="mt-1 text-[11px] leading-relaxed">
+                <span className="font-medium text-text">Q:</span>{" "}
+                {priorTurnPreviews[priorTurnPreviews.length - 1]?.question}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed">
+                <span className="font-medium text-text">A:</span>{" "}
+                {priorTurnPreviews[priorTurnPreviews.length - 1]?.answer ||
+                  "No answer recorded."}
+              </p>
+              {priorTurnPreviews.length > 1 ? (
+                <p className="mt-2 text-[11px] text-text-muted">
+                  {priorTurnPreviews.length - 1} more prior turn
+                  {priorTurnPreviews.length === 2 ? "" : "s"} are available in thread history.
+                </p>
+              ) : null}
+            </article>
           ) : null}
         </div>
       ) : null}
 
       <ConversationThread />
       <AnswerPanel />
-      <FollowUpInput />
+      <FollowUpInput mode={isLowQualityResult ? "recovery" : "default"} />
     </div>
   )
 }

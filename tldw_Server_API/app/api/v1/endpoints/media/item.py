@@ -23,16 +23,17 @@ from tldw_Server_API.app.api.v1.utils.rag_cache import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE, MEDIA_UPDATE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.DB_Manager import get_full_media_details_rich2
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    fetch_keywords_for_media,
+    get_full_media_details_rich,
+    get_media_by_id,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
-    fetch_keywords_for_media,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+from .....core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
 
@@ -102,8 +103,8 @@ async def get_media_item(
         logger.debug("Failed to emit media item auth header diagnostics", exc_info=auth_header_log_error)
 
     try:
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db,
             media_id=media_id,
             include_content=include_content,
             include_versions=include_versions,
@@ -179,7 +180,12 @@ async def delete_media_item(
     Soft-delete a media item by moving it to trash (is_trash=1).
     """
     try:
-        existing = db.get_media_by_id(media_id, include_deleted=False, include_trash=True)
+        existing = get_media_by_id(
+            db,
+            media_id,
+            include_deleted=False,
+            include_trash=True,
+        )
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -273,7 +279,12 @@ async def restore_media_item(
     Restore a trashed media item (is_trash=0) and return its details.
     """
     try:
-        existing = db.get_media_by_id(media_id, include_deleted=False, include_trash=True)
+        existing = get_media_by_id(
+            db,
+            media_id,
+            include_deleted=False,
+            include_trash=True,
+        )
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -291,8 +302,8 @@ async def restore_media_item(
                 getattr(current_user, "id", "?"),
                 media_id,
             )
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db,
             media_id=media_id,
             include_content=include_content,
             include_versions=include_versions,
@@ -364,7 +375,12 @@ async def permanently_delete_media_item(
     Permanently delete a trashed media item.
     """
     try:
-        existing = db.get_media_by_id(media_id, include_deleted=False, include_trash=True)
+        existing = get_media_by_id(
+            db,
+            media_id,
+            include_deleted=False,
+            include_trash=True,
+        )
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -469,7 +485,8 @@ async def update_media_item(
             "Update request for media {} received with no fields to update.",
             media_id,
         )
-        current_data = db.get_media_by_id(
+        current_data = get_media_by_id(
+            db,
             media_id,
             include_deleted=False,
             include_trash=False,
@@ -480,8 +497,8 @@ async def update_media_item(
                 detail="Media item not found or inactive.",
             )
         # Use the rich detail view for consistency with normal responses.
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -674,8 +691,8 @@ async def update_media_item(
                 updated_media_info,
             )
 
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -744,7 +761,7 @@ async def update_media_keywords(
     mode = payload.mode
     target_keywords = [k.strip() for k in payload.keywords if k and k.strip()]
     try:
-        current_keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db)
+        current_keywords = fetch_keywords_for_media(db, media_id)
         if mode == "set":
             desired = target_keywords
         elif mode == "remove":
@@ -755,7 +772,7 @@ async def update_media_keywords(
             existing = {k.lower() for k in current_keywords}
             desired = current_keywords + [k for k in target_keywords if k.lower() not in existing]
         db.update_keywords_for_media(media_id=media_id, keywords=desired)
-        updated_keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db)
+        updated_keywords = fetch_keywords_for_media(db, media_id)
         return MediaKeywordsResponse(media_id=media_id, keywords=updated_keywords)
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

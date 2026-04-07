@@ -33,16 +33,14 @@ from tldw_Server_API.app.core.DB_Management.ChatWorkflows_DB import ChatWorkflow
 # insert_prompt_to_db as sqlite_insert_prompt_to_db,
 #delete_prompt as sqlite_delete_prompt
 #)
-from tldw_Server_API.app.core.DB_Management.content_backend import (
-    ContentDatabaseSettings,
-    get_content_backend,
-    load_content_db_settings,
-)
+from tldw_Server_API.app.core.DB_Management.content_backend import ContentDatabaseSettings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
-from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
-    MediaDbRuntimeConfig,
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import defaults as media_db_runtime_defaults
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.defaults import (
+    build_media_runtime_config,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
     create_media_database as runtime_create_media_database,
@@ -98,12 +96,6 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_backup import (
     create_automated_backup as sqlite_create_automated_backup,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_media_details import (
-    get_full_media_details as sqlite_get_full_media_details,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_media_details import (
-    get_full_media_details_rich as sqlite_get_full_media_details_rich,
-)
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 
@@ -114,20 +106,17 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 ############################################################################################################
 #
 # Database Config loading (standardized on load_comprehensive_config)
-single_user_config = load_comprehensive_config()
-
-content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
-
-# Resolve shared backend instance for content databases (Media/ChaCha).
-# Keep backend initialization lazy to avoid heavy import-time side effects.
-_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = None
-_POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
-
-# Default Media DB is per-user. For single-user mode, resolve the fixed user's path.
-single_user_db_path: str = (
-    content_db_settings.sqlite_path
-    or str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-)
+single_user_config: configparser.ConfigParser
+content_db_settings: ContentDatabaseSettings
+_CONTENT_DB_BACKEND: Optional[DatabaseBackend]
+_POSTGRES_CONTENT_MODE: bool
+single_user_db_path: str
+single_user_backup_path: str
+single_user_backup_dir: Union[str, bytes]
+single_user_chacha_path: str
+single_user_workflows_path: str
+single_user_chat_workflows_path: str
+db_type: str
 """Backup directory resolution (standardized)
 
 Precedence:
@@ -136,27 +125,6 @@ Precedence:
 3) default ./tldw_DB_Backups/
 """
 _DEFAULT_BACKUP_DIR = './tldw_DB_Backups/'
-single_user_backup_path: str = content_db_settings.backup_path or _DEFAULT_BACKUP_DIR
-single_user_backup_dir: Union[str, bytes] = (
-    os.environ.get('TLDW_DB_BACKUP_PATH')
-    or single_user_backup_path
-    or _DEFAULT_BACKUP_DIR
-)
-single_user_chacha_path: str = single_user_config.get(
-    'Database',
-    'chacha_path',
-    fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
-)
-single_user_workflows_path: str = single_user_config.get(
-    'Database',
-    'workflows_path',
-    fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id()))
-)
-single_user_chat_workflows_path: str = single_user_config.get(
-    'Database',
-    'chat_workflows_path',
-    fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
-)
 
 DB_MANAGER_RUNTIME_EXCEPTIONS = (
     OSError,
@@ -169,23 +137,85 @@ DB_MANAGER_RUNTIME_EXCEPTIONS = (
 )
 
 
+def _sync_media_runtime_defaults() -> None:
+    """Mirror shared Media DB runtime defaults onto DB_Manager compatibility globals."""
+    global single_user_config, content_db_settings, _CONTENT_DB_BACKEND
+    global _POSTGRES_CONTENT_MODE, single_user_db_path
+
+    single_user_config = media_db_runtime_defaults.single_user_config
+    content_db_settings = media_db_runtime_defaults.content_db_settings
+    _CONTENT_DB_BACKEND = media_db_runtime_defaults.content_db_backend
+    _POSTGRES_CONTENT_MODE = media_db_runtime_defaults.postgres_content_mode
+    single_user_db_path = str(media_db_runtime_defaults.single_user_db_path)
+
+
+def _sync_db_manager_path_defaults(
+    config: Optional[configparser.ConfigParser] = None,
+) -> None:
+    """Refresh DB_Manager-owned path globals from the shared Media DB defaults."""
+    global single_user_backup_path, single_user_backup_dir
+    global single_user_chacha_path, single_user_workflows_path
+    global single_user_chat_workflows_path
+
+    cfg = config or single_user_config
+    single_user_backup_path = content_db_settings.backup_path or _DEFAULT_BACKUP_DIR
+    single_user_backup_dir = (
+        os.environ.get('TLDW_DB_BACKUP_PATH')
+        or single_user_backup_path
+        or _DEFAULT_BACKUP_DIR
+    )
+    single_user_chacha_path = cfg.get(
+        'Database',
+        'chacha_path',
+        fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
+    )
+    single_user_workflows_path = cfg.get(
+        'Database',
+        'workflows_path',
+        fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id())),
+    )
+    single_user_chat_workflows_path = cfg.get(
+        'Database',
+        'chat_workflows_path',
+        fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
+    )
+
+
+def _sync_db_type() -> None:
+    """Refresh the DB_Manager compatibility backend discriminator."""
+    global db_type
+
+    raw_backend = content_db_settings.raw_backend_type
+    if content_db_settings.backend_type == BackendType.POSTGRESQL:
+        db_type = 'postgres'
+    elif content_db_settings.backend_type == BackendType.SQLITE:
+        db_type = 'sqlite'
+    elif raw_backend in {'elasticsearch', 'opensearch'}:
+        db_type = 'elasticsearch'
+        logger.warning(
+            "Elasticsearch content backend is not supported in DB_Manager; operations will raise NotImplementedError"
+        )
+    else:
+        logger.warning(f"Unknown Database.type '{raw_backend}', defaulting to sqlite content backend")
+        db_type = 'sqlite'
+
+
+_sync_media_runtime_defaults()
+_sync_db_manager_path_defaults()
+_sync_db_type()
+
+
 def _ensure_content_backend_loaded() -> Optional[DatabaseBackend]:
     """Lazily resolve the shared content backend when PostgreSQL mode is active."""
-    global _CONTENT_DB_BACKEND
-    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
-        try:
-            _CONTENT_DB_BACKEND = get_content_backend(single_user_config)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Unable to initialize PostgreSQL content backend lazily: {exc}")
-            _CONTENT_DB_BACKEND = None
-    return _CONTENT_DB_BACKEND
+    backend = media_db_runtime_defaults.ensure_content_backend_loaded()
+    _sync_media_runtime_defaults()
+    return backend
 
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
     """Return the shared content DatabaseBackend instance (if configured)."""
-    backend = _ensure_content_backend_loaded()
-    if _POSTGRES_CONTENT_MODE and backend is None:
-        raise RuntimeError("PostgreSQL content backend is required but was not initialized. Check TLDW_CONTENT_DB_BACKEND configuration.")
+    backend = media_db_runtime_defaults.get_content_backend_instance()
+    _sync_media_runtime_defaults()
     return backend
 
 
@@ -240,88 +270,22 @@ def reset_content_backend(
     - Recomputes module-level settings and paths derived from config.
     - Optionally rebuilds the backend immediately when reload=True.
     """
-    global _CONTENT_DB_BACKEND, _POSTGRES_CONTENT_MODE
-    global content_db_settings
-    global single_user_db_path, single_user_backup_path, single_user_backup_dir
+    global _CONTENT_DB_BACKEND
+    global single_user_backup_path, single_user_backup_dir
     global single_user_chacha_path, single_user_workflows_path
-    global single_user_chat_workflows_path, single_user_config
+    global single_user_chat_workflows_path
 
     cfg = config or single_user_config
-
-    # Invalidate content_backend module cache if present
     try:
-        import tldw_Server_API.app.core.DB_Management.content_backend as cb
-        try:
-            if hasattr(cb, "_cache_lock") and cb._cache_lock:
-                with cb._cache_lock:  # type: ignore[attr-defined]
-                    cb._cached_backend = None  # type: ignore[attr-defined]
-                    cb._cached_backend_signature = None  # type: ignore[attr-defined]
-            else:
-                cb._cached_backend = None  # type: ignore[attr-defined]
-                cb._cached_backend_signature = None  # type: ignore[attr-defined]
-        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
-            logger.debug(f"reset_content_backend: failed to clear backend cache: {e}")
-    except ImportError as e:
-        logger.debug(f"reset_content_backend: unable to import content_backend: {e}")
-
-    # Clear shared instance
-    _CONTENT_DB_BACKEND = None
-
-    # Recompute settings and derived paths from the provided config
-    try:
-        content_db_settings = load_content_db_settings(cfg)
-        _POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
-
-        single_user_db_path = (
-            content_db_settings.sqlite_path
-            or str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
+        _CONTENT_DB_BACKEND = media_db_runtime_defaults.reset_media_runtime_defaults(
+            config=cfg,
+            reload=reload,
         )
-        single_user_backup_path = content_db_settings.backup_path or _DEFAULT_BACKUP_DIR
-        single_user_backup_dir = (
-            os.environ.get('TLDW_DB_BACKUP_PATH')
-            or single_user_backup_path
-            or _DEFAULT_BACKUP_DIR
-        )
-        single_user_chacha_path = cfg.get(
-            'Database',
-            'chacha_path',
-            fallback=str(DatabasePaths.get_chacha_db_path(DatabasePaths.get_single_user_id())),
-        )
-        single_user_workflows_path = cfg.get(
-            'Database',
-            'workflows_path',
-            fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id())),
-        )
-        single_user_chat_workflows_path = cfg.get(
-            'Database',
-            'chat_workflows_path',
-            fallback=str(DatabasePaths.get_chat_workflows_db_path(DatabasePaths.get_single_user_id())),
-        )
-        # Recompute db_type to reflect updated settings
-        global db_type
-        raw_backend_local = content_db_settings.raw_backend_type
-        if content_db_settings.backend_type == BackendType.POSTGRESQL:
-            db_type = 'postgres'
-        elif content_db_settings.backend_type == BackendType.SQLITE:
-            db_type = 'sqlite'
-        elif raw_backend_local in {'elasticsearch', 'opensearch'}:
-            db_type = 'elasticsearch'
-            logger.warning(
-                "Elasticsearch content backend is not supported in DB_Manager; operations will raise NotImplementedError"
-            )
-        else:
-            logger.warning(
-                f"Unknown Database.type '{raw_backend_local}', defaulting to sqlite content backend"
-            )
-            db_type = 'sqlite'
+        _sync_media_runtime_defaults()
+        _sync_db_manager_path_defaults(cfg)
+        _sync_db_type()
     except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
         logger.debug(f"reset_content_backend: failed to recompute content settings: {e}")
-
-    if reload:
-        try:
-            _CONTENT_DB_BACKEND = get_content_backend(cfg)
-        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
-            logger.debug(f"reset_content_backend: unable to rebuild content backend: {e}")
     return _CONTENT_DB_BACKEND
 
 
@@ -333,19 +297,12 @@ def create_media_database(
     config: Optional[configparser.ConfigParser] = None,
 ) -> Any:
     """Factory for MediaDatabase instances using the shared backend wiring."""
-
-    runtime = MediaDbRuntimeConfig(
-        default_db_path=str(single_user_db_path),
-        default_config=single_user_config,
-        postgres_content_mode=_POSTGRES_CONTENT_MODE,
-        backend_loader=_ensure_content_backend_loaded,
-    )
     return runtime_create_media_database(
         client_id,
         db_path=db_path,
         backend=backend,
         config=config,
-        runtime=runtime,
+        runtime=build_media_runtime_config(),
     )
 
 
@@ -356,15 +313,9 @@ def validate_postgres_content_backend() -> None:
     row-level security policies are missing. Acts as a no-op for SQLite.
     """
 
-    runtime = MediaDbRuntimeConfig(
-        default_db_path=str(single_user_db_path),
-        default_config=single_user_config,
-        postgres_content_mode=_POSTGRES_CONTENT_MODE,
-        backend_loader=_ensure_content_backend_loaded,
-    )
     runtime_validate_postgres_content_backend(
         get_content_backend_instance=get_content_backend_instance,
-        runtime=runtime,
+        runtime=build_media_runtime_config(),
     )
 
 
@@ -501,22 +452,6 @@ def default_db_config():
         'elasticsearch_port': 9200
     }
 
-raw_backend = content_db_settings.raw_backend_type
-# Derive db_type from resolved backend settings with explicit handling for
-# unsupported elasticsearch/opensearch types.
-if content_db_settings.backend_type == BackendType.POSTGRESQL:
-    db_type = 'postgres'
-elif content_db_settings.backend_type == BackendType.SQLITE:
-    db_type = 'sqlite'
-elif raw_backend in {'elasticsearch', 'opensearch'}:
-    db_type = 'elasticsearch'
-    logger.warning(
-        "Elasticsearch content backend is not supported in DB_Manager; operations will raise NotImplementedError"
-    )
-else:
-    logger.warning(f"Unknown Database.type '{raw_backend}', defaulting to sqlite content backend")
-    db_type = 'sqlite'
-
 # Content backends supported by this module. Elasticsearch/opensearch are
 # intentionally not wired here to avoid confusing fallthrough paths.
 SQL_CONTENT_BACKENDS = {'sqlite', 'postgres'}
@@ -584,9 +519,19 @@ def check_media_exists(*args, **kwargs):
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
+
+# DEPRECATED MEDIA COMPATIBILITY SURFACE
+# Keep these forwards until all callers have moved to media_db.api.
 def get_full_media_details(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return sqlite_get_full_media_details(*args, **kwargs)
+        db_instance = kwargs.get('db_instance') or (args[0] if args else None)
+        media_id = kwargs.get('media_id') or (args[1] if len(args) > 1 else None)
+        include_content = kwargs.get('include_content', True)
+        return media_db_api.get_full_media_details(
+            db=db_instance,
+            media_id=media_id,
+            include_content=include_content,
+        )
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_full_media_details")
     else:
@@ -600,7 +545,18 @@ def get_full_media_details2(*args, **kwargs):
 
 def get_full_media_details_rich(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        return sqlite_get_full_media_details_rich(*args, **kwargs)
+        db_instance = kwargs.get('db_instance') or (args[0] if args else None)
+        media_id = kwargs.get('media_id') or (args[1] if len(args) > 1 else None)
+        include_content = kwargs.get('include_content', True)
+        include_versions = kwargs.get('include_versions', True)
+        include_version_content = kwargs.get('include_version_content', False)
+        return media_db_api.get_full_media_details_rich(
+            db=db_instance,
+            media_id=media_id,
+            include_content=include_content,
+            include_versions=include_versions,
+            include_version_content=include_version_content,
+        )
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_full_media_details_rich")
     else:
@@ -1332,8 +1288,8 @@ def fetch_item_details(*args, **kwargs) -> tuple[str, str, str]:
         db_instance = _unwrap_media_database(db_instance)
         if not _is_media_database_instance(db_instance) or media_id is None:
             raise ValueError("fetch_item_details requires 'db_instance' and 'media_id'")
-        details = sqlite_get_full_media_details_rich(
-            db_instance=db_instance,
+        details = media_db_api.get_full_media_details_rich(
+            db=db_instance,
             media_id=media_id,
             include_content=True,
             include_versions=True,

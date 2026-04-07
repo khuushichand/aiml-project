@@ -14,6 +14,7 @@ from loguru import logger
 
 #
 # Local imports
+from tldw_Server_API.app.core.AuthNZ.admin_webhook_secrets import encrypt_admin_webhook_secret
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
 from tldw_Server_API.app.core.Infrastructure.distributed_lock import acquire_migration_lock
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -4049,6 +4050,243 @@ def migration_079_add_governance_pack_trust_policy(conn: sqlite3.Connection) -> 
     logger.info("Migration 079: Added governance-pack trust policy schema")
 
 
+def migration_080_create_admin_webhooks_tables(conn: sqlite3.Connection) -> None:
+    """Create admin_webhooks and admin_webhooks_delivery_log tables."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            secret_encrypted TEXT NOT NULL,
+            secret_key_id TEXT,
+            event_types TEXT NOT NULL DEFAULT '[]',
+            description TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            retry_count INTEGER NOT NULL DEFAULT 3 CHECK (retry_count >= 0 AND retry_count <= 10),
+            timeout_seconds INTEGER NOT NULL DEFAULT 10 CHECK (timeout_seconds >= 1 AND timeout_seconds <= 120),
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_webhooks_delivery_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER NOT NULL REFERENCES admin_webhooks(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL,
+            status_code INTEGER,
+            response_body TEXT,
+            latency_ms INTEGER,
+            retry_attempt INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            delivered_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_webhooks_delivery_log_webhook_id "
+        "ON admin_webhooks_delivery_log(webhook_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_webhooks_delivery_log_created_at "
+        "ON admin_webhooks_delivery_log(created_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 080: Created admin_webhooks and delivery_log tables")
+
+
+def migration_081_create_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
+    """Create time-series table for dependency health probe results."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_dependency_health_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            latency_ms INTEGER,
+            error_message TEXT,
+            checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_dep_health_service_checked "
+        "ON admin_dependency_health_history(service_name, checked_at DESC)"
+    )
+
+    conn.commit()
+    logger.info("Migration 081: Created admin_dependency_health_history table")
+
+
+def migration_082_harden_admin_webhooks_and_create_admin_settings(conn: sqlite3.Connection) -> None:
+    """Create admin_settings and migrate admin_webhooks secrets to encrypted storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_settings (
+            setting_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    if not _sqlite_table_exists(conn, "admin_webhooks"):
+        conn.commit()
+        logger.info("Migration 082: Created admin_settings table")
+        return
+
+    table_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_webhooks'"
+    ).fetchone()
+    table_sql = str(table_sql_row[0] if table_sql_row and table_sql_row[0] else "")
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(admin_webhooks)").fetchall()
+    }
+    needs_rebuild = (
+        "secret" in columns
+        or "secret_encrypted" not in columns
+        or "secret_key_id" not in columns
+        or "CHECK (retry_count >=" not in table_sql
+        or "CHECK (timeout_seconds >=" not in table_sql
+    )
+    if not needs_rebuild:
+        conn.commit()
+        logger.info("Migration 082: Admin webhook schema already hardened")
+        return
+
+    previous_row_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM admin_webhooks").fetchall()
+    finally:
+        conn.row_factory = previous_row_factory
+
+    migrated_rows: list[tuple[Any, ...]] = []
+    for row in rows:
+        secret_encrypted = row["secret_encrypted"] if "secret_encrypted" in row.keys() else None
+        secret_key_id = row["secret_key_id"] if "secret_key_id" in row.keys() else None
+        if not secret_encrypted:
+            plaintext_secret = row["secret"] if "secret" in row.keys() else None
+            if not plaintext_secret:
+                raise ValueError(f"Admin webhook {row['id']} is missing a secret for migration")
+            encrypted = encrypt_admin_webhook_secret(str(plaintext_secret))
+            secret_encrypted = encrypted.encrypted_blob
+            secret_key_id = encrypted.key_id
+
+        migrated_rows.append(
+            (
+                row["id"],
+                row["url"],
+                secret_encrypted,
+                secret_key_id,
+                row["event_types"],
+                row["description"],
+                row["active"],
+                row["retry_count"],
+                row["timeout_seconds"],
+                row["created_by"],
+                row["created_at"],
+                row["updated_at"],
+            )
+        )
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE admin_webhooks_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                secret_encrypted TEXT NOT NULL,
+                secret_key_id TEXT,
+                event_types TEXT NOT NULL DEFAULT '[]',
+                description TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 1,
+                retry_count INTEGER NOT NULL DEFAULT 3 CHECK (retry_count >= 0 AND retry_count <= 10),
+                timeout_seconds INTEGER NOT NULL DEFAULT 10 CHECK (timeout_seconds >= 1 AND timeout_seconds <= 120),
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        if migrated_rows:
+            conn.executemany(
+                """
+                INSERT INTO admin_webhooks_new (
+                    id, url, secret_encrypted, secret_key_id, event_types, description,
+                    active, retry_count, timeout_seconds, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                migrated_rows,
+            )
+        conn.execute("DROP TABLE admin_webhooks")
+        conn.execute("ALTER TABLE admin_webhooks_new RENAME TO admin_webhooks")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    conn.commit()
+    logger.info("Migration 082: Hardened admin_webhooks schema and created admin_settings")
+
+
+def migration_083_create_org_stt_settings(conn: sqlite3.Connection) -> None:
+    """Create org_stt_settings table for org-scoped STT policy."""
+    logger.info("Migration 083: START org_stt_settings table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_stt_settings (
+            org_id INTEGER PRIMARY KEY,
+            delete_audio_after_success INTEGER NOT NULL DEFAULT 1,
+            audio_retention_hours REAL NOT NULL DEFAULT 0.0,
+            redact_pii INTEGER NOT NULL DEFAULT 0,
+            allow_unredacted_partials INTEGER NOT NULL DEFAULT 0,
+            redact_categories_json TEXT NOT NULL DEFAULT '[]',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_stt_settings_updated_by ON org_stt_settings(updated_by)")
+    conn.commit()
+    logger.info("Migration 083: Created org_stt_settings table")
+
+
+def rollback_083_drop_org_stt_settings(conn: sqlite3.Connection) -> None:
+    """Rollback migration 083 by dropping org_stt_settings."""
+    conn.execute("DROP TABLE IF EXISTS org_stt_settings")
+    conn.commit()
+    logger.info("Rollback 083: Dropped org_stt_settings table")
+
+
+def rollback_081_drop_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
+    """Rollback migration 081."""
+    conn.execute("DROP TABLE IF EXISTS admin_dependency_health_history")
+    conn.commit()
+    logger.info("Rollback 081: Dropped admin_dependency_health_history table")
+
+
+def rollback_080_drop_admin_webhooks_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 080 by dropping admin webhook tables."""
+    conn.execute("DROP TABLE IF EXISTS admin_webhooks_delivery_log")
+    conn.execute("DROP TABLE IF EXISTS admin_webhooks")
+    conn.commit()
+    logger.info("Rollback 080: Dropped admin webhook tables")
+
+
 def rollback_077_drop_sharing_tables(conn: sqlite3.Connection) -> None:
     """Rollback migration 077 by dropping sharing tables."""
     conn.execute("DROP TABLE IF EXISTS sharing_config")
@@ -4387,6 +4625,29 @@ def get_authnz_migrations() -> list[Migration]:
             79,
             "Add governance-pack trust policy",
             migration_079_add_governance_pack_trust_policy,
+        ),
+        Migration(
+            80,
+            "Create admin webhooks tables",
+            migration_080_create_admin_webhooks_tables,
+            rollback_080_drop_admin_webhooks_tables,
+        ),
+        Migration(
+            81,
+            "Create dependency health history table",
+            migration_081_create_admin_dependency_health_history,
+            rollback_081_drop_admin_dependency_health_history,
+        ),
+        Migration(
+            82,
+            "Harden admin webhooks schema and create admin settings table",
+            migration_082_harden_admin_webhooks_and_create_admin_settings,
+        ),
+        Migration(
+            83,
+            "Create org STT settings table",
+            migration_083_create_org_stt_settings,
+            rollback_083_drop_org_stt_settings,
         ),
     ]
 

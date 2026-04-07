@@ -5,11 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
+from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.core.Setup.audio_readiness_store import AudioReadinessStore
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     AUDIO_BUNDLE_CATALOG_VERSION,
     DEFAULT_AUDIO_RESOURCE_PROFILE,
@@ -17,7 +22,10 @@ from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     get_audio_bundle_catalog,
 )
 
+CONFIG_ROOT = setup_manager.CONFIG_RELATIVE_PATH.parent
 AUDIO_PACK_FORMAT = "audio_bundle_pack_manifest_v1"
+AUDIO_PACKS_DIRNAME = "audio_packs"
+_AUDIO_PACK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
 
 PACK_ISSUE_UNKNOWN_BUNDLE = "unknown_bundle"
 PACK_ISSUE_MANIFEST_CHECKSUM = "manifest_checksum_mismatch"
@@ -49,6 +57,38 @@ def _default_compatibility() -> dict[str, str]:
     }
 
 
+def get_audio_pack_root() -> Path:
+    """Return the setup-managed directory used for offline audio pack manifests."""
+    root = CONFIG_ROOT / AUDIO_PACKS_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    return root.resolve()
+
+
+def normalize_audio_pack_name(pack_name: str) -> str:
+    """Validate that a caller provided only a bare JSON filename for a managed pack."""
+    normalized = str(pack_name or "").strip()
+    if not normalized or "/" in normalized or "\\" in normalized or not _AUDIO_PACK_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Audio pack names must be plain JSON filenames inside the managed audio_packs directory."
+        )
+    return normalized
+
+
+def resolve_audio_pack_path(pack_name: str) -> Path:
+    """Resolve a managed pack filename into the setup-controlled audio pack directory."""
+    root = get_audio_pack_root()
+    candidate = (root / normalize_audio_pack_name(pack_name)).resolve()
+    if candidate.parent != root:
+        raise ValueError(
+            "Audio pack names must be plain JSON filenames inside the managed audio_packs directory."
+        )
+    return candidate
+
+
+def _display_audio_pack_path(pack_name: str) -> str:
+    return str(Path(AUDIO_PACKS_DIRNAME) / normalize_audio_pack_name(pack_name))
+
+
 def _canonical_manifest_payload(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -57,12 +97,16 @@ def _sha256_hexdigest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _sha256_file_hexdigest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _copy_asset_manifest(installed_assets: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    assets: list[dict[str, Any]] = []
-    for entry in installed_assets or []:
-        if isinstance(entry, dict):
-            assets.append(dict(entry))
-    return assets
+    return [dict(entry) for entry in (installed_assets or []) if isinstance(entry, dict)]
 
 
 def _append_issue(issues: list[str], issue_codes: list[str], code: str, message: str) -> None:
@@ -79,7 +123,7 @@ def _calculate_asset_checksums(assets: list[dict[str, Any]]) -> dict[str, str]:
         asset_path = Path(path_value)
         if not asset_path.is_file():
             continue
-        checksums[str(asset_path)] = _sha256_hexdigest(asset_path.read_bytes())
+        checksums[str(asset_path)] = _sha256_file_hexdigest(asset_path)
     return checksums
 
 
@@ -133,7 +177,7 @@ def build_audio_pack_manifest(
 
 def write_audio_pack_manifest(
     *,
-    pack_path: str | Path,
+    pack_name: str,
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
     tts_choice: str | None = None,
@@ -151,30 +195,41 @@ def write_audio_pack_manifest(
         compatibility=compatibility,
         installed_assets=installed_assets,
     )
-    destination = Path(pack_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination = resolve_audio_pack_path(pack_name)
     destination.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
 
-def load_audio_pack_manifest(pack_path: str | Path) -> dict[str, Any]:
+def load_audio_pack_manifest(pack_name: str) -> dict[str, Any]:
     """Load an audio pack manifest from disk."""
 
-    return json.loads(Path(pack_path).read_text(encoding="utf-8"))
+    return json.loads(resolve_audio_pack_path(pack_name).read_text(encoding="utf-8"))
 
 
 def validate_audio_pack_manifest(
-    pack_path: str | Path,
+    pack_name: str,
     *,
     machine_profile: dict[str, Any] | None = None,
     python_version: str | None = None,
 ) -> dict[str, Any]:
     """Validate manifest checksum and local compatibility for an audio pack."""
 
-    manifest = load_audio_pack_manifest(pack_path)
+    raw_manifest = load_audio_pack_manifest(pack_name)
     issues: list[str] = []
     issue_codes: list[str] = []
     warnings: list[str] = []
+
+    if not isinstance(raw_manifest, dict):
+        return {
+            "compatible": False,
+            "issues": ["Audio pack manifest must be a JSON object."],
+            "warnings": warnings,
+            "manifest": {},
+            "selection_key": None,
+            "bundle_label": None,
+        }
+
+    manifest = dict(raw_manifest)
 
     if manifest.get("format") != AUDIO_PACK_FORMAT:
         _append_issue(issues, issue_codes, "unsupported_format", "Unsupported audio pack format.")
@@ -199,7 +254,13 @@ def validate_audio_pack_manifest(
     checksum_payload = dict(manifest)
     checksum_payload["checksums"] = {}
     expected_manifest_checksum = _sha256_hexdigest(_canonical_manifest_payload(checksum_payload))
-    actual_manifest_checksum = manifest.get("checksums", {}).get("manifest_sha256")
+    checksums = manifest.get("checksums")
+    if checksums is None:
+        checksums = {}
+    elif not isinstance(checksums, dict):
+        issues.append("Manifest checksums entry must be an object.")
+        checksums = {}
+    actual_manifest_checksum = checksums.get("manifest_sha256")
     if actual_manifest_checksum != expected_manifest_checksum:
         _append_issue(
             issues,
@@ -209,7 +270,12 @@ def validate_audio_pack_manifest(
         )
 
     local_profile = machine_profile or _default_compatibility()
-    compatibility = manifest.get("compatibility") or {}
+    compatibility = manifest.get("compatibility")
+    if compatibility is None:
+        compatibility = {}
+    elif not isinstance(compatibility, dict):
+        issues.append("Manifest compatibility entry must be an object.")
+        compatibility = {}
     if compatibility.get("platform") and compatibility["platform"] != local_profile.get("platform"):
         _append_issue(
             issues,
@@ -263,13 +329,27 @@ def validate_audio_pack_manifest(
             "Pack selection key does not match the canonical bundle/profile/TTS choice identity.",
         )
 
-    for asset in manifest.get("assets", []):
+    manifest_assets = manifest.get("assets")
+    if manifest_assets is None:
+        manifest_assets = []
+    elif not isinstance(manifest_assets, list):
+        issues.append("Manifest assets entry must be a list.")
+        manifest_assets = []
+
+    for asset in manifest_assets:
+        if not isinstance(asset, dict):
+            issues.append("Manifest assets entries must be objects.")
+            continue
         path_value = asset.get("path") or asset.get("asset_path")
         if not path_value:
             continue
         asset_path = Path(path_value)
         if not asset_path.exists():
             warnings.append(f"Referenced asset is not present locally: {asset_path}")
+
+    selection_key = manifest.get("selection_key") if isinstance(manifest.get("selection_key"), str) else None
+    if not selection_key and isinstance(bundle_id, str) and isinstance(resource_profile, str):
+        selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
 
     return {
         "compatible": not issues,
@@ -284,16 +364,16 @@ def validate_audio_pack_manifest(
 
 
 def register_imported_audio_pack(
-    pack_path: str | Path,
+    pack_name: str,
     *,
-    readiness_store,
+    readiness_store: AudioReadinessStore,
     machine_profile: dict[str, Any] | None = None,
     python_version: str | None = None,
 ) -> dict[str, Any]:
     """Validate an imported pack and persist its metadata into readiness."""
 
     validation = validate_audio_pack_manifest(
-        pack_path,
+        pack_name,
         machine_profile=machine_profile,
         python_version=python_version,
     )
@@ -318,7 +398,7 @@ def register_imported_audio_pack(
     imported_packs = list(readiness.get("imported_packs") or [])
     imported_packs.append(
         {
-            "pack_path": str(pack_path),
+            "pack_path": _display_audio_pack_path(pack_name),
             "bundle_id": manifest.get("bundle_id"),
             "resource_profile": manifest.get("resource_profile"),
             "tts_choice": validation["tts_choice"],
@@ -328,7 +408,9 @@ def register_imported_audio_pack(
             "issues": list(validation["issues"]),
             "warnings": list(validation["warnings"]),
             "imported_at": _utc_now(),
-            "manifest_sha256": manifest.get("checksums", {}).get("manifest_sha256"),
+            "manifest_sha256": (manifest.get("checksums") if isinstance(manifest.get("checksums"), dict) else {}).get(
+                "manifest_sha256"
+            ),
         }
     )
 
@@ -350,9 +432,13 @@ def register_imported_audio_pack(
 
 __all__ = [
     "AUDIO_PACK_FORMAT",
+    "AUDIO_PACKS_DIRNAME",
     "build_audio_pack_manifest",
+    "get_audio_pack_root",
     "load_audio_pack_manifest",
+    "normalize_audio_pack_name",
     "register_imported_audio_pack",
+    "resolve_audio_pack_path",
     "validate_audio_pack_manifest",
     "write_audio_pack_manifest",
 ]

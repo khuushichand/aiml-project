@@ -16,7 +16,7 @@ import pytest
 from loguru import logger
 
 # Import actual MediaDatabase for integration tests
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 from tldw_Server_API.app.core.RAG.rag_service.metrics_collector import QueryMetrics
 

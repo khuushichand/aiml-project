@@ -1,12 +1,12 @@
 import os
 import tempfile
-import importlib
 import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig
+from tldw_Server_API.tests.helpers.app_main_state import reload_app_main
 
 
 pytestmark = pytest.mark.integration
@@ -42,9 +42,8 @@ def _fresh_client() -> TestClient:
         _ = None
 
     # Reload app module to ensure lifespan uses new env/settings
-    from tldw_Server_API.app import main as app_main
-    importlib.reload(app_main)
-    client = TestClient(app_main.app, headers={"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]})
+    reloaded = reload_app_main()
+    client = TestClient(reloaded.app, headers={"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]})
     # Attach tmp path for caller cleanup if desired
     client._tmp_auth_db_path = tmp_path  # type: ignore[attr-defined]
     return client

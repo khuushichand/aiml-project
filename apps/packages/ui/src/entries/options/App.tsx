@@ -1,1 +1,1 @@
-export { OptionsApp as default } from "@/entries/shared/apps"
+export { OptionsApp as default } from "@/entries/shared/options-app"

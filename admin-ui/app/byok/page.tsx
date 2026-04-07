@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { KeyRound, RefreshCw, Plus, Trash2, Send, Server, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import type { AuditLog, ByokValidationRunItem } from '@/types';
@@ -187,6 +188,7 @@ const PROVIDER_OPTIONS = [
 export default function ByokDashboardPage() {
   const { selectedOrg } = useOrgContext();
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
@@ -596,14 +598,13 @@ export default function ByokDashboardPage() {
   };
 
   const handleDisconnectOpenAIOAuth = async () => {
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: 'Disconnect OpenAI OAuth',
       message: 'Disconnect OAuth credentials for OpenAI?',
       confirmText: 'Disconnect',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setOpenAIOAuthAction('disconnect');
@@ -652,14 +653,13 @@ export default function ByokDashboardPage() {
 
   const handleDeleteSharedKey = async (key: SharedProviderKey) => {
     const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
-    const confirmed = await confirm({
+    const result = await promptPrivilegedAction({
       title: 'Delete Shared Key',
       message: `Delete the shared key for "${key.provider}"? Users and orgs will fall back to their own keys.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: true,
     });
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setDeletingKey(keyId);
@@ -957,9 +957,25 @@ export default function ByokDashboardPage() {
                         {formatValidationStatus(latestValidationRun.status)}
                       </Badge>
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {formatValidationCounts(latestValidationRun)}
-                    </div>
+                    {latestValidationRun.status === 'complete' && latestValidationRun.keys_checked != null ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge variant="secondary">{latestValidationRun.keys_checked} checked</Badge>
+                        <Badge className="bg-green-600 text-white">{latestValidationRun.valid_count ?? 0} valid</Badge>
+                        {(latestValidationRun.invalid_count ?? 0) > 0 && (
+                          <Badge variant="destructive">{latestValidationRun.invalid_count} invalid</Badge>
+                        )}
+                        {(latestValidationRun.error_count ?? 0) > 0 && (
+                          <Badge className="bg-yellow-500 text-black">{latestValidationRun.error_count} errors</Badge>
+                        )}
+                        {(latestValidationRun.keys_checked ?? 0) > 0 && (latestValidationRun.invalid_count ?? 0) === 0 && (latestValidationRun.error_count ?? 0) === 0 && (
+                          <span className="text-xs text-green-600 font-medium">All keys passed validation</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {formatValidationCounts(latestValidationRun)}
+                      </div>
+                    )}
                     <div className="mt-1 text-xs text-muted-foreground">
                       Requested by {latestValidationRun.requested_by_label || 'Unknown'} • {new Date(latestValidationRun.created_at).toLocaleString()}
                     </div>

@@ -402,3 +402,5 @@ Dockerfiles/Monitoring/secrets/
 /.hypothesis
 /admin-ui/.next
 /.playwright-cli
+/output
+

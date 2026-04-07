@@ -39,7 +39,7 @@ from tldw_Server_API.tests.test_utils import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase # Import Database class
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase # Import Database class
 # Import the form model
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm, MediaType # Import AddMediaForm, MediaType
 #

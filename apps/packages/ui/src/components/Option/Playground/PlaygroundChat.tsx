@@ -7,26 +7,14 @@ import {
   PlaygroundMessage,
   type MessageResearchActions
 } from "@/components/Common/Playground/Message"
-import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
-import { Clock, DollarSign, Hash } from "lucide-react"
 import { generateID, updateMessageMedia } from "@/db/dexie/helpers"
-import { decodeChatErrorPayload } from "@/utils/chat-error-message"
-import { humanizeMilliseconds } from "@/utils/humanize-milliseconds"
-import { trackCompareMetric } from "@/utils/compare-metrics"
-import { resolveMessageCostUsd } from "@/components/Common/Playground/message-usage"
-import { formatCost } from "@/utils/model-pricing"
-import { fetchChatModels } from "@/services/tldw-server"
-import { tldwModels } from "@/services/tldw"
+import { fetchChatModels, clearChatModelsCache } from "@/services/tldw-server"
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { tldwClient, type ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
+import { NoProviderBanner } from "@/components/Common/NoProviderBanner"
 import { applyVariantToMessage } from "@/utils/message-variants"
-import {
-  buildNormalizedPreview,
-  computeNormalizedPreviewBudget
-} from "./compare-normalized-preview"
-import { computeResponseDiffPreview } from "./compare-response-diff"
-import { ResearchRunStatusStack } from "./ResearchRunStatusStack"
 import {
   getChatLinkedResearchActionPolicy,
   getChatLinkedResearchRefetchInterval,
@@ -34,7 +22,6 @@ import {
 } from "./research-run-status"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
 import {
   deriveAttachedResearchContext,
   isDeepResearchCompletionMetadata,
@@ -71,6 +58,22 @@ const resolveTimelineMessageType = (
 const shouldHideTimelineMessage = (message: TimelineMessageShape): boolean =>
   resolveTimelineMessageType(message) === IMAGE_GENERATION_USER_MESSAGE_TYPE
 
+const LazyPlaygroundCompareCluster = React.lazy(() =>
+  import("./PlaygroundCompareCluster").then((module) => ({
+    default: module.PlaygroundCompareCluster
+  }))
+)
+const LazyResearchRunStatusStack = React.lazy(() =>
+  import("./ResearchRunStatusStack").then((module) => ({
+    default: module.ResearchRunStatusStack
+  }))
+)
+const LazyChatGreetingPicker = React.lazy(() =>
+  import("@/components/Common/ChatGreetingPicker").then((module) => ({
+    default: module.ChatGreetingPicker
+  }))
+)
+
 type PlaygroundChatProps = {
   searchQuery?: string
   matchedMessageIndices?: Set<number>
@@ -79,53 +82,6 @@ type PlaygroundChatProps = {
   onPrepareResearchFollowUp?: (target: ResearchFollowUpTarget) => void
   returnedResearchRunId?: string | null
   onDismissReturnedResearchRun?: () => void
-}
-
-const PerModelMiniComposer: React.FC<{
-  placeholder: string
-  disabled?: boolean
-  helperText?: string | null
-  onSend: (text: string) => Promise<void> | void
-}> = ({ placeholder, disabled = false, helperText, onSend }) => {
-  const { t } = useTranslation(["common"])
-  const [value, setValue] = React.useState("")
-
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const trimmed = value.trim()
-    if (!trimmed || disabled) {
-      return
-    }
-    await onSend(trimmed)
-    setValue("")
-  }
-
-  return (
-    <div className="mt-2 space-y-1 text-[11px]">
-      <form onSubmit={handleSubmit} className="flex items-center gap-2">
-        <input
-          className="flex-1 rounded border border-border bg-surface px-2 py-1 text-[11px] text-text placeholder:text-text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={placeholder}
-          disabled={disabled}
-        />
-        <button
-          type="submit"
-          disabled={disabled || value.trim().length === 0}
-          title={t("common:send", "Send") as string}
-          className="rounded bg-primary px-2 py-1 text-[11px] font-medium text-surface disabled:cursor-not-allowed disabled:opacity-60 hover:bg-primaryStrong">
-          {t("common:send", "Send")}
-        </button>
-      </form>
-      {helperText && (
-        <div className="text-[10px] text-text-subtle">
-          {helperText}
-        </div>
-      )}
-    </div>
-  )
 }
 
 const buildBlocks = (messages: TimelineMessageShape[]): TimelineBlock[] => {
@@ -230,22 +186,28 @@ export const PlaygroundChat = ({
   } = useMessageOption()
   const [openReasoning] = useStorage("openReasoning", false)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
-  const { data: chatModels = [] } = useQuery({
+  const isConnected = useIsConnected()
+  const { data: chatModels = [], isFetched: chatModelsFetched, refetch: refetchChatModels } = useQuery({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
-    enabled: true
+    enabled: isConnected,
+    staleTime: 30_000,
   })
-  const [collapsedClusters, setCollapsedClusters] = React.useState<
-    Record<string, boolean>
-  >({})
-  const [hiddenModelsByCluster, setHiddenModelsByCluster] = React.useState<
-    Record<string, string[]>
-  >({})
-  const [normalizedPreviewByCluster, setNormalizedPreviewByCluster] =
-    React.useState<Record<string, boolean>>({})
-  const [diffPreviewByCluster, setDiffPreviewByCluster] = React.useState<
-    Record<string, boolean>
-  >({})
+  const {
+    data: providersStatus,
+    refetch: refetchProvidersStatus,
+  } = useQuery({
+    queryKey: ["playground:providersStatus"],
+    queryFn: async () => {
+      await tldwClient.initialize().catch(() => null)
+      return await tldwClient.getProvidersStatus()
+    },
+    enabled: isConnected,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const noProvidersConfigured =
+    providersStatus != null && providersStatus.any_configured === false
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
     temporaryChat || historyId === "temp" ? null : historyId
@@ -1040,7 +1002,7 @@ export const PlaygroundChat = ({
 
   return (
     <>
-      <div className="relative flex w-full flex-col items-center pt-16 pb-4">
+      <div className="relative flex w-full flex-col items-center pt-8 pb-4">
         {showSelectedServerChatLoadFailure ? (
           <div className="mt-32 w-full px-6">
             <div className="mx-auto max-w-xl rounded-xl border border-destructive/30 bg-destructive/5 px-5 py-4 text-center text-sm text-text">
@@ -1048,17 +1010,44 @@ export const PlaygroundChat = ({
             </div>
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
-          <div className="mt-32 w-full">
+          <div className="mt-4 w-full">
+            {isConnected && noProvidersConfigured && (
+              <NoProviderBanner
+                className="mb-4"
+                onRefresh={() => {
+                  clearChatModelsCache()
+                  void refetchChatModels()
+                  void refetchProvidersStatus()
+                }}
+              />
+            )}
+            {isConnected && !noProvidersConfigured && chatModelsFetched && chatModels.length === 0 && (
+              <div className="mx-auto mb-4 max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-center text-sm text-text">
+                <p className="font-medium">{t("playground:noModelsAvailable", "No AI models available")}</p>
+                <p className="mt-1 text-xs text-text-muted">
+                  {t("playground:addApiKeyInstructions", "Add an LLM provider API key in your server settings and restart, then")}{" "}
+                  <button
+                    type="button"
+                    className="underline hover:text-text"
+                    onClick={() => { clearChatModelsCache(); void refetchChatModels() }}
+                  >
+                    {t("playground:refreshModels", "refresh models")}
+                  </button>.
+                </p>
+              </div>
+            )}
             <PlaygroundEmpty />
           </div>
         )}
-        <ChatGreetingPicker
-          selectedCharacter={selectedCharacter}
-          messages={messages}
-          historyId={historyId}
-          serverChatId={serverChatId}
-          className="mb-6 mt-4"
-        />
+        <React.Suspense fallback={null}>
+          <LazyChatGreetingPicker
+            selectedCharacter={selectedCharacter}
+            messages={messages}
+            historyId={historyId}
+            serverChatId={serverChatId}
+            className="mb-6 mt-4"
+          />
+        </React.Suspense>
         {returnedResearchRun &&
         returnedResearchActionPolicy &&
         returnedResearchBannerState ? (
@@ -1156,13 +1145,15 @@ export const PlaygroundChat = ({
             </div>
           </section>
         ) : null}
-        <ResearchRunStatusStack
-          runs={linkedResearchRuns}
-          onUseInChat={(run) => {
-            void handleAttachResearchRun(run.run_id, run.query)
-          }}
-          onFollowUp={onPrepareResearchFollowUp}
-        />
+        <React.Suspense fallback={null}>
+          <LazyResearchRunStatusStack
+            runs={linkedResearchRuns}
+            onUseInChat={(run) => {
+              void handleAttachResearchRun(run.run_id, run.query)
+            }}
+            onFollowUp={onPrepareResearchFollowUp}
+          />
+        </React.Suspense>
         {blocks.map((block, blockIndex) => {
           if (block.kind === "single") {
             const message = messages[block.index]
@@ -1255,6 +1246,89 @@ export const PlaygroundChat = ({
               />
             )
           }
+
+          return (
+            <React.Suspense
+              key={`c-${block.clusterId}`}
+              fallback={
+                <div className="w-full max-w-5xl md:px-4 mb-4">
+                  <div className="rounded-md border border-border bg-surface p-3 text-sm text-text-muted shadow-sm">
+                    {t(
+                      "playground:composer.compareLoading",
+                      "Loading comparison…"
+                    )}
+                  </div>
+                </div>
+              }>
+              <LazyPlaygroundCompareCluster
+                block={block}
+                blockIndex={blockIndex}
+                messages={messages}
+                openReasoning={openReasoning}
+                isProcessing={isProcessing}
+                isSearchingInternet={isSearchingInternet}
+                ttsEnabled={ttsEnabled}
+                streaming={streaming}
+                temporaryChat={temporaryChat}
+                serverChatId={serverChatId}
+                actionInfo={actionInfo}
+                isEmbedding={isEmbedding}
+                selectedCharacter={selectedCharacter}
+                characterIdentityEnabled={characterIdentityEnabled}
+                normalizedSearchQuery={normalizedSearchQuery}
+                historyId={historyId}
+                stableHistoryId={stableHistoryId}
+                conversationInstanceId={conversationInstanceId}
+                messageSteeringMode={messageSteeringMode}
+                messageSteeringForceNarrate={messageSteeringForceNarrate}
+                compareFeatureEnabled={compareFeatureEnabled}
+                compareModeActive={compareModeActive}
+                compareSelectionByCluster={compareSelectionByCluster}
+                compareActiveModelsByCluster={compareActiveModelsByCluster}
+                compareCanonicalByCluster={compareCanonicalByCluster}
+                compareContinuationModeByCluster={compareContinuationModeByCluster}
+                compareSplitChats={compareSplitChats}
+                compareMaxModels={compareMaxModels}
+                modelMetaById={modelMetaById}
+                getTokenCount={getTokenCount}
+                getPreviousUserMessage={getPreviousUserMessage}
+                resolveSearchMatch={resolveSearchMatch}
+                resolveMessageType={resolveMessageType}
+                regenerateLastMessage={regenerateLastMessage}
+                handleRegenerateGeneratedImage={handleRegenerateGeneratedImage}
+                handleDeleteGeneratedImage={handleDeleteGeneratedImage}
+                handleSelectGeneratedImageVariant={handleSelectGeneratedImageVariant}
+                handleKeepGeneratedImageVariant={handleKeepGeneratedImageVariant}
+                handleDeleteGeneratedImageVariant={handleDeleteGeneratedImageVariant}
+                handleDeleteAllGeneratedImageVariants={handleDeleteAllGeneratedImageVariants}
+                editMessage={editMessage}
+                deleteMessage={deleteMessage}
+                toggleMessagePinned={toggleMessagePinned}
+                createChatBranch={createChatBranch}
+                stopStreamingRequest={stopStreamingRequest}
+                runContinue={runContinue}
+                runSteeredContinue={runSteeredContinue}
+                buildMessageResearchActions={buildMessageResearchActions}
+                handleVariantSwipe={handleVariantSwipe}
+                setMessageSteeringMode={setMessageSteeringMode}
+                setMessageSteeringForceNarrate={setMessageSteeringForceNarrate}
+                clearMessageSteering={clearMessageSteering}
+                setCompareSelectionForCluster={setCompareSelectionForCluster}
+                setCompareActiveModelsForCluster={setCompareActiveModelsForCluster}
+                setCompareSelectedModels={setCompareSelectedModels}
+                setSelectedModel={setSelectedModel}
+                setCompareMode={setCompareMode}
+                sendPerModelReply={sendPerModelReply}
+                setCompareCanonicalForCluster={setCompareCanonicalForCluster}
+                setCompareContinuationModeForCluster={
+                  setCompareContinuationModeForCluster
+                }
+                setCompareParentForHistory={setCompareParentForHistory}
+                setCompareSplitChat={setCompareSplitChat}
+                createCompareBranch={createCompareBranch}
+              />
+            </React.Suspense>
+          )
 
           const userMessage = messages[block.userIndex]
           const previousUserMessage = getPreviousUserMessage(block.userIndex)

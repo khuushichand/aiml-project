@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Bot, Plus, Pencil, Trash2, Shield } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
+import { TagInput } from '@/components/ui/tag-input';
 
 interface AgentConfig {
   id: number;
@@ -35,6 +36,50 @@ interface AgentConfig {
   is_configured: boolean;
   created_at: string;
   updated_at: string | null;
+  max_token_budget: number | null;
+}
+
+interface AgentMetrics {
+  agent_type: string;
+  session_count: number;
+  active_sessions: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_messages: number;
+  last_used_at: string | null;
+  total_estimated_cost_usd: number | null;
+}
+
+function formatTokens(n: number): string {
+  if (n === 0) return '0';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return '\u2014';
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  const diffMs = now - then;
+  if (diffMs < 0) return 'just now';
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
+}
+
+function formatCost(usd: number | null | undefined): string {
+  if (usd == null) return '\u2014';
+  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
 }
 
 interface PermissionPolicy {
@@ -59,8 +104,11 @@ const defaultAgentForm = {
   temperature: '0.7',
   model: '',
   max_tokens: '',
+  max_token_budget: '',
   requires_api_key: '',
   enabled: true,
+  default_token_budget: '',
+  default_auto_terminate_at_budget: true,
 };
 
 const defaultPolicyForm = {
@@ -70,9 +118,34 @@ const defaultPolicyForm = {
   priority: '0',
 };
 
+function extractToolNames(response: unknown): string[] {
+  const rawTools: unknown[] = Array.isArray(response)
+    ? response
+    : (
+      response
+      && typeof response === 'object'
+      && 'tools' in response
+      && Array.isArray((response as Record<string, unknown>).tools)
+    )
+      ? (response as Record<string, unknown>).tools as unknown[]
+      : [];
+
+  return rawTools.flatMap((tool) => {
+    if (typeof tool === 'string' && tool.trim()) {
+      return [tool];
+    }
+    if (tool && typeof tool === 'object' && 'name' in tool) {
+      const name = String((tool as Record<string, unknown>).name).trim();
+      return name ? [name] : [];
+    }
+    return [];
+  });
+}
+
 export default function ACPAgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [policies, setPolicies] = useState<PermissionPolicy[]>([]);
+  const [agentMetrics, setAgentMetrics] = useState<Map<string, AgentMetrics>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -88,6 +161,14 @@ export default function ACPAgentsPage() {
 
   const [activeTab, setActiveTab] = useState<'agents' | 'policies'>('agents');
 
+  // Agent usage metrics (optional — fetched separately)
+  const [agentUsage, setAgentUsage] = useState<Record<string, {
+    invocation_count: number; total_tokens: number;
+    estimated_cost_usd: number; error_count: number;
+  }>>({});
+
+  const [availableTools, setAvailableTools] = useState<string[]>([]);
+
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -101,6 +182,12 @@ export default function ACPAgentsPage() {
       ]);
       setAgents(agentsRes.agents || []);
       setPolicies(policiesRes.policies || []);
+
+      // Fetch metrics separately — non-blocking; failures are silently ignored
+      api.getACPAgentMetrics().then(({ items }) => {
+        const map = new Map(items.map(m => [m.agent_type, m]));
+        setAgentMetrics(map);
+      }).catch(() => {});
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to load data';
       setError(message);
@@ -112,6 +199,18 @@ export default function ACPAgentsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    api.getACPAgentUsage(7).then((res) => {
+      const map: Record<string, typeof res.agents[0]> = {};
+      for (const a of res.agents) map[a.agent_type] = a;
+      setAgentUsage(map);
+    }).catch(() => { /* usage is optional — don't block page */ });
+
+    api.getMCPTools().then((res) => {
+      setAvailableTools(extractToolNames(res));
+    }).catch(() => { /* tools list is optional */ });
+  }, []);
 
   // -- Agent CRUD --
 
@@ -134,7 +233,10 @@ export default function ACPAgentsPage() {
       model: String((agent.parameters as Record<string, unknown>).model ?? ''),
       max_tokens: String((agent.parameters as Record<string, unknown>).max_tokens ?? ''),
       requires_api_key: agent.requires_api_key || '',
+      max_token_budget: agent.max_token_budget != null ? String(agent.max_token_budget) : '',
       enabled: agent.enabled,
+      default_token_budget: String((agent.parameters as Record<string, unknown>).default_token_budget ?? ''),
+      default_auto_terminate_at_budget: (agent.parameters as Record<string, unknown>).default_auto_terminate_at_budget !== false,
     });
     setAgentDialogOpen(true);
   };
@@ -152,9 +254,12 @@ export default function ACPAgentsPage() {
           ...(agentForm.temperature ? { temperature: parseFloat(agentForm.temperature) } : {}),
           ...(agentForm.model ? { model: agentForm.model } : {}),
           ...(agentForm.max_tokens ? { max_tokens: parseInt(agentForm.max_tokens) } : {}),
+          ...(agentForm.default_token_budget ? { default_token_budget: parseInt(agentForm.default_token_budget) } : {}),
+          ...(agentForm.default_token_budget ? { default_auto_terminate_at_budget: agentForm.default_auto_terminate_at_budget } : {}),
         },
         requires_api_key: agentForm.requires_api_key || null,
         enabled: agentForm.enabled,
+        max_token_budget: agentForm.max_token_budget ? parseInt(agentForm.max_token_budget) : null,
       };
 
       if (editingAgent) {
@@ -168,6 +273,24 @@ export default function ACPAgentsPage() {
       loadData();
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to save agent configuration';
+      toast.error(message);
+    }
+  };
+
+  const handleToggleAgent = async (agent: AgentConfig) => {
+    const newEnabled = !agent.enabled;
+    // Optimistic: update UI immediately
+    setAgents((prev) =>
+      prev.map((a) => (a.id === agent.id ? { ...a, enabled: newEnabled } : a))
+    );
+    try {
+      await api.updateACPAgentConfig(agent.id, { enabled: newEnabled });
+    } catch (err: unknown) {
+      // Rollback on failure
+      setAgents((prev) =>
+        prev.map((a) => (a.id === agent.id ? { ...a, enabled: agent.enabled } : a))
+      );
+      const message = err instanceof ApiError ? err.message : 'Failed to toggle agent';
       toast.error(message);
     }
   };
@@ -331,6 +454,11 @@ export default function ACPAgentsPage() {
                         <TableHead>Status</TableHead>
                         <TableHead>Model</TableHead>
                         <TableHead>Tools</TableHead>
+                        <TableHead>Sessions</TableHead>
+                        <TableHead className="text-right">Invocations</TableHead>
+                        <TableHead className="text-right">Tokens</TableHead>
+                        <TableHead className="text-right">Cost</TableHead>
+                        <TableHead>Last Used</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -346,11 +474,21 @@ export default function ACPAgentsPage() {
                           <TableCell><Badge variant="outline">{agent.type}</Badge></TableCell>
                           <TableCell>
                             <div className="flex gap-1">
-                              {agent.enabled ? (
-                                <Badge variant="default">Enabled</Badge>
-                              ) : (
-                                <Badge variant="secondary">Disabled</Badge>
-                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                type="button"
+                                onClick={() => void handleToggleAgent(agent)}
+                                className="h-auto p-0 hover:bg-transparent hover:opacity-80"
+                                title={`Click to ${agent.enabled ? 'disable' : 'enable'}`}
+                                aria-pressed={agent.enabled}
+                              >
+                                {agent.enabled ? (
+                                  <Badge variant="default">Enabled</Badge>
+                                ) : (
+                                  <Badge variant="secondary">Disabled</Badge>
+                                )}
+                              </Button>
                               {agent.is_configured ? (
                                 <Badge variant="default">Configured</Badge>
                               ) : (
@@ -365,6 +503,56 @@ export default function ACPAgentsPage() {
                             {agent.allowed_tools ? `${agent.allowed_tools.length} allowed` : 'All'}
                             {agent.denied_tools ? `, ${agent.denied_tools.length} denied` : ''}
                           </TableCell>
+                          {(() => {
+                            const metrics = agentMetrics.get(agent.type);
+                            return (
+                              <>
+                                <TableCell>
+                                  {metrics ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <span>{metrics.session_count}</span>
+                                      {metrics.active_sessions > 0 && (
+                                        <Badge variant="default" className="text-xs px-1.5 py-0">
+                                          {metrics.active_sessions} active
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-muted-foreground">{'\u2014'}</span>
+                                  )}
+                                </TableCell>
+                              </>
+                            );
+                          })()}
+                          <TableCell className="text-right font-mono text-sm">
+                            {agentUsage[agent.type]?.invocation_count ?? '—'}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm">
+                            {agentUsage[agent.type]
+                              ? formatTokens(agentUsage[agent.type].total_tokens)
+                              : (() => {
+                                  const metrics = agentMetrics.get(agent.type);
+                                  return metrics ? formatTokens(metrics.total_tokens) : '—';
+                                })()}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm">
+                            {agentUsage[agent.type]?.estimated_cost_usd != null
+                              ? `$${agentUsage[agent.type].estimated_cost_usd.toFixed(2)}`
+                              : (() => {
+                                  const metrics = agentMetrics.get(agent.type);
+                                  return metrics?.total_estimated_cost_usd != null
+                                    ? formatCost(metrics.total_estimated_cost_usd)
+                                    : '—';
+                                })()}
+                          </TableCell>
+                          {(() => {
+                            const metrics = agentMetrics.get(agent.type);
+                            return (
+                              <TableCell className="text-xs text-muted-foreground">
+                                {metrics ? formatRelativeTime(metrics.last_used_at) : '\u2014'}
+                              </TableCell>
+                            );
+                          })()}
                           <TableCell>
                             <div className="flex gap-1">
                               <AccessibleIconButton
@@ -514,19 +702,44 @@ export default function ACPAgentsPage() {
                     <Input id="agent-tokens" type="number" value={agentForm.max_tokens} onChange={(e) => setAgentForm(f => ({ ...f, max_tokens: e.target.value }))} placeholder="4096" />
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-budget">Session Token Budget</Label>
+                  <Input id="agent-budget" type="number" value={agentForm.max_token_budget} onChange={(e) => setAgentForm(f => ({ ...f, max_token_budget: e.target.value }))} placeholder="Leave empty for unlimited" />
+                  <p className="text-xs text-muted-foreground">Maximum total tokens per session. Sessions are auto-terminated when exceeded.</p>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="agent-allowed">Allowed Tools (comma-separated)</Label>
-                    <Input id="agent-allowed" value={agentForm.allowed_tools} onChange={(e) => setAgentForm(f => ({ ...f, allowed_tools: e.target.value }))} placeholder="read_file, write_file, search" />
+                    <Label htmlFor="agent-allowed">Allowed Tools</Label>
+                    <TagInput id="agent-allowed" value={agentForm.allowed_tools} onChange={(v) => setAgentForm(f => ({ ...f, allowed_tools: v }))} placeholder="Type tool name, press Enter" />
+                    {availableTools.length > 0 && (
+                      <p className="text-xs text-muted-foreground">{availableTools.length} backend tools available. Enter exact tool names to allow.</p>
+                    )}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="agent-denied">Denied Tools (comma-separated)</Label>
-                    <Input id="agent-denied" value={agentForm.denied_tools} onChange={(e) => setAgentForm(f => ({ ...f, denied_tools: e.target.value }))} placeholder="bash, execute_command" />
+                    <Label htmlFor="agent-denied">Denied Tools</Label>
+                    <TagInput id="agent-denied" value={agentForm.denied_tools} onChange={(v) => setAgentForm(f => ({ ...f, denied_tools: v }))} placeholder="Type tool name, press Enter" />
                   </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="agent-key">Required API Key (env var name)</Label>
                   <Input id="agent-key" value={agentForm.requires_api_key} onChange={(e) => setAgentForm(f => ({ ...f, requires_api_key: e.target.value }))} placeholder="ANTHROPIC_API_KEY" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-default-budget">Default Token Budget</Label>
+                    <Input id="agent-default-budget" type="number" min={0} value={agentForm.default_token_budget} onChange={(e) => setAgentForm(f => ({ ...f, default_token_budget: e.target.value }))} placeholder="e.g. 100000 (empty = no budget)" />
+                  </div>
+                  <div className="flex items-end pb-2">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="agent-auto-terminate"
+                        checked={agentForm.default_auto_terminate_at_budget}
+                        onCheckedChange={(checked) => setAgentForm(f => ({ ...f, default_auto_terminate_at_budget: checked === true }))}
+                        disabled={!agentForm.default_token_budget}
+                      />
+                      <Label htmlFor="agent-auto-terminate">Auto-terminate at budget</Label>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Checkbox
@@ -561,13 +774,10 @@ export default function ACPAgentsPage() {
                   <Input id="policy-desc" value={policyForm.description} onChange={(e) => setPolicyForm(f => ({ ...f, description: e.target.value }))} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="policy-rules">Rules (JSON)</Label>
-                  <textarea
-                    id="policy-rules"
+                  <Label>Rules</Label>
+                  <PolicyRuleBuilder
                     value={policyForm.rules}
-                    onChange={(e) => setPolicyForm(f => ({ ...f, rules: e.target.value }))}
-                    className="w-full min-h-[120px] font-mono text-xs rounded-md border border-input bg-background px-3 py-2"
-                    placeholder='[{"tool_pattern": "read_*", "tier": "auto"}]'
+                    onChange={(rules) => setPolicyForm(f => ({ ...f, rules }))}
                   />
                 </div>
                 <div className="space-y-2">
@@ -584,5 +794,64 @@ export default function ACPAgentsPage() {
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+// Structured rule builder that serializes to/from JSON
+function PolicyRuleBuilder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const TIER_OPTIONS = ['auto_approve', 'require_approval', 'deny'];
+
+  let rules: Array<{ tool_pattern: string; tier: string }> = [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) rules = parsed;
+  } catch { /* invalid JSON — start fresh */ }
+
+  const updateRules = (updated: typeof rules) => {
+    onChange(JSON.stringify(updated, null, 2));
+  };
+
+  const addRule = () => {
+    updateRules([...rules, { tool_pattern: '', tier: 'auto_approve' }]);
+  };
+
+  const removeRule = (index: number) => {
+    updateRules(rules.filter((_, i) => i !== index));
+  };
+
+  const updateRule = (index: number, field: 'tool_pattern' | 'tier', val: string) => {
+    updateRules(rules.map((r, i) => i === index ? { ...r, [field]: val } : r));
+  };
+
+  return (
+    <div className="space-y-2">
+      {rules.map((rule, idx) => (
+        <div key={idx} className="flex items-center gap-2">
+          <Input
+            placeholder="Tool pattern (e.g., read_*)"
+            value={rule.tool_pattern}
+            onChange={(e) => updateRule(idx, 'tool_pattern', e.target.value)}
+            className="flex-1"
+          />
+          <select
+            value={rule.tier}
+            onChange={(e) => updateRule(idx, 'tier', e.target.value)}
+            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          >
+            {TIER_OPTIONS.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+          </select>
+          <Button variant="ghost" size="sm" onClick={() => removeRule(idx)} className="text-destructive">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+      <Button variant="outline" size="sm" onClick={addRule}>
+        <Plus className="mr-1 h-3 w-3" /> Add Rule
+      </Button>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-muted-foreground">JSON preview</summary>
+        <pre className="mt-1 p-2 bg-muted rounded text-xs overflow-auto max-h-24">{value}</pre>
+      </details>
+    </div>
   );
 }

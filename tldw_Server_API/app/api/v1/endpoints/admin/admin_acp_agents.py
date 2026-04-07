@@ -7,21 +7,29 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentConfigCreate,
     ACPAgentConfigListResponse,
     ACPAgentConfigResponse,
+    ACPAgentMetrics,
+    ACPAgentMetricsListResponse,
+    ACPAgentUsageItem,
+    ACPAgentUsageResponse,
     ACPPermissionPolicyCreate,
     ACPPermissionPolicyListResponse,
     ACPPermissionPolicyResponse,
+    ACPSessionBudgetRequest,
+    ACPSessionBudgetResponse,
     ACPSessionInfo,
     ACPSessionListResponse,
     ACPSessionUsageResponse,
     ACPTokenUsage,
 )
+from tldw_Server_API.app.core.Usage.pricing_catalog import compute_token_cost
 from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 
 router = APIRouter(tags=["admin-acp"])
@@ -85,6 +93,12 @@ async def admin_acp_session_usage(session_id: str) -> ACPSessionUsageResponse:
         message_count=rec.message_count,
         created_at=rec.created_at,
         last_activity_at=rec.last_activity_at,
+        model=rec.model,
+        estimated_cost_usd=compute_token_cost(
+            model=rec.model,
+            prompt_tokens=rec.usage.prompt_tokens,
+            completion_tokens=rec.usage.completion_tokens,
+        ),
     )
 
 
@@ -106,6 +120,59 @@ async def admin_close_acp_session(session_id: str) -> dict[str, str]:
     return {"status": "ok", "session_id": session_id}
 
 
+@router.patch("/acp/sessions/{session_id}/budget", response_model=ACPSessionBudgetResponse)
+async def admin_set_session_budget(
+    session_id: str,
+    body: ACPSessionBudgetRequest,
+) -> ACPSessionBudgetResponse:
+    """Set or update the token budget for an ACP session.
+
+    Setting token_budget to null removes the budget (unlimited).
+    When auto_terminate_at_budget is True, the session will automatically
+    close once total_tokens >= token_budget.
+    """
+    store = await get_acp_session_store()
+    rec = await store.update_session_budget(
+        session_id,
+        token_budget=body.token_budget,
+        auto_terminate_at_budget=body.auto_terminate_at_budget,
+    )
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    budget_remaining = None
+    if rec.token_budget is not None:
+        budget_remaining = max(0, rec.token_budget - rec.usage.total_tokens)
+
+    return ACPSessionBudgetResponse(
+        session_id=rec.session_id,
+        token_budget=rec.token_budget,
+        auto_terminate_at_budget=rec.auto_terminate_at_budget,
+        budget_exhausted=rec.budget_exhausted,
+        total_tokens=rec.usage.total_tokens,
+        budget_remaining=budget_remaining,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent Usage Stats
+# ---------------------------------------------------------------------------
+
+@router.get("/acp/agents/usage", response_model=ACPAgentUsageResponse)
+async def admin_get_agent_usage(
+    range_days: int = Query(7, ge=1, le=90),
+    _: object = Depends(get_auth_principal),
+    __: None = Depends(check_rate_limit),
+) -> ACPAgentUsageResponse:
+    """Aggregated per-agent token usage from ACP sessions."""
+    store = await get_acp_session_store()
+    rows = await store.get_agent_usage_stats(range_days=range_days)
+    return ACPAgentUsageResponse(
+        agents=[ACPAgentUsageItem(**r) for r in rows],
+        range_days=range_days,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Agent Configuration CRUD
 # ---------------------------------------------------------------------------
@@ -122,6 +189,20 @@ async def admin_list_agent_configs(
     return ACPAgentConfigListResponse(
         agents=[ACPAgentConfigResponse(**c.to_dict()) for c in configs],
         total=len(configs),
+    )
+
+
+@router.get("/acp/agents/metrics", response_model=ACPAgentMetricsListResponse)
+async def get_acp_agent_metrics() -> ACPAgentMetricsListResponse:
+    """Aggregate runtime metrics per ACP agent type.
+
+    Returns per-agent totals for sessions, active sessions, tokens,
+    messages, and the timestamp of the most recent activity.
+    """
+    store = await get_acp_session_store()
+    metrics = await store.get_agent_metrics()
+    return ACPAgentMetricsListResponse(
+        items=[ACPAgentMetrics(**m) for m in metrics],
     )
 
 

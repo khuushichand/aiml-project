@@ -23,7 +23,7 @@ async def test_cookie_manager_stores_and_returns_cookies(tmp_path):
 
 async def test_process_web_scraping_endpoint_receives_custom_headers():
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
     from tldw_Server_API.app.main import app
 
     fake_db = MagicMock(spec=MediaDatabase)

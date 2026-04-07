@@ -17,6 +17,12 @@
   "chatSettingsNav": "Chat",
   "quickIngestSettingsNav": "Quick Ingest",
   "speechSettingsNav": "Speech",
+  "audioSourcePicker": {
+    "defaultMic": "Default microphone",
+    "selectLabel": "Audio input source",
+    "sourceFallbackActive": "Source fallback active",
+    "unavailable": "Unavailable"
+  },
   "imageGenerationSettingsNav": "Image Generation",
   "uiCustomizationNav": "UI customization",
   "researchStudioNav": "Research Studio",
@@ -931,7 +937,15 @@
       },
       "segEmbeddingsModel": {
         "label": "Segmentation embeddings model"
-      }
+      },
+      "sourcePreferences": {
+        "title": "Audio input source preferences",
+        "description": "Choose which microphone each speech surface should prefer by default.",
+        "dictation": "Dictation",
+        "liveVoice": "Live voice",
+        "speechPlayground": "Speech Playground"
+      },
+      "noModelsAlert": "No STT models available on your server. Configure a transcription engine to enable speech-to-text."
     },
     "empty": {
       "connectTitle": "Connect tldw Assistant to your server",

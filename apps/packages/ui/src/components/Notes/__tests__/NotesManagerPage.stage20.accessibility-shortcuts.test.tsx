@@ -166,11 +166,13 @@ describe("NotesManagerPage stage 20 accessibility shortcut discovery", () => {
 
     fireEvent.click(screen.getByTestId("notes-shortcuts-help-button"))
 
-    expect(screen.getByRole("dialog")).toBeInTheDocument()
-    expect(screen.getByTestId("notes-shortcuts-modal")).toHaveTextContent("Ctrl/Cmd + S")
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+    expect(await screen.findByTestId("notes-shortcuts-modal")).toHaveTextContent(
+      "Ctrl/Cmd + S"
+    )
   })
 
-  it("ignores '?' while typing in the editor and opens help from global context", () => {
+  it("ignores '?' while typing in the editor and opens help from global context", async () => {
     renderPage()
 
     const textarea = screen.getByLabelText("Note content")
@@ -180,7 +182,7 @@ describe("NotesManagerPage stage 20 accessibility shortcut discovery", () => {
 
     fireEvent.keyDown(window, { key: "?", shiftKey: true })
 
-    expect(screen.getByRole("dialog")).toBeInTheDocument()
-    expect(screen.getByTestId("notes-shortcuts-modal")).toBeInTheDocument()
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+    expect(await screen.findByTestId("notes-shortcuts-modal")).toBeInTheDocument()
   })
 })

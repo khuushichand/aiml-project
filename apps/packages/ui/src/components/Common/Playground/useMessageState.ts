@@ -1,6 +1,7 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useChatMoodBadgePreference } from "@/hooks/useChatMoodBadgePreference"
 import { useTTS, type TtsClipMeta } from "@/hooks/useTTS"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useFeedback } from "@/hooks/useFeedback"
@@ -38,6 +39,10 @@ import {
   resolveCharacterMoodImageUrl
 } from "@/utils/character-mood"
 import type { PlaygroundMessageProps } from "./message-types"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TTS_PROVIDER
+} from "@/services/tts"
 
 export type MessageStateProps = PlaygroundMessageProps & { sources?: any[] }
 
@@ -242,7 +247,7 @@ export function useMessageState(props: MessageStateProps) {
   const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
   const [showCharacterPortraits] = useStorage("chatShowCharacterPortraits", true)
-  const [showMoodBadge] = useStorage("chatShowMoodBadge", true)
+  const [showMoodBadge] = useChatMoodBadgePreference()
   const moodConfidenceDefault =
     Boolean(props.characterIdentityEnabled) && Boolean(props.characterIdentity?.id)
   const [showMoodConfidence] = useStorage(
@@ -250,7 +255,8 @@ export function useMessageState(props: MessageStateProps) {
     moodConfidenceDefault
   )
   const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
-  const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [ttsProvider] = useStorage("ttsProvider", DEFAULT_TTS_PROVIDER)
+  const [tldwTtsModel] = useStorage("tldwTtsModel", DEFAULT_TLDW_TTS_MODEL)
 
   // ── Translation ───────────────────────────────────────────────────────────
   const { t } = useTranslation(["common", "playground"])
@@ -275,7 +281,8 @@ export function useMessageState(props: MessageStateProps) {
   // ── TTS ───────────────────────────────────────────────────────────────────
   const { cancel, isSpeaking, speak } = useTTS()
   const { healthState: audioHealthState, voicesAvailable } = useTldwAudioStatus({
-    requireVoices: ttsProvider === "tldw"
+    requireVoices: ttsProvider === "tldw",
+    tldwTtsModel
   })
 
   // ── Disco Skills ──────────────────────────────────────────────────────────

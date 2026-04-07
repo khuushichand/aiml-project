@@ -190,6 +190,10 @@ class VisualStyleResponse(VisualStyleBase):
 
     id: str
     scope: str
+    category: str | None = None
+    guide_number: int | None = None
+    tags: list[str] | None = None
+    best_for: list[str] | None = None
     version: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

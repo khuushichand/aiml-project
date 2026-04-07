@@ -57,6 +57,14 @@ bun run dev -- -p 8080
 
 Open [http://localhost:8080](http://localhost:8080) with your browser.
 
+### Quickstart networking (default Docker WebUI path)
+
+When you use the repository quickstart Docker + WebUI flow, the default browser path stays on same-origin browser API requests through the WebUI proxy. That is the default quickstart networking story and does not depend on browser CORS setup or a custom browser-visible API host.
+
+### Advanced/custom-host networking
+
+Set `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` together with `NEXT_PUBLIC_API_URL` only when you intentionally need an advanced/custom-host networking path, such as LAN/mobile access, a reverse proxy, or a custom domain where the browser should call a non-default API host directly.
+
 ### repo2txt Route
 
 The web app exposes the shared repo2txt options UI at:

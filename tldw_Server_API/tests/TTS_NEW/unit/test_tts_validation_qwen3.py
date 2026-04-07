@@ -10,6 +10,15 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import TTSValidationError
 from tldw_Server_API.app.core.TTS.tts_validation import validate_tts_request
 
 
+def _qwen3_upstream_config(**provider_overrides):
+    provider_cfg = {"runtime": "upstream"}
+    provider_cfg.update(provider_overrides)
+    return {
+        "providers": {"qwen3_tts": provider_cfg},
+        "strict_validation": True,
+    }
+
+
 @pytest.mark.unit
 def test_voice_clone_prompt_size_limit():
     payload = base64.b64encode(b"a" * 2048).decode("utf-8")
@@ -18,10 +27,7 @@ def test_voice_clone_prompt_size_limit():
         format=AudioFormat.MP3,
         extra_params={"voice_clone_prompt": payload},
     )
-    cfg = {
-        "providers": {"qwen3_tts": {"voice_clone_prompt_max_kb": 1}},
-        "strict_validation": True,
-    }
+    cfg = _qwen3_upstream_config(voice_clone_prompt_max_kb=1)
     with pytest.raises(TTSValidationError) as exc:
         validate_tts_request(request, provider="qwen3_tts", config=cfg)
     assert "voice_clone_prompt" in str(exc.value)
@@ -38,10 +44,7 @@ def test_voice_clone_prompt_payload_object_valid():
         format=AudioFormat.MP3,
         extra_params={"voice_clone_prompt": payload},
     )
-    cfg = {
-        "providers": {"qwen3_tts": {"voice_clone_prompt_max_kb": 1}},
-        "strict_validation": True,
-    }
+    cfg = _qwen3_upstream_config(voice_clone_prompt_max_kb=1)
     # Should not raise
     validate_tts_request(request, provider="qwen3_tts", config=cfg)
 
@@ -57,10 +60,7 @@ def test_voice_clone_prompt_payload_object_invalid_format():
         format=AudioFormat.MP3,
         extra_params={"voice_clone_prompt": payload},
     )
-    cfg = {
-        "providers": {"qwen3_tts": {"voice_clone_prompt_max_kb": 1}},
-        "strict_validation": True,
-    }
+    cfg = _qwen3_upstream_config(voice_clone_prompt_max_kb=1)
     with pytest.raises(TTSValidationError) as exc:
         validate_tts_request(request, provider="qwen3_tts", config=cfg)
     assert "voice_clone_prompt" in str(exc.value)
@@ -75,7 +75,7 @@ def test_qwen3_customvoice_speaker_validation():
     )
     request.model = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
     with pytest.raises(TTSValidationError) as exc:
-        validate_tts_request(request, provider="qwen3_tts")
+        validate_tts_request(request, provider="qwen3_tts", config=_qwen3_upstream_config())
     assert "speaker" in str(exc.value).lower()
 
 
@@ -89,7 +89,7 @@ def test_qwen3_base_requires_reference_audio():
     )
     request.model = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     with pytest.raises(TTSValidationError) as exc:
-        validate_tts_request(request, provider="qwen3_tts")
+        validate_tts_request(request, provider="qwen3_tts", config=_qwen3_upstream_config())
     assert "reference" in str(exc.value).lower()
 
 
@@ -103,7 +103,7 @@ def test_qwen3_base_requires_reference_audio_even_with_x_vector_only():
     )
     request.model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
     with pytest.raises(TTSValidationError) as exc:
-        validate_tts_request(request, provider="qwen3_tts")
+        validate_tts_request(request, provider="qwen3_tts", config=_qwen3_upstream_config())
     assert "reference" in str(exc.value).lower()
 
 
@@ -118,7 +118,7 @@ def test_qwen3_base_requires_reference_text_unless_x_vector_only():
     )
     request.model = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     with pytest.raises(TTSValidationError) as exc:
-        validate_tts_request(request, provider="qwen3_tts")
+        validate_tts_request(request, provider="qwen3_tts", config=_qwen3_upstream_config())
     assert "reference_text" in str(exc.value).lower()
 
 
@@ -139,7 +139,7 @@ def test_reference_duration_min_enforced():
     )
     request.model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
     with pytest.raises(TTSValidationError) as exc:
-        validate_tts_request(request, provider="qwen3_tts")
+        validate_tts_request(request, provider="qwen3_tts", config=_qwen3_upstream_config())
     assert "too short" in str(exc.value).lower()
 
 
@@ -159,5 +159,5 @@ def test_qwen3_base_default_reference_min_duration():
     )
     request.model = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     with pytest.raises(TTSValidationError) as exc:
-        validate_tts_request(request, provider="qwen3_tts")
+        validate_tts_request(request, provider="qwen3_tts", config=_qwen3_upstream_config())
     assert "too short" in str(exc.value).lower()

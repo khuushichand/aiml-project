@@ -2,6 +2,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
 } from "react"
@@ -14,19 +15,24 @@ import type {
   WizardResultItem,
   ItemProgress,
 } from "./types"
-import { DEFAULT_PRESETS } from "./presets"
-import { DEFAULT_PRESET } from "./presets"
+import {
+  DEFAULT_PRESETS,
+  DEFAULT_PRESET,
+  mergePresetConfig,
+  configMatchesPreset,
+} from "./presets"
 
 // ---------------------------------------------------------------------------
 // State shape
 // ---------------------------------------------------------------------------
 
-type IngestWizardState = {
+export type IngestWizardState = {
   currentStep: WizardStep
   /** Highest step the user has reached (for backward navigation guard). */
   highestStep: WizardStep
   queueItems: WizardQueueItem[]
   selectedPreset: IngestPreset
+  customBasePreset: Exclude<IngestPreset, "custom">
   presetConfig: PresetConfig
   customOptions: Partial<PresetConfig>
   processingState: WizardProcessingState
@@ -61,38 +67,67 @@ type Action =
 // ---------------------------------------------------------------------------
 
 const resolvePresetConfig = (
-  preset: IngestPreset,
+  preset: Exclude<IngestPreset, "custom">,
   customOptions: Partial<PresetConfig>
-): PresetConfig => {
-  if (preset === "custom") {
-    // Merge custom options on top of the standard preset as a base
-    const base = DEFAULT_PRESETS.standard
-    return {
-      common: { ...base.common, ...(customOptions.common ?? {}) },
-      storeRemote: customOptions.storeRemote ?? base.storeRemote,
-      reviewBeforeStorage:
-        customOptions.reviewBeforeStorage ?? base.reviewBeforeStorage,
-      typeDefaults: {
-        audio: {
-          ...base.typeDefaults?.audio,
-          ...(customOptions.typeDefaults?.audio ?? {}),
-        },
-        document: {
-          ...base.typeDefaults?.document,
-          ...(customOptions.typeDefaults?.document ?? {}),
-        },
-        video: {
-          ...base.typeDefaults?.video,
-          ...(customOptions.typeDefaults?.video ?? {}),
-        },
+): PresetConfig => mergePresetConfig(DEFAULT_PRESETS[preset], customOptions)
+
+const mergeCustomOptions = (
+  current: Partial<PresetConfig>,
+  incoming: Partial<PresetConfig>
+): Partial<PresetConfig> => {
+  const next: Partial<PresetConfig> = { ...current }
+
+  if (incoming.common) {
+    next.common = {
+      ...(current.common ?? {}),
+      ...incoming.common,
+    }
+  }
+
+  if (incoming.typeDefaults) {
+    next.typeDefaults = {
+      audio: {
+        ...(current.typeDefaults?.audio ?? {}),
+        ...(incoming.typeDefaults.audio ?? {}),
       },
-      advancedValues: {
-        ...(base.advancedValues ?? {}),
-        ...(customOptions.advancedValues ?? {}),
+      document: {
+        ...(current.typeDefaults?.document ?? {}),
+        ...(incoming.typeDefaults.document ?? {}),
+      },
+      video: {
+        ...(current.typeDefaults?.video ?? {}),
+        ...(incoming.typeDefaults.video ?? {}),
       },
     }
   }
-  return DEFAULT_PRESETS[preset]
+
+  if (incoming.advancedValues) {
+    next.advancedValues = {
+      ...(current.advancedValues ?? {}),
+      ...incoming.advancedValues,
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(incoming, "storeRemote")) {
+    next.storeRemote = incoming.storeRemote
+  }
+
+  if (Object.prototype.hasOwnProperty.call(incoming, "reviewBeforeStorage")) {
+    next.reviewBeforeStorage = incoming.reviewBeforeStorage
+  }
+
+  return next
+}
+
+const findMatchingPreset = (
+  config: PresetConfig
+): Exclude<IngestPreset, "custom"> | null => {
+  for (const preset of ["quick", "standard", "deep"] as const) {
+    if (configMatchesPreset(config, preset)) {
+      return preset
+    }
+  }
+  return null
 }
 
 const INITIAL_PROCESSING_STATE: WizardProcessingState = {
@@ -107,12 +142,41 @@ const createInitialState = (): IngestWizardState => ({
   highestStep: 1,
   queueItems: [],
   selectedPreset: DEFAULT_PRESET,
+  customBasePreset: DEFAULT_PRESET,
   presetConfig: DEFAULT_PRESETS[DEFAULT_PRESET],
   customOptions: {},
   processingState: { ...INITIAL_PROCESSING_STATE },
   results: [],
   isMinimized: false,
 })
+
+const createInitialStateFromSeed = (
+  seed?: Partial<IngestWizardState>
+): IngestWizardState => {
+  const base = createInitialState()
+  if (!seed) return base
+
+  return {
+    ...base,
+    ...seed,
+    queueItems: seed.queueItems ?? base.queueItems,
+    selectedPreset: seed.selectedPreset ?? base.selectedPreset,
+    customBasePreset: seed.customBasePreset ?? base.customBasePreset,
+    presetConfig: seed.presetConfig ?? base.presetConfig,
+    customOptions: seed.customOptions ?? base.customOptions,
+    processingState: seed.processingState
+      ? {
+          ...INITIAL_PROCESSING_STATE,
+          ...seed.processingState,
+          perItemProgress:
+            seed.processingState.perItemProgress ??
+            INITIAL_PROCESSING_STATE.perItemProgress,
+        }
+      : { ...INITIAL_PROCESSING_STATE },
+    results: seed.results ?? base.results,
+    isMinimized: seed.isMinimized ?? base.isMinimized,
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -147,18 +211,52 @@ const reducer = (state: IngestWizardState, action: Action): IngestWizardState =>
       return { ...state, queueItems: action.items }
 
     case "SET_PRESET": {
-      const presetConfig = resolvePresetConfig(action.preset, state.customOptions)
+      if (action.preset === "custom") {
+        return {
+          ...state,
+          selectedPreset: "custom",
+          presetConfig: resolvePresetConfig(
+            state.customBasePreset,
+            state.customOptions
+          ),
+        }
+      }
+
       return {
         ...state,
         selectedPreset: action.preset,
-        presetConfig,
+        customBasePreset: action.preset,
+        customOptions: {},
+        presetConfig: DEFAULT_PRESETS[action.preset],
       }
     }
 
     case "SET_CUSTOM_OPTIONS": {
-      const customOptions = { ...state.customOptions, ...action.options }
-      const presetConfig = resolvePresetConfig(state.selectedPreset, customOptions)
-      return { ...state, customOptions, presetConfig }
+      const customOptions = mergeCustomOptions(state.customOptions, action.options)
+      const basePreset =
+        state.selectedPreset === "custom"
+          ? state.customBasePreset
+          : state.selectedPreset
+      const presetConfig = resolvePresetConfig(basePreset, customOptions)
+      const matchedPreset = findMatchingPreset(presetConfig)
+
+      if (matchedPreset) {
+        return {
+          ...state,
+          selectedPreset: matchedPreset,
+          customBasePreset: matchedPreset,
+          customOptions: {},
+          presetConfig: DEFAULT_PRESETS[matchedPreset],
+        }
+      }
+
+      return {
+        ...state,
+        selectedPreset: "custom",
+        customBasePreset: basePreset,
+        customOptions,
+        presetConfig,
+      }
     }
 
     case "START_PROCESSING": {
@@ -310,12 +408,24 @@ const IngestWizardContext = createContext<IngestWizardContextValue | null>(null)
 
 type IngestWizardProviderProps = {
   children: React.ReactNode
+  initialState?: Partial<IngestWizardState>
+  onStateChange?: (state: IngestWizardState) => void
 }
 
 export const IngestWizardProvider: React.FC<IngestWizardProviderProps> = ({
   children,
+  initialState,
+  onStateChange,
 }) => {
-  const [state, dispatch] = useReducer(reducer, undefined, createInitialState)
+  const [state, dispatch] = useReducer(
+    reducer,
+    initialState,
+    createInitialStateFromSeed
+  )
+
+  useEffect(() => {
+    onStateChange?.(state)
+  }, [onStateChange, state])
 
   const goToStep = useCallback(
     (step: WizardStep) => dispatch({ type: "GO_TO_STEP", step }),

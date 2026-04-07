@@ -12,12 +12,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { CardSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput, FormSelect } from '@/components/ui/form';
 import { CreditCard, Plus, Pencil, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 import { Plan } from '@/types';
+import { logger } from '@/lib/logger';
 
 const PLAN_TIERS = ['free', 'pro', 'enterprise'] as const;
 
@@ -46,9 +48,11 @@ function formatCents(cents: number): string {
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [compareMode, setCompareMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const { success, error: showError } = useToast();
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
 
   const [showDialog, setShowDialog] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
@@ -75,7 +79,7 @@ export default function PlansPage() {
       const data = await api.getPlans();
       setPlans(Array.isArray(data) ? data : []);
     } catch (err: unknown) {
-      console.error('Failed to load plans:', err);
+      logger.error('Failed to load plans', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to load plans', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setLoading(false);
@@ -139,7 +143,7 @@ export default function PlansPage() {
       form.reset();
       loadPlans();
     } catch (err: unknown) {
-      console.error('Failed to save plan:', err);
+      logger.error('Failed to save plan', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to save plan', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setSubmitting(false);
@@ -147,21 +151,43 @@ export default function PlansPage() {
   });
 
   const handleDelete = async (plan: Plan) => {
-    const confirmed = await confirm({
+    let subscriberCount = 0;
+    let subscriberCheckFailed = false;
+
+    if (billingEnabled) {
+      try {
+        const subs = await api.getSubscriptions({ plan_id: String(plan.id) });
+        const allSubs = Array.isArray(subs) ? subs : [];
+        subscriberCount = allSubs.filter(
+          (s) => s.status === 'active' || s.status === 'trialing'
+        ).length;
+      } catch (err: unknown) {
+        logger.error('Failed to check plan subscribers', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
+        subscriberCheckFailed = true;
+      }
+    }
+
+    let message = `Are you sure you want to delete the plan "${plan.name}"? This action cannot be undone.`;
+    if (subscriberCount > 0) {
+      message = `This plan has ${subscriberCount} active subscription(s). Deleting it will affect these organizations.\n\n${message}`;
+    } else if (subscriberCheckFailed) {
+      message = `Warning: Could not verify whether this plan has active subscribers.\n\n${message}`;
+    }
+
+    const approval = await promptPrivilegedAction({
       title: 'Delete Plan',
-      message: `Are you sure you want to delete the plan "${plan.name}"? This action cannot be undone.`,
+      message,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: true,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       await api.deletePlan(plan.id);
       success('Plan Deleted', `Plan "${plan.name}" has been deleted`);
       loadPlans();
     } catch (err: unknown) {
-      console.error('Failed to delete plan:', err);
+      logger.error('Failed to delete plan', { component: 'PlansPage', error: err instanceof Error ? err.message : String(err) });
       showError('Failed to delete plan', err instanceof Error ? err.message : 'Please try again.');
     }
   };
@@ -180,12 +206,19 @@ export default function PlansPage() {
                 Manage subscription plans and pricing
               </p>
             </div>
-            {billingEnabled && (
-              <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Plan
-              </Button>
-            )}
+            <div className="flex gap-2">
+              {billingEnabled && plans.length > 1 && (
+                <Button variant={compareMode ? 'default' : 'outline'} onClick={() => setCompareMode(!compareMode)}>
+                  {compareMode ? 'Card View' : 'Compare'}
+                </Button>
+              )}
+              {billingEnabled && (
+                <Button onClick={openCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Plan
+                </Button>
+              )}
+            </div>
           </div>
 
           {!billingEnabled ? (
@@ -206,6 +239,41 @@ export default function PlansPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 <p className="text-muted-foreground">No plans found. Create your first plan to get started.</p>
+              </CardContent>
+            </Card>
+          ) : compareMode ? (
+            <Card>
+              <CardContent className="pt-6 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-2 font-semibold">Feature</th>
+                      {plans.map(p => (
+                        <th key={p.id} className="text-center p-2 font-semibold">
+                          {p.name} <PlanBadge tier={p.tier} />
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b">
+                      <td className="p-2 text-muted-foreground">Price</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2 font-medium">{formatCents(p.monthly_price_cents)}/mo</td>)}
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2 text-muted-foreground">Token Credits</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2">{p.included_token_credits.toLocaleString()}</td>)}
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2 text-muted-foreground">Overage Rate</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2">{formatCents(p.overage_rate_per_1k_tokens_cents)}/1k</td>)}
+                    </tr>
+                    <tr>
+                      <td className="p-2 text-muted-foreground">Features</td>
+                      {plans.map(p => <td key={p.id} className="text-center p-2">{p.features?.length ?? 0}</td>)}
+                    </tr>
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
           ) : (
@@ -231,6 +299,11 @@ export default function PlansPage() {
                         <dt className="text-muted-foreground">Overage rate</dt>
                         <dd>{formatCents(plan.overage_rate_per_1k_tokens_cents)}/1k tokens</dd>
                       </div>
+                      {plan.overage_rate_per_1k_tokens_cents > 0 && (
+                        <p className="text-xs italic text-muted-foreground">
+                          e.g., 100k excess tokens = {formatCents(plan.overage_rate_per_1k_tokens_cents * 100)}
+                        </p>
+                      )}
                       <div className="flex justify-between">
                         <dt className="text-muted-foreground">Features</dt>
                         <dd>{plan.features?.length ?? 0}</dd>

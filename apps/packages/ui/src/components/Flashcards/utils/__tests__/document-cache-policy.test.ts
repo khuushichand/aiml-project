@@ -62,4 +62,20 @@ describe("shouldRefetchDocumentQueryAfterRowSave", () => {
       })
     ).toBe(false)
   })
+
+  it("forces refresh when workspace-scoped document views move a row across decks", () => {
+    const previous = makeFlashcard({ uuid: "row-1", deck_id: 5 })
+    const next = makeFlashcard({ uuid: "row-1", deck_id: 7 })
+
+    expect(
+      shouldRefetchDocumentQueryAfterRowSave(previous, next, {
+        deckId: null,
+        tags: [],
+        sortBy: "due",
+        dueStatus: "all",
+        workspaceId: "workspace-77",
+        includeWorkspaceItems: false
+      })
+    ).toBe(true)
+  })
 })

@@ -1,9 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react"
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useWorkflowsStore } from "@/store/workflows"
-import { WorkflowLandingModal } from "./WorkflowLanding"
-import { WorkflowOverlay } from "./WorkflowContainer"
+
+const WorkflowLandingModal = lazy(() =>
+  import("./WorkflowLanding").then((module) => ({
+    default: module.WorkflowLandingModal
+  }))
+)
+
+const WorkflowOverlay = lazy(() =>
+  import("./WorkflowContainer").then((module) => ({
+    default: module.WorkflowOverlay
+  }))
+)
 
 interface WorkflowIntegrationHostProps {
   justChatPath?: string
@@ -33,6 +43,7 @@ export const WorkflowIntegrationHost: React.FC<
   const loadDismissedSuggestions = useWorkflowsStore(
     (s) => s.loadDismissedSuggestions
   )
+  const isWizardOpen = useWorkflowsStore((s) => s.isWizardOpen)
   const markLandingSeen = useWorkflowsStore((s) => s.markLandingSeen)
   const showLanding = useWorkflowsStore((s) => s.showLanding)
   const autoShowRequestedRef = useRef(false)
@@ -74,8 +85,16 @@ export const WorkflowIntegrationHost: React.FC<
 
   return (
     <>
-      <WorkflowOverlay />
-      <WorkflowLandingModal onJustChat={handleJustChat} />
+      {isWizardOpen && (
+        <Suspense fallback={null}>
+          <WorkflowOverlay />
+        </Suspense>
+      )}
+      {showLanding && (
+        <Suspense fallback={null}>
+          <WorkflowLandingModal onJustChat={handleJustChat} />
+        </Suspense>
+      )}
     </>
   )
 }

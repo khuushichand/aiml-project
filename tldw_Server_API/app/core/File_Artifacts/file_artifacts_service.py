@@ -28,6 +28,10 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 from tldw_Server_API.app.core.File_Artifacts.adapter_registry import get_registry
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, FileAdapter, ValidationIssue
+from tldw_Server_API.app.core.File_Artifacts.adapters.image_adapter import (
+    reset_image_adapter_request_context,
+    set_image_adapter_request_context,
+)
 from tldw_Server_API.app.core.File_Artifacts.metrics import register_file_artifacts_metrics
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env
@@ -100,6 +104,9 @@ class FileArtifactsService:
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
             raise FileArtifactsError("persist_required")
 
+        image_context_token = None
+        if request.file_type == "image":
+            image_context_token = set_image_adapter_request_context(collections_db=self._cdb, user_id=self._user_id)
         try:
             structured = adapter.normalize(request.payload)
         except FileArtifactsValidationError as exc:
@@ -110,6 +117,9 @@ class FileArtifactsService:
             self._log_validation_failure(request_id, request.file_type, str(exc))
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
             raise FileArtifactsValidationError(str(exc)) from exc
+        finally:
+            if image_context_token is not None:
+                reset_image_adapter_request_context(image_context_token)
 
         issues = adapter.validate(structured)
         errors, warnings = self._split_issues(issues)
@@ -217,6 +227,8 @@ class FileArtifactsService:
             raise FileArtifactsValidationError("unsupported_export_format")
         export_req = FileExportRequest(format=export_format, mode="url", async_mode="async")
         export_result = await self._export_sync(adapter, structured, export_format)
+        if adapter.file_type == "image" and structured.get("reference_file_id") is not None:
+            self._persist_structured_json(file_id, structured)
         return await self._finalize_export(file_id, export_req, export_result, options, file_type=adapter.file_type)
 
     async def _handle_export(
@@ -281,6 +293,8 @@ class FileArtifactsService:
             return export_info, HTTPStatus.ACCEPTED
 
         export_result = await self._export_sync(adapter, structured, export_req.format)
+        if adapter.file_type == "image" and structured.get("reference_file_id") is not None:
+            self._persist_structured_json(file_id, structured)
         if adapter.file_type == "image" and export_result.content:
             inline_max_bytes = self._resolve_inline_max_bytes_for_file_type(adapter.file_type)
             if len(export_result.content) > inline_max_bytes:
@@ -290,9 +304,31 @@ class FileArtifactsService:
         return export_info, HTTPStatus.OK
 
     async def _export_sync(self, adapter, structured: dict[str, Any], export_format: str) -> ExportResult:
-        if export_format == "xlsx" or getattr(adapter, "file_type", None) == "image":
-            return await asyncio.to_thread(adapter.export, structured, format=export_format)
-        return adapter.export(structured, format=export_format)
+        image_context_token = None
+        if getattr(adapter, "file_type", None) == "image":
+            image_context_token = set_image_adapter_request_context(collections_db=self._cdb, user_id=self._user_id)
+        try:
+            if export_format == "xlsx" or getattr(adapter, "file_type", None) == "image":
+                return await asyncio.to_thread(adapter.export, structured, format=export_format)
+            return adapter.export(structured, format=export_format)
+        finally:
+            if image_context_token is not None:
+                reset_image_adapter_request_context(image_context_token)
+
+    def _persist_structured_json(self, file_id: int, structured: dict[str, Any]) -> None:
+        """Persist updated structured metadata back onto a file artifact row."""
+        updated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        q = (
+            "UPDATE file_artifacts SET structured_json = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ? AND deleted = 0"
+        )
+        params = (json.dumps(structured), updated_at, file_id, self._cdb.user_id)
+        try:
+            res = self._cdb.backend.execute(q, params)
+        except Exception as exc:
+            raise FileArtifactsError("storage_persist_failed", detail=str(exc)) from exc
+        if res.rowcount <= 0:
+            raise FileArtifactsError("storage_persist_failed", detail="file_artifact_not_found")
 
     def _get_jobs_manager(self) -> JobManager:
         if self._jobs_manager is None:

@@ -18,11 +18,17 @@ import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { Plus, Users, Building2, Search, Pencil, Trash2 } from 'lucide-react';
 import { Team, Organization } from '@/types';
 import { api } from '@/lib/api-client';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportTeams, ExportFormat } from '@/lib/export';
 import Link from 'next/link';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
+import { logger } from '@/lib/logger';
 
 const teamSchema = z.object({
   name: z.string().min(1, 'Team name is required'),
@@ -30,6 +36,8 @@ const teamSchema = z.object({
 });
 
 type TeamFormData = z.infer<typeof teamSchema>;
+
+const ALL_ORGANIZATIONS_SENTINEL = '__all__';
 
 function TeamsPageContent() {
   const [teams, setTeams] = useState<Team[]>([]);
@@ -52,8 +60,14 @@ function TeamsPageContent() {
   const [editError, setEditError] = useState('');
   const [updatingTeam, setUpdatingTeam] = useState(false);
   const [deletingTeamId, setDeletingTeamId] = useState<number | null>(null);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { warning, success, error: showError } = useToast();
+  const isAllOrganizations = selectedOrgId === ALL_ORGANIZATIONS_SENTINEL;
+  const scopedOrganizationId = isAllOrganizations ? undefined : selectedOrgId;
+  const canBrowseTeams = Boolean(scopedOrganizationId || isAllOrganizations);
   const teamForm = useForm<TeamFormData>({
     resolver: zodResolver(teamSchema),
     defaultValues: {
@@ -68,7 +82,7 @@ function TeamsPageContent() {
       const orgs = Array.isArray(data) ? data : [];
       setOrganizations(orgs);
     } catch (error) {
-      console.error('Failed to load organizations:', error);
+      logger.error('Failed to load organizations', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       setOrganizations([]);
     }
   }, []);
@@ -76,22 +90,42 @@ function TeamsPageContent() {
   const loadTeams = useCallback(async (orgId: string) => {
     try {
       setLoading(true);
-      const data = await api.getTeams(orgId);
-      setTeams(Array.isArray(data) ? data : []);
+      if (orgId === '__all__') {
+        // Load teams from all organizations
+        const results = await Promise.allSettled(
+          organizations.map((org) => api.getTeams(String(org.id)))
+        );
+        const allTeams: Team[] = [];
+        const failedOrgs: string[] = [];
+        results.forEach((result, idx) => {
+          if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+            allTeams.push(...result.value);
+          } else if (result.status === 'rejected') {
+            failedOrgs.push(String(organizations[idx]?.name ?? organizations[idx]?.id ?? idx));
+          }
+        });
+        setTeams(allTeams);
+        if (failedOrgs.length > 0) {
+          warning(`Failed to load teams for: ${failedOrgs.join(', ')}`);
+        }
+      } else {
+        const data = await api.getTeams(orgId);
+        setTeams(Array.isArray(data) ? data : []);
+      }
     } catch (error) {
-      console.error('Failed to load teams:', error);
+      logger.error('Failed to load teams', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       setTeams([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [organizations]);
 
   useEffect(() => {
     loadOrganizations();
   }, [loadOrganizations]);
 
   useEffect(() => {
-    if (!selectedOrgId && organizations.length > 0) {
+    if (selectedOrgId === undefined && organizations.length > 0) {
       setSelectedOrgId(String(organizations[0].id));
     }
   }, [organizations, selectedOrgId, setSelectedOrgId]);
@@ -103,31 +137,40 @@ function TeamsPageContent() {
   }, [showCreateForm, teamForm]);
 
   useEffect(() => {
-    if (selectedOrgId) {
-      loadTeams(selectedOrgId);
+    if (scopedOrganizationId) {
+      loadTeams(scopedOrganizationId);
+    } else if (isAllOrganizations && organizations.length > 0) {
+      // "All Organizations" mode: fetch teams for each org
+      setLoading(true);
+      Promise.allSettled(organizations.map(org => api.getTeams(String(org.id))))
+        .then(results => {
+          const allTeams = results.flatMap(r => r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []);
+          setTeams(allTeams);
+        })
+        .finally(() => setLoading(false));
     } else {
       setTeams([]);
     }
-  }, [loadTeams, selectedOrgId]);
+  }, [isAllOrganizations, loadTeams, organizations, scopedOrganizationId]);
 
   const handleSubmit = teamForm.handleSubmit(async (data) => {
-    if (!selectedOrgId) {
+    if (!scopedOrganizationId) {
       warning('Select organization', 'Please select an organization first.');
       return;
     }
     try {
       setCreatingTeam(true);
-      await api.createTeam(selectedOrgId, {
+      await api.createTeam(scopedOrganizationId, {
         name: data.name,
         description: data.description?.trim() || undefined,
       });
       setShowCreateForm(false);
       teamForm.reset();
       success('Team created', `${data.name} has been created.`);
-      await loadTeams(selectedOrgId);
+      await loadTeams(scopedOrganizationId);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again.';
-      console.error('Failed to create team:', error);
+      logger.error('Failed to create team', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       showError('Failed to create team', message);
     } finally {
       setCreatingTeam(false);
@@ -159,7 +202,8 @@ function TeamsPageContent() {
   };
 
   const handleUpdateTeam = async () => {
-    if (!editingTeam || !selectedOrgId) return;
+    const targetOrgId = isAllOrganizations ? String(editingTeam?.org_id ?? '') : scopedOrganizationId;
+    if (!editingTeam || !targetOrgId) return;
     const trimmedName = editName.trim();
     if (!trimmedName) {
       setEditError('Team name is required.');
@@ -169,13 +213,27 @@ function TeamsPageContent() {
     try {
       setUpdatingTeam(true);
       setEditError('');
-      await api.updateTeam(selectedOrgId, String(editingTeam.id), {
+      await api.updateTeam(targetOrgId, String(editingTeam.id), {
         name: trimmedName,
         description: editDescription.trim() || undefined,
       });
       success('Team updated', `${trimmedName} has been updated.`);
       closeEditTeamDialog();
-      await loadTeams(selectedOrgId);
+      if (isAllOrganizations) {
+        setTeams((currentTeams) =>
+          currentTeams.map((team) =>
+            team.id === editingTeam.id
+              ? {
+                  ...team,
+                  name: trimmedName,
+                  description: editDescription.trim() || undefined,
+                }
+              : team
+          )
+        );
+      } else {
+        await loadTeams(targetOrgId);
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to update team.';
       setEditError(message);
@@ -186,7 +244,8 @@ function TeamsPageContent() {
   };
 
   const handleDeleteTeam = async (team: Team) => {
-    if (!selectedOrgId) return;
+    const targetOrgId = isAllOrganizations ? String(team.org_id ?? '') : scopedOrganizationId;
+    if (!targetOrgId) return;
     try {
       const membersResponse = await api.getTeamMembers(String(team.id));
       const memberCount = Array.isArray(membersResponse)
@@ -209,9 +268,13 @@ function TeamsPageContent() {
       if (!confirmed) return;
 
       setDeletingTeamId(team.id);
-      await api.deleteTeam(selectedOrgId, String(team.id));
+      await api.deleteTeam(targetOrgId, String(team.id));
       success('Team deleted', `${team.name} has been deleted.`);
-      await loadTeams(selectedOrgId);
+      if (isAllOrganizations) {
+        setTeams((currentTeams) => currentTeams.filter((currentTeam) => currentTeam.id !== team.id));
+      } else {
+        await loadTeams(targetOrgId);
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to delete team.';
       showError('Delete team failed', message);
@@ -219,6 +282,88 @@ function TeamsPageContent() {
       setDeletingTeamId((current) => (current === team.id ? null : current));
     }
   };
+
+  // Clear selection when team list changes
+  useEffect(() => {
+    setSelectedTeamIds((prev) => {
+      if (prev.size === 0) return prev;
+      const available = new Set(teams.map((t) => t.id));
+      const next = new Set<number>();
+      prev.forEach((id) => {
+        if (available.has(id)) next.add(id);
+      });
+      return next;
+    });
+  }, [teams]);
+
+  const handleToggleSelectTeam = (teamId: number, checked: boolean) => {
+    setSelectedTeamIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(teamId);
+      } else {
+        next.delete(teamId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllVisibleTeams = (checked: boolean, visibleTeams: Team[]) => {
+    setSelectedTeamIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        visibleTeams.forEach((t) => next.add(t.id));
+      } else {
+        visibleTeams.forEach((t) => next.delete(t.id));
+      }
+      return next;
+    });
+  };
+
+  const handleClearTeamSelection = () => {
+    setSelectedTeamIds(new Set());
+  };
+
+  const handleBulkDeleteTeams = async () => {
+    if (!selectedOrgId || selectedOrgId === '__all__') return;
+    const ids = Array.from(selectedTeamIds);
+    if (ids.length === 0) return;
+    const approval = await promptPrivilegedAction({
+      title: 'Delete selected teams',
+      message: `Delete ${ids.length} team${ids.length !== 1 ? 's' : ''}? This cannot be undone.`,
+      confirmText: 'Delete',
+      requirePassword: false,
+    });
+    if (!approval) return;
+
+    try {
+      setBulkDeleting(true);
+      const results = await Promise.allSettled(
+        ids.map((id) => api.deleteTeam(selectedOrgId, String(id)))
+      );
+      const failures = results.filter((r) => r.status === 'rejected').length;
+      if (failures > 0) {
+        showError(
+          'Bulk delete incomplete',
+          `${ids.length - failures} deleted, ${failures} failed.`
+        );
+      } else {
+        success(
+          'Teams deleted',
+          `${ids.length} team${ids.length !== 1 ? 's' : ''} removed.`
+        );
+      }
+      handleClearTeamSelection();
+      await loadTeams(selectedOrgId);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete teams';
+      showError('Bulk delete failed', message);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const selectedTeamCount = selectedTeamIds.size;
 
   const filteredTeams = teams.filter((team) => {
     if (!searchQuery) return true;
@@ -233,6 +378,8 @@ function TeamsPageContent() {
   const totalPages = Math.ceil(totalItems / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
   const paginatedTeams = filteredTeams.slice(startIndex, startIndex + pageSize);
+  const allVisibleTeamsSelected = paginatedTeams.length > 0
+    && paginatedTeams.every((t) => selectedTeamIds.has(t.id));
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -243,13 +390,19 @@ function TeamsPageContent() {
                 <h1 className="text-3xl font-bold">Teams</h1>
                 <p className="text-muted-foreground">Manage teams within organizations</p>
               </div>
-              <Button
-                onClick={() => setShowCreateForm(!showCreateForm)}
-                disabled={!selectedOrgId}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                New Team
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <ExportMenu
+                  onExport={(format: ExportFormat) => exportTeams(filteredTeams, format)}
+                  disabled={filteredTeams.length === 0}
+                />
+                <Button
+                  onClick={() => setShowCreateForm(!showCreateForm)}
+                  disabled={!selectedOrgId || selectedOrgId === '__all__'}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Team
+                </Button>
+              </div>
             </div>
 
             {/* Organization Selector */}
@@ -278,10 +431,11 @@ function TeamsPageContent() {
                   />
                 ) : (
                   <Select
-                    value={selectedOrgId || ''}
+                    value={selectedOrgId ?? ''}
                     onChange={(e) => handleOrgChange(e.target.value)}
                     className="max-w-md"
                   >
+                    <option value={ALL_ORGANIZATIONS_SENTINEL}>All Organizations</option>
                     {organizations.map((org) => (
                       <option key={org.id} value={org.id}>
                         {org.name} ({org.slug})
@@ -292,7 +446,7 @@ function TeamsPageContent() {
               </CardContent>
             </Card>
 
-            {showCreateForm && selectedOrgId && (
+            {showCreateForm && scopedOrganizationId && (
               <Card className="mb-6">
                 <CardHeader>
                   <CardTitle>Create Team</CardTitle>
@@ -339,7 +493,7 @@ function TeamsPageContent() {
                     value={searchQuery || ''}
                     onChange={(e) => handleSearchChange(e.target.value)}
                     className="pl-10"
-                    disabled={!selectedOrgId}
+                    disabled={!canBrowseTeams}
                   />
                 </div>
               </CardContent>
@@ -349,13 +503,15 @@ function TeamsPageContent() {
               <CardHeader>
                 <CardTitle>Teams List</CardTitle>
                 <CardDescription>
-                  {selectedOrgId
-                    ? `Teams in ${organizations.find(o => String(o.id) === selectedOrgId)?.name || 'selected organization'}`
-                    : 'Select an organization to view teams'}
+                  {isAllOrganizations
+                    ? 'Teams across all organizations'
+                    : scopedOrganizationId
+                      ? `Teams in ${organizations.find(o => String(o.id) === scopedOrganizationId)?.name || 'selected organization'}`
+                      : 'Select an organization to view teams'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {!selectedOrgId ? (
+                {!canBrowseTeams ? (
                   <EmptyState
                     icon={Users}
                     title="Select an organization"
@@ -373,7 +529,7 @@ function TeamsPageContent() {
                   />
                 ) : loading ? (
                   <div className="py-4">
-                    <TableSkeleton rows={4} columns={5} />
+                    <TableSkeleton rows={4} columns={6} />
                   </div>
                 ) : filteredTeams.length === 0 ? (
                   <EmptyState
@@ -392,15 +548,57 @@ function TeamsPageContent() {
                           }
                         : {
                             label: 'Create team',
-                            onClick: () => setShowCreateForm(true),
+                            onClick: () => {
+                              if (scopedOrganizationId) {
+                                setShowCreateForm(true);
+                              }
+                            },
                           },
                     ]}
                   />
                 ) : (
                   <>
+                    {selectedTeamCount > 0 && (
+                      <div className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline">{selectedTeamCount} selected</Badge>
+                          <span className="text-sm text-muted-foreground">
+                            Bulk actions apply to selected teams.
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBulkDeleteTeams}
+                            loading={bulkDeleting}
+                            loadingText="Deleting..."
+                            disabled={bulkDeleting}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 text-destructive" />
+                            Delete
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleClearTeamSelection}
+                            disabled={bulkDeleting}
+                          >
+                            Clear selection
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="w-10">
+                            <Checkbox
+                              checked={allVisibleTeamsSelected}
+                              onCheckedChange={(checked) => handleToggleSelectAllVisibleTeams(checked, paginatedTeams)}
+                              aria-label="Select all visible teams"
+                            />
+                          </TableHead>
                           <TableHead>ID</TableHead>
                           <TableHead>Name</TableHead>
                           <TableHead>Description</TableHead>
@@ -411,6 +609,13 @@ function TeamsPageContent() {
                       <TableBody>
                         {paginatedTeams.map((team) => (
                           <TableRow key={team.id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedTeamIds.has(team.id)}
+                                onCheckedChange={(checked) => handleToggleSelectTeam(team.id, checked)}
+                                aria-label={`Select team ${team.name}`}
+                              />
+                            </TableCell>
                             <TableCell className="font-mono text-sm">{team.id}</TableCell>
                             <TableCell className="font-medium">{team.name}</TableCell>
                             <TableCell className="text-muted-foreground">

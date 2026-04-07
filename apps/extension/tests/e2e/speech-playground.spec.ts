@@ -44,6 +44,17 @@ const waitForSpeechPageReady = async (page: Page) => {
   await expect(page.getByText(/Speech Playground/i)).toBeVisible({ timeout: 15000 })
 }
 
+const expectMicOnlySourceOptions = async (page: Page) => {
+  const picker = page.locator('[aria-label="Speech playground input source"]').first()
+  await expect(picker).toBeVisible({ timeout: 15000 })
+  await picker.click()
+  await expect(page.getByRole('option', { name: 'Default microphone' })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'USB microphone' })).toBeVisible()
+  await expect(page.getByRole('option', { name: /tab audio/i })).toHaveCount(0)
+  await expect(page.getByRole('option', { name: /system audio/i })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+}
+
 test.describe('Speech Playground UX', () => {
   test('shows ElevenLabs timeout hint and recovers on retry in listen mode', async () => {
     const extPath = path.resolve('build/chrome-mv3')
@@ -218,6 +229,23 @@ test.describe('Speech Playground UX', () => {
       } catch {}
 
       try {
+        mediaDevices.enumerateDevices = async () => [
+          {
+            deviceId: 'default',
+            kind: 'audioinput',
+            label: 'Default microphone',
+            groupId: 'default-group'
+          },
+          {
+            deviceId: 'usb-1',
+            kind: 'audioinput',
+            label: 'USB microphone',
+            groupId: 'usb-group'
+          }
+        ]
+      } catch {}
+
+      try {
         Object.defineProperty(mediaDevices, 'getUserMedia', {
           value: async () => fakeStream,
           configurable: true
@@ -341,6 +369,7 @@ test.describe('Speech Playground UX', () => {
     await dismissWorkflowHubIfVisible(page)
     await waitForSpeechPageReady(page)
     await page.waitForFunction(() => window.__e2eMicStub === true)
+    await expectMicOnlySourceOptions(page)
 
     const ttsInput = page.getByPlaceholder('Type or paste text here, then use Play to listen.')
     await expect(ttsInput).toBeVisible()

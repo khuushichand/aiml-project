@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Plus, Copy, KeyRound, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, Plus, Copy, KeyRound, ShieldCheck, Trash2, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { ToggleBadgeGroup } from '@/components/ui/toggle-badge-group';
 import { api } from '@/lib/api-client';
@@ -20,6 +20,8 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
+import { PageHeaderSkeleton, TableSkeleton, CardSkeleton } from '@/components/ui/skeleton';
+import { logger } from '@/lib/logger';
 
 type VirtualApiKey = {
   id: string;
@@ -68,6 +70,7 @@ export default function UserApiKeysPage() {
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [creatingVirtualKey, setCreatingVirtualKey] = useState(false);
   const [newVirtualKeyValue, setNewVirtualKeyValue] = useState<string | null>(null);
+  const [deletingVirtualKeyId, setDeletingVirtualKeyId] = useState<string | null>(null);
 
   const { user, apiKeys, loading, reload } = useUserApiKeys(userId, { onError: setError });
 
@@ -82,10 +85,31 @@ export default function UserApiKeysPage() {
         Array.isArray(result) ? result as VirtualApiKey[] : []
       );
     } catch (err: unknown) {
-      console.error('Failed to load virtual keys:', err);
+      logger.error('Failed to load virtual keys', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       // Don't set error - virtual keys may not be available
     } finally {
       setVirtualKeysLoading(false);
+    }
+  };
+
+  const handleDeleteVirtualKey = async (keyId: string, keyName: string) => {
+    const confirmed = await confirm({
+      title: 'Delete virtual key',
+      message: `Delete virtual key "${keyName}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      setDeletingVirtualKeyId(keyId);
+      await api.deleteUserVirtualKey(userId, keyId);
+      setSuccess('Virtual key deleted');
+      await loadVirtualKeys();
+    } catch (err: unknown) {
+      logger.error('Failed to delete virtual key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
+      setError(err instanceof Error && err.message ? err.message : 'Failed to delete virtual key');
+    } finally {
+      setDeletingVirtualKeyId(null);
     }
   };
 
@@ -124,7 +148,7 @@ export default function UserApiKeysPage() {
       setShowCreateForm(false);
       void reload();
     } catch (err: unknown) {
-      console.error('Failed to create API key:', err);
+      logger.error('Failed to create API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to create API key');
     } finally {
       setCreatingKey(false);
@@ -151,7 +175,7 @@ export default function UserApiKeysPage() {
       setSuccess('API key rotated successfully');
       void reload();
     } catch (err: unknown) {
-      console.error('Failed to rotate API key:', err);
+      logger.error('Failed to rotate API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to rotate API key');
     }
   };
@@ -173,7 +197,7 @@ export default function UserApiKeysPage() {
       setSuccess('API key revoked successfully');
       void reload();
     } catch (err: unknown) {
-      console.error('Failed to revoke API key:', err);
+      logger.error('Failed to revoke API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to revoke API key');
     }
   };
@@ -197,7 +221,7 @@ export default function UserApiKeysPage() {
         successTimerRef.current = null;
       }, 2000);
     } catch (err: unknown) {
-      console.error('Failed to copy to clipboard:', err);
+      logger.error('Failed to copy to clipboard', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       if (!isMountedRef.current) {
         return;
       }
@@ -235,7 +259,7 @@ export default function UserApiKeysPage() {
       setSelectedScopes([]);
       void loadVirtualKeys();
     } catch (err: unknown) {
-      console.error('Failed to create virtual API key:', err);
+      logger.error('Failed to create virtual API key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error && err.message ? err.message : 'Failed to create virtual API key');
     } finally {
       setCreatingVirtualKey(false);
@@ -247,7 +271,8 @@ export default function UserApiKeysPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <PageHeaderSkeleton />
+            <TableSkeleton rows={3} columns={4} />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>
@@ -312,14 +337,7 @@ export default function UserApiKeysPage() {
                         onClick={() => copyToClipboard(newKeyValue)}
                       />
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setNewKeyValue(null)}
-                      className="text-yellow-700"
-                    >
-                      Dismiss
-                    </Button>
+                    <DismissKeyButton key={newKeyValue} onDismiss={() => setNewKeyValue(null)} />
                   </div>
                 </AlertDescription>
               </Alert>
@@ -394,14 +412,7 @@ export default function UserApiKeysPage() {
                             onClick={() => copyToClipboard(newVirtualKeyValue)}
                           />
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setNewVirtualKeyValue(null)}
-                          className="text-yellow-700"
-                        >
-                          Dismiss
-                        </Button>
+                        <DismissKeyButton key={newVirtualKeyValue} onDismiss={() => setNewVirtualKeyValue(null)} />
                       </div>
                     </AlertDescription>
                   </Alert>
@@ -460,9 +471,7 @@ export default function UserApiKeysPage() {
 
                 {/* Virtual Keys List */}
                 {virtualKeysLoading ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    Loading virtual keys...
-                  </div>
+                  <TableSkeleton rows={3} columns={5} />
                 ) : virtualKeys.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     <KeyRound className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -478,6 +487,7 @@ export default function UserApiKeysPage() {
                         <TableHead>Created</TableHead>
                         <TableHead>Last Used</TableHead>
                         <TableHead>Expires</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -512,6 +522,22 @@ export default function UserApiKeysPage() {
                           <TableCell className="text-sm text-muted-foreground">
                             {formatDate(key.expires_at)}
                           </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                void handleDeleteVirtualKey(key.id, key.name);
+                              }}
+                              disabled={deletingVirtualKeyId === key.id}
+                              loading={deletingVirtualKeyId === key.id}
+                              aria-label={`Delete virtual key ${key.name}`}
+                              title="Delete virtual key"
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -522,5 +548,29 @@ export default function UserApiKeysPage() {
           </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+function DismissKeyButton({ onDismiss }: { onDismiss: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-yellow-800">Have you saved this key?</span>
+        <Button variant="destructive" size="sm" onClick={onDismiss}>
+          Yes, dismiss
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setConfirming(false)} className="text-yellow-700">
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button variant="ghost" size="sm" onClick={() => setConfirming(true)} className="text-yellow-700">
+      Dismiss
+    </Button>
   );
 }

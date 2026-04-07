@@ -168,6 +168,48 @@ class DummyReadModuleWithSchema(BaseModule):
         return f"{arguments.get('x')}:{arguments.get('y')}"
 
 
+class DummyDynamicWriteModuleNoValidator(BaseModule):
+    TOOL_NAME = "dynamic_gate_tool"
+
+    async def on_initialize(self) -> None:
+        return None
+
+    async def on_shutdown(self) -> None:
+        return None
+
+    async def check_health(self) -> dict:
+        return {"ready": True}
+
+    async def get_tools(self) -> list[dict]:
+        return [
+            create_tool_definition(
+                name=self.TOOL_NAME,
+                description="Read/write classification comes from args",
+                parameters={
+                    "properties": {
+                        "mode": {"type": "string"},
+                        "message": {"type": "string"},
+                    },
+                    "required": ["mode", "message"],
+                },
+                metadata={"category": "read"},
+            )
+        ]
+
+    def is_write_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        tool_def: dict[str, object] | None = None,
+    ) -> bool:
+        if tool_name != self.TOOL_NAME:
+            return False
+        return str(arguments.get("mode", "")).lower() == "write"
+
+    async def execute_tool(self, tool_name: str, arguments: dict, context=None):
+        return str(arguments.get("message", ""))
+
+
 @pytest.mark.asyncio
 async def test_schema_validation_required_type_and_unknown():
     # Ensure config has schema validation enabled
@@ -221,3 +263,31 @@ async def test_disable_write_tools_gate(monkeypatch):
     resp = await proto.process_request(req, ctx)
     assert resp.error is not None
     assert resp.error.code == -32001  # AUTHORIZATION_ERROR
+
+
+@pytest.mark.asyncio
+async def test_preexec_dynamic_write_classification_requires_validator():
+    registry = get_module_registry()
+    await registry.register_module(
+        "dummy_dynamic_no_validator",
+        DummyDynamicWriteModuleNoValidator,
+        ModuleConfig(name="dummy_dynamic_no_validator"),
+    )
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+
+    req = MCPRequest(
+        method="tools/call",
+        params={
+            "name": DummyDynamicWriteModuleNoValidator.TOOL_NAME,
+            "arguments": {"mode": "write", "message": "hi"},
+        },
+        id="dw-dynamic-1",
+    )
+    ctx = RequestContext(request_id="dw-dynamic-r1", user_id="u9", client_id="c9")
+
+    resp = await proto.process_request(req, ctx)
+    assert resp.error is not None
+    assert resp.error.code == -32602  # INVALID_PARAMS
+    assert "requires module.validate_tool_arguments" in (resp.error.message or "")

@@ -257,7 +257,7 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                 );
                 return (
                   <Fragment key={policy.key}>
-                    <TableRow key={policy.key}>
+                    <TableRow>
                       <TableCell className="font-mono text-xs">{policy.key}</TableCell>
                       <TableCell>{policy.description || '—'}</TableCell>
                       <TableCell className="w-40">
@@ -299,11 +299,24 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                       </TableCell>
                     </TableRow>
 
-                    {previewCurrent && (
+                    {previewCurrent && (() => {
+                      const totalAffected = previewCurrent.counts.auditLogEntries + previewCurrent.counts.jobRecords + previewCurrent.counts.backupFiles;
+                      const severityClass = totalAffected > 1000
+                        ? 'border-red-400 bg-red-50'
+                        : totalAffected > 100
+                          ? 'border-yellow-400 bg-yellow-50'
+                          : 'bg-muted/40';
+                      const textClass = totalAffected > 1000
+                        ? 'text-red-700 font-semibold'
+                        : totalAffected > 100
+                          ? 'text-yellow-700'
+                          : '';
+                      return (
                       <TableRow data-testid={`retention-preview-row-${policy.key}`}>
                         <TableCell colSpan={4}>
-                          <div className="rounded-md border bg-muted/40 p-3 space-y-2">
-                            <p className="text-sm" data-testid={`retention-preview-text-${policy.key}`}>
+                          <div className={`rounded-md border p-3 space-y-2 ${severityClass}`}>
+                            <p className={`text-sm ${textClass}`} data-testid={`retention-preview-text-${policy.key}`}>
+                              {totalAffected > 1000 && <AlertTriangle className="inline h-4 w-4 mr-1 text-red-600" />}
                               Changing from {previewCurrent.currentDays} to {previewCurrent.newDays} days will delete approximately{' '}
                               {previewCurrent.counts.auditLogEntries} audit log entries, {previewCurrent.counts.jobRecords}{' '}
                               job records, {previewCurrent.counts.backupFiles} backup files.
@@ -321,7 +334,7 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                                 id={`retention-preview-ack-${policy.key}`}
                                 checked={Boolean(policyPreviewAcknowledged[policy.key])}
                                 onCheckedChange={(checked) =>
-                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked }))
+                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked === true }))
                                 }
                               />
                               <span>I understand this change can permanently delete historical data.</span>
@@ -329,7 +342,8 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                           </div>
                         </TableCell>
                       </TableRow>
-                    )}
+                      );
+                    })()}
                   </Fragment>
                 );
               })

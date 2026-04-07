@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, List, Modal, Space, Tag, Tooltip, Typography } from "antd"
+import { QuestionCircleOutlined } from "@ant-design/icons"
 
 import {
   clearExternalServerSlotSecret,
@@ -143,10 +144,11 @@ export const ExternalServersTab = ({
         return
       }
       setActiveServerId(managedRows[0]?.id || "")
-    } catch {
+    } catch (err) {
       setServers([])
       setActiveServerId("")
-      setErrorMessage("Failed to load external servers.")
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to load external servers: ${msg}`)
     } finally {
       setLoading(false)
       setServersLoaded(true)
@@ -255,8 +257,9 @@ export const ExternalServersTab = ({
       setSecretValue("")
       setSuccessMessage("Secret configured")
       await loadServers()
-    } catch {
-      setErrorMessage("Failed to save external server secret.")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(`Failed to save external server secret: ${msg}`)
     } finally {
       setSaving(false)
     }
@@ -381,26 +384,34 @@ export const ExternalServersTab = ({
       resetServerForm()
       await loadServers()
       setSuccessMessage(editingServerId ? "Server updated" : "Server created")
-    } catch {
-      setErrorMessage(editingServerId ? "Failed to update external server." : "Failed to create external server.")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      setErrorMessage(editingServerId ? `Failed to update external server: ${msg}` : `Failed to create external server: ${msg}`)
     } finally {
       setServerSaving(false)
     }
   }
 
-  const handleDeleteServer = async (serverId: string) => {
-    if (typeof window !== "undefined" && !window.confirm("Delete this external server?")) {
-      return
-    }
-    setErrorMessage(null)
-    setSuccessMessage(null)
-    try {
-      await deleteExternalServer(serverId)
-      await loadServers()
-      setSuccessMessage("Server deleted")
-    } catch {
-      setErrorMessage("Failed to delete external server.")
-    }
+  const handleDeleteServer = (server: McpHubExternalServer) => {
+    Modal.confirm({
+      title: "Delete External Server",
+      content: `Are you sure you want to delete the server "${server.name}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setErrorMessage(null)
+        setSuccessMessage(null)
+        try {
+          await deleteExternalServer(server.id)
+          await loadServers()
+          setSuccessMessage("Server deleted")
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete external server: ${msg}`)
+        }
+      }
+    })
   }
 
   const openCreateSlotForm = () => {
@@ -460,24 +471,31 @@ export const ExternalServersTab = ({
     }
   }
 
-  const handleDeleteSlot = async (slot: McpHubExternalServerCredentialSlot) => {
+  const handleDeleteSlot = (slot: McpHubExternalServerCredentialSlot) => {
     if (!activeManagedServer) return
-    if (typeof window !== "undefined" && !window.confirm("Delete this credential slot?")) {
-      return
-    }
-    const slotKey = `${activeManagedServer.id}:${slot.slot_name}`
-    setSlotDeletingKey(slotKey)
-    setErrorMessage(null)
-    setSuccessMessage(null)
-    try {
-      await deleteExternalServerCredentialSlot(activeManagedServer.id, slot.slot_name)
-      await loadServers()
-      setSuccessMessage("Credential slot deleted")
-    } catch {
-      setErrorMessage("Failed to delete credential slot.")
-    } finally {
-      setSlotDeletingKey(null)
-    }
+    Modal.confirm({
+      title: "Delete Credential Slot",
+      content: `Are you sure you want to delete the credential slot "${slot.display_name}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        const slotKey = `${activeManagedServer.id}:${slot.slot_name}`
+        setSlotDeletingKey(slotKey)
+        setErrorMessage(null)
+        setSuccessMessage(null)
+        try {
+          await deleteExternalServerCredentialSlot(activeManagedServer.id, slot.slot_name)
+          await loadServers()
+          setSuccessMessage("Credential slot deleted")
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error"
+          setErrorMessage(`Failed to delete credential slot: ${msg}`)
+        } finally {
+          setSlotDeletingKey(null)
+        }
+      }
+    })
   }
 
   const handleAddAuthTemplateMapping = () => {
@@ -598,7 +616,18 @@ export const ExternalServersTab = ({
 
             <Space>
               <Space orientation="vertical">
-                <label htmlFor="mcp-external-server-transport">Transport</label>
+                <span className="flex items-center gap-1">
+                  <label htmlFor="mcp-external-server-transport">Transport</label>
+                  <Tooltip title="How to communicate with the server. Use 'stdio' for local processes, 'websocket' for remote servers.">
+                    <button
+                      type="button"
+                      aria-label="Transport help"
+                      style={{ border: 0, background: "transparent", padding: 0, cursor: "help", lineHeight: 1 }}
+                    >
+                      <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)" }} />
+                    </button>
+                  </Tooltip>
+                </span>
                 <select
                   id="mcp-external-server-transport"
                   aria-label="Transport"
@@ -672,8 +701,8 @@ export const ExternalServersTab = ({
         <Alert
           type="info"
           showIcon
-          title="No managed external servers are available yet."
-          description="Import a legacy server into MCP Hub before configuring secrets or bindings."
+          title="No external servers connected"
+          description="External MCP servers extend your AI assistant with tools like web search, code execution, and more. Click 'New Managed Server' above to add one, or import a legacy server from the list below."
         />
       )}
 
@@ -708,7 +737,18 @@ export const ExternalServersTab = ({
                     </Space>
                     <Space>
                       <Space orientation="vertical">
-                        <label htmlFor="mcp-external-slot-secret-kind">Secret Kind</label>
+                        <span className="flex items-center gap-1">
+                          <label htmlFor="mcp-external-slot-secret-kind">Secret Kind</label>
+                          <Tooltip title="The type of credential needed. 'bearer_token' for API keys, 'api_key' for simple keys, 'client_secret' for OAuth.">
+                            <button
+                              type="button"
+                              aria-label="Secret kind help"
+                              style={{ border: 0, background: "transparent", padding: 0, cursor: "help", lineHeight: 1 }}
+                            >
+                              <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)" }} />
+                            </button>
+                          </Tooltip>
+                        </span>
                         <select
                           id="mcp-external-slot-secret-kind"
                           aria-label="Secret Kind"
@@ -988,7 +1028,24 @@ export const ExternalServersTab = ({
         bordered
         loading={loading}
         dataSource={servers}
-        locale={{ emptyText: <Empty description="No external servers configured" /> }}
+        locale={{
+          emptyText: (
+            <Empty
+              description={
+                <Space orientation="vertical" size={4}>
+                  <Typography.Text type="secondary">No external servers configured</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    External MCP servers extend your AI assistant with tools like web search, code execution, and more.
+                  </Typography.Text>
+                </Space>
+              }
+            >
+              <Button type="primary" onClick={openCreateForm}>
+                Add New Server
+              </Button>
+            </Empty>
+          )
+        }}
         renderItem={(server) => (
           <List.Item>
             <Space wrap size="small" style={{ width: "100%", justifyContent: "space-between" }}>
@@ -1038,7 +1095,7 @@ export const ExternalServersTab = ({
                     size="small"
                     danger
                     aria-label={`Delete ${server.name}`}
-                    onClick={() => void handleDeleteServer(server.id)}
+                    onClick={() => handleDeleteServer(server)}
                   >
                     Delete
                   </Button>

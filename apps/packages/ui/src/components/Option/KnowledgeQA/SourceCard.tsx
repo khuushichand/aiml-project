@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useMemo } from "react"
+import { useTranslation } from "react-i18next"
 import {
   FileText,
   Globe,
@@ -15,11 +16,14 @@ import {
   BookOpen,
   ThumbsUp,
   ThumbsDown,
+  MoreHorizontal,
 } from "lucide-react"
 import { cn } from "@/libs/utils"
 import type { RagResult } from "./types"
 import {
+  detectSourceContentFacet,
   formatChunkPosition,
+  getSourceContentFacetLabel,
   formatSourceDate,
   getFreshnessDescriptor,
   getRelevanceDescriptor,
@@ -48,6 +52,7 @@ type SourceCardProps = {
   isPinned: boolean
   highlightTerms: string[]
   citationUsages: CitationUsageAnchor[]
+  density?: "default" | "compact"
   className?: string
 }
 
@@ -114,31 +119,70 @@ export function SourceCard({
   isPinned,
   highlightTerms,
   citationUsages,
+  density = "default",
   className,
 }: SourceCardProps) {
+  const { t } = useTranslation("knowledge")
   const [copiedState, setCopiedState] = React.useState<"text" | "citation" | null>(null)
   const [isExpanded, setIsExpanded] = React.useState(false)
-  const [askTemplate, setAskTemplate] = React.useState<SourceAskTemplate>("detail")
+  const [overflowOpen, setOverflowOpen] = React.useState(false)
+  const overflowRef = React.useRef<HTMLDivElement>(null)
   const copiedStateTimeoutRef = React.useRef<number | null>(null)
   const latestCopyRequestIdRef = React.useRef(0)
   const isMountedRef = React.useRef(true)
 
   const title = result.metadata?.title || result.metadata?.source || `Source ${index}`
   const content = result.content || result.text || result.chunk || ""
-  const excerpt = isExpanded ? content : truncateText(content, 300)
+  const compactDensity = density === "compact"
+  const excerptLength = compactDensity ? 180 : 300
+  const excerpt = isExpanded ? content : truncateText(content, excerptLength)
   const excerptSegments = useMemo(
     () => splitTextByHighlights(excerpt, highlightTerms),
     [excerpt, highlightTerms]
   )
-  const canExpand = content.length > 300
+  const canExpand = content.length > excerptLength
   const url = result.metadata?.url
   const score = result.score
   const sourceType = result.metadata?.source_type || "media_db"
   const sourceTypeLabel = getSourceTypeLabel(sourceType)
+  const sourceFacetLabel = getSourceContentFacetLabel(detectSourceContentFacet(result))
+  const sourceKindLabel = sourceTypeLabel === "Other" ? sourceFacetLabel : sourceTypeLabel
   const chunkPosition = formatChunkPosition(result.metadata?.chunk_id)
   const sourceDate = formatSourceDate(result)
   const freshnessDescriptor = getFreshnessDescriptor(result)
   const relevanceDescriptor = getRelevanceDescriptor(score)
+  const compactMetaItems = compactDensity
+    ? [sourceKindLabel, chunkPosition, freshnessDescriptor?.label ?? sourceDate].filter(
+        (value): value is string => Boolean(value)
+      )
+    : []
+
+  // Determine whether this source is a document that can be opened in the
+  // Document Workspace (PDF, EPUB, or generic "document"/"ebook" media types).
+  const contentFacet = detectSourceContentFacet(result)
+  const rawMediaType = String(
+    (result.metadata as Record<string, unknown> | undefined)?.media_type ?? ""
+  ).toLowerCase()
+  const isDocumentType =
+    contentFacet === "pdf" ||
+    rawMediaType.includes("pdf") ||
+    rawMediaType.includes("ebook") ||
+    rawMediaType === "document"
+
+  // Resolve the numeric media_id from metadata for workspace navigation.
+  const resolvedMediaId = (() => {
+    const raw =
+      (result.metadata as Record<string, unknown> | undefined)?.media_id ??
+      result.metadata?.id ??
+      result.id
+    if (typeof raw === "number" && Number.isFinite(raw)) return Math.round(raw)
+    if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+      return Number.parseInt(raw.trim(), 10)
+    }
+    return null
+  })()
+
+  const canOpenInWorkspace = isDocumentType && resolvedMediaId != null
 
   const Icon = getSourceIcon(sourceType)
 
@@ -153,6 +197,21 @@ export function SourceCard({
     },
     []
   )
+
+  // Close overflow menu on outside click
+  React.useEffect(() => {
+    if (!overflowOpen) return
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        overflowRef.current &&
+        !overflowRef.current.contains(event.target as Node)
+      ) {
+        setOverflowOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [overflowOpen])
 
   const scheduleCopiedStateReset = useCallback((requestId: number) => {
     if (copiedStateTimeoutRef.current != null) {
@@ -258,7 +317,12 @@ export function SourceCard({
       )}
     >
       {/* Header */}
-      <div className="flex items-start gap-2.5 p-3 pb-2 sm:gap-3 sm:p-4 sm:pb-2">
+      <div
+        className={cn(
+          "flex items-start gap-2.5 p-3 pb-2 sm:gap-3 sm:pb-2",
+          compactDensity ? "sm:p-3" : "sm:p-4"
+        )}
+      >
         {/* Index badge */}
         <div
           className={cn(
@@ -274,65 +338,133 @@ export function SourceCard({
           <div className="flex items-start gap-2">
             <Icon className="w-4 h-4 text-text-muted mt-0.5 flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <h4 className="font-medium text-sm truncate" title={title}>
-                {title}
-              </h4>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted sm:gap-2 sm:text-xs">
-                {relevanceDescriptor && (
-                  <span
-                    className={cn(
-                      "rounded px-1.5 py-0.5",
-                      relevanceDescriptor.className
+              {compactDensity ? (
+                <>
+                  <div className="flex items-start justify-between gap-2">
+                    <h4
+                      className="min-w-0 flex-1 truncate font-medium text-[13px]"
+                      title={title}
+                    >
+                      {title}
+                    </h4>
+                    {relevanceDescriptor ? (
+                      <span
+                        data-testid="knowledge-source-compact-relevance"
+                        className={cn(
+                          "shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+                          relevanceDescriptor.className
+                        )}
+                        title={`${relevanceDescriptor.label} (${relevanceDescriptor.percent}%)`}
+                      >
+                        {relevanceDescriptor.percent}% match
+                      </span>
+                    ) : null}
+                  </div>
+                  {compactMetaItems.length > 0 ? (
+                    <div
+                      data-testid="knowledge-source-compact-meta"
+                      className="mt-1 flex flex-wrap items-center gap-x-1 text-[11px] leading-4 text-text-muted"
+                    >
+                      {compactMetaItems.map((item, itemIndex) => (
+                        <React.Fragment key={`${item}-${itemIndex}`}>
+                          {itemIndex > 0 ? <span aria-hidden="true">{" • "}</span> : null}
+                          <span>{item}</span>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  ) : null}
+                  {isPinned || isCited ? (
+                    <div
+                      data-testid="knowledge-source-compact-status"
+                      className="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
+                    >
+                      {isPinned ? (
+                        <span className="inline-flex items-center gap-1 text-primary">
+                          <Pin className="h-3 w-3" />
+                          Pinned
+                        </span>
+                      ) : null}
+                      {isCited ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onJumpToCitation(index)
+                          }}
+                          className="inline-flex items-center gap-1 text-primary hover:text-primaryStrong transition-colors"
+                          aria-label={`Jump to citation ${index} in answer`}
+                          title={`Jump to citation [${index}] in answer`}
+                        >
+                          <Quote className="w-3 h-3" />
+                          Cited
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <h4 className="font-medium truncate text-sm" title={title}>
+                    {title}
+                  </h4>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted sm:gap-2 sm:text-xs">
+                    {relevanceDescriptor && (
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5",
+                          relevanceDescriptor.className
+                        )}
+                        title={`${relevanceDescriptor.label} (${relevanceDescriptor.percent}%)`}
+                      >
+                        {relevanceDescriptor.label} ({relevanceDescriptor.percent}%)
+                      </span>
                     )}
-                    title={`${relevanceDescriptor.label} (${relevanceDescriptor.percent}%)`}
-                  >
-                    {relevanceDescriptor.label} ({relevanceDescriptor.percent}%)
-                  </span>
-                )}
-                <span className="inline-flex items-center gap-0.5">
-                  {sourceType === "web" ? (
-                    <Globe className="h-3 w-3" />
-                  ) : (
-                    <BookOpen className="h-3 w-3" />
-                  )}
-                  {sourceTypeLabel}
-                </span>
-                {chunkPosition ? <span>{chunkPosition}</span> : null}
-                {freshnessDescriptor ? (
-                  <span
-                    className={cn(
-                      "rounded border px-1.5 py-0.5",
-                      freshnessDescriptor.className
+                    <span className="inline-flex items-center gap-0.5">
+                      {sourceType === "web" ? (
+                        <Globe className="h-3 w-3" />
+                      ) : (
+                        <BookOpen className="h-3 w-3" />
+                      )}
+                      {sourceKindLabel}
+                    </span>
+                    {chunkPosition ? <span>{chunkPosition}</span> : null}
+                    {freshnessDescriptor ? (
+                      <span
+                        className={cn(
+                          "rounded border px-1.5 py-0.5",
+                          freshnessDescriptor.className
+                        )}
+                        title={sourceDate ? `Source date ${sourceDate}` : undefined}
+                      >
+                        {freshnessDescriptor.label}
+                      </span>
+                    ) : sourceDate ? (
+                      <span>{sourceDate}</span>
+                    ) : null}
+                    {isPinned && (
+                      <span className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary">
+                        <Pin className="h-3 w-3" />
+                        Pinned
+                      </span>
                     )}
-                    title={sourceDate ? `Source date ${sourceDate}` : undefined}
-                  >
-                    {freshnessDescriptor.label}
-                  </span>
-                ) : sourceDate ? (
-                  <span>{sourceDate}</span>
-                ) : null}
-                {isPinned && (
-                  <span className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary">
-                    <Pin className="h-3 w-3" />
-                    Pinned
-                  </span>
-                )}
-                {isCited && (
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onJumpToCitation(index)
-                    }}
-                    className="inline-flex items-center gap-1 text-primary hover:text-primaryStrong transition-colors"
-                    aria-label={`Jump to citation ${index} in answer`}
-                    title={`Jump to citation [${index}] in answer`}
-                  >
-                    <Quote className="w-3 h-3" />
-                    Cited
-                  </button>
-                )}
-              </div>
+                    {isCited && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onJumpToCitation(index)
+                        }}
+                        className="inline-flex items-center gap-1 text-primary hover:text-primaryStrong transition-colors"
+                        aria-label={`Jump to citation ${index} in answer`}
+                        title={`Jump to citation [${index}] in answer`}
+                      >
+                        <Quote className="w-3 h-3" />
+                        Cited
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
               {isCited && citationUsages.length > 0 ? (
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted sm:text-xs">
                   <span>Used in answer:</span>
@@ -364,8 +496,8 @@ export function SourceCard({
       </div>
 
       {/* Content excerpt */}
-      <div className="px-3 pb-2 sm:px-4 sm:pb-3">
-        <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap sm:text-sm">
+      <div className={cn("px-3 pb-2", compactDensity ? "sm:px-3 sm:pb-2" : "sm:px-4 sm:pb-3")}>
+        <p className={cn("text-xs text-text-muted leading-relaxed whitespace-pre-wrap", !compactDensity && "sm:text-sm")}>
           {excerptSegments.map((segment, segmentIndex) =>
             segment.highlight ? (
               <mark
@@ -392,79 +524,23 @@ export function SourceCard({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-bg-subtle px-3 py-2 sm:px-4">
-        <div className="flex flex-wrap items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onTogglePin(result, index)}
-            aria-pressed={isPinned}
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors",
-              isPinned
-                ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
-                : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
-            )}
-            title={isPinned ? "Unpin source" : "Pin source"}
-            aria-label={isPinned ? `Unpin source ${index}` : `Pin source ${index}`}
-          >
-            <Pin className="w-3.5 h-3.5" />
-            {isPinned ? "Unpin" : "Pin"}
-          </button>
-
+      {/* Actions — primary/secondary split */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-bg-subtle px-3 py-2",
+          compactDensity ? "sm:px-3" : "sm:px-4"
+        )}
+      >
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => onViewFull(result, index)}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="View the full source content"
-            aria-label={`View full source ${index}`}
+            aria-label={`View source ${index}`}
           >
             <FileText className="w-3.5 h-3.5" />
-            View full
-          </button>
-
-          <div className="inline-flex items-center rounded-md border border-border bg-surface">
-            <button
-              type="button"
-              onClick={() => onAskAbout(result, askTemplate)}
-              title="Create a question about this source"
-              aria-label={`Ask about ${title}`}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Ask
-            </button>
-            <select
-              aria-label={`Ask template for ${title}`}
-              value={askTemplate}
-              onChange={(event) =>
-                setAskTemplate(event.target.value as SourceAskTemplate)
-              }
-              className="border-l border-border bg-transparent px-1.5 py-1.5 text-xs text-text-muted focus:outline-none"
-            >
-              <option value="detail">Tell me more</option>
-              <option value="summary">Summarize</option>
-              <option value="quotes">Key quotes</option>
-            </select>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleCopyText}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
-            title="Copy full source text"
-          >
-            {copiedState === "text" ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                Copied text
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                Copy text
-              </>
-            )}
+            View
           </button>
 
           <button
@@ -473,29 +549,143 @@ export function SourceCard({
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="Copy citation"
           >
-            {copiedState === "citation" ? "Copied citation" : "Copy citation"}
+            {copiedState === "citation" ? "Copied!" : "Cite"}
           </button>
-        </div>
 
-        <button
-          type="button"
-          onClick={handleOpenExternal}
-          disabled={!url}
-          className={cn(
-            "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors",
-            url
-              ? "text-text-subtle hover:text-text hover:bg-hover"
-              : "text-text-subtle opacity-60 cursor-not-allowed"
-          )}
-          title={url ? "Open original" : "No external URL available"}
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          Open
-        </button>
+          <div ref={overflowRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setOverflowOpen((prev) => !prev)}
+              className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+              aria-label={`More actions for source ${index}`}
+              aria-expanded={overflowOpen}
+              aria-haspopup="menu"
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+            {overflowOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 top-full z-20 mt-1 min-w-[180px] rounded-md border border-border bg-surface py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onTogglePin(result, index)
+                    setOverflowOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                >
+                  <Pin className="w-3.5 h-3.5" />
+                  {isPinned ? "Unpin" : "Pin"}
+                </button>
+                <div className="my-1 border-t border-border/50" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onAskAbout(result, "detail")
+                    setOverflowOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Ask: Tell me more
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onAskAbout(result, "summary")
+                    setOverflowOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Ask: Summarize
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onAskAbout(result, "quotes")
+                    setOverflowOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Ask: Key quotes
+                </button>
+                <div className="my-1 border-t border-border/50" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    handleCopyText()
+                    setOverflowOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                >
+                  {copiedState === "text" ? (
+                    <Check className="w-3.5 h-3.5" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  {copiedState === "text" ? "Copied text" : "Copy text"}
+                </button>
+                {url && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      handleOpenExternal()
+                      setOverflowOpen(false)
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open original
+                  </button>
+                )}
+                {canOpenInWorkspace && (
+                  <>
+                    <div className="my-1 border-t border-border/50" role="separator" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-label={t("sourceCard.openInWorkspace", "Open in Document Workspace")}
+                      onClick={() => {
+                        window.open(
+                          `/document-workspace?open=${resolvedMediaId}`,
+                          "_blank",
+                          "noopener,noreferrer"
+                        )
+                        setOverflowOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      {t("sourceCard.openInWorkspace", "Open in Document Workspace")}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-t border-border/50 text-xs">
-        <span className="text-text-muted">Relevant?</span>
+      {/* Feedback — visible on hover/focus */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-2 text-xs opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity",
+          compactDensity
+            ? "justify-end px-3 pb-2 pt-1"
+            : "border-t border-border/50 px-4 py-2"
+        )}
+      >
+        {!compactDensity ? <span className="text-text-muted">Relevant?</span> : null}
         <button
           type="button"
           onClick={() => onSourceFeedback(result, index, "up")}

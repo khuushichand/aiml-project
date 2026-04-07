@@ -106,30 +106,271 @@ const buildLiveWorkspaceSources = async (): Promise<LiveWorkspaceSource[]> => {
   return Promise.all([
     seedLiveWorkspaceDocument(
       `WS ${fixtureId} Alpha`,
-      `Workspace output matrix alpha source. Claim: rollout improved by 12 percent. Token ${fixtureId}-alpha.`,
+      `Workspace output matrix alpha briefing for Project Falcon.
+January 10, 2026: Pilot rollout launched to two teams.
+February 14, 2026: Training completed for 40 operators.
+March 20, 2026: Full rollout completed.
+Key metrics:
+- Rollout completion improved from 68 percent to 80 percent, a gain of 12 percent.
+- Customer retention improved from 70 percent to 81 percent, a gain of 11 percent.
+Key findings:
+- Training cadence and weekly office hours reduced rollout blockers.
+- Leaders recommend keeping the training playbook and phased launches.
+Token ${fixtureId}-alpha.`,
     ),
     seedLiveWorkspaceDocument(
       `WS ${fixtureId} Beta`,
-      `Workspace output matrix beta source. Claim: retention improved by 18 percent. Token ${fixtureId}-beta.`,
+      `Workspace output matrix beta review for Project Falcon.
+January 12, 2026: Baseline survey completed.
+February 18, 2026: Onboarding changes shipped.
+March 22, 2026: Retention review published.
+Key metrics:
+- Retention improved from 64 percent to 82 percent, a gain of 18 percent.
+- Rollout completion improved from 71 percent to 79 percent, a gain of 8 percent.
+Key findings:
+- Both teams agree training helped adoption.
+- Beta reviewers note retention gains were stronger than rollout gains.
+- Reviewers recommend expanding onboarding experiments and measuring long-term retention.
+Token ${fixtureId}-beta.`,
     ),
   ])
 }
 
 const OUTPUTS = [
-  { label: "Report", textDownload: true },
-  { label: "Compare Sources", textDownload: true },
-  { label: "Timeline", textDownload: true },
-  { label: "Data Table", textDownload: true },
-  { label: "Mind Map", textDownload: true },
-  { label: "Slides", textDownload: false },
-  { label: "Quiz", textDownload: true },
-  { label: "Flashcards", textDownload: true },
+  { label: "Audio Summary", validation: "audio_summary" },
+  { label: "Summary", validation: "summary" },
+  { label: "Report", validation: "report" },
+  { label: "Compare Sources", validation: "compare_sources" },
+  { label: "Timeline", validation: "timeline" },
+  { label: "Data Table", validation: "data_table" },
+  { label: "Mind Map", validation: "mindmap" },
+  { label: "Slides", validation: "slides" },
+  { label: "Quiz", validation: "quiz" },
+  { label: "Flashcards", validation: "flashcards" },
 ] as const
 
-const hasErrorText = (content: string) =>
-  /error encountered|generation failed|no usable|download failed|could not/i.test(
-    content,
+const FAILURE_TEXT_PATTERN =
+  /failed to generate|generation failed|error encountered|encountered an error|no usable|download failed|could not/i
+const SOURCE_SIGNAL_PATTERN =
+  /(rollout|retention|training|onboarding|falcon|12\s*percent|18\s*percent|12%|18%|january|february|march)/i
+
+const hasErrorText = (content: string) => FAILURE_TEXT_PATTERN.test(content)
+
+const getMeaningfulLines = (content: string): string[] =>
+  content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+const readDownloadedText = (artifactPath: string): string =>
+  readFileSync(artifactPath, "utf8")
+
+const assertNoFailureText = (content: string, label: string) => {
+  expect(content.trim().length, `${label} download should not be empty`).toBeGreaterThan(
+    20,
   )
+  expect(
+    hasErrorText(content),
+    `${label} download should not include failure text`,
+  ).toBe(false)
+}
+
+const validateNarrativeArtifact = (
+  label: string,
+  content: string,
+  options?: { minLength?: number; requireSourceSignal?: boolean },
+) => {
+  assertNoFailureText(content, label)
+  expect(
+    content.trim().length,
+    `${label} should contain substantive text`,
+  ).toBeGreaterThan(options?.minLength ?? 80)
+  const sentenceCount = (content.match(/[.!?](?:\s|$)/g) ?? []).length
+  expect(
+    Math.max(getMeaningfulLines(content).length, sentenceCount),
+    `${label} should contain more than a fragment`,
+  ).toBeGreaterThan(1)
+  if (options?.requireSourceSignal ?? true) {
+    expect(
+      SOURCE_SIGNAL_PATTERN.test(content),
+      `${label} should reference source claims`,
+    ).toBe(true)
+  }
+}
+
+const validateReportArtifact = (content: string) => {
+  validateNarrativeArtifact("Report", content, { minLength: 120 })
+  const matchedSections = [
+    "Executive Summary",
+    "Key Findings",
+    "Detailed Analysis",
+    "Conclusions",
+    "Recommendations",
+  ].filter((section) => new RegExp(section, "i").test(content))
+  expect(
+    matchedSections.length,
+    "Report should contain multiple expected report sections",
+  ).toBeGreaterThanOrEqual(2)
+}
+
+const validateCompareSourcesArtifact = (content: string) => {
+  validateNarrativeArtifact("Compare Sources", content, { minLength: 120 })
+  expect(
+    /(agree|disagree|conflict|difference|compare|comparison)/i.test(content),
+    "Compare Sources should read like a comparison",
+  ).toBe(true)
+}
+
+const validateTimelineArtifact = (content: string) => {
+  validateNarrativeArtifact("Timeline", content, { minLength: 60 })
+  expect(
+    /(\bJanuary\b|\bFebruary\b|\bMarch\b|\b2026\b|(^[-*]\s)|(\btimeline\b)|(\bchronolog))/im.test(
+      content,
+    ),
+    "Timeline should contain dated or timeline-like structure",
+  ).toBe(true)
+}
+
+const validateDataTableArtifact = (content: string) => {
+  assertNoFailureText(content, "Data Table")
+  const lines = getMeaningfulLines(content)
+  expect(
+    lines.length,
+    "Data Table should include a header and at least one row",
+  ).toBeGreaterThanOrEqual(3)
+  expect(/^\|.+\|$/.test(lines[0]), "Data Table header should be pipe-delimited").toBe(
+    true,
+  )
+  const headerColumnCount = lines[0].split("|").filter(Boolean).length
+  expect(
+    headerColumnCount,
+    "Data Table should contain multiple columns",
+  ).toBeGreaterThanOrEqual(2)
+  for (const line of lines.slice(2, 5)) {
+    expect(
+      line.split("|").filter(Boolean).length,
+      "Data Table rows should have the same column count as the header",
+    ).toBe(headerColumnCount)
+  }
+  expect(
+    SOURCE_SIGNAL_PATTERN.test(content),
+    "Data Table should reference the source claims",
+  ).toBe(true)
+}
+
+const extractMermaid = (content: string): string => {
+  const fenced = content.match(/```(?:mermaid)?\s*([\s\S]*?)```/i)
+  return (fenced?.[1] ?? content).trim()
+}
+
+const validateMindMapArtifact = (content: string) => {
+  assertNoFailureText(content, "Mind Map")
+  const mermaid = extractMermaid(content)
+  expect(/\bmindmap\b/i.test(mermaid), "Mind Map should be Mermaid mindmap syntax").toBe(
+    true,
+  )
+  expect(
+    getMeaningfulLines(mermaid).length,
+    "Mind Map should contain multiple Mermaid nodes",
+  ).toBeGreaterThanOrEqual(3)
+}
+
+const validateSlidesArtifact = (content: string) => {
+  assertNoFailureText(content, "Slides")
+  expect(/^#\s+/m.test(content), "Slides markdown should contain a title heading").toBe(
+    true,
+  )
+  expect(
+    /(^##\s+)|(\bslide\b)/im.test(content),
+    "Slides markdown should contain slide sections",
+  ).toBe(true)
+  expect(
+    SOURCE_SIGNAL_PATTERN.test(content),
+    "Slides markdown should reference the source claims",
+  ).toBe(true)
+}
+
+const validateQuizArtifact = (content: string) => {
+  assertNoFailureText(content, "Quiz")
+  const parsed = JSON.parse(content) as {
+    title?: string
+    questions?: Array<{
+      question?: string
+      options?: unknown[]
+      answer?: string
+    }>
+  }
+  expect(typeof parsed.title).toBe("string")
+  expect(Array.isArray(parsed.questions), "Quiz should export a questions array").toBe(
+    true,
+  )
+  expect(parsed.questions?.length ?? 0, "Quiz should contain at least one question").toBeGreaterThan(
+    0,
+  )
+  const firstQuestion = parsed.questions?.[0]
+  expect(typeof firstQuestion?.question).toBe("string")
+  expect(Array.isArray(firstQuestion?.options)).toBe(true)
+  expect((firstQuestion?.options?.length ?? 0) >= 2).toBe(true)
+}
+
+const validateFlashcardsArtifact = (content: string) => {
+  assertNoFailureText(content, "Flashcards")
+  if (content.trim().startsWith("{") || content.trim().startsWith("[")) {
+    const parsed = JSON.parse(content) as Array<Record<string, unknown>> | Record<string, unknown>
+    expect(parsed).toBeTruthy()
+    return
+  }
+  expect(/Front:/i.test(content), "Flashcards export should contain card fronts").toBe(true)
+  expect(/Back:/i.test(content), "Flashcards export should contain card backs").toBe(true)
+}
+
+const validateDownloadedArtifact = (
+  output: (typeof OUTPUTS)[number],
+  artifactPath: string,
+  suggestedFilename: string,
+) => {
+  const lowerName = suggestedFilename.toLowerCase()
+  if (output.validation === "slides" && !lowerName.endsWith(".md")) {
+    expect(statSync(artifactPath).size).toBeGreaterThan(32)
+    return
+  }
+
+  const content = readDownloadedText(artifactPath)
+  switch (output.validation) {
+    case "audio_summary":
+      validateNarrativeArtifact("Audio Summary", content, { minLength: 80 })
+      return
+    case "summary":
+      validateNarrativeArtifact("Summary", content, { minLength: 80 })
+      return
+    case "report":
+      validateReportArtifact(content)
+      return
+    case "compare_sources":
+      validateCompareSourcesArtifact(content)
+      return
+    case "timeline":
+      validateTimelineArtifact(content)
+      return
+    case "data_table":
+      validateDataTableArtifact(content)
+      return
+    case "mindmap":
+      validateMindMapArtifact(content)
+      return
+    case "slides":
+      validateSlidesArtifact(content)
+      return
+    case "quiz":
+      validateQuizArtifact(content)
+      return
+    case "flashcards":
+      validateFlashcardsArtifact(content)
+      return
+    default:
+      throw new Error(`Unhandled artifact validation kind: ${String(output.validation)}`)
+  }
+}
 
 const disableNextJsPortalPointerInterception = async (
   page: import("@playwright/test").Page,
@@ -186,7 +427,7 @@ const prepareWorkspaceForOutput = async (
 
 const verifyDownloadedArtifact = async (
   download: import("@playwright/test").Download,
-  textDownload: boolean,
+  output: (typeof OUTPUTS)[number],
 ) => {
   const artifactPath = path.join(
     process.cwd(),
@@ -194,15 +435,7 @@ const verifyDownloadedArtifact = async (
     download.suggestedFilename(),
   )
   await download.saveAs(artifactPath)
-
-  if (textDownload) {
-    const content = readFileSync(artifactPath, "utf8")
-    expect(content.trim().length).toBeGreaterThan(20)
-    expect(hasErrorText(content)).toBe(false)
-    return
-  }
-
-  expect(statSync(artifactPath).size).toBeGreaterThan(32)
+  validateDownloadedArtifact(output, artifactPath, download.suggestedFilename())
 }
 
 const generateAndDownloadOutput = async (
@@ -306,11 +539,7 @@ const generateAndDownloadOutput = async (
       )
     }
 
-    if (download.suggestedFilename().toLowerCase().endsWith(".md")) {
-      await verifyDownloadedArtifact(download, true)
-    } else {
-      await verifyDownloadedArtifact(download, false)
-    }
+    await verifyDownloadedArtifact(download, output)
     return
   }
 
@@ -319,7 +548,7 @@ const generateAndDownloadOutput = async (
     activateButton(page, downloadButton),
   ]).then(([event]) => event)
 
-  await verifyDownloadedArtifact(download, output.textDownload)
+  await verifyDownloadedArtifact(download, output)
 }
 
 test.describe("Workspace Playground output matrix probe", () => {

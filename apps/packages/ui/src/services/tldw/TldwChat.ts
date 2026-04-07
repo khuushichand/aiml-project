@@ -59,6 +59,44 @@ const normalizeSystemPrompt = (value?: string): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined
 }
 
+const coercePositiveTimeout = (
+  value: unknown,
+  fallback: number
+): number => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value)
+  }
+  return fallback
+}
+
+const hasReasoningProgress = (chunk: unknown): boolean => {
+  if (!chunk || typeof chunk !== "object") return false
+  const record = chunk as Record<string, unknown>
+  const reasoningDelta =
+    (record.choices as Array<Record<string, unknown>> | undefined)?.[0]?.delta &&
+    typeof (record.choices as Array<Record<string, unknown>>)[0]?.delta === "object"
+      ? (
+          (record.choices as Array<Record<string, unknown>>)[0]
+            ?.delta as Record<string, unknown>
+        )?.reasoning_content
+      : undefined
+  if (typeof reasoningDelta === "string" && reasoningDelta.length > 0) {
+    return true
+  }
+  const additionalKwargs =
+    typeof record.additional_kwargs === "object" &&
+    record.additional_kwargs !== null
+      ? (record.additional_kwargs as Record<string, unknown>)
+      : null
+  return Boolean(
+    typeof additionalKwargs?.reasoning_content === "string" &&
+      additionalKwargs.reasoning_content.length > 0
+  )
+}
+
+const hasVisibleAssistantProgress = (chunk: unknown): boolean =>
+  extractTokenFromChunk(chunk).length > 0 || hasReasoningProgress(chunk)
+
 const sanitizeUserContent = (
   content: string | ChatCompletionContentPart[]
 ): string | ChatCompletionContentPart[] | null => {
@@ -422,6 +460,13 @@ export class TldwChatService {
 
       // Create new abort controller
       this.currentController = new AbortController()
+      const cfg = (await tldwClient.getConfig().catch(() => null)) as
+        | {
+            chatRequestTimeoutMs?: number
+            chatStartupTimeoutMs?: number
+            chatStreamIdleTimeoutMs?: number
+          }
+        | null
 
       const request: ChatCompletionRequest = {
         messages: requestMessages,
@@ -464,23 +509,66 @@ export class TldwChatService {
         body: request
       })
 
-      const stream = tldwClient.streamChatCompletion(request, { signal: this.currentController.signal })
+      const startupTimeoutMs = coercePositiveTimeout(
+        cfg?.chatStartupTimeoutMs,
+        10_000
+      )
+      const streamIdleTimeoutMs = coercePositiveTimeout(
+        cfg?.chatStreamIdleTimeoutMs,
+        30_000
+      )
+      const stream = tldwClient.streamChatCompletion(request, {
+        signal: this.currentController.signal,
+        streamIdleTimeoutMs
+      })
 
-      const STREAM_IDLE_TIMEOUT_MS = 30_000
       let idleTimer: ReturnType<typeof setTimeout> | null = null
+      let startupTimer: ReturnType<typeof setTimeout> | null = null
       const controller = this.currentController
+      let sawVisibleProgress = false
+      let timeoutReason: "startup" | "idle" | null = null
+
+      const clearIdleTimer = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer)
+          idleTimer = null
+        }
+      }
+
+      const clearStartupTimer = () => {
+        if (startupTimer) {
+          clearTimeout(startupTimer)
+          startupTimer = null
+        }
+      }
+
+      const abortForTimeout = (reason: "startup" | "idle") => {
+        timeoutReason = reason
+        controller?.abort()
+      }
+
+      const armStartupTimer = () => {
+        clearStartupTimer()
+        startupTimer = setTimeout(() => {
+          abortForTimeout("startup")
+        }, startupTimeoutMs)
+      }
 
       const resetIdleTimer = () => {
-        if (idleTimer) clearTimeout(idleTimer)
+        clearIdleTimer()
         idleTimer = setTimeout(() => {
-          controller?.abort()
-        }, STREAM_IDLE_TIMEOUT_MS)
+          abortForTimeout("idle")
+        }, streamIdleTimeoutMs)
       }
 
       try {
-        resetIdleTimer()
+        armStartupTimer()
         for await (const chunk of stream) {
-          resetIdleTimer()
+          if (hasVisibleAssistantProgress(chunk)) {
+            sawVisibleProgress = true
+            clearStartupTimer()
+            resetIdleTimer()
+          }
 
           // Check if stream was cancelled
           if (controller?.signal.aborted) {
@@ -497,8 +585,15 @@ export class TldwChatService {
             yield token
           }
         }
+        if (timeoutReason === "startup" && !sawVisibleProgress) {
+          throw new Error("Chat response timed out before any visible output arrived.")
+        }
+        if (timeoutReason === "idle") {
+          throw new Error("Chat response stalled after visible output began.")
+        }
       } finally {
-        if (idleTimer) clearTimeout(idleTimer)
+        clearIdleTimer()
+        clearStartupTimer()
       }
     } catch (error) {
       console.error('Stream completion failed:', error)

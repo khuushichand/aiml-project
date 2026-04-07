@@ -2,6 +2,7 @@ import os
 from typing import Tuple
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncWebhookSubscription
@@ -61,6 +62,17 @@ def test_list_providers_includes_gmail_when_feature_flag_enabled(connectors_clie
     assert response.status_code == 200, response.text
     names = {str(item.get("name")) for item in response.json()}
     assert "gmail" in names
+
+
+@pytest.mark.integration
+def test_list_providers_includes_zotero(connectors_client):
+    client, headers = connectors_client
+
+    response = client.get("/api/v1/connectors/providers", headers=headers)
+    assert response.status_code == 200, response.text
+    providers = {str(item.get("name")): item for item in response.json()}
+    assert "zotero" in providers
+    assert providers["zotero"]["auth_type"] == "oauth1"
 
 
 @pytest.mark.integration
@@ -358,6 +370,19 @@ def test_add_source_forbid_extra_fields(connectors_client, monkeypatch):
 def test_patch_source_success(connectors_client, monkeypatch):
     client, headers = connectors_client
 
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "account_id": 1,
+            "provider": "notion",
+            "remote_id": "abc",
+            "type": "page",
+            "path": None,
+            "options": {"recursive": False},
+            "enabled": True,
+            "last_synced_at": None,
+        }
+
     async def _fake_update_source(db, user_id, source_id, *, enabled=None, options=None):
         return {
             "id": source_id,
@@ -372,6 +397,7 @@ def test_patch_source_success(connectors_client, monkeypatch):
         }
 
     import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
     monkeypatch.setattr(ep, "update_source", _fake_update_source)
 
     r = client.patch(
@@ -420,6 +446,7 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
     client, headers = connectors_client
 
     import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    import tldw_Server_API.app.core.Jobs.manager as jobs_manager
 
     async def _fake_list_sources(db, user_id):
         return [
@@ -453,11 +480,19 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
         return {
             "tracked_item_count": 4,
             "degraded_item_count": 2,
+            "duplicate_count": 3,
+            "metadata_only_count": 1,
         }
+
+    class _FakeJobManager:
+        def get_job(self, job_id: int):
+            assert job_id == 88
+            return None
 
     monkeypatch.setattr(ep, "list_sources", _fake_list_sources)
     monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
     monkeypatch.setattr(ep, "get_source_binding_health", _fake_get_source_binding_health)
+    monkeypatch.setattr(jobs_manager, "JobManager", _FakeJobManager)
 
     response = client.get("/api/v1/connectors/sources", headers=headers)
     assert response.status_code == 200, response.text
@@ -472,6 +507,8 @@ def test_get_sources_includes_sync_summary(connectors_client, monkeypatch):
     assert body[0]["sync"]["active_job_id"] == "88"
     assert body[0]["sync"]["tracked_item_count"] == 4
     assert body[0]["sync"]["degraded_item_count"] == 2
+    assert body[0]["sync"]["duplicate_count"] == 3
+    assert body[0]["sync"]["metadata_only_count"] == 1
 
 
 @pytest.mark.integration
@@ -544,6 +581,568 @@ def test_oauth_callback_accepts_valid_state(connectors_client, monkeypatch):
 
 
 @pytest.mark.integration
+def test_start_authorize_zotero_requests_temporary_credential_and_persists_state_metadata(
+    connectors_client,
+    monkeypatch,
+):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    oauth_state_calls: list[dict] = []
+    authorize_calls: list[dict] = []
+
+    async def _fake_create_oauth_state(db, user_id, provider, state, metadata=None):
+        oauth_state_calls.append(
+            {
+                "user_id": user_id,
+                "provider": provider,
+                "state": state,
+                "metadata": dict(metadata or {}),
+            }
+        )
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            authorize_calls.append({"callback_url": callback_url})
+            return {
+                "oauth_token": "temp-token",
+                "oauth_token_secret": "temp-secret",
+            }
+
+        def authorize_url(self, state=None, scopes=None, redirect_path=None):
+            authorize_calls.append(
+                {
+                    "state": state,
+                    "scopes": list(scopes or []),
+                    "redirect_path": redirect_path,
+                }
+            )
+            return "https://www.zotero.org/oauth/authorize?oauth_token=temp-token"
+
+    monkeypatch.setattr(ep, "create_oauth_state", _fake_create_oauth_state)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["auth_url"] == "https://www.zotero.org/oauth/authorize?oauth_token=temp-token"
+    assert oauth_state_calls[0]["provider"] == "zotero"
+    assert oauth_state_calls[0]["metadata"] == {
+        "oauth_token": "temp-token",
+        "oauth_token_secret": "temp-secret",
+    }
+    assert authorize_calls[0]["callback_url"].startswith(
+        "http://testserver/api/v1/connectors/providers/zotero/callback?state="
+    )
+    assert authorize_calls[1]["scopes"] == ["oauth_token=temp-token"]
+
+
+@pytest.mark.integration
+def test_start_authorize_zotero_ignores_untrusted_request_base_when_connector_base_is_configured(
+    connectors_client,
+    monkeypatch,
+):
+    base_client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    oauth_state_calls: list[dict] = []
+    authorize_calls: list[dict] = []
+
+    async def _fake_create_oauth_state(db, user_id, provider, state, metadata=None):
+        oauth_state_calls.append(
+            {
+                "user_id": user_id,
+                "provider": provider,
+                "state": state,
+                "metadata": dict(metadata or {}),
+            }
+        )
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "https://trusted.example"
+
+        async def request_temporary_credential(self, callback_url):
+            authorize_calls.append({"callback_url": callback_url})
+            return {
+                "oauth_token": "temp-token",
+                "oauth_token_secret": "temp-secret",
+            }
+
+        def authorize_url(self, state=None, scopes=None, redirect_path=None):
+            authorize_calls.append(
+                {
+                    "state": state,
+                    "scopes": list(scopes or []),
+                    "redirect_path": redirect_path,
+                    "redirect_base": self.redirect_base,
+                }
+            )
+            return "https://www.zotero.org/oauth/authorize?oauth_token=temp-token"
+
+    client = TestClient(base_client.app, base_url="https://evil.example")
+    monkeypatch.setattr(ep, "create_oauth_state", _fake_create_oauth_state)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+    assert response.status_code == 200, response.text
+    assert oauth_state_calls[0]["provider"] == "zotero"
+    assert authorize_calls[0]["callback_url"].startswith(
+        "https://trusted.example/api/v1/connectors/providers/zotero/callback?state="
+    )
+    assert authorize_calls[1]["redirect_base"] == "https://trusted.example"
+
+
+@pytest.mark.integration
+def test_start_authorize_zotero_rejects_request_derived_localhost_base_in_production_mode(
+    connectors_client,
+    monkeypatch,
+):
+    base_client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            raise AssertionError("temporary credentials must not be requested when redirect base is unconfigured")
+
+        def authorize_url(self, *a, **kw):
+            raise AssertionError("authorize_url must not be reached when redirect base is unconfigured")
+
+    monkeypatch.delenv("CONNECTOR_REDIRECT_BASE_URL", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    client = TestClient(base_client.app, base_url="http://localhost")
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must be configured before enabling OAuth connectors"
+
+
+@pytest.mark.integration
+def test_start_authorize_zotero_rejects_insecure_non_https_redirect_base(
+    connectors_client,
+    monkeypatch,
+):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            raise AssertionError("temporary credentials must not be requested for insecure redirect bases")
+
+        def authorize_url(self, *a, **kw):
+            raise AssertionError("authorize_url must not be reached for insecure redirect bases")
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("CONNECTOR_REDIRECT_BASE_URL", "http://example.com")
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must use https unless it targets localhost"
+
+
+@pytest.mark.integration
+def test_start_authorize_zotero_treats_whitespace_redirect_base_as_unconfigured(
+    connectors_client,
+    monkeypatch,
+):
+    base_client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+        redirect_base = "http://ignored.example"
+
+        async def request_temporary_credential(self, callback_url):
+            raise AssertionError("temporary credentials must not be requested when redirect base is blank")
+
+        def authorize_url(self, *a, **kw):
+            raise AssertionError("authorize_url must not be reached when redirect base is blank")
+
+    monkeypatch.setenv("CONNECTOR_REDIRECT_BASE_URL", "   ")
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    client = TestClient(base_client.app, base_url="http://localhost")
+    response = client.post("/api/v1/connectors/providers/zotero/authorize", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "CONNECTOR_REDIRECT_BASE_URL must be configured before enabling OAuth connectors"
+
+
+def test_resolve_webhook_callback_base_treats_whitespace_redirect_base_as_missing(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    monkeypatch.setenv("CONNECTOR_REDIRECT_BASE_URL", "   ")
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        ep._resolve_webhook_callback_base(None, type("Conn", (), {"redirect_base": ""})())
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "CONNECTOR_REDIRECT_BASE_URL must be configured before enabling webhook subscriptions"
+
+
+@pytest.mark.integration
+def test_oauth_callback_accepts_zotero_oauth1_payload_and_persists_provider_identity(
+    connectors_client,
+    monkeypatch,
+):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    exchange_calls: list[dict] = []
+    account_calls: list[dict] = []
+
+    async def _fake_consume_oauth_state(db, *, user_id, provider, state, max_age_minutes=10):
+        return {
+            "state": state,
+            "provider": provider,
+            "oauth_token": "temp-token",
+            "oauth_token_secret": "temp-secret",
+        }
+
+    class _FakeConn:
+        name = "zotero"
+
+        def authorize_url(self, *a, **kw):
+            return ""
+
+        async def exchange_code(self, code, redirect_uri):
+            exchange_calls.append({"code": code, "redirect_uri": redirect_uri})
+            return {
+                "access_token": "api-key",
+                "provider": "zotero",
+                "display_name": "Zotero Account",
+                "provider_user_id": "123456",
+                "username": "alice",
+            }
+
+    async def _fake_create_account(db, user_id, provider, display_name, email, tokens):
+        account_calls.append(
+            {
+                "user_id": user_id,
+                "provider": provider,
+                "display_name": display_name,
+                "email": email,
+                "tokens": dict(tokens),
+            }
+        )
+        return {"id": 456, "display_name": display_name, "email": email, "created_at": "now"}
+
+    monkeypatch.setattr(ep, "consume_oauth_state", _fake_consume_oauth_state)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+    monkeypatch.setattr(ep, "create_account", _fake_create_account)
+    monkeypatch.setenv("ORG_CONNECTORS_ACCOUNT_LINKING_ROLE", "member")
+
+    response = client.get(
+        "/api/v1/connectors/providers/zotero/callback",
+        params={"oauth_token": "temp-token", "oauth_verifier": "verifier-1", "state": "good"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == 456
+    assert body["provider"] == "zotero"
+    assert exchange_calls[0]["code"] == (
+        '{"oauth_token": "temp-token", "oauth_token_secret": "temp-secret", "oauth_verifier": "verifier-1"}'
+    )
+    assert account_calls[0]["tokens"]["provider_user_id"] == "123456"
+
+
+@pytest.mark.integration
+def test_browse_provider_sources_returns_zotero_collection_rows(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+
+        def authorize_url(self, *a, **kw):
+            return ""
+
+        async def exchange_code(self, *a, **kw):
+            return {}
+
+        async def list_collections(self, account, *, cursor=None, page_size=100):
+            assert account["provider_user_id"] == "123456"
+            assert account["tokens"]["access_token"] == "api-key"
+            return (
+                [
+                    {
+                        "provider": "zotero",
+                        "collection_key": "COLL1234",
+                        "collection_name": "Language Models",
+                        "source_url": "https://www.zotero.org/users/123456/collections/COLL1234",
+                    }
+                ],
+                "next-zotero-cursor",
+            )
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        assert account_id == 15
+        return {"access_token": "api-key", "provider_user_id": "123456"}
+
+    async def _fake_get_account_email(db, user_id, account_id):
+        return None
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        assert account_id == 15
+        return {"id": account_id, "user_id": user_id, "provider": "zotero"}
+
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+    monkeypatch.setattr(ep, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(ep, "get_account_email", _fake_get_account_email)
+
+    response = client.get(
+        "/api/v1/connectors/providers/zotero/sources/browse",
+        params={"account_id": 15, "page_size": 25},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["next_cursor"] == "next-zotero-cursor"
+    assert body["items"][0]["collection_key"] == "COLL1234"
+    assert body["items"][0]["collection_name"] == "Language Models"
+
+
+@pytest.mark.integration
+def test_browse_provider_sources_backfills_blank_zotero_provider_user_id(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    class _FakeConn:
+        name = "zotero"
+
+        def authorize_url(self, *a, **kw):
+            return ""
+
+        async def exchange_code(self, *a, **kw):
+            return {}
+
+        async def list_collections(self, account, *, cursor=None, page_size=100):
+            assert account["provider_user_id"] == "123456"
+            return ([], None)
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        assert account_id == 15
+        return {"access_token": "api-key", "provider_user_id": "123456"}
+
+    async def _fake_get_account_email(db, user_id, account_id):
+        return None
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {
+            "id": account_id,
+            "user_id": user_id,
+            "provider": "zotero",
+            "provider_user_id": "",
+        }
+
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+    monkeypatch.setattr(ep, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(ep, "get_account_email", _fake_get_account_email)
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    response = client.get(
+        "/api/v1/connectors/providers/zotero/sources/browse",
+        params={"account_id": 15, "page_size": 25},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.integration
+def test_browse_provider_sources_rejects_account_provider_mismatch(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        return {"access_token": "api-key", "provider_user_id": "123456"}
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {"id": account_id, "user_id": user_id, "provider": "drive"}
+
+    monkeypatch.setattr(ep, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    response = client.get(
+        "/api/v1/connectors/providers/zotero/sources/browse",
+        params={"account_id": 15, "page_size": 25},
+        headers=headers,
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "Account provider mismatch"
+
+
+@pytest.mark.integration
+def test_add_zotero_source_accepts_collection_type(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_create_source(db, *, account_id, provider, remote_id, type_, path, options, enabled=True):
+        return {
+            "id": 202,
+            "account_id": account_id,
+            "provider": provider,
+            "remote_id": remote_id,
+            "type": type_,
+            "path": path,
+            "options": options or {},
+            "enabled": enabled,
+            "last_synced_at": None,
+        }
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {"id": account_id, "user_id": user_id, "provider": "zotero"}
+
+    monkeypatch.setattr(ep, "create_source", _fake_create_source)
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    payload = {
+        "account_id": 19,
+        "provider": "zotero",
+        "remote_id": "COLL1234",
+        "type": "collection",
+        "options": {},
+    }
+    response = client.post("/api/v1/connectors/sources", json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "zotero"
+    assert body["type"] == "collection"
+
+
+@pytest.mark.integration
+def test_add_zotero_source_rejects_recursive_option(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {"id": account_id, "user_id": user_id, "provider": "zotero"}
+
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    payload = {
+        "account_id": 19,
+        "provider": "zotero",
+        "remote_id": "COLL1234",
+        "type": "collection",
+        "options": {"recursive": True},
+    }
+    response = client.post("/api/v1/connectors/sources", json=payload, headers=headers)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "Zotero collection sync is flat in v1; link child collections separately."
+
+
+@pytest.mark.integration
+def test_patch_zotero_source_rejects_recursive_option(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "account_id": 19,
+            "provider": "zotero",
+            "remote_id": "COLL1234",
+            "type": "collection",
+            "path": None,
+            "options": {"recursive": False},
+            "enabled": True,
+            "last_synced_at": None,
+        }
+
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+
+    response = client.patch(
+        "/api/v1/connectors/sources/19",
+        json={"options": {"recursive": True}},
+        headers=headers,
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "Zotero collection sync is flat in v1; link child collections separately."
+
+
+@pytest.mark.integration
+def test_patch_zotero_source_preserves_flat_recursive_false(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    update_calls: list[dict] = []
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "account_id": 19,
+            "provider": "zotero",
+            "remote_id": "COLL1234",
+            "type": "collection",
+            "path": None,
+            "options": {"recursive": False},
+            "enabled": True,
+            "last_synced_at": None,
+        }
+
+    async def _fake_update_source(db, user_id, source_id, *, enabled=None, options=None):
+        update_calls.append({"source_id": source_id, "enabled": enabled, "options": dict(options or {})})
+        return {
+            "id": source_id,
+            "account_id": 19,
+            "provider": "zotero",
+            "remote_id": "COLL1234",
+            "type": "collection",
+            "path": None,
+            "options": dict(options or {}),
+            "enabled": True,
+            "last_synced_at": None,
+        }
+
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(ep, "update_source", _fake_update_source)
+
+    response = client.patch(
+        "/api/v1/connectors/sources/19",
+        json={"options": {}},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert update_calls[0]["options"]["recursive"] is False
+    assert response.json()["options"]["recursive"] is False
+
+
+@pytest.mark.integration
 def test_get_source_sync_status_returns_state_and_active_job(connectors_client, monkeypatch):
     client, headers = connectors_client
 
@@ -590,6 +1189,8 @@ def test_get_source_sync_status_returns_state_and_active_job(connectors_client, 
         return {
             "tracked_item_count": 9,
             "degraded_item_count": 3,
+            "duplicate_count": 2,
+            "metadata_only_count": 5,
         }
 
     monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
@@ -611,6 +1212,63 @@ def test_get_source_sync_status_returns_state_and_active_job(connectors_client, 
     assert body["active_job"]["progress_pct"] == 35
     assert body["tracked_item_count"] == 9
     assert body["degraded_item_count"] == 3
+    assert body["duplicate_count"] == 2
+    assert body["metadata_only_count"] == 5
+
+
+@pytest.mark.integration
+def test_get_source_sync_status_prefers_active_job_state_over_needs_full_rescan(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    import tldw_Server_API.app.core.Jobs.manager as jobs_manager
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {
+            "id": source_id,
+            "provider": "zotero",
+            "enabled": True,
+        }
+
+    async def _fake_get_source_sync_state(db, *, source_id):
+        return {
+            "source_id": source_id,
+            "sync_mode": "poll",
+            "needs_full_rescan": True,
+            "active_job_id": "88",
+            "active_job_started_at": "2026-03-30 20:00:00",
+        }
+
+    async def _fake_get_source_binding_health(db, *, source_id):
+        return {
+            "tracked_item_count": 0,
+            "degraded_item_count": 0,
+            "duplicate_count": 0,
+            "metadata_only_count": 0,
+        }
+
+    class _FakeJobManager:
+        def get_job(self, job_id: int):
+            assert job_id == 88
+            return {
+                "id": job_id,
+                "job_type": "incremental_sync",
+                "status": "processing",
+                "progress_percent": 10,
+                "result": {"processed": 1, "failed": 0, "skipped": 0},
+            }
+
+    monkeypatch.setattr(ep, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(ep, "get_source_sync_state", _fake_get_source_sync_state)
+    monkeypatch.setattr(ep, "get_source_binding_health", _fake_get_source_binding_health)
+    monkeypatch.setattr(jobs_manager, "JobManager", _FakeJobManager)
+
+    response = client.get("/api/v1/connectors/sources/88/sync", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "running"
+    assert body["needs_full_rescan"] is True
+    assert body["active_job"]["id"] == "88"
 
 
 @pytest.mark.integration

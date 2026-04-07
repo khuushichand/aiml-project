@@ -1,7 +1,10 @@
 import type { LucideIcon } from "lucide-react"
-import { optionRoutes, type NavGroupKey } from "@/routes/route-registry"
 import { isRouteEnabledForCapabilities } from "@/routes/route-capabilities"
 import type { ServerCapabilities } from "@/services/tldw/server-capabilities"
+import {
+  SETTINGS_ROUTE_NAV_ITEMS,
+  type NavGroupKey
+} from "./settings-nav-config"
 
 export type SettingsNavItem = {
   to: string
@@ -25,14 +28,7 @@ const NAV_GROUPS: Array<{ key: NavGroupKey; titleToken: string }> = [
 
 type NavItemWithOrder = SettingsNavItem & { order: number }
 
-const SETTINGS_ROUTE_PREFIX = "/settings"
-const SETTINGS_NAV_ADDITIONAL_PATHS = new Set<string>([
-  "/moderation-playground"
-])
-
 const SETTINGS_BETA_BADGE_WINDOWS: Record<string, string> = {
-  "/settings/family-guardrails": "2026-12-31",
-  "/settings/guardian": "2026-12-31",
   "/settings/prompt-studio": "2026-09-30"
 }
 
@@ -58,14 +54,7 @@ export const isSettingsAnnouncementBadgeActive = (
 const buildNavItemsByGroup = (
   capabilities: ServerCapabilities | null | undefined
 ) =>
-  optionRoutes.reduce((acc, route) => {
-    if (!route.nav) return acc
-    if (
-      !route.path.startsWith(SETTINGS_ROUTE_PREFIX) &&
-      !SETTINGS_NAV_ADDITIONAL_PATHS.has(route.path)
-    ) {
-      return acc
-    }
+  SETTINGS_ROUTE_NAV_ITEMS.reduce((acc, route) => {
     const capabilitiesResolved = capabilities !== undefined
     if (
       capabilitiesResolved &&
@@ -73,7 +62,7 @@ const buildNavItemsByGroup = (
     ) {
       return acc
     }
-    const { group, labelToken, icon, beta, order } = route.nav
+    const { group, labelToken, icon, beta, order } = route
     const items = acc.get(group) ?? []
     const badgeActive = Boolean(beta && isSettingsAnnouncementBadgeActive(route.path))
     items.push({

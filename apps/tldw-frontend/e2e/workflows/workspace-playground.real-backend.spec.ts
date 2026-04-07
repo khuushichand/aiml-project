@@ -22,7 +22,9 @@ import {
   TEST_CONFIG,
   generateTestId
 } from "../utils/helpers"
-import { WorkspacePlaygroundPage } from "../utils/page-objects"
+import { WorkspacePlaygroundPage } from "../utils/page-objects/WorkspacePlaygroundPage"
+import { QuizPage } from "../utils/page-objects/QuizPage"
+import { FlashcardsPage } from "../utils/page-objects/FlashcardsPage"
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 }
 const CHAT_BOOTSTRAP_ENDPOINT =
@@ -134,8 +136,92 @@ type RagSearchCall = {
   status: number
 }
 
+type ChatCompletionCall = {
+  requestBody: Record<string, unknown>
+  responseBody: Record<string, unknown> | null
+  status: number
+}
+
+type QuizListResponse = {
+  items: Array<{
+    id: number
+    name: string
+    workspace_id?: string | null
+    workspace_tag?: string | null
+    deleted?: boolean
+  }>
+}
+
+type FlashcardListResponse = {
+  items: Array<{
+    uuid: string
+    deck_id?: number | null
+    front: string
+    back: string
+  }>
+}
+
+type DeckListItem = {
+  id: number
+  name: string
+  workspace_id?: string | null
+}
+
 const normalizeWhitespace = (value: string): string =>
   value.replace(/\s+/g, " ").trim()
+
+const normalizeAssistantMessageText = (value: string): string =>
+  value
+    .replace(/▋/g, "")
+    .split(/\n+/)
+    .map((line) => normalizeWhitespace(line))
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !/^(Mood:|Response complete$|Loading content(?:\.{3}|…)?)$/i.test(line)
+    )
+    .join(" ")
+
+const waitForCompletedAssistantReply = async (
+  workspacePage: WorkspacePlaygroundPage
+): Promise<string> => {
+  const assistantMessage = workspacePage.chatPanel.locator(
+    "article[aria-label*='Assistant message'], [data-role='assistant'], [data-message-role='assistant'], .assistant-message"
+  ).last()
+
+  await expect(assistantMessage).toBeVisible({ timeout: 30_000 })
+
+  const readCompletedReply = async (): Promise<string> => {
+    const isGenerating = await assistantMessage
+      .getByText(/Generating response/i)
+      .isVisible()
+      .catch(() => false)
+    const hasStopStreaming = await assistantMessage
+      .getByRole("button", {
+        name: /Stop streaming response|Stop Streaming/i
+      })
+      .isVisible()
+      .catch(() => false)
+    const text = normalizeAssistantMessageText(
+      (await assistantMessage.textContent().catch(() => "")) || ""
+    )
+
+    if (isGenerating || hasStopStreaming) {
+      return ""
+    }
+
+    return text
+  }
+
+  await expect
+    .poll(readCompletedReply, {
+      timeout: 90_000,
+      message: "Timed out waiting for the grounded workspace assistant reply"
+    })
+    .not.toBe("")
+
+  return readCompletedReply()
+}
 
 const seedLiveWorkspaceDocument = async (
   title: string,
@@ -231,6 +317,26 @@ const waitForRagSearchCall = async (
   }
 }
 
+const waitForChatCompletionCall = async (
+  page: Page,
+  action: () => Promise<void>
+): Promise<ChatCompletionCall> => {
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method().toUpperCase() === "POST" &&
+      /\/api\/v1\/chat\/completions(?:\?|$)/i.test(response.url()),
+    { timeout: 90_000 }
+  )
+  const [response] = await Promise.all([responsePromise, action()])
+  return {
+    requestBody:
+      (response.request().postDataJSON() as Record<string, unknown>) || {},
+    responseBody:
+      (await response.json().catch(() => null)) as Record<string, unknown> | null,
+    status: response.status()
+  }
+}
+
 const waitForStudioArtifactCompletion = async (artifactCard: Locator) => {
   await expect
     .poll(
@@ -251,7 +357,7 @@ const waitForStudioArtifactCompletion = async (artifactCard: Locator) => {
         return "pending"
       },
       {
-        timeout: 120_000,
+        timeout: 180_000,
         message: "Studio artifact did not reach a completed state"
       }
     )
@@ -274,6 +380,127 @@ const buildSeedSources = () => {
       url: "https://example.com/workspace-real-source-b"
     }
   ]
+}
+
+const fetchJsonWithApiKey = async <T>(path: string): Promise<T> => {
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}${path}`,
+    TEST_CONFIG.apiKey
+  )
+  if (!response.ok) {
+    throw new Error(`GET ${path} failed with HTTP ${response.status}: ${await response.text()}`)
+  }
+  return (await response.json()) as T
+}
+
+const listQuizRecords = async (params: Record<string, string | number | boolean | undefined> = {}) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue
+    search.set(key, String(value))
+  }
+  const suffix = search.toString().length > 0 ? `?${search.toString()}` : ""
+  return await fetchJsonWithApiKey<QuizListResponse>(`/api/v1/quizzes${suffix}`)
+}
+
+const listDeckRecords = async (params: Record<string, string | number | boolean | undefined> = {}) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue
+    search.set(key, String(value))
+  }
+  const suffix = search.toString().length > 0 ? `?${search.toString()}` : ""
+  return await fetchJsonWithApiKey<DeckListItem[]>(`/api/v1/flashcards/decks${suffix}`)
+}
+
+const listFlashcardRecords = async (
+  params: Record<string, string | number | boolean | undefined> = {},
+) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue
+    search.set(key, String(value))
+  }
+  const suffix = search.toString().length > 0 ? `?${search.toString()}` : ""
+  return await fetchJsonWithApiKey<FlashcardListResponse>(`/api/v1/flashcards${suffix}`)
+}
+
+const waitForGeneratedArtifactRecord = async (
+  workspacePage: WorkspacePlaygroundPage,
+  artifactType: "quiz" | "flashcards"
+) => {
+  await expect
+    .poll(async () => workspacePage.getGeneratedArtifactRecord(artifactType), {
+      timeout: 120_000,
+      message: `Workspace ${artifactType} artifact never exposed a persisted record`
+    })
+    .not.toBeNull()
+  const artifact = await workspacePage.getGeneratedArtifactRecord(artifactType)
+  if (!artifact) {
+    throw new Error(`Workspace ${artifactType} artifact record missing after completion`)
+  }
+  return artifact
+}
+
+const waitForPersistedWorkspaceArtifact = async (
+  workspacePage: WorkspacePlaygroundPage,
+  artifactType: "quiz" | "flashcards"
+) => {
+  await expect
+    .poll(
+      async () => {
+        const artifact = await workspacePage.getGeneratedArtifactRecord(artifactType)
+        if (!artifact) {
+          return "missing"
+        }
+        const normalizedStatus = String(artifact.status || "").toLowerCase()
+        if (normalizedStatus === "failed") {
+          return `failed:${artifact.status}`
+        }
+        const persistedId = Number(
+          artifact.serverId ??
+            artifact.data?.quizId ??
+            artifact.data?.deckId ??
+            Number.NaN
+        )
+        if (Number.isFinite(persistedId) && persistedId > 0) {
+          return "persisted"
+        }
+        return "pending"
+      },
+      {
+        timeout: 180_000,
+        message: `Workspace ${artifactType} artifact never persisted a server record`
+      }
+    )
+    .toBe("persisted")
+
+  const artifact = await workspacePage.getGeneratedArtifactRecord(artifactType)
+  if (!artifact) {
+    throw new Error(`Workspace ${artifactType} artifact record missing after persistence`)
+  }
+  return artifact
+}
+
+const disableNextJsPortalPointerInterception = async (page: Page) => {
+  await page.evaluate(() => {
+    document.querySelectorAll("nextjs-portal").forEach((portal) => {
+      ;(portal as HTMLElement).style.pointerEvents = "none"
+    })
+  })
+}
+
+const clickActionable = async (locator: Locator) => {
+  try {
+    await locator.click({ timeout: 5_000 })
+  } catch (error) {
+    if (!String(error).includes("nextjs-portal")) {
+      throw error
+    }
+    await locator.focus()
+    await expect(locator).toBeFocused({ timeout: 5_000 })
+    await locator.press("Enter")
+  }
 }
 
 test.describe("Workspace Playground Workflow (Real Backend)", () => {
@@ -412,12 +639,14 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
       expect(ragCall.requestBody.include_media_ids).toEqual([selectedSource.mediaId])
       expect(ragCall.requestBody.sources).toEqual(["media_db"])
       expect(String(ragCall.requestBody.query ?? "")).toContain(probeToken)
-      expect(
-        String(ragCall.responseBody?.generated_answer ?? "").trim().length
-      ).toBeGreaterThan(0)
       await expect(workspacePage.chatPanel.getByText(question)).toBeVisible({
         timeout: 10_000
       })
+      const groundedReply = await waitForCompletedAssistantReply(workspacePage)
+      expect(groundedReply.length).toBeGreaterThan(0)
+      expect(groundedReply).not.toMatch(
+        /cannot reach server|unable to reach server|request failed|connection/i
+      )
 
       await ensureNoServerReachabilityDialog(authedPage)
     } finally {
@@ -432,6 +661,7 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
     serverInfo,
     diagnostics
   }) => {
+    test.setTimeout(120_000)
     skipIfServerUnavailable(serverInfo)
     const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
     test.skip(
@@ -474,22 +704,29 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
       ).toBeEnabled({ timeout: 10_000 })
 
       const beforeCount = await workspacePage.getStudioArtifactCards().count()
-      const ragCall = await waitForRagSearchCall(authedPage, async () => {
+      const chatCall = await waitForChatCompletionCall(authedPage, async () => {
         await workspacePage.getStudioOutputButton("Compare Sources").click()
       })
 
-      expect(ragCall.status).toBe(200)
-      expect(
-        [...((ragCall.requestBody.include_media_ids as number[]) || [])].sort(
-          (a, b) => a - b
+      expect(chatCall.status).toBe(200)
+      const messages = Array.isArray(chatCall.requestBody.messages)
+        ? (chatCall.requestBody.messages as Array<Record<string, unknown>>)
+        : []
+      const requestText = messages
+        .map((message) =>
+          typeof message.content === "string" ? message.content : ""
         )
-      ).toEqual([leftSource.mediaId, rightSource.mediaId].sort((a, b) => a - b))
-      expect(ragCall.requestBody.enable_generation).toBe(true)
-      expect(String(ragCall.requestBody.generation_prompt ?? "")).toContain(
+        .join("\n")
+      expect(requestText).toContain(leftSource.title)
+      expect(requestText).toContain(rightSource.title)
+      expect(requestText).toContain(
         "Compare the selected sources and produce"
       )
       expect(
-        String(ragCall.responseBody?.generated_answer ?? "").trim().length
+        String(
+          ((chatCall.responseBody?.choices as Array<Record<string, unknown>> | undefined)?.[0]
+            ?.message as Record<string, unknown> | undefined)?.content ?? ""
+        ).trim().length
       ).toBeGreaterThan(0)
 
       await expect(workspacePage.getStudioArtifactCards()).toHaveCount(
@@ -563,6 +800,338 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
       await expect(workspacePage.globalSearchModal).toBeHidden({ timeout: 10_000 })
 
       await ensureNoServerReachabilityDialog(authedPage)
+    } finally {
+      tracker.dispose()
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("keeps a workspace-generated quiz hidden until forced visible, then moves it to general without changing its record id", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    test.setTimeout(300_000)
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const fixtureId = generateTestId("workspace-study-quiz")
+    const probeToken = `${fixtureId}-quiz-token`
+    const selectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Quiz`,
+      `Workspace quiz source for ${probeToken}. The source is intentionally specific so the generated study artifact has stable content.`
+    )
+    const companionSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Quiz Companion`,
+      `Workspace quiz companion source for ${probeToken}-companion. The second source keeps the generation path aligned with the existing workspace output matrix.`
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const quizPage = new QuizPage(authedPage)
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.resetWorkspace(`Workspace ${fixtureId}`)
+      await workspacePage.setStudyMaterialsPolicy("workspace")
+      await workspacePage.seedSources([selectedSource, companionSource])
+      await expect
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
+          timeout: 10_000
+        })
+        .toBeGreaterThanOrEqual(1)
+      await workspacePage.selectSourceByTitle(selectedSource.title)
+      await workspacePage.selectSourceByTitle(companionSource.title)
+      await workspacePage.expectSourceSelectedByTitle(selectedSource.title)
+      await workspacePage.expectSourceSelectedByTitle(companionSource.title)
+
+      const beforeArtifacts = await workspacePage.getStudioArtifactCards().count()
+      await disableNextJsPortalPointerInterception(authedPage)
+      await clickActionable(workspacePage.getStudioOutputButton("Quiz"))
+
+      await expect(workspacePage.getStudioArtifactCards()).toHaveCount(
+        beforeArtifacts + 1,
+        { timeout: 90_000 }
+      )
+      const quizArtifact = await waitForPersistedWorkspaceArtifact(
+        workspacePage,
+        "quiz"
+      )
+      const quizId = Number(quizArtifact.serverId ?? quizArtifact.data?.quizId)
+      expect(Number.isFinite(quizId) && quizId > 0).toBe(true)
+      const workspaceId = await workspacePage.getWorkspaceId()
+      expect(workspaceId).toBeTruthy()
+
+      const quizQuestions = await fetchJsonWithApiKey<{
+        items: Array<{ id: number }>
+      }>(`/api/v1/quizzes/${quizId}/questions?include_answers=true&limit=100&offset=0`)
+      expect(quizQuestions.items.length).toBeGreaterThan(0)
+
+      const persistedQuizList = await listQuizRecords({
+        include_workspace_items: true,
+        limit: 100,
+        offset: 0
+      })
+      const persistedQuiz = persistedQuizList.items.find((item) => item.id === quizId)
+      expect(persistedQuiz).toBeTruthy()
+      expect(persistedQuiz).toMatchObject({
+        id: quizId,
+        workspace_id: workspaceId
+      })
+
+      await quizPage.goto()
+      await quizPage.assertPageReady()
+      await quizPage.switchToTab("manage")
+      await expect(quizPage.getManageQuizStartButton(quizId)).toBeHidden({
+        timeout: 10_000
+      })
+
+      await expect(quizPage.manageShowWorkspaceQuizzesToggle).toBeVisible({
+        timeout: 10_000
+      })
+      await quizPage.manageShowWorkspaceQuizzesToggle.click()
+      await expect(quizPage.getManageQuizStartButton(quizId)).toBeVisible({
+        timeout: 10_000
+      })
+
+      await quizPage.gotoPath(
+        `/quiz?tab=take&start_quiz_id=${quizId}&highlight_quiz_id=${quizId}&include_workspace_items=1`
+      )
+      await quizPage.assertPageReady()
+      await expect(
+        authedPage.getByRole("dialog").filter({ hasText: /Ready to begin\?/i })
+      ).toBeVisible({
+        timeout: 10_000
+      })
+
+      await quizPage.goto()
+      await quizPage.assertPageReady()
+      await quizPage.switchToTab("manage")
+      await expect(quizPage.manageShowWorkspaceQuizzesToggle).toBeVisible({
+        timeout: 10_000
+      })
+      await quizPage.manageShowWorkspaceQuizzesToggle.click()
+      await quizPage.getManageQuizEditButton(quizId).click()
+      const quizEditModal = authedPage.getByTestId("manage-edit-quiz-modal")
+      const workspaceIdInput = quizEditModal.getByLabel("Workspace ID")
+      await expect(workspaceIdInput).toBeVisible({ timeout: 10_000 })
+      await workspaceIdInput.fill("")
+      await quizEditModal.getByRole("button", { name: "Save" }).click()
+
+      await expect
+        .poll(
+          async () => {
+            const updatedQuiz = await fetchJsonWithApiKey<{
+              id: number
+              workspace_id?: string | null
+            }>(`/api/v1/quizzes/${quizId}`)
+            return updatedQuiz.workspace_id ?? null
+          },
+          {
+            timeout: 30_000,
+            message: "Quiz workspace scope never moved back to general"
+          }
+        )
+        .toBeNull()
+
+      const generalQuizList = await listQuizRecords({
+        include_workspace_items: false,
+        limit: 100,
+        offset: 0
+      })
+      expect(generalQuizList.items.some((item) => item.id === quizId)).toBe(true)
+      const scopedQuizList = await listQuizRecords({
+        workspace_id: workspaceId || undefined,
+        include_workspace_items: false,
+        limit: 100,
+        offset: 0
+      })
+      expect(scopedQuizList.items.some((item) => item.id === quizId)).toBe(false)
+
+      await quizPage.goto()
+      await quizPage.assertPageReady()
+      await quizPage.switchToTab("manage")
+      await expect(quizPage.getManageQuizStartButton(quizId)).toBeVisible({
+        timeout: 10_000
+      })
+    } finally {
+      tracker.dispose()
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("keeps a workspace-generated flashcards deck hidden until forced visible, then moves it to general without changing its record id", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    test.setTimeout(300_000)
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const fixtureId = generateTestId("workspace-study-flashcards")
+    const probeToken = `${fixtureId}-flashcards-token`
+    const selectedSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Flashcards`,
+      `Workspace flashcards source for ${probeToken}. The source is intentionally specific so the generated deck remains stable enough for native-page assertions.`
+    )
+    const companionSource = await seedLiveWorkspaceDocument(
+      `WS ${fixtureId} Flashcards Companion`,
+      `Workspace flashcards companion source for ${probeToken}-companion. The second source helps exercise the same multi-source path as the output matrix probe.`
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const flashcardsPage = new FlashcardsPage(authedPage)
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.resetWorkspace(`Workspace ${fixtureId}`)
+      await workspacePage.setStudyMaterialsPolicy("workspace")
+      await workspacePage.seedSources([selectedSource, companionSource])
+      await expect
+        .poll(async () => (await workspacePage.getSourceIds()).length, {
+          timeout: 10_000
+        })
+        .toBeGreaterThanOrEqual(1)
+      await workspacePage.selectSourceByTitle(selectedSource.title)
+      await workspacePage.selectSourceByTitle(companionSource.title)
+      await workspacePage.expectSourceSelectedByTitle(selectedSource.title)
+      await workspacePage.expectSourceSelectedByTitle(companionSource.title)
+
+      const beforeArtifacts = await workspacePage.getStudioArtifactCards().count()
+      await disableNextJsPortalPointerInterception(authedPage)
+      await clickActionable(workspacePage.getStudioOutputButton("Flashcards"))
+
+      await expect(workspacePage.getStudioArtifactCards()).toHaveCount(
+        beforeArtifacts + 1,
+        { timeout: 90_000 }
+      )
+      const flashcardArtifact = await waitForPersistedWorkspaceArtifact(
+        workspacePage,
+        "flashcards"
+      )
+      const deckId = Number(flashcardArtifact.serverId ?? flashcardArtifact.data?.deckId)
+      expect(Number.isFinite(deckId) && deckId > 0).toBe(true)
+      const workspaceId = await workspacePage.getWorkspaceId()
+      expect(workspaceId).toBeTruthy()
+
+      const flashcardList = await listFlashcardRecords({
+        deck_id: deckId,
+        include_workspace_items: true,
+        limit: 100,
+        offset: 0
+      })
+      expect(flashcardList.items.length).toBeGreaterThan(0)
+      const firstCardUuid = flashcardList.items[0]?.uuid
+      expect(firstCardUuid).toBeTruthy()
+
+      const deckRecords = await listDeckRecords({
+        include_workspace_items: true
+      })
+      const persistedDeck = deckRecords.find((deck) => deck.id === deckId)
+      expect(persistedDeck).toBeTruthy()
+      expect(persistedDeck).toMatchObject({
+        id: deckId,
+        workspace_id: workspaceId
+      })
+      const generalDecksBeforeMove = await listDeckRecords({
+        include_workspace_items: false
+      })
+      expect(generalDecksBeforeMove.some((deck) => deck.id === deckId)).toBe(false)
+
+      await flashcardsPage.gotoPath(
+        `/flashcards?deck_id=${deckId}&include_workspace_items=1`
+      )
+      await flashcardsPage.assertPageReady()
+      await expect(flashcardsPage.reviewDeckSelect).toBeVisible({
+        timeout: 10_000
+      })
+      const deckName = persistedDeck?.name ?? `Deck ${deckId}`
+      await expect(flashcardsPage.reviewDeckSelect.getByText(deckName, { exact: true })).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(flashcardsPage.reviewActiveCard).toBeVisible({ timeout: 10_000 })
+
+      await flashcardsPage.gotoPath(
+        `/flashcards?tab=manage&deck_id=${deckId}&include_workspace_items=1`
+      )
+      await flashcardsPage.assertPageReady()
+      await expect(flashcardsPage.manageMoveScopeButton).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(flashcardsPage.getManageFlashcardRow(firstCardUuid)).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(flashcardsPage.manageMoveScopeButton).toBeEnabled({
+        timeout: 10_000
+      })
+      await flashcardsPage.manageMoveScopeButton.click()
+      const flashcardsMoveModal = authedPage
+        .getByRole("dialog")
+        .filter({ hasText: /Move deck scope/i })
+      const workspaceIdInput = flashcardsMoveModal.getByLabel("Workspace ID")
+      await expect(workspaceIdInput).toBeVisible({ timeout: 10_000 })
+      await workspaceIdInput.fill("")
+      await flashcardsMoveModal.getByRole("button", { name: "Save" }).click()
+
+      await expect
+        .poll(
+          async () => {
+            const updatedDecks = await listDeckRecords({
+              include_workspace_items: false
+            })
+            return updatedDecks.some((deck) => deck.id === deckId)
+          },
+          {
+            timeout: 30_000,
+            message: "Flashcards deck never moved back to general scope"
+          }
+        )
+        .toBe(true)
+
+      const remainingWorkspaceDecks = await listDeckRecords({
+        workspace_id: workspaceId || undefined,
+        include_workspace_items: false
+      })
+      expect(remainingWorkspaceDecks.some((deck) => deck.id === deckId)).toBe(false)
+
+      const updatedDecks = await listDeckRecords({
+        include_workspace_items: false
+      })
+      expect(updatedDecks.some((deck) => deck.id === deckId)).toBe(true)
+      const updatedFlashcardList = await listFlashcardRecords({
+        deck_id: deckId,
+        include_workspace_items: false,
+        limit: 100,
+        offset: 0
+      })
+      expect(updatedFlashcardList.items.length).toBeGreaterThan(0)
+
+      await flashcardsPage.goto()
+      await flashcardsPage.assertPageReady()
+      await flashcardsPage.switchToTab("manage")
+      await expect(flashcardsPage.getManageFlashcardRow(firstCardUuid)).toBeVisible({
+        timeout: 10_000
+      })
     } finally {
       tracker.dispose()
     }

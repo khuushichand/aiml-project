@@ -1,5 +1,7 @@
 import React, { Suspense, lazy } from "react"
-import { CommandPalette, type CommandPaletteProps } from "@/components/Common/CommandPalette"
+
+import type { CommandPaletteProps } from "@/components/Common/CommandPalette"
+import { CommandPaletteHost } from "@/components/Common/CommandPaletteHost"
 
 const PageHelpModal = lazy(() =>
   import("@/components/Common/PageHelpModal").then((m) => ({
@@ -15,7 +17,7 @@ export const EventOnlyHosts = ({
   commandPaletteProps
 }: EventOnlyHostsProps) => (
   <>
-    <CommandPalette {...commandPaletteProps} />
+    <CommandPaletteHost commandPaletteProps={commandPaletteProps} />
     <Suspense fallback={null}>
       <PageHelpModal />
     </Suspense>

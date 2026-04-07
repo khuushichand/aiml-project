@@ -13,8 +13,6 @@ export { WorkflowNode, buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
 
 // Sidebar panels
 export { NodePalette } from "./NodePalette"
-export { NodeConfigPanel } from "./NodeConfigPanel"
-export { ExecutionPanel } from "./ExecutionPanel"
 
 // Step registry
 export {

@@ -947,6 +947,18 @@ class Qwen3TTSAdapter(TTSAdapter):
         requested = (getattr(request, "model", None) or self.model or "auto")
         requested = requested.strip() if isinstance(requested, str) else str(requested)
         requested_key = requested.lower()
+        provider_aliases = {
+            self.PROVIDER_KEY.lower(),
+            self.PROVIDER_KEY.lower().replace("_", "-"),
+        }
+        if requested_key in provider_aliases:
+            configured = (self.model or "auto").strip()
+            configured_key = configured.lower()
+            if configured_key in provider_aliases:
+                configured = "auto"
+                configured_key = "auto"
+            requested = configured
+            requested_key = configured_key
         if requested_key == "auto":
             if self._is_voice_design_request(request) or self._is_voice_clone_request(request):
                 raise TTSValidationError(

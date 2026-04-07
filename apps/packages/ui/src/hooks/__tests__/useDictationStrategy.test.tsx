@@ -182,4 +182,23 @@ describe("useDictationStrategy hook", () => {
     expect(result.current.autoFallbackActive).toBe(false)
     expect(result.current.resolvedMode).toBe("browser")
   })
+
+  it("uses the source-enforced server path when browser dictation is not compatible", () => {
+    const { result } = renderHook(() =>
+      useDictationStrategy({
+        canUseServerStt: true,
+        browserSupportsSpeechRecognition: true,
+        browserDictationCompatible: false,
+        resolvedModeOverride: "server",
+        isServerDictating: false,
+        isBrowserDictating: false,
+        modeOverride: "browser",
+        autoFallbackEnabled: true
+      })
+    )
+
+    expect(result.current.requestedMode).toBe("browser")
+    expect(result.current.resolvedMode).toBe("server")
+    expect(result.current.toggleIntent).toBe("start_server")
+  })
 })

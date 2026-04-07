@@ -10,11 +10,12 @@ import { useMobile } from "@/hooks/useMediaQuery"
 
 type FollowUpInputProps = {
   className?: string
+  mode?: "default" | "recovery"
 }
 
 const MAX_FOLLOW_UP_LENGTH = 20000
 
-export function FollowUpInput({ className }: FollowUpInputProps) {
+export function FollowUpInput({ className, mode = "default" }: FollowUpInputProps) {
   const { askFollowUp, isSearching, startNewTopic, results, answer } =
     useKnowledgeQA()
   const isMobile = useMobile()
@@ -26,6 +27,18 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
   const controlsDisabled = isSearching || pendingAction !== null
   const showCharacterCount = input.length >= Math.floor(MAX_FOLLOW_UP_LENGTH * 0.8)
   const hitCharacterLimit = input.length >= MAX_FOLLOW_UP_LENGTH
+  const promptTitle =
+    mode === "recovery" && !isQueuedState ? "Try a sharper follow-up" : null
+  const helperText = isQueuedState
+    ? "Follow-up input unlocks when the current search completes."
+    : mode === "recovery"
+      ? "Ask for the missing detail, timeframe, or source you still need."
+      : 'Follow-up questions maintain context. Click "New Topic" to start fresh.'
+  const inputPlaceholder = isQueuedState
+    ? "Current search in progress..."
+    : mode === "recovery"
+      ? "Ask a more specific follow-up..."
+      : "Ask a follow-up question..."
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -72,6 +85,12 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
           className
         )}
       >
+        {promptTitle ? (
+          <div className={cn("mb-3", useStickyMobileLayout && "mx-auto max-w-4xl")}>
+            <p className="text-sm font-semibold text-text">{promptTitle}</p>
+            <p className="mt-1 text-xs text-text-muted">{helperText}</p>
+          </div>
+        ) : null}
         <form
           onSubmit={handleSubmit}
           className={cn(
@@ -79,30 +98,13 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             useStickyMobileLayout && "mx-auto max-w-4xl"
           )}
         >
-          {/* New topic button */}
-          <button
-            type="button"
-            onClick={handleNewTopic}
-            aria-label="Start new topic"
-            disabled={controlsDisabled}
-            className="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
-            title="Start new topic"
-          >
-            <Plus className="w-4 h-4 text-text-muted" />
-            <span className="text-xs font-medium text-text-muted">New Topic</span>
-          </button>
-
           {/* Input */}
           <div className="relative flex-1">
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value.slice(0, MAX_FOLLOW_UP_LENGTH))}
-              placeholder={
-                isQueuedState
-                  ? "Current search in progress..."
-                  : "Ask a follow-up question..."
-              }
+              placeholder={inputPlaceholder}
               aria-label="Ask a follow-up question"
               disabled={controlsDisabled}
               maxLength={MAX_FOLLOW_UP_LENGTH}
@@ -137,18 +139,31 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
               )}
             </button>
           </div>
+
+          {/* New topic button */}
+          <button
+            type="button"
+            onClick={handleNewTopic}
+            aria-label="Start new topic"
+            disabled={controlsDisabled}
+            className="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            title="Start new topic"
+          >
+            <Plus className="w-4 h-4 text-text-muted" />
+            <span className="text-xs font-medium text-text-muted">New Topic</span>
+          </button>
         </form>
 
-        <p
-          className={cn(
-            "mt-2 text-xs text-text-muted text-center",
-            useStickyMobileLayout && "mx-auto max-w-4xl"
-          )}
-        >
-          {isQueuedState
-            ? "Follow-up input unlocks when the current search completes."
-            : "Follow-up questions maintain context. Click \"New Topic\" to start fresh."}
-        </p>
+        {!promptTitle ? (
+          <p
+            className={cn(
+              "mt-2 text-xs text-text-muted text-center",
+              useStickyMobileLayout && "mx-auto max-w-4xl"
+            )}
+          >
+            {helperText}
+          </p>
+        ) : null}
         {showCharacterCount ? (
           <p
             className={cn(

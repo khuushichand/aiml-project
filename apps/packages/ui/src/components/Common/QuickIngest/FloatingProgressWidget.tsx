@@ -3,6 +3,7 @@ import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { Loader2, Check, ExternalLink } from "lucide-react"
 import { useIngestWizard } from "./IngestWizardContext"
+import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -19,6 +20,10 @@ export const FloatingProgressWidget: React.FC = () => {
   const { t } = useTranslation(["option"])
   const { state, restore } = useIngestWizard()
   const { processingState, isMinimized } = state
+  const { sessionVisibility, showSession } = useQuickIngestSessionStore((store) => ({
+    sessionVisibility: store.session?.visibility,
+    showSession: store.showSession,
+  }))
   const [dismissed, setDismissed] = useState(false)
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -84,11 +89,12 @@ export const FloatingProgressWidget: React.FC = () => {
       clearTimeout(dismissTimerRef.current)
       dismissTimerRef.current = null
     }
+    showSession()
     restore()
-  }, [restore])
+  }, [restore, showSession])
 
   // Only render when minimized and not dismissed
-  if (!isMinimized || dismissed) return null
+  if (!isMinimized || sessionVisibility !== "hidden" || dismissed) return null
 
   const estimatedText =
     processingState.estimatedRemaining > 0
@@ -129,6 +135,16 @@ export const FloatingProgressWidget: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Processing description */}
+        {!allDone && (
+          <p className="text-[11px] leading-tight text-text-muted">
+            {qi(
+              "widget.processingHint",
+              "Transcribing and indexing content..."
+            )}
+          </p>
+        )}
 
         {/* Progress bar + percentage + Open button */}
         <div className="flex items-center gap-2">

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +132,43 @@ def _as_str_list(value: Any) -> list[str]:
     return out
 
 
+def _allowed_shared_workspace_roots() -> tuple[Path, ...]:
+    from tldw_Server_API.app.core.config import get_config_value
+
+    raw_values: list[str] = []
+    raw_values.extend(
+        entry.strip()
+        for entry in str(get_config_value("ACP-WORKSPACE", "allowed_base_paths", "") or "").replace(
+            os.pathsep,
+            ",",
+        ).split(",")
+        if entry.strip()
+    )
+    raw_values.extend(
+        entry.strip()
+        for entry in str(os.getenv("ACP_WORKSPACE_ALLOWED_BASE_PATHS", "") or "").replace(
+            os.pathsep,
+            ",",
+        ).split(",")
+        if entry.strip()
+    )
+
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        candidate = Path(raw_value).expanduser()
+        if not candidate.is_absolute():
+            logger.warning("Ignoring non-absolute MCP shared workspace base path: {}", raw_value)
+            continue
+        normalized = Path(os.path.normpath(str(candidate)))
+        marker = str(normalized)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        roots.append(normalized)
+    return tuple(roots)
+
+
 def _unique(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -228,12 +266,24 @@ class McpHubService:
 
     @staticmethod
     def _normalize_shared_workspace_root(absolute_root: str) -> str:
-        candidate = Path(str(absolute_root or "").strip()).expanduser()
-        if not str(candidate):
+        raw_value = str(absolute_root or "").strip()
+        if not raw_value:
             raise BadRequestError("absolute_root is required")
+        candidate = Path(raw_value).expanduser()
         if not candidate.is_absolute():
             raise BadRequestError("absolute_root must be an absolute path")
-        return str(candidate.resolve(strict=False))
+        normalized = Path(os.path.normpath(str(candidate)))
+        if str(normalized) in {normalized.anchor, "/"}:
+            raise BadRequestError("absolute_root must not be the filesystem root")
+        allowed_roots = _allowed_shared_workspace_roots()
+        if allowed_roots and not any(
+            normalized == root or normalized.is_relative_to(root)
+            for root in allowed_roots
+        ):
+            raise BadRequestError(
+                "absolute_root must stay under the configured allowed base paths"
+            )
+        return str(normalized)
 
     @staticmethod
     def _scope_reference_allowed(

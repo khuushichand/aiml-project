@@ -2,7 +2,12 @@
 # Description: Audio health endpoints.
 import asyncio
 from dataclasses import asdict, is_dataclass
+import importlib.util
 import os
+import platform
+import re
+import sys
+from ctypes.util import find_library as _ctypes_find_library
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -14,6 +19,7 @@ from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.TTS.circuit_breaker import build_qwen_runtime_breaker_key
+from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -25,6 +31,33 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"},
     },
 )
+
+_AUTH_HEALTH_PROVIDERS = frozenset({"openai", "elevenlabs"})
+_SUSPICIOUS_PUBLIC_HEALTH_RE = re.compile(
+    r"traceback|stack(?:\s*trace)?|exception|\/Users\/|[A-Za-z]:\\|\.py:\d+",
+    re.IGNORECASE,
+)
+_SANITIZED_PUBLIC_HEALTH_MESSAGE = "Internal health diagnostics were suppressed."
+_PROVIDER_API_KEY_PLACEHOLDERS: dict[str, set[str]] = {
+    "openai": {
+        "",
+        "none",
+        "null",
+        "<openai_api_key>",
+        "your-openai-api-key",
+        "your_openai_api_key",
+        "sk-mock-key-12345",
+    },
+    "elevenlabs": {
+        "",
+        "none",
+        "null",
+        "<elevenlabs_api_key>",
+        "<eleven_labs_api_key>",
+        "your-elevenlabs-api-key",
+        "your_elevenlabs_api_key",
+    },
+}
 
 
 def _build_internal_health_request(path: str) -> Request:
@@ -39,6 +72,25 @@ def _build_internal_health_request(path: str) -> Request:
         "scheme": "http",
     }
     return Request(scope)
+
+
+def _sanitize_public_health_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return (
+            _SANITIZED_PUBLIC_HEALTH_MESSAGE
+            if _SUSPICIOUS_PUBLIC_HEALTH_RE.search(value)
+            else value
+        )
+    if isinstance(value, list):
+        return [_sanitize_public_health_payload(item) for item in value]
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"details", "exception", "traceback", "stack", "stack_trace"}:
+                continue
+            sanitized[key] = _sanitize_public_health_payload(item)
+        return sanitized
+    return value
 
 
 def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
@@ -64,6 +116,272 @@ def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
     except Exception as dataclass_error:
         logger.debug("TTS health capabilities dataclass conversion failed", exc_info=dataclass_error)
     return None
+
+
+def _normalize_provider_api_key(provider_name: str, raw_key: Any) -> Optional[str]:
+    normalized_provider = str(provider_name or "").strip().lower()
+    text = str(raw_key or "").strip()
+    if not text:
+        return None
+    if text.lower() in _PROVIDER_API_KEY_PLACEHOLDERS.get(normalized_provider, {"", "none", "null"}):
+        return None
+    return text
+
+
+def _load_auth_provider_configs() -> tuple[bool, dict[str, Any]]:
+    try:
+        config_manager = get_tts_config_manager()
+        return True, {
+            provider_name: config_manager.get_provider_config(provider_name)
+            for provider_name in _AUTH_HEALTH_PROVIDERS
+        }
+    except Exception as exc:
+        logger.debug(f"TTS health auth config lookup failed: {exc}")
+        return False, {}
+
+
+def _load_detailed_circuit_breakers(tts_service: Any) -> dict[str, Any]:
+    circuit_manager = getattr(tts_service, "circuit_manager", None)
+    if circuit_manager is None or not hasattr(circuit_manager, "get_all_status"):
+        return {}
+    try:
+        detailed = circuit_manager.get_all_status(detailed=True)
+        return detailed if isinstance(detailed, dict) else {}
+    except Exception as exc:
+        logger.debug(f"TTS health detailed circuit-breaker lookup failed: {exc}")
+        return {}
+
+
+def _provider_has_auth_failure(
+    provider_name: str,
+    detailed_circuit_breakers: dict[str, Any],
+) -> bool:
+    normalized_provider = str(provider_name or "").strip().lower()
+    if not normalized_provider:
+        return False
+
+    for breaker_key, breaker_status in detailed_circuit_breakers.items():
+        normalized_key = str(breaker_key or "").strip().lower()
+        if normalized_key != normalized_provider and not normalized_key.startswith(
+            f"{normalized_provider}:"
+        ):
+            continue
+        if not isinstance(breaker_status, dict):
+            continue
+        error_analysis = breaker_status.get("error_analysis")
+        if not isinstance(error_analysis, dict):
+            continue
+        error_categories = error_analysis.get("error_categories")
+        if not isinstance(error_categories, dict):
+            continue
+        try:
+            if int(error_categories.get("authentication") or 0) > 0:
+                return True
+        except Exception:
+            if error_categories.get("authentication"):
+                return True
+    return False
+
+
+def _recompute_health_rollup(
+    health: dict[str, Any],
+    provider_details: dict[str, Any],
+    capability_envelopes: list[dict[str, Any]],
+) -> None:
+    available_providers = (
+        sum(1 for entry in capability_envelopes if entry.get("availability") == "enabled")
+        if capability_envelopes
+        else sum(
+            1
+            for details in provider_details.values()
+            if isinstance(details, dict) and details.get("availability") == "enabled"
+        )
+    )
+    health["providers"]["available"] = available_providers
+    health["status"] = "healthy" if available_providers > 0 else "unhealthy"
+
+
+def _enrich_external_provider_auth_health(
+    health: dict[str, Any],
+    provider_details: dict[str, Any],
+    capability_envelopes: list[dict[str, Any]],
+    tts_service: Any,
+) -> None:
+    configs_loaded, provider_configs = _load_auth_provider_configs()
+    detailed_circuit_breakers = _load_detailed_circuit_breakers(tts_service)
+    updated = False
+
+    for provider_name in _AUTH_HEALTH_PROVIDERS:
+        detail = provider_details.get(provider_name)
+        matching_entries = [
+            entry
+            for entry in capability_envelopes
+            if str(entry.get("provider") or "").strip().lower() == provider_name
+        ]
+
+        if not isinstance(detail, dict) and not matching_entries:
+            continue
+
+        current_availability = (
+            str(detail.get("availability") or "").strip().lower()
+            if isinstance(detail, dict)
+            else ""
+        )
+        if not current_availability and matching_entries:
+            current_availability = str(
+                matching_entries[0].get("availability") or ""
+            ).strip().lower()
+
+        auth_configured: Optional[bool] = None
+        auth_reason: Optional[str] = None
+        if configs_loaded:
+            provider_cfg = provider_configs.get(provider_name)
+            configured_key = _normalize_provider_api_key(
+                provider_name,
+                getattr(provider_cfg, "api_key", None) if provider_cfg is not None else None,
+            )
+            auth_configured = configured_key is not None
+            if current_availability == "enabled" and not auth_configured:
+                auth_reason = "api_key_missing"
+
+        if _provider_has_auth_failure(provider_name, detailed_circuit_breakers):
+            auth_reason = "authentication_failed"
+
+        auth_ready: Optional[bool]
+        if auth_reason is not None:
+            auth_ready = False
+        elif auth_configured is not None:
+            auth_ready = auth_configured
+        else:
+            auth_ready = None
+
+        if isinstance(detail, dict):
+            if auth_configured is not None:
+                detail["auth_configured"] = auth_configured
+            if auth_ready is not None:
+                detail["auth_ready"] = auth_ready
+            if auth_reason is not None or "auth_reason" in detail:
+                detail["auth_reason"] = auth_reason
+            if auth_reason is not None and current_availability == "enabled":
+                detail["status"] = "unhealthy"
+                detail["availability"] = "unhealthy"
+                detail["failed"] = True
+                updated = True
+
+        for entry in matching_entries:
+            if auth_configured is not None:
+                entry["auth_configured"] = auth_configured
+            if auth_ready is not None:
+                entry["auth_ready"] = auth_ready
+            if auth_reason is not None or "auth_reason" in entry:
+                entry["auth_reason"] = auth_reason
+            if auth_reason is not None and str(entry.get("availability") or "").strip().lower() == "enabled":
+                entry["availability"] = "unhealthy"
+                updated = True
+
+    if updated:
+        _recompute_health_rollup(health, provider_details, capability_envelopes)
+
+
+def _module_spec_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
+
+
+def _discover_kokoro_espeak_library(adapter: Any) -> Optional[str]:
+    try:
+        config = getattr(adapter, "config", {}) or {}
+    except Exception:
+        config = {}
+
+    configured_path = config.get("kokoro_espeak_lib") if isinstance(config, dict) else None
+    if configured_path and os.path.exists(str(configured_path)):
+        return str(configured_path)
+
+    env_path = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    sys_plat = sys.platform
+    candidates: list[str] = []
+    if sys_plat == "darwin":
+        candidates = [
+            "/opt/homebrew/lib/libespeak-ng.dylib",
+            "/usr/local/lib/libespeak-ng.dylib",
+            "/opt/local/lib/libespeak-ng.dylib",
+        ]
+    elif sys_plat.startswith("linux"):
+        arch = platform.machine() or ""
+        candidates = [
+            f"/usr/lib/{arch}/libespeak-ng.so.1" if arch else "",
+            "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+            "/usr/lib/aarch64-linux-gnu/libespeak-ng.so.1",
+            "/usr/lib64/libespeak-ng.so.1",
+            "/usr/lib/libespeak-ng.so.1",
+            "/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+            "/lib/aarch64-linux-gnu/libespeak-ng.so.1",
+            "/lib/libespeak-ng.so.1",
+        ]
+    elif sys_plat in ("win32", "cygwin"):
+        pf = os.environ.get("PROGRAMFILES", r"C:\\Program Files")
+        pf86 = os.environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)")
+        candidates = [
+            os.path.join(pf, "eSpeak NG", "libespeak-ng.dll"),
+            os.path.join(pf86, "eSpeak NG", "libespeak-ng.dll"),
+        ]
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            if directory:
+                candidates.append(os.path.join(directory, "libespeak-ng.dll"))
+
+    try:
+        discovered_name = _ctypes_find_library("espeak-ng") or _ctypes_find_library("espeak")
+        if discovered_name and os.path.isabs(discovered_name) and os.path.exists(discovered_name):
+            candidates.insert(0, discovered_name)
+    except Exception as exc:
+        logger.debug(f"Unable to discover eSpeak library via ctypes lookup: {exc}")
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _evaluate_kokoro_runtime(adapter: Any) -> tuple[bool, Optional[str], dict[str, Any]]:
+    backend = "onnx" if getattr(adapter, "use_onnx", True) else "pytorch"
+    diagnostics: dict[str, Any] = {"backend": backend}
+
+    if backend == "onnx":
+        has_backend = _module_spec_available("kokoro_onnx")
+        espeak_path = _discover_kokoro_espeak_library(adapter)
+        diagnostics["kokoro_onnx_available"] = has_backend
+        diagnostics["espeak_lib_path"] = _sanitize_health_path_value(espeak_path)
+        diagnostics["espeak_lib_exists"] = bool(espeak_path and os.path.exists(espeak_path))
+        if not has_backend:
+            return False, "kokoro_onnx_missing", diagnostics
+        if not diagnostics["espeak_lib_exists"]:
+            return False, "espeak_missing", diagnostics
+        return True, None, diagnostics
+
+    has_pipeline = _module_spec_available("kokoro.pipeline")
+    diagnostics["kokoro_pipeline_available"] = has_pipeline
+    if not has_pipeline:
+        return False, "kokoro_pipeline_missing", diagnostics
+    return True, None, diagnostics
+
+
+def _sanitize_health_path_value(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    expanded = os.path.expanduser(text)
+    if os.path.isabs(expanded):
+        name = os.path.basename(expanded)
+        return name or "<redacted>"
+    return text
 
 
 @router.get("/health")
@@ -172,6 +490,13 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
             "timestamp": datetime.utcnow().isoformat(),
         }
 
+        _enrich_external_provider_auth_health(
+            health,
+            provider_details,
+            capability_envelopes,
+            tts_service,
+        )
+
         try:
             from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider
 
@@ -182,21 +507,42 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
             adapter = await factory.registry.get_adapter(TTSProvider.KOKORO)
             if adapter:
                 backend = "onnx" if getattr(adapter, "use_onnx", True) else "pytorch"
+                runtime_ready, runtime_reason, runtime_diagnostics = _evaluate_kokoro_runtime(adapter)
                 kokoro_info = {
                     "backend": backend,
                     "device": str(getattr(adapter, "device", "unknown")),
-                    "model_path": getattr(adapter, "model_path", None),
-                    "voices_json": getattr(adapter, "voices_json", None),
+                    "model_path": _sanitize_health_path_value(getattr(adapter, "model_path", None)),
+                    "voices_json": _sanitize_health_path_value(getattr(adapter, "voices_json", None)),
+                    "runtime_ready": runtime_ready,
+                    "runtime_reason": runtime_reason,
                 }
                 try:
                     es_env = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
-                    kokoro_info["espeak_lib_env"] = es_env
-                    if es_env:
-                        kokoro_info["espeak_lib_exists"] = bool(os.path.exists(es_env))
-                    else:
-                        kokoro_info["espeak_lib_exists"] = False
+                    kokoro_info["espeak_lib_env"] = _sanitize_health_path_value(es_env)
+                    kokoro_info["espeak_lib_path"] = runtime_diagnostics.get("espeak_lib_path")
+                    kokoro_info["espeak_lib_exists"] = bool(runtime_diagnostics.get("espeak_lib_exists"))
                 except Exception as exc:
                     logger.debug(f"Kokoro health: espeak library introspection failed: {exc}")
+                kokoro_detail = provider_details.get("kokoro")
+                if not isinstance(kokoro_detail, dict):
+                    kokoro_detail = {}
+                    provider_details["kokoro"] = kokoro_detail
+                kokoro_detail["runtime_ready"] = runtime_ready
+                kokoro_detail["runtime_reason"] = runtime_reason
+                if not runtime_ready:
+                    kokoro_detail["status"] = "unhealthy"
+                    kokoro_detail["availability"] = "unhealthy"
+                    kokoro_detail["failed"] = True
+
+                for entry in capability_envelopes:
+                    if str(entry.get("provider") or "").strip().lower() != "kokoro":
+                        continue
+                    entry["runtime_ready"] = runtime_ready
+                    entry["runtime_reason"] = runtime_reason
+                    if not runtime_ready:
+                        entry["availability"] = "unhealthy"
+
+                _recompute_health_rollup(health, provider_details, capability_envelopes)
                 health["providers"]["kokoro"] = kokoro_info
         except Exception as e:
             logger.debug(f"Kokoro health enrichment failed: {e}")
@@ -213,8 +559,34 @@ async def collect_setup_tts_health() -> dict[str, Any]:
     """Collect TTS health without going through the HTTP routing layer."""
 
     request = _build_internal_health_request("/api/v1/audio/health")
-    tts_service = await get_tts_service()
-    return await get_tts_health(request, tts_service)
+    try:
+        tts_service = await get_tts_service()
+        return await get_tts_health(request, tts_service)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "TTS health check failed"
+        return {
+            "status": "error",
+            "providers": {"total": 0, "available": 0, "details": {}},
+            "message": message,
+            "error": detail,
+            "status_code": exc.status_code,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("TTS setup health collection failed")
+        request_id = ensure_request_id(request)
+        payload = _http_error_detail("TTS health check failed", request_id, exc=exc)
+        return {
+            "status": "error",
+            "providers": {"total": 0, "available": 0, "details": {}},
+            **payload,
+            "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        }
 
 
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
@@ -307,7 +679,7 @@ async def get_stt_health(
     if warm_info:
         health["warm"] = warm_info
 
-    return health
+    return _sanitize_public_health_payload(health)
 
 
 async def collect_setup_stt_health(
@@ -318,4 +690,29 @@ async def collect_setup_stt_health(
     """Collect STT health without going through the HTTP routing layer."""
 
     request = _build_internal_health_request("/api/v1/audio/transcriptions/health")
-    return await get_stt_health(request, model=model, warm=warm)
+    try:
+        return await get_stt_health(request, model=model, warm=warm)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        detail = _sanitize_public_health_payload(detail)
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "Failed to collect STT health."
+        return {
+            "provider": None,
+            "alias": model,
+            "model": model,
+            "available": False,
+            "usable": False,
+            "on_demand": False,
+            "message": message,
+            "error": (
+                detail.get("error")
+                if isinstance(detail, dict) and isinstance(detail.get("error"), str)
+                else None
+            ),
+            "status_code": exc.status_code,
+        }

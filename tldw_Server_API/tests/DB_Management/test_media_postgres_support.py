@@ -2,13 +2,22 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sys
 import threading
+import types
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock
 import uuid
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_repository import (
     MediaRepository,
 )
@@ -138,6 +147,212 @@ def test_postgres_migrations_include_current_schema_version() -> None:
     assert MediaDatabase._CURRENT_SCHEMA_VERSION in migrations
 
 
+def test_postgres_migrations_include_v23() -> None:
+
+    migrations = MediaDatabase._get_postgres_migrations(MediaDatabase.__new__(MediaDatabase))
+    assert 23 in migrations
+
+
+def test_run_postgres_migrate_to_v23_executes_transcript_run_history_updates() -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.schema.migration_bodies import (
+        postgres_transcript_run_history as postgres_transcript_run_history_module,
+    )
+
+    conn = object()
+    calls: list[tuple[str, tuple[object, ...] | None, object]] = []
+
+    class FakeBackend:
+        def escape_identifier(self, name: str) -> str:
+            return f'"{name}"'
+
+        def execute(
+            self,
+            query: str,
+            params: tuple[object, ...] | None = None,
+            *,
+            connection: object,
+        ) -> None:
+            calls.append((query, params, connection))
+
+    db = MediaDatabase.__new__(MediaDatabase)
+    db.backend = FakeBackend()
+
+    postgres_transcript_run_history_module.run_postgres_migrate_to_v23(db, conn)
+
+    executed_sql = "\n".join(query for query, _params, _connection in calls)
+    assert 'ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "latest_transcription_run_id" BIGINT' in executed_sql
+    assert 'ALTER TABLE "transcripts" ADD COLUMN IF NOT EXISTS "transcription_run_id" BIGINT' in executed_sql
+    assert 'CREATE UNIQUE INDEX IF NOT EXISTS "idx_transcripts_media_run_id"' in executed_sql
+    assert 'WHERE "transcription_run_id" IS NOT NULL' in executed_sql
+    assert 'CREATE UNIQUE INDEX IF NOT EXISTS "idx_transcripts_media_idempotency_key"' in executed_sql
+    assert 'WHERE "idempotency_key" IS NOT NULL' in executed_sql
+    assert 'DROP CONSTRAINT IF EXISTS transcripts_media_id_whisper_model_key' in executed_sql
+    assert "ROW_NUMBER() OVER (" in executed_sql
+    assert "PARTITION BY media_id" in executed_sql
+    assert "ORDER BY created_at NULLS FIRST, id ASC" in executed_sql
+    assert "WHERE deleted = FALSE" in executed_sql
+
+
+@pytest.mark.integration
+def test_fresh_postgres_schema_enforces_transcript_run_history_uniqueness(
+    pg_database_config: DatabaseConfig,
+) -> None:
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
+    db = MediaDatabase(db_path=":memory:", client_id="pg-bootstrap-v23", backend=backend)
+
+    try:
+        media_uuid = str(uuid.uuid4())
+        now = db._get_current_utc_timestamp_str()
+
+        with backend.transaction() as conn:
+            backend.execute(
+                """
+                INSERT INTO Media (uuid, title, type, content_hash, last_modified, version, client_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    media_uuid,
+                    "Bootstrap uniqueness",
+                    "audio",
+                    f"hash-{media_uuid}",
+                    now,
+                    1,
+                    db.client_id,
+                ),
+                connection=conn,
+            )
+            media_id = int(
+                backend.execute(
+                    "SELECT id FROM media WHERE uuid = %s",
+                    (media_uuid,),
+                    connection=conn,
+                ).scalar
+            )
+            backend.execute(
+                """
+                INSERT INTO Transcripts (
+                    media_id, whisper_model, transcription, created_at, transcription_run_id,
+                    idempotency_key, uuid, last_modified, version, client_id, deleted
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    media_id,
+                    "small",
+                    "baseline transcript",
+                    now,
+                    1,
+                    "job-1",
+                    str(uuid.uuid4()),
+                    now,
+                    1,
+                    db.client_id,
+                    False,
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                """
+                INSERT INTO Transcripts (
+                    media_id, whisper_model, transcription, created_at, transcription_run_id,
+                    idempotency_key, uuid, last_modified, version, client_id, deleted
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    media_id,
+                    "medium",
+                    "nullable key transcript",
+                    now,
+                    2,
+                    None,
+                    str(uuid.uuid4()),
+                    now,
+                    1,
+                    db.client_id,
+                    False,
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                """
+                INSERT INTO Transcripts (
+                    media_id, whisper_model, transcription, created_at, transcription_run_id,
+                    idempotency_key, uuid, last_modified, version, client_id, deleted
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    media_id,
+                    "large",
+                    "second nullable key transcript",
+                    now,
+                    3,
+                    None,
+                    str(uuid.uuid4()),
+                    now,
+                    1,
+                    db.client_id,
+                    False,
+                ),
+                connection=conn,
+            )
+
+        with pytest.raises(BackendDatabaseError, match="unique|duplicate key"):
+            with backend.transaction() as conn:
+                backend.execute(
+                    """
+                    INSERT INTO Transcripts (
+                        media_id, whisper_model, transcription, created_at, transcription_run_id,
+                        idempotency_key, uuid, last_modified, version, client_id, deleted
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        media_id,
+                        "duplicate-run",
+                        "duplicate run transcript",
+                        now,
+                        1,
+                        "job-2",
+                        str(uuid.uuid4()),
+                        now,
+                        1,
+                        db.client_id,
+                        False,
+                    ),
+                    connection=conn,
+                )
+
+        with pytest.raises(BackendDatabaseError, match="unique|duplicate key"):
+            with backend.transaction() as conn:
+                backend.execute(
+                    """
+                    INSERT INTO Transcripts (
+                        media_id, whisper_model, transcription, created_at, transcription_run_id,
+                        idempotency_key, uuid, last_modified, version, client_id, deleted
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        media_id,
+                        "duplicate-key",
+                        "duplicate idempotency transcript",
+                        now,
+                        4,
+                        "job-1",
+                        str(uuid.uuid4()),
+                        now,
+                        1,
+                        db.client_id,
+                        False,
+                    ),
+                    connection=conn,
+                )
+    finally:
+        db.close_connection()
+
+
 def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
 
     db = MediaDatabase.__new__(MediaDatabase)
@@ -227,6 +442,107 @@ def test_delete_fts_keyword_postgres_nulls_vector() -> None:
     sql, params = db._execute_with_connection.call_args.args[1:]
     assert sql.strip().startswith("UPDATE keywords SET keyword_fts_tsv = NULL")
     assert params == (7,)
+
+
+def test_runtime_fts_ops_update_fts_media_sqlite_preserves_synonym_expansion_and_fallback(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import fts_ops
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        def execute(self, sql: str, params: tuple[object, ...]):
+            self.calls.append((sql, params))
+            return None
+
+    class _Db:
+        backend_type = BackendType.SQLITE
+
+    module_name = "tldw_Server_API.app.core.RAG.rag_service.synonyms_registry"
+    synonym_module = types.ModuleType(module_name)
+
+    def fake_get_corpus_synonyms(_corpus):
+        return {"title": ["alias-one"], "body": ["alias-two"]}
+
+    synonym_module.get_corpus_synonyms = fake_get_corpus_synonyms  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module_name, synonym_module)
+    monkeypatch.setenv("DEFAULT_FTS_CORPUS", "test-corpus")
+    monkeypatch.setenv("FTS_SYNONYM_EXPANSION_LIMIT", "1")
+
+    conn = _Conn()
+    fts_ops._update_fts_media(_Db(), conn, 9, "Title", "Body")
+
+    assert len(conn.calls) == 1
+    sql, params = conn.calls[0]
+    assert sql.startswith("INSERT OR REPLACE INTO media_fts")
+    assert params[0:2] == (9, "Title")
+    assert params[2] in {"Body alias-one", "Body alias-two"}
+
+    def raising_get_corpus_synonyms(_corpus):
+        raise RuntimeError("boom")
+
+    synonym_module.get_corpus_synonyms = raising_get_corpus_synonyms  # type: ignore[attr-defined]
+    conn_fallback = _Conn()
+    fts_ops._update_fts_media(_Db(), conn_fallback, 10, "Title", "Body")
+
+    assert conn_fallback.calls[0][1] == (10, "Title", "Body")
+
+
+def test_runtime_fts_ops_sync_refresh_noops_when_update_payload_has_no_relevant_fields() -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import fts_ops
+
+    class _Db:
+        def __init__(self) -> None:
+            self.deleted_media: list[int] = []
+            self.updated_media: list[tuple[int, str, object]] = []
+            self.deleted_keywords: list[int] = []
+            self.updated_keywords: list[tuple[int, str]] = []
+
+        def _fetchone_with_connection(self, _conn, query: str, _params=None):
+            if "FROM Media" in query:
+                return {"id": 7, "title": "Title", "content": "Body", "deleted": 0}
+            if "FROM Keywords" in query:
+                return {"id": 5, "keyword": "science", "deleted": 0}
+            raise AssertionError(f"unexpected query: {query}")
+
+        def _delete_fts_media(self, _conn, media_id: int) -> None:
+            self.deleted_media.append(media_id)
+
+        def _update_fts_media(self, _conn, media_id: int, title: str, content: object) -> None:
+            self.updated_media.append((media_id, title, content))
+
+        def _delete_fts_keyword(self, _conn, keyword_id: int) -> None:
+            self.deleted_keywords.append(keyword_id)
+
+        def _update_fts_keyword(self, _conn, keyword_id: int, keyword: str) -> None:
+            self.updated_keywords.append((keyword_id, keyword))
+
+    db = _Db()
+    conn = object()
+
+    fts_ops.sync_refresh_fts_for_entity(
+        db,
+        conn,
+        entity="Media",
+        entity_uuid="media-uuid",
+        operation="update",
+        payload={"author": "ignored"},
+    )
+    fts_ops.sync_refresh_fts_for_entity(
+        db,
+        conn,
+        entity="Keywords",
+        entity_uuid="kw-uuid",
+        operation="update",
+        payload={"confidence": 0.9},
+    )
+
+    assert db.deleted_media == []
+    assert db.updated_media == []
+    assert db.deleted_keywords == []
+    assert db.updated_keywords == []
 
 
 def test_media_repository_uses_execution_helper_for_postgres_chunk_persistence(monkeypatch) -> None:

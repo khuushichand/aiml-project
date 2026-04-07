@@ -29,22 +29,29 @@ module.exports = {
       },
       fontFamily: {
         display: ["Space Grotesk", "Inter", "sans-serif"],
-        body: ["Inter", "system-ui", "sans-serif"],
-        arimo: ["Arimo", "sans-serif"]
+        body: ["var(--font-family, Inter)", "system-ui", "sans-serif"],
+        mono: ["var(--font-family-mono, 'Courier New')", "monospace"],
+        arimo: ["Arimo", "sans-serif"],
       },
       fontSize: {
-        body: ["14px", { lineHeight: "20px" }],
-        message: ["15px", { lineHeight: "22px" }],
-        caption: ["12px", { lineHeight: "16px" }],
-        label: ["11px", { lineHeight: "14px", letterSpacing: "0.04em" }]
+        body: ["var(--font-size-body, 14px)", { lineHeight: "1.43" }],
+        message: ["var(--font-size-message, 15px)", { lineHeight: "1.47" }],
+        caption: ["var(--font-size-caption, 12px)", { lineHeight: "1.33" }],
+        label: ["var(--font-size-label, 11px)", { lineHeight: "1.27", letterSpacing: "0.04em" }],
       },
       borderRadius: {
-        card: "12px",
-        pill: "9999px"
+        sm: "var(--radius-sm, 2px)",
+        md: "var(--radius-md, 6px)",
+        lg: "var(--radius-lg, 8px)",
+        xl: "var(--radius-xl, 12px)",
+        card: "var(--radius-xl, 12px)",
+        pill: "9999px",
       },
       boxShadow: {
-        card: "0 6px 18px rgba(0,0,0,0.16)",
-        modal: "0 10px 30px rgba(0,0,0,0.28)"
+        sm: "var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.12))",
+        md: "var(--shadow-md, 0 6px 18px rgba(0,0,0,0.08))",
+        card: "var(--shadow-md, 0 6px 18px rgba(0,0,0,0.16))",
+        modal: "var(--shadow-md, 0 10px 30px rgba(0,0,0,0.28))",
       },
       backgroundImage: {
         "bottom-mask":

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 import tldw_Server_API.app.services.claims_review_metrics_scheduler as scheduler_mod
 from tldw_Server_API.app.services.claims_review_metrics_scheduler import run_claims_review_metrics_once
 

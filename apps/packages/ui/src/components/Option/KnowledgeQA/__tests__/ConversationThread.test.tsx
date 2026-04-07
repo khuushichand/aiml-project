@@ -99,9 +99,46 @@ describe("ConversationThread", () => {
 
     expect(screen.getByLabelText("Conversation thread")).toBeInTheDocument()
     expect(screen.getByText("What changed in Q1?")).toBeInTheDocument()
+    expect(screen.getByText("Q1 revenue increased by 12%.")).toBeInTheDocument()
     expect(screen.queryByText("How does that compare with Q2?")).not.toBeInTheDocument()
     expect(screen.getByText("2 sources")).toBeInTheDocument()
     expect(screen.getByText("2 citations")).toBeInTheDocument()
+  })
+
+  it("keeps lightweight compare affordances for a single prior turn", () => {
+    state.messages = [
+      {
+        id: "u1",
+        role: "user",
+        content: "What changed in Q1?",
+        timestamp: "2026-02-18T08:00:00.000Z",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Q1 revenue increased by 12%.",
+        timestamp: "2026-02-18T08:00:05.000Z",
+      },
+      {
+        id: "u2",
+        role: "user",
+        content: "How does that compare with Q2?",
+        timestamp: "2026-02-18T08:01:00.000Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Q2 rose by 9%, so Q1 was higher.",
+        timestamp: "2026-02-18T08:01:06.000Z",
+      },
+    ]
+
+    render(<ConversationThread />)
+
+    expect(screen.getByRole("button", { name: "Compare to current answer" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Compare turns" })
+    ).not.toBeInTheDocument()
   })
 
   it("allows reusing a previous question by loading it into the main search input", async () => {
@@ -173,7 +210,7 @@ describe("ConversationThread", () => {
 
     render(<ConversationThread />)
 
-    await userEvent.click(screen.getByRole("button", { name: "Start Branch" }))
+    await userEvent.click(screen.getByRole("button", { name: "Ask a different follow-up" }))
 
     expect(state.branchFromTurn).toHaveBeenCalledWith("u1")
   })
@@ -222,7 +259,7 @@ describe("ConversationThread", () => {
 
     render(<ConversationThread />)
 
-    const branchButtons = screen.getAllByRole("button", { name: "Start Branch" })
+    const branchButtons = screen.getAllByRole("button", { name: "Ask a different follow-up" })
     await userEvent.click(branchButtons[0])
 
     expect(state.branchFromTurn).toHaveBeenCalledTimes(1)
@@ -405,8 +442,33 @@ describe("ConversationThread", () => {
   })
 
   it("keeps the comparison loading state visible until all selected remote threads finish loading", async () => {
-    state.messages = []
     state.currentThreadId = null
+    state.messages = [
+      {
+        id: "u1",
+        role: "user",
+        content: "How did Q1 perform?",
+        timestamp: "2026-02-18T08:00:00.000Z",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Q1 increased by 12%.",
+        timestamp: "2026-02-18T08:00:03.000Z",
+      },
+      {
+        id: "u2",
+        role: "user",
+        content: "How did Q2 perform?",
+        timestamp: "2026-02-18T08:01:00.000Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Q2 increased by 9%.",
+        timestamp: "2026-02-18T08:01:03.000Z",
+      },
+    ]
     state.searchHistory = [
       {
         id: "history-1",
@@ -532,7 +594,7 @@ describe("ConversationThread", () => {
 
     render(<ConversationThread />)
 
-    await userEvent.click(screen.getByRole("button", { name: "Compare with previous" }))
+    await userEvent.click(screen.getByRole("button", { name: "Compare to current answer" }))
 
     expect(
       screen.getByRole("region", { name: "Side-by-side query comparison" })

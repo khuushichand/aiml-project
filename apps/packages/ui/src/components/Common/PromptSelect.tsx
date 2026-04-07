@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { Dropdown, Empty, Input, Tooltip } from "antd"
+import { Dropdown, Empty, Input, Modal, Tooltip } from "antd"
 import type { InputRef } from "antd"
 import type { ItemType, MenuItemType } from "antd/es/menu/interface"
 import { BookIcon, ComputerIcon, ZapIcon, Search } from "lucide-react"
@@ -9,11 +9,18 @@ import { getAllPrompts } from "@/db/dexie/helpers"
 import type { Prompt } from "@/db/dexie/types"
 import { useStorage } from "@plasmohq/storage/hook"
 import { IconButton } from "./IconButton"
+import {
+  normalizeSystemPromptOverrideValue,
+  resolveEffectiveSystemPromptState,
+  resolveSelectedSystemPromptContent
+} from "./system-prompt-utils"
 
 type Props = {
   setSelectedSystemPrompt: (promptId: string | undefined) => void
   setSelectedQuickPrompt: (prompt: string | undefined) => void
   selectedSystemPrompt: string | undefined
+  systemPrompt: string | undefined
+  setSystemPrompt: (prompt: string) => void
   className?: string
   iconClassName?: string
 }
@@ -22,6 +29,8 @@ export const PromptSelect: React.FC<Props> = ({
   setSelectedQuickPrompt,
   setSelectedSystemPrompt,
   selectedSystemPrompt,
+  systemPrompt,
+  setSystemPrompt,
   className = "text-text-muted",
   iconClassName = "size-5"
 }) => {
@@ -29,6 +38,11 @@ export const PromptSelect: React.FC<Props> = ({
   const [menuDensity] = useStorage("menuDensity", "comfortable")
   const [searchText, setSearchText] = useState("")
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorLoading, setEditorLoading] = useState(false)
+  const [editorDraft, setEditorDraft] = useState("")
+  const [editorTemplateContent, setEditorTemplateContent] = useState("")
+  const [editorOverrideActive, setEditorOverrideActive] = useState(false)
   const searchInputRef = useRef<InputRef | null>(null)
 
   const { data } = useQuery({
@@ -69,6 +83,46 @@ export const PromptSelect: React.FC<Props> = ({
     const prompt = data.find((item) => item.id === selectedSystemPrompt)
     return prompt?.title || null
   }, [data, selectedSystemPrompt])
+
+  const openSystemPromptEditor = React.useCallback(async () => {
+    setDropdownOpen(false)
+    setEditorOpen(true)
+    setEditorLoading(true)
+    const resolved = await resolveEffectiveSystemPromptState({
+      selectedSystemPrompt,
+      systemPrompt
+    })
+    setEditorTemplateContent(resolved.templateContent)
+    setEditorDraft(resolved.effectiveContent)
+    setEditorOverrideActive(
+      Boolean(selectedSystemPrompt) &&
+        typeof systemPrompt === "string" &&
+        systemPrompt.trim().length > 0 &&
+        systemPrompt !== resolved.templateContent
+    )
+    setEditorLoading(false)
+  }, [selectedSystemPrompt, systemPrompt])
+
+  const handleEditorSave = React.useCallback(() => {
+    const nextValue = normalizeSystemPromptOverrideValue({
+      draft: editorDraft,
+      templateContent: editorTemplateContent
+    })
+    setSystemPrompt(nextValue)
+    setEditorOpen(false)
+  }, [editorDraft, editorTemplateContent, setSystemPrompt])
+
+  const handleEditorReset = React.useCallback(async () => {
+    setEditorLoading(true)
+    const nextValue = await resolveSelectedSystemPromptContent(
+      selectedSystemPrompt
+    )
+    setEditorTemplateContent(nextValue)
+    setEditorDraft(nextValue)
+    setEditorOverrideActive(false)
+    setSystemPrompt(nextValue)
+    setEditorLoading(false)
+  }, [selectedSystemPrompt, setSystemPrompt])
 
   // Group prompts by category: Favorites, System, Quick
   const groupedMenuItems = useMemo<ItemType[]>(() => {
@@ -147,13 +201,36 @@ export const PromptSelect: React.FC<Props> = ({
       })
     }
 
+    if (items.length > 0) {
+      items.push({
+        type: "divider"
+      })
+    }
+
+    items.push({
+      key: "__edit_system_prompt__",
+      label: t("promptSelect.editSystemPrompt", "Edit system prompt"),
+      onClick: () => {
+        void openSystemPromptEditor()
+      }
+    })
+
     // If no groups (shouldn't happen, but fallback)
     if (items.length === 0) {
       return filteredData.map(createPromptItem)
     }
 
     return items
-  }, [filteredData, searchText, selectedSystemPrompt, t, handlePromptChange, setDropdownOpen, setSelectedSystemPrompt])
+  }, [
+    filteredData,
+    searchText,
+    selectedSystemPrompt,
+    t,
+    handlePromptChange,
+    openSystemPromptEditor,
+    setDropdownOpen,
+    setSelectedSystemPrompt
+  ])
 
   // Focus search input when dropdown opens
   useEffect(() => {
@@ -190,51 +267,100 @@ export const PromptSelect: React.FC<Props> = ({
   return (
     <>
       {data && (
-        <Dropdown
-          open={dropdownOpen}
-          onOpenChange={setDropdownOpen}
-          menu={{
-            items: groupedMenuItems,
-            style: {
-              maxHeight: 400,
-              overflowY: "auto"
-            },
-            className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            activeKey: selectedSystemPrompt
-          }}
-          popupRender={(menu) => (
-            <div className="bg-surface rounded-lg shadow-lg border border-border">
-              <div className="p-2 border-b border-border">
-                <Input
-                  ref={searchInputRef}
-                  placeholder={t("searchPrompts", "Search prompts...")}
-                  prefix={<Search className="size-4 text-text-subtle" />}
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  allowClear
-                  size="small"
-                  onKeyDown={(e) => e.stopPropagation()}
-                />
+        <>
+          <Dropdown
+            open={dropdownOpen}
+            onOpenChange={setDropdownOpen}
+            menu={{
+              items: groupedMenuItems,
+              style: {
+                maxHeight: 400,
+                overflowY: "auto"
+              },
+              className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
+              activeKey: selectedSystemPrompt
+            }}
+            popupRender={(menu) => (
+              <div className="bg-surface rounded-lg shadow-lg border border-border">
+                <div className="p-2 border-b border-border">
+                  <Input
+                    ref={searchInputRef}
+                    placeholder={t("searchPrompts", "Search prompts...")}
+                    prefix={<Search className="size-4 text-text-subtle" />}
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    allowClear
+                    size="small"
+                    onKeyDown={(e) => e.stopPropagation()}
+                  />
+                </div>
+                {menu}
               </div>
-              {menu}
+            )}
+            placement={"topLeft"}
+            trigger={["click"]}>
+            <Tooltip title={t("selectAPrompt")}>
+              <IconButton
+                ariaLabel={t("selectAPrompt") as string}
+                hasPopup="menu"
+                dataTestId="chat-prompt-select"
+                className={className}>
+                <BookIcon className={iconClassName} />
+                <span className="ml-1 hidden max-w-[120px] truncate text-xs font-medium text-text sm:inline">
+                  {selectedPromptLabel ||
+                    t("promptSelect.label", "Prompt")}
+                </span>
+              </IconButton>
+            </Tooltip>
+          </Dropdown>
+          <Modal
+            open={editorOpen}
+            title={t("promptSelect.editSystemPrompt", "Edit system prompt")}
+            onCancel={() => setEditorOpen(false)}
+            footer={
+              <div className="flex items-center justify-end gap-2">
+                <button type="button" onClick={() => setEditorOpen(false)}>
+                  {t("common:cancel", "Cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleEditorReset()
+                  }}
+                >
+                  {t("common:reset", "Reset")}
+                </button>
+                <button type="button" onClick={handleEditorSave}>
+                  {t("common:save", "Save")}
+                </button>
+              </div>
+            }>
+            <div className="space-y-3">
+              {editorOverrideActive ? (
+                <div className="text-xs text-text-subtle">
+                  {t(
+                    "promptSelect.overrideActive",
+                    "Override active: this conversation is currently using a custom system prompt instead of the selected template."
+                  )}
+                </div>
+              ) : null}
+              <Input.TextArea
+                rows={6}
+                placeholder={t(
+                  "promptSelect.systemPromptPlaceholder",
+                  "Enter system prompt"
+                )}
+                value={editorDraft}
+                onChange={(event) => setEditorDraft(event.target.value)}
+              />
+              {editorLoading ? (
+                <div className="text-xs text-text-subtle">
+                  {t("common:loading", "Loading")}
+                </div>
+              ) : null}
             </div>
-          )}
-          placement={"topLeft"}
-          trigger={["click"]}>
-          <Tooltip title={t("selectAPrompt")}>
-            <IconButton
-              ariaLabel={t("selectAPrompt") as string}
-              hasPopup="menu"
-              dataTestId="chat-prompt-select"
-              className={className}>
-              <BookIcon className={iconClassName} />
-              <span className="ml-1 hidden max-w-[120px] truncate text-xs font-medium text-text sm:inline">
-                {selectedPromptLabel ||
-                  t("promptSelect.label", "Prompt")}
-              </span>
-            </IconButton>
-          </Tooltip>
-        </Dropdown>
+          </Modal>
+        </>
       )}
     </>
   )

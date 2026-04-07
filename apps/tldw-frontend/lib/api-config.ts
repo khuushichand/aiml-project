@@ -1,14 +1,35 @@
-const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+import { buildApiBaseUrl, resolvePublicApiOrigin } from '@web/lib/api-base';
+
+const DEPLOYMENT_ENV = {
+  NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+};
 const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
 
-export const API_BASE_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
-
-export const buildApiUrl = (endpoint?: string): string => {
-  if (!endpoint) {
-    return API_BASE_URL;
+const resolvePageOrigin = (request?: RequestLike): string | undefined => {
+  if (request?.url) {
+    try {
+      return new URL(request.url).origin;
+    } catch {
+      return undefined;
+    }
   }
 
-  return `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  return typeof window !== 'undefined' ? window.location?.origin : undefined;
+};
+
+const resolveApiBaseUrl = (request?: RequestLike): string =>
+  buildApiBaseUrl(resolvePublicApiOrigin(DEPLOYMENT_ENV, resolvePageOrigin(request)), API_VERSION);
+
+export const API_BASE_URL = resolveApiBaseUrl();
+
+export const buildApiUrl = (endpoint?: string): string => {
+  const baseUrl = resolveApiBaseUrl();
+  if (!endpoint) {
+    return baseUrl;
+  }
+
+  return `${baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 };
 
 type RequestLike = {
@@ -16,6 +37,13 @@ type RequestLike = {
 };
 
 export const buildApiUrlForRequest = (
-  _request: RequestLike,
+  request: RequestLike,
   endpoint?: string,
-): string => buildApiUrl(endpoint);
+): string => {
+  const baseUrl = resolveApiBaseUrl(request);
+  if (!endpoint) {
+    return baseUrl;
+  }
+
+  return `${baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+};

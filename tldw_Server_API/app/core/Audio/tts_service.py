@@ -13,11 +13,19 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSAuthenticationError,
+    TTSConfigurationError,
     TTSError,
     TTSInvalidVoiceReferenceError,
+    TTSModelLoadError,
+    TTSModelNotFoundError,
+    TTSNetworkError,
+    TTSProviderInitializationError,
     TTSProviderNotConfiguredError,
+    TTSProviderUnavailableError,
     TTSQuotaExceededError,
     TTSRateLimitError,
+    TTSResourceError,
+    TTSTimeoutError,
     TTSValidationError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
@@ -59,6 +67,8 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "supertonic"
     if m.startswith("echo-tts") or m.startswith("echo_tts") or m.startswith("jordand/echo-tts"):
         return "echo_tts"
+    if m.startswith("qwen3_tts") or m.startswith("qwen3-tts") or m.startswith("qwen/qwen3-tts"):
+        return "qwen3_tts"
     return None
 
 
@@ -75,17 +85,59 @@ def _raise_for_tts_error(exc: Exception, request_id: Optional[str]) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
         )
+    if isinstance(exc, TTSModelNotFoundError):
+        logger.error(f"TTS model not found: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_http_error_detail("Requested TTS model not found", request_id, exc=exc),
+        )
     if isinstance(exc, TTSProviderNotConfiguredError):
         logger.error(f"TTS provider not configured: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
         )
+    if isinstance(exc, (TTSProviderInitializationError, TTSConfigurationError)):
+        logger.error(f"TTS provider initialization error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSModelLoadError):
+        logger.error(f"TTS model load error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_http_error_detail("TTS model unavailable", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSResourceError):
+        logger.error(f"TTS resource error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSProviderUnavailableError):
+        logger.error(f"TTS provider unavailable: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_http_error_detail("TTS provider unavailable", request_id, exc=exc),
+        )
     if isinstance(exc, TTSAuthenticationError):
         logger.error(f"TTS authentication error: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=_http_error_detail("TTS provider authentication failed", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSNetworkError):
+        logger.error(f"TTS network error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_http_error_detail("TTS provider request failed", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSTimeoutError):
+        logger.error(f"TTS timeout error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=_http_error_detail("TTS provider timed out", request_id, exc=exc),
         )
     if isinstance(exc, TTSRateLimitError):
         logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)

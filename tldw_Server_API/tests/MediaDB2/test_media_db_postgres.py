@@ -13,9 +13,10 @@ import pytest
 # without relying on a root conftest.
 pytest_plugins = ["tldw_Server_API.tests.AuthNZ.conftest"]
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.scope_context import scoped_context
 
 
@@ -157,6 +158,15 @@ def test_media_rls_enforces_scope_postgres():
             assert (
                 db_other_user.get_media_by_id(media_id) is None
             ), "Unrelated user should not see another user's media"
+            hidden_rows, hidden_total = media_db_api.search_media(
+                db_other_user,
+                search_query=None,
+                search_fields=[],
+                page=1,
+                results_per_page=20,
+            )
+            assert hidden_total == 0
+            assert hidden_rows == []
 
         with scoped_context(
             user_id=101,
@@ -167,6 +177,15 @@ def test_media_rls_enforces_scope_postgres():
         ):
             owner_row = db_owner.get_media_by_id(media_id)
             assert owner_row is not None and owner_row["id"] == media_id
+            owner_rows, owner_total = media_db_api.search_media(
+                db_owner,
+                search_query=None,
+                search_fields=[],
+                page=1,
+                results_per_page=20,
+            )
+            assert owner_total == 1
+            assert owner_rows[0]["id"] == media_id
 
         with scoped_context(
             user_id=999,
@@ -252,6 +271,15 @@ def test_media_rls_enforces_scope_postgres():
         ):
             accessible = db_team_reader.get_media_by_id(team_media_id)
             assert accessible is not None and accessible["id"] == team_media_id
+            team_rows, team_total = media_db_api.search_media(
+                db_team_reader,
+                search_query=None,
+                search_fields=[],
+                page=1,
+                results_per_page=20,
+            )
+            assert team_total == 1
+            assert team_rows[0]["id"] == team_media_id
 
         with scoped_context(
             user_id=202,

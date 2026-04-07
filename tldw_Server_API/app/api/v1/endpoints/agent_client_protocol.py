@@ -669,6 +669,27 @@ async def _execute_acp_prompt(
     )
     if used_bootstrap:
         await _clear_acp_bootstrap_state(session_id)
+
+    # Check token budget after recording usage — auto-terminate if exceeded
+    budget_terminated = False
+    try:
+        store = await get_acp_session_store()
+        budget_terminated = await store.check_and_enforce_budget(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Budget enforcement check failed for session {}", session_id)
+    if budget_terminated:
+        # Inject budget exhaustion notice into the result
+        result["budget_exhausted"] = True
+        result["budget_termination_notice"] = (
+            "Session auto-terminated: token budget exhausted"
+        )
+        _acp_record_audit_event(
+            action="budget_terminated",
+            user_id=int(user_id),
+            session_id=session_id,
+            metadata={"reason": "token_budget_exhausted"},
+        )
+
     _acp_record_audit_event(
         action="prompt",
         user_id=int(user_id),
@@ -1310,7 +1331,35 @@ async def acp_health(
             runner_probe = {"status": "error", "detail": str(exc)}
     result["runner_probe"] = runner_probe
 
-    # 4. Overall status
+    # 4. Route-gating status
+    try:
+        from tldw_Server_API.app.core.config import route_enabled as _route_enabled
+
+        _stable_only = False
+        try:
+            from tldw_Server_API.app.core.config import _route_toggle_policy
+            _policy = _route_toggle_policy()
+            _stable_only = bool(_policy.get("stable_only", False))
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        _acp_enabled = _route_enabled("acp", default_stable=False)
+        _route_note: str | None = None
+        if _stable_only and not _acp_enabled:
+            _route_note = (
+                "ACP routes are hidden because stable_only is enabled. "
+                "Add 'acp' to the enable list in [API-Routes] section of "
+                "config.txt, or set ROUTES_STABLE_ONLY=false."
+            )
+        result["routes"] = {
+            "stable_only": _stable_only,
+            "acp_enabled": _acp_enabled,
+            "note": _route_note,
+        }
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        result["routes"] = None
+
+    # 5. Overall status
     any_agent_available = any(a.get("status") == "available" for a in agents_status)
     runner_ok = runner_status.get("status") == "ok"
 
@@ -1774,6 +1823,17 @@ async def acp_session_new(
         resolved_workspace_group_id = resolved_workspace_group_id or sandbox_meta.get("workspace_group_id")
         resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
+    # Resolve model from agent registry for cost tracking
+    resolved_model: str | None = None
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+        _reg = get_agent_registry()
+        _agent_entry = _reg.get_entry(resolved_agent_type or "custom")
+        if _agent_entry is not None:
+            resolved_model = _agent_entry.model or _agent_entry.mcp_llm_model
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+
     # Persist session metadata and emit SSE event
     persisted_record = None
     try:
@@ -1790,6 +1850,7 @@ async def acp_session_new(
             workspace_id=resolved_workspace_id,
             workspace_group_id=resolved_workspace_group_id,
             scope_snapshot_id=resolved_scope_snapshot_id,
+            model=resolved_model,
         )
         if persisted_record is not None:
             try:
@@ -1872,6 +1933,24 @@ async def acp_session_prompt(
         raise
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("Token quota check failed (non-blocking): {}", exc)
+    # Budget exhaustion pre-check — reject prompts on budget-exhausted sessions
+    try:
+        store = await get_acp_session_store()
+        rec = await store.get_session(payload.session_id)
+        if rec and rec.budget_exhausted:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "budget_exhausted",
+                    "message": "Session token budget has been exhausted",
+                    "token_budget": rec.token_budget,
+                    "total_tokens": rec.usage.total_tokens,
+                },
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Budget exhaustion pre-check failed (non-blocking): {}", exc)
     try:
         client = await get_runner_client()
         result, turn_usage = await _execute_acp_prompt(

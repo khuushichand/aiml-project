@@ -1,9 +1,20 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { UploadCloud } from "lucide-react"
 import { useQuickIngestStore } from "@/store/quick-ingest"
-import { QuickIngestWizardModal as QuickIngestModal } from "../Common/QuickIngestWizardModal"
+import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 import { createEventHost } from "@/utils/create-event-host"
+import {
+  consumePendingQuickIngestOpen,
+  rememberQuickIngestOpenRequest,
+  type QuickIngestPendingOpenOptions,
+} from "@/utils/quick-ingest-open"
+
+const QuickIngestModal = lazy(() =>
+  import("../Common/QuickIngestWizardModal").then((m) => ({
+    default: m.QuickIngestWizardModal
+  }))
+)
 
 const classNames = (...classes: (string | false | null | undefined)[]) =>
   classes.filter(Boolean).join(" ")
@@ -13,10 +24,7 @@ interface QuickIngestButtonProps {
   className?: string
 }
 
-type QuickIngestOpenOptions = {
-  autoProcessQueued?: boolean
-  focusTrigger?: boolean
-}
+type QuickIngestOpenOptions = QuickIngestPendingOpenOptions
 
 type QuickIngestEventsOptions = {
   focusTriggerRef?: React.RefObject<HTMLElement>
@@ -24,29 +32,95 @@ type QuickIngestEventsOptions = {
 
 export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
   const focusTriggerRef = options?.focusTriggerRef
-  const [quickIngestOpen, setQuickIngestOpen] = useState(false)
   const [quickIngestAutoProcessQueued, setQuickIngestAutoProcessQueued] =
     useState(false)
+  const [quickIngestSessionHydrated, setQuickIngestSessionHydrated] = useState(
+    () => useQuickIngestSessionStore.persist?.hasHydrated?.() ?? true
+  )
   const quickIngestReadyRef = useRef(false)
   const pendingQuickIngestIntroRef = useRef(false)
+  const { session, createDraftSession, showSession, hideSession } =
+    useQuickIngestSessionStore((s) => ({
+      session: s.session,
+      createDraftSession: s.createDraftSession,
+      showSession: s.showSession,
+      hideSession: s.hideSession,
+    }))
+  const quickIngestOpen = session?.visibility === "visible"
+  const hasQuickIngestSession = Boolean(session)
 
-  const openQuickIngest = useCallback(
+  const rehydrateQuickIngestSession = useCallback(async () => {
+    const persistApi = useQuickIngestSessionStore.persist
+    if (!persistApi) {
+      return
+    }
+    if (persistApi.hasHydrated?.()) {
+      setQuickIngestSessionHydrated(true)
+      return
+    }
+    await persistApi.rehydrate?.()
+    setQuickIngestSessionHydrated(persistApi.hasHydrated?.() ?? true)
+  }, [])
+
+  const performOpenQuickIngest = useCallback(
     (options?: QuickIngestOpenOptions) => {
       const { autoProcessQueued = false, focusTrigger = true } = options || {}
       setQuickIngestAutoProcessQueued(autoProcessQueued)
-      setQuickIngestOpen(true)
+      const currentSession = useQuickIngestSessionStore.getState().session
+      if (currentSession) {
+        showSession()
+      } else {
+        createDraftSession()
+      }
       if (focusTrigger && focusTriggerRef?.current) {
         requestAnimationFrame(() => {
           focusTriggerRef.current?.focus()
         })
       }
     },
-    [focusTriggerRef]
+    [createDraftSession, focusTriggerRef, showSession]
+  )
+
+  const performOpenQuickIngestIntro = useCallback(
+    (options?: QuickIngestOpenOptions) => {
+      performOpenQuickIngest({ ...options, focusTrigger: false })
+      if (quickIngestReadyRef.current) {
+        window.dispatchEvent(new CustomEvent("tldw:quick-ingest-force-intro"))
+      } else {
+        pendingQuickIngestIntroRef.current = true
+      }
+    },
+    [performOpenQuickIngest]
+  )
+
+  const consumePendingOpenRequest = useCallback(() => {
+    const pending = consumePendingQuickIngestOpen()
+    if (!pending) {
+      return false
+    }
+    if (pending.mode === "intro") {
+      performOpenQuickIngestIntro(pending.options)
+      return true
+    }
+    performOpenQuickIngest(pending.options)
+    return true
+  }, [performOpenQuickIngest, performOpenQuickIngestIntro])
+
+  const openQuickIngest = useCallback(
+    (nextOptions?: QuickIngestOpenOptions) => {
+      if (!quickIngestSessionHydrated) {
+        rememberQuickIngestOpenRequest("normal", undefined, nextOptions)
+        void rehydrateQuickIngestSession()
+        return
+      }
+      performOpenQuickIngest(nextOptions)
+    },
+    [performOpenQuickIngest, quickIngestSessionHydrated, rehydrateQuickIngestSession]
   )
 
   const closeQuickIngest = useCallback(
     (options?: { focusTrigger?: boolean }) => {
-      setQuickIngestOpen(false)
+      hideSession()
       setQuickIngestAutoProcessQueued(false)
       if ((options?.focusTrigger ?? true) && focusTriggerRef?.current) {
         requestAnimationFrame(() => {
@@ -54,7 +128,7 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
         })
       }
     },
-    [focusTriggerRef]
+    [focusTriggerRef, hideSession]
   )
 
   // Global event listeners for opening quick ingest
@@ -67,6 +141,41 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
       window.removeEventListener("tldw:open-quick-ingest", handler)
     }
   }, [openQuickIngest])
+
+  useEffect(() => {
+    const persistApi = useQuickIngestSessionStore.persist
+    if (!persistApi) {
+      return
+    }
+
+    const syncHydrationState = () => {
+      setQuickIngestSessionHydrated(persistApi.hasHydrated?.() ?? true)
+    }
+
+    syncHydrationState()
+    const unsubscribeHydrate = persistApi.onHydrate?.(() => {
+      setQuickIngestSessionHydrated(false)
+    })
+    const unsubscribeFinishHydration = persistApi.onFinishHydration?.(() => {
+      setQuickIngestSessionHydrated(true)
+    })
+
+    if (!(persistApi.hasHydrated?.() ?? true)) {
+      void persistApi.rehydrate?.().then(syncHydrationState)
+    }
+
+    return () => {
+      unsubscribeHydrate?.()
+      unsubscribeFinishHydration?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!quickIngestSessionHydrated) {
+      return
+    }
+    consumePendingOpenRequest()
+  }, [consumePendingOpenRequest, quickIngestSessionHydrated])
 
   useEffect(() => {
     const markQuickIngestReady = () => {
@@ -87,21 +196,28 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
 
   useEffect(() => {
     const handler = () => {
-      openQuickIngest({ focusTrigger: false })
-      if (quickIngestReadyRef.current) {
-        window.dispatchEvent(new CustomEvent("tldw:quick-ingest-force-intro"))
-      } else {
-        pendingQuickIngestIntroRef.current = true
+      if (!quickIngestSessionHydrated) {
+        rememberQuickIngestOpenRequest("intro", undefined, {
+          focusTrigger: false,
+        })
+        void rehydrateQuickIngestSession()
+        return
       }
+      performOpenQuickIngestIntro({ focusTrigger: false })
     }
     window.addEventListener("tldw:open-quick-ingest-intro", handler)
     return () => {
       window.removeEventListener("tldw:open-quick-ingest-intro", handler)
     }
-  }, [openQuickIngest])
+  }, [
+    performOpenQuickIngestIntro,
+    quickIngestSessionHydrated,
+    rehydrateQuickIngestSession,
+  ])
 
   return {
     quickIngestOpen,
+    hasQuickIngestSession,
     quickIngestAutoProcessQueued,
     openQuickIngest,
     closeQuickIngest
@@ -117,10 +233,16 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
   const quickIngestBtnRef = useRef<HTMLButtonElement>(null)
   const {
     quickIngestOpen,
+    hasQuickIngestSession,
     quickIngestAutoProcessQueued,
     openQuickIngest,
     closeQuickIngest
   } = useQuickIngestEvents({ focusTriggerRef: quickIngestBtnRef })
+  const { quickIngestSession, quickIngestSessionSummary } =
+    useQuickIngestSessionStore((s) => ({
+      quickIngestSession: s.session,
+      quickIngestSessionSummary: s.triggerSummary,
+    }))
 
   const { queuedQuickIngestCount, quickIngestHadFailure } = useQuickIngestStore(
     (s) => ({
@@ -129,7 +251,13 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
     })
   )
 
-  const hasQueuedQuickIngest = queuedQuickIngestCount > 0
+  const sessionBadgeCount = quickIngestSessionSummary.count
+  const visibleBadgeCount =
+    sessionBadgeCount > 0 ? sessionBadgeCount : queuedQuickIngestCount
+  const hasQueuedQuickIngest = visibleBadgeCount > 0
+  const shouldShowProcessQueuedCta =
+    quickIngestSession?.lifecycle === "draft" &&
+    (quickIngestSession.badge.queueCount > 0 || queuedQuickIngestCount > 0)
 
   const quickIngestAriaLabel = React.useMemo(() => {
     const base = t("option:header.quickIngest", "Quick Ingest")
@@ -137,12 +265,23 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
       return base
     }
 
+    if (quickIngestSessionSummary.label) {
+      return t(
+        "option:header.quickIngestSessionAria",
+        "{{label}} - {{summary}} - click to reopen current ingest session",
+        {
+          label: base,
+          summary: quickIngestSessionSummary.label,
+        }
+      )
+    }
+
     const queuedText = t(
       "option:header.quickIngestQueuedAria",
       "{{label}} - {{count}} items queued - click to review and process",
       {
         label: base,
-        count: queuedQuickIngestCount,
+        count: visibleBadgeCount,
       }
     )
 
@@ -155,7 +294,13 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
     }
 
     return queuedText
-  }, [hasQueuedQuickIngest, queuedQuickIngestCount, quickIngestHadFailure, t])
+  }, [
+    hasQueuedQuickIngest,
+    quickIngestHadFailure,
+    quickIngestSessionSummary.label,
+    t,
+    visibleBadgeCount,
+  ])
 
   return (
     <>
@@ -183,12 +328,12 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
           <span>{t("option:header.addContent", "Add Content")}</span>
           {hasQueuedQuickIngest && (
             <span className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold text-white">
-              {queuedQuickIngestCount > 9 ? "9+" : queuedQuickIngestCount}
+              {visibleBadgeCount > 9 ? "9+" : visibleBadgeCount}
             </span>
           )}
         </button>
 
-        {hasQueuedQuickIngest && (
+        {shouldShowProcessQueuedCta && (
           <button
             type="button"
             data-testid="process-queued-ingest-header"
@@ -212,24 +357,33 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
         )}
       </div>
 
-      <QuickIngestModal
-        open={quickIngestOpen}
-        autoProcessQueued={quickIngestAutoProcessQueued}
-        onClose={closeQuickIngest}
-      />
+      <Suspense fallback={null}>
+        <QuickIngestModal
+          open={quickIngestOpen}
+          autoProcessQueued={quickIngestAutoProcessQueued}
+          onClose={closeQuickIngest}
+        />
+      </Suspense>
     </>
   )
 }
 
 export const QuickIngestModalHost = createEventHost({
   useEvents: useQuickIngestEvents,
-  isActive: ({ quickIngestOpen }) => quickIngestOpen,
-  render: ({ quickIngestOpen, quickIngestAutoProcessQueued, closeQuickIngest }) => (
-    <QuickIngestModal
-      open={quickIngestOpen}
-      autoProcessQueued={quickIngestAutoProcessQueued}
-      onClose={() => closeQuickIngest({ focusTrigger: false })}
-    />
+  isActive: ({ quickIngestOpen, hasQuickIngestSession }) =>
+    quickIngestOpen || hasQuickIngestSession,
+  render: ({
+    quickIngestOpen,
+    quickIngestAutoProcessQueued,
+    closeQuickIngest,
+  }) => (
+    <Suspense fallback={null}>
+      <QuickIngestModal
+        open={quickIngestOpen}
+        autoProcessQueued={quickIngestAutoProcessQueued}
+        onClose={() => closeQuickIngest({ focusTrigger: false })}
+      />
+    </Suspense>
   )
 })
 

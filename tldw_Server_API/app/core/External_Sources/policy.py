@@ -19,9 +19,9 @@ def _gmail_connector_enabled_from_env() -> bool:
 def get_default_policy_from_env(org_id: int) -> dict[str, Any]:
     """Return a default org policy derived from environment variables."""
     default_providers = (
-        "drive,notion,gmail"
+        "drive,notion,gmail,zotero"
         if _gmail_connector_enabled_from_env()
-        else "drive,notion"
+        else "drive,notion,zotero"
     )
     return {
         "org_id": org_id,

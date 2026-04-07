@@ -239,10 +239,15 @@ def _normalize_budget_payload(raw: Any) -> dict[str, Any]:
     budgets: dict[str, Any] = {}
     if isinstance(data.get("budgets"), dict):
         budgets.update(data.get("budgets") or {})
+    provider_budgets = budgets.pop("provider_budgets", None)
     for key in _BUDGET_KEYS:
         if key in data and key not in budgets:
             budgets[key] = data[key]
+    if provider_budgets is None and isinstance(data.get("provider_budgets"), dict):
+        provider_budgets = data.get("provider_budgets")
     payload = {"budgets": budgets} if budgets else {}
+    if isinstance(provider_budgets, dict) and provider_budgets:
+        payload["provider_budgets"] = provider_budgets
     thresholds = _coerce_alert_thresholds(data.get("alert_thresholds"))
     if thresholds is not None:
         payload["alert_thresholds"] = thresholds
@@ -262,6 +267,8 @@ def _flatten_budget_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key in _BUDGET_KEYS:
             if key in payload:
                 flat[key] = payload[key]
+    if isinstance(payload.get("provider_budgets"), dict):
+        flat["provider_budgets"] = payload.get("provider_budgets")
     if "alert_thresholds" in payload:
         flat["alert_thresholds"] = payload.get("alert_thresholds")
     if "enforcement_mode" in payload:
@@ -276,6 +283,8 @@ def _inflate_budget_payload(flat: dict[str, Any]) -> dict[str, Any]:
     for key in _BUDGET_KEYS:
         if key in flat:
             payload[key] = flat[key]
+    if "provider_budgets" in flat:
+        payload["provider_budgets"] = flat.get("provider_budgets")
     if "alert_thresholds" in flat:
         payload["alert_thresholds"] = flat.get("alert_thresholds")
     if "enforcement_mode" in flat:
@@ -463,8 +472,42 @@ def merge_budget_settings(
             else:
                 merged[key] = merged_enforcement
             continue
+        if key == "provider_budgets":
+            merged_providers = _merge_provider_budgets(merged.get(key), value)
+            if merged_providers is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = merged_providers
+            continue
         raise ValueError("invalid_budget_update")
     return merged
+
+
+def _merge_provider_budgets(
+    existing: Any, updates: Any
+) -> dict[str, Any] | None:
+    """Merge per-provider budget thresholds.
+
+    Structure: ``{"openai": {"month_usd": 50}, "anthropic": {"month_usd": 100}}``
+    Setting a provider to ``None`` removes it.
+    """
+    if updates is None:
+        return None
+    existing_payload = existing if isinstance(existing, dict) else {}
+    merged = dict(existing_payload)
+    if not isinstance(updates, dict):
+        return merged or None
+    for provider, settings in updates.items():
+        if settings is None:
+            merged.pop(provider, None)
+        elif isinstance(settings, dict):
+            existing_provider = merged.get(provider)
+            if not isinstance(existing_provider, dict):
+                existing_provider = {}
+            merged[provider] = {**existing_provider, **settings}
+        else:
+            merged[provider] = settings
+    return merged or None
 
 
 def _merge_alert_thresholds(existing: Any, updates: Any) -> dict[str, Any] | None:
@@ -620,6 +663,16 @@ def build_budget_change_log(
                 )
             )
             continue
+        if key == "provider_budgets":
+            changes.extend(
+                _build_generic_map_changes(
+                    "provider_budgets",
+                    existing_budgets.get("provider_budgets"),
+                    merged_budgets.get("provider_budgets"),
+                    budget_updates.get("provider_budgets"),
+                )
+            )
+            continue
     return changes
 
 
@@ -699,6 +752,52 @@ def _build_nested_changes(
                     }
                 )
 
+    return changes
+
+
+def _build_generic_map_changes(
+    field_name: str,
+    existing_value: Any,
+    merged_value: Any,
+    update_value: Any,
+) -> list[dict[str, Any]]:
+    if update_value is None:
+        if existing_value is None:
+            return []
+        return [
+            {
+                "field_name": f"budgets.{field_name}",
+                "old_value": existing_value,
+                "new_value": None,
+                "data_type": _infer_change_data_type(existing_value),
+            }
+        ]
+
+    if not isinstance(update_value, dict):
+        if existing_value == merged_value:
+            return []
+        changed_value = merged_value if merged_value is not None else existing_value
+        return [
+            {
+                "field_name": f"budgets.{field_name}",
+                "old_value": existing_value,
+                "new_value": merged_value,
+                "data_type": _infer_change_data_type(changed_value),
+            }
+        ]
+
+    existing_payload = existing_value if isinstance(existing_value, dict) else {}
+    merged_payload = merged_value if isinstance(merged_value, dict) else {}
+    changes: list[dict[str, Any]] = []
+    for key, value in update_value.items():
+        changes.extend(
+            _build_generic_map_changes(
+                f"{field_name}.{key}",
+                existing_payload.get(key),
+                merged_payload.get(key),
+                value,
+            )
+        )
     return changes
 
 

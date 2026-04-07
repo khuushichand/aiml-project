@@ -1,7 +1,9 @@
-import React from "react"
+import React, { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useIsConnected } from "@/hooks/useConnectionState"
+import { useMilestoneStore } from "@/store/milestones"
 import {
   type CompanionHomeSnapshot,
   type CompanionHomeSurface
@@ -13,12 +15,14 @@ import {
 
 import { createEmptySnapshot, useCompanionHomeData, useCompanionHomeLayout } from "./hooks"
 import { CustomizeHomeDrawer } from "./CustomizeHomeDrawer"
+import { GettingStartedSection } from "./GettingStartedSection"
 import { GoalsFocusCard } from "./cards/GoalsFocusCard"
 import { InboxPreviewCard } from "./cards/InboxPreviewCard"
 import { NeedsAttentionCard } from "./cards/NeedsAttentionCard"
 import { ReadingQueueCard } from "./cards/ReadingQueueCard"
 import { RecentActivityCard } from "./cards/RecentActivityCard"
 import { ResumeWorkCard } from "./cards/ResumeWorkCard"
+import { WhatsNextCard } from "./cards/WhatsNextCard"
 import type { CompanionHomeCardState } from "./cards/CardShell"
 
 type CompanionHomePageProps = {
@@ -41,6 +45,31 @@ export function CompanionHomePage({
 }: CompanionHomePageProps) {
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const [customizeOpen, setCustomizeOpen] = React.useState(false)
+
+  // Bootstrap milestones from existing usage evidence for returning users.
+  // Also re-bootstrap when connection becomes ready, so mission cards appear
+  // immediately after onboarding completes without requiring a page refresh.
+  const isConnected = useIsConnected()
+  const bootstrapMilestones = useMilestoneStore((s) => s.bootstrapFromExistingUsage)
+  const markMilestone = useMilestoneStore((s) => s.markMilestone)
+  const milestoneBootstrapped = useRef(false)
+  useEffect(() => {
+    if (!milestoneBootstrapped.current) {
+      milestoneBootstrapped.current = true
+      bootstrapMilestones()
+    }
+  }, [bootstrapMilestones])
+  // Re-bootstrap when connection becomes ready so post-onboarding milestones appear
+  useEffect(() => {
+    if (isConnected && milestoneBootstrapped.current) {
+      bootstrapMilestones()
+    }
+  }, [isConnected, bootstrapMilestones])
+  useEffect(() => {
+    if (isConnected) {
+      markMilestone("first_connection")
+    }
+  }, [isConnected, markMilestone])
 
   const hasPersonalization = Boolean(capabilities?.hasPersonalization)
   const { layout, updateLayout } = useCompanionHomeLayout(surface)
@@ -88,13 +117,13 @@ export function CompanionHomePage({
     if (!hasPersonalization) {
       return {
         label: "Setup required",
-        description: setupDescription
+        description: "Connect your tldw server and enable personalization to unlock this feature. " + setupDescription
       }
     }
     if (profileLoaded && !profile?.enabled) {
       return {
         label: "Enable Companion",
-        description: setupDescription
+        description: "Turn on personalized recommendations and goal tracking to populate this card. " + setupDescription
       }
     }
     if (workspaceUnavailable) {
@@ -119,13 +148,13 @@ export function CompanionHomePage({
         ? {
             label: "Setup required",
             description:
-              "Companion setup unlocks needs-attention signals from goals and reading."
+              "Connect your tldw server and enable personalization to unlock needs-attention signals from goals and reading."
           }
         : profileLoaded && !profile?.enabled
           ? {
               label: "Enable Companion",
               description:
-                "Enable Companion to surface needs-attention signals from goals and reading."
+                "Turn on personalized recommendations and goal tracking to surface needs-attention signals from goals and reading."
             }
           : workspaceUnavailable || readingUnavailable
             ? {
@@ -142,13 +171,13 @@ export function CompanionHomePage({
         ? {
             label: "Setup required",
             description:
-              "Companion setup unlocks resume suggestions across goals, reading, and notes."
+              "Connect your tldw server and enable personalization to unlock resume suggestions across goals, reading, and notes."
           }
         : profileLoaded && !profile?.enabled
           ? {
               label: "Enable Companion",
               description:
-                "Enable Companion to surface resume suggestions across goals, reading, and notes."
+                "Turn on personalized recommendations and goal tracking to surface resume suggestions across goals, reading, and notes."
             }
           : workspaceUnavailable || readingUnavailable || notesUnavailable
             ? {
@@ -255,7 +284,7 @@ export function CompanionHomePage({
 
   return (
     <div className="flex flex-col gap-6" data-testid="companion-home-page">
-      <header className="rounded-3xl border border-border/80 bg-[linear-gradient(135deg,rgba(255,248,235,0.96),rgba(245,248,255,0.92))] p-6 shadow-sm">
+      <header className="rounded-3xl border border-border/80 bg-surface/90 p-6 shadow-sm backdrop-blur-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-muted">
@@ -293,8 +322,8 @@ export function CompanionHomePage({
         </div>
 
         {topBand ? (
-          <div className="mt-5 rounded-2xl border border-amber-300/70 bg-amber-50/80 px-4 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">
+          <div className="mt-5 rounded-2xl border border-warn/30 bg-warn/10 px-4 py-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-warn">
               {topBand.eyebrow}
             </p>
             <div className="mt-2 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -347,13 +376,16 @@ export function CompanionHomePage({
         </div>
 
         {error ? (
-          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-4 rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
             {error}
           </div>
         ) : null}
       </header>
 
+      <GettingStartedSection />
+
       <div className="grid gap-4 xl:grid-cols-2">
+        <WhatsNextCard />
         <InboxPreviewCard items={resolvedSnapshot.inbox} state={inboxState} />
         <NeedsAttentionCard
           items={resolvedSnapshot.needsAttention}

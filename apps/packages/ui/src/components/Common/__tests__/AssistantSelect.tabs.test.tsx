@@ -14,6 +14,11 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: (_key: string, defaultValue: unknown) =>
+    React.useState(defaultValue)
+}))
+
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: vi.fn(async () => null),
@@ -28,6 +33,26 @@ vi.mock("@/hooks/useSelectedAssistant", () => ({
     { isLoading: false, setRenderValue: vi.fn() }
   ]
 }))
+
+vi.mock("antd", async () => {
+  const React = await import("react")
+
+  const Input = React.forwardRef<HTMLInputElement, any>((props, ref) => (
+    <input
+      ref={ref}
+      aria-label={props["aria-label"] ?? props.placeholder}
+      value={props.value}
+      onChange={props.onChange}
+      onKeyDown={props.onKeyDown}
+    />
+  ))
+
+  return {
+    Dropdown: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    Input,
+    Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>
+  }
+})
 
 import { AssistantSelect } from "../AssistantSelect"
 

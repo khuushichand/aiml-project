@@ -1,5 +1,5 @@
 import React from 'react'
-import { Input, Typography, Button, Modal, Checkbox } from 'antd'
+import { Input, Typography, Button } from 'antd'
 import {
   ChevronLeft,
   ChevronRight,
@@ -19,8 +19,8 @@ import { shallow } from "zustand/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import NotesEditorPane from "@/components/Notes/NotesEditorPane"
+import NotesStudioCreateModal from "@/components/Notes/NotesStudioCreateModal"
 import NotesSidebar from "@/components/Notes/NotesSidebar"
-import NotesGraphModal from "@/components/Notes/NotesGraphModal"
 import {
   useNotesKeywords,
   useNotesListManagement,
@@ -32,6 +32,8 @@ import {
 import type { NoteListItem } from "@/components/Notes/notes-manager-types"
 import { clearSetting, getSetting } from "@/services/settings/registry"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
+import { buildStudyPackRoute } from "@/services/tldw/study-pack-handoff"
+import { deriveNoteStudio, getNoteStudioState, regenerateNoteStudio } from "@/services/notes-studio"
 import { useMobile } from "@/hooks/useMediaQuery"
 import {
   LAST_NOTE_ID_SETTING,
@@ -44,6 +46,13 @@ import type {
   NotesTocEntry,
   KeywordPickerSortMode,
 } from './notes-manager-types'
+import type {
+  NoteStudioState,
+  NotesStudioHandwritingMode,
+  NotesStudioPaperSize,
+  NotesStudioTemplateType,
+} from './notes-studio-types'
+import { getDefaultStudioPaperSizeFromLocale } from './export-utils'
 import {
   normalizeConversationId,
   toConversationLabel,
@@ -57,7 +66,6 @@ import {
   shouldIgnoreGlobalShortcut,
   calculateSidebarHeight,
   NOTE_TEMPLATES,
-  toKeywordTestIdSegment,
   toSortableTimestamp,
   toNoteVersion,
   markdownToWysiwygHtml,
@@ -68,7 +76,7 @@ import {
   sortNotesByPinnedIds,
 } from './notes-manager-utils'
 
-const KeywordPickerModal = React.lazy(() => import('@/components/Notes/KeywordPickerModal'))
+const LazyNotesManagerOverlays = React.lazy(() => import("./NotesManagerOverlays"))
 
 const isMissingConversationLookupError = (error: unknown): boolean => {
   if (!error) return false
@@ -238,6 +246,23 @@ const NotesManagerPage: React.FC = () => {
     editorDisabled,
   })
 
+  const [notesStudioCreateOpen, setNotesStudioCreateOpen] = React.useState(false)
+  const [notesStudioCreateLoading, setNotesStudioCreateLoading] = React.useState(false)
+  const [notesStudioMarkdownOnlyNoticeOpen, setNotesStudioMarkdownOnlyNoticeOpen] = React.useState(false)
+  const [notesStudioExcerptText, setNotesStudioExcerptText] = React.useState('')
+  const [notesStudioTemplateType, setNotesStudioTemplateType] =
+    React.useState<NotesStudioTemplateType>('lined')
+  const [notesStudioHandwritingMode, setNotesStudioHandwritingMode] =
+    React.useState<NotesStudioHandwritingMode>('accented')
+  const [selectedStudioState, setSelectedStudioState] = React.useState<NoteStudioState | null>(null)
+  const [notesStudioRegenerating, setNotesStudioRegenerating] = React.useState(false)
+  const defaultStudioPaperSize = React.useMemo(
+    () => getDefaultStudioPaperSizeFromLocale(typeof navigator !== 'undefined' ? navigator.language : ''),
+    []
+  )
+  const [selectedStudioPaperSize, setSelectedStudioPaperSize] =
+    React.useState<NotesStudioPaperSize>(defaultStudioPaperSize)
+
   // Wire the keyword hook's cross-cutting refs now that editor is available
   setIsDirtyRef.current = ed.setIsDirty
   setSaveIndicatorRef.current = ed.setSaveIndicator
@@ -257,6 +282,57 @@ const NotesManagerPage: React.FC = () => {
     () => visibleNotes.map((note) => String(note.id)),
     [visibleNotes]
   )
+
+  const selectedStudioSummaryNoteId = ed.selectedStudioSummary?.note_id ?? null
+  const currentNoteStudioSummary =
+    ed.selectedId != null &&
+    selectedStudioSummaryNoteId != null &&
+    String(selectedStudioSummaryNoteId) === String(ed.selectedId)
+      ? ed.selectedStudioSummary
+      : null
+
+  React.useEffect(() => {
+    if (ed.selectedId == null || !currentNoteStudioSummary?.note_id) {
+      setSelectedStudioState(null)
+      return
+    }
+
+    let cancelled = false
+    void getNoteStudioState(String(ed.selectedId))
+      .then((studioState) => {
+        if (cancelled) return
+        setSelectedStudioState(studioState)
+        ed.setEditorMode('preview')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setSelectedStudioState(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentNoteStudioSummary?.note_id, ed.selectedId])
+
+  const effectiveStudioState = React.useMemo(() => {
+    if (!selectedStudioState || ed.selectedId == null) return null
+    if (String(selectedStudioState.note.id) !== String(ed.selectedId)) {
+      return null
+    }
+    if (String(ed.content || '') === String(selectedStudioState.note.content || '')) {
+      return selectedStudioState
+    }
+    return {
+      ...selectedStudioState,
+      is_stale: true,
+      stale_reason: selectedStudioState.stale_reason || 'companion_content_hash_mismatch'
+    }
+  }, [ed.content, ed.selectedId, selectedStudioState])
+
+  React.useEffect(() => {
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    setSelectedStudioPaperSize(defaultStudioPaperSize)
+  }, [defaultStudioPaperSize, ed.selectedId])
 
   // ---- Note graph neighbors ----
   const {
@@ -460,6 +536,8 @@ const NotesManagerPage: React.FC = () => {
     title: ed.title,
     content: ed.content,
     editorKeywords: kw.editorKeywords,
+    selectedStudioState: effectiveStudioState,
+    studioPaperSize: selectedStudioPaperSize,
   })
 
   // ---- Import hook ----
@@ -470,6 +548,15 @@ const NotesManagerPage: React.FC = () => {
     listMode: list.listMode,
     refetch: list.refetch,
   })
+  const hasDeferredOverlayOpen =
+    kw.keywordSuggestionOptions.length > 0 ||
+    kw.keywordPickerOpen ||
+    kw.keywordManagerOpen ||
+    kw.keywordRenameDraft != null ||
+    kw.keywordMergeDraft != null ||
+    imp.importModalOpen ||
+    ed.graphModalOpen ||
+    shortcutHelpOpen
 
   // ---- Remaining logic that stays in the component ----
 
@@ -622,6 +709,50 @@ const NotesManagerPage: React.FC = () => {
       ed.titleInputRef.current?.focus()
     }, 0)
   }, [ed, isMobileViewport, list, message])
+
+  const handleCreateStudyPackFromNote = React.useCallback(() => {
+    const selectedNoteId = ed.selectedId
+    if (selectedNoteId == null) {
+      message.warning(
+        t('option:notesSearch.createStudyPackMissingSelection', {
+          defaultValue: 'Select a note before creating a study pack.'
+        })
+      )
+      return
+    }
+
+    if (ed.isDirty) {
+      message.warning(
+        t('option:notesSearch.createStudyPackDirty', {
+          defaultValue: 'Save this note before creating a study pack.'
+        })
+      )
+      return
+    }
+
+    const noteTitle = ed.title.trim()
+    if (!noteTitle) {
+      message.warning(
+        t('option:notesSearch.createStudyPackEmpty', {
+          defaultValue: 'Save and title this note before creating a study pack.'
+        })
+      )
+      return
+    }
+
+    navigate(
+      buildStudyPackRoute({
+        title: noteTitle,
+        sourceItems: [
+          {
+            sourceType: 'note',
+            sourceId: String(selectedNoteId),
+            sourceTitle: noteTitle
+          }
+        ]
+      })
+    )
+  }, [ed.isDirty, ed.selectedId, ed.title, message, navigate, t])
 
   const duplicateSelectedNote = React.useCallback(async () => {
     if (editorDisabled) return
@@ -1264,6 +1395,7 @@ const NotesManagerPage: React.FC = () => {
     (nextMode: NotesInputMode) => {
       if (nextMode === ed.editorInputMode) return
       if (nextMode === 'wysiwyg') { enterWysiwygMode(); return }
+      setNotesStudioMarkdownOnlyNoticeOpen(false)
       exitWysiwygMode()
       window.requestAnimationFrame(() => {
         const textarea = ed.contentTextareaRef.current
@@ -1354,6 +1486,117 @@ const NotesManagerPage: React.FC = () => {
     },
     [ed]
   )
+
+  const closeNotesStudioCreateModal = React.useCallback(() => {
+    setNotesStudioCreateOpen(false)
+    setNotesStudioExcerptText('')
+    setNotesStudioTemplateType('lined')
+    setNotesStudioHandwritingMode('accented')
+  }, [])
+
+  const handleOpenNotesStudio = React.useCallback(() => {
+    if (editorDisabled || ed.selectedId == null) return
+    if (ed.isDirty) {
+      message.warning(t('option:notesSearch.notesStudioSaveFirstWarning', {
+        defaultValue: 'Save this note before opening Notes Studio.'
+      }))
+      return
+    }
+    if (ed.editorInputMode !== 'markdown') {
+      setNotesStudioMarkdownOnlyNoticeOpen(true)
+      return
+    }
+    const textarea = ed.contentTextareaRef.current
+    if (!textarea) {
+      message.warning(t('option:notesSearch.notesStudioSelectionRequired', {
+        defaultValue: 'Select Markdown text before opening Notes Studio.'
+      }))
+      return
+    }
+    const start = textarea.selectionStart ?? 0
+    const end = textarea.selectionEnd ?? start
+    const excerptText = ed.content.slice(start, end)
+    if (excerptText.trim().length === 0) {
+      message.warning(t('option:notesSearch.notesStudioSelectionRequired', {
+        defaultValue: 'Select Markdown text before opening Notes Studio.'
+      }))
+      return
+    }
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    setNotesStudioExcerptText(excerptText)
+    setNotesStudioTemplateType('lined')
+    setNotesStudioHandwritingMode('accented')
+    setNotesStudioCreateOpen(true)
+  }, [ed, editorDisabled, message, t])
+
+  const switchNotesStudioToMarkdown = React.useCallback(() => {
+    setNotesStudioMarkdownOnlyNoticeOpen(false)
+    handleEditorInputModeChange('markdown')
+  }, [handleEditorInputModeChange])
+
+  const handleCreateNotesStudio = React.useCallback(async () => {
+    if (ed.selectedId == null || !notesStudioExcerptText.trim()) return
+    setNotesStudioCreateLoading(true)
+    try {
+      const studioState = await deriveNoteStudio({
+        source_note_id: String(ed.selectedId),
+        excerpt_text: notesStudioExcerptText,
+        template_type: notesStudioTemplateType,
+        handwriting_mode: notesStudioHandwritingMode,
+      })
+      closeNotesStudioCreateModal()
+      await list.refetch()
+      const opened = await ed.handleSelectNote(studioState.note.id)
+      if (!opened) return
+      setSelectedStudioState(studioState)
+      ed.setEditorMode('preview')
+    } catch (error: any) {
+      message.error(
+        error?.message || t('option:notesSearch.notesStudioCreateError', {
+          defaultValue: 'Failed to create Notes Studio note.'
+        })
+      )
+    } finally {
+      setNotesStudioCreateLoading(false)
+    }
+  }, [
+    closeNotesStudioCreateModal,
+    ed,
+    list,
+    message,
+    notesStudioExcerptText,
+    notesStudioHandwritingMode,
+    notesStudioTemplateType,
+    t,
+  ])
+
+  const handleRegenerateStudioView = React.useCallback(async () => {
+    if (ed.selectedId == null) return
+    setNotesStudioRegenerating(true)
+    try {
+      const selectedNoteId = String(ed.selectedId)
+      const refreshed = await regenerateNoteStudio(String(ed.selectedId), {
+        current_markdown: String(ed.content || ''),
+      })
+      const detailReloaded = await ed.loadDetail(selectedNoteId)
+      if (!detailReloaded) {
+        ed.setTitle(String(refreshed.note.title || ''))
+        ed.setContent(String(refreshed.note.content || ''))
+        ed.setWysiwygHtml(markdownToWysiwygHtml(String(refreshed.note.content || '')))
+        ed.setIsDirty(false)
+      }
+      setSelectedStudioState(refreshed)
+      ed.setEditorMode('preview')
+    } catch (error: any) {
+      message.error(
+        error?.message || t('option:notesSearch.notesStudioRegenerateError', {
+          defaultValue: 'Failed to regenerate Notes Studio view.'
+        })
+      )
+    } finally {
+      setNotesStudioRegenerating(false)
+    }
+  }, [ed, message, t])
 
   // Flashcards
   const handleGenerateFlashcardsFromNote = React.useCallback(() => {
@@ -1659,6 +1902,17 @@ const NotesManagerPage: React.FC = () => {
       <p id={NOTES_SHORTCUTS_SUMMARY_ID} className="sr-only">
         {t('option:notesSearch.shortcutSummaryText', { defaultValue: 'Keyboard shortcuts: Ctrl or Command plus S to save, question mark to open keyboard shortcuts help, Escape to close dialogs.' })}
       </p>
+      <div className="absolute right-4 top-4 z-20">
+        <Button
+          type="primary"
+          size="small"
+          onClick={handleCreateStudyPackFromNote}
+          disabled={ed.selectedId == null || ed.isDirty || !ed.title.trim()}
+          data-testid="notes-create-study-pack-button"
+        >
+          {t('option:notesSearch.createStudyPack', { defaultValue: 'Create study pack' })}
+        </Button>
+      </div>
       {isMobileViewport && mobileSidebarOpen && (
         <button type="button" aria-label={t('option:notesSearch.closeMobileSidebar', { defaultValue: 'Close notes list' })} data-testid="notes-mobile-sidebar-backdrop" className="absolute inset-0 z-30 bg-black/35" onClick={() => setMobileSidebarOpen(false)} />
       )}
@@ -1798,6 +2052,17 @@ const NotesManagerPage: React.FC = () => {
         canSwitchTitleStrategy={ed.canSwitchTitleStrategy}
         effectiveTitleSuggestStrategy={ed.effectiveTitleSuggestStrategy}
         titleStrategyOptions={ed.titleStrategyOptions}
+        studioBadgeLabel={effectiveStudioState || currentNoteStudioSummary ? t('option:notesSearch.notesStudioAction', {
+          defaultValue: 'Notes Studio'
+        }) : null}
+        showStudioMarkdownOnlyNotice={notesStudioMarkdownOnlyNoticeOpen}
+        selectedStudioState={effectiveStudioState}
+        studioPaperSize={selectedStudioPaperSize}
+        onStudioPaperSizeChange={setSelectedStudioPaperSize}
+        onRegenerateStudioView={() => {
+          void handleRegenerateStudioView()
+        }}
+        studioRegenerating={notesStudioRegenerating}
         setTitleSuggestStrategy={ed.setTitleSuggestStrategy}
         manualLinkTargetId={ed.manualLinkTargetId}
         setManualLinkTargetId={ed.setManualLinkTargetId}
@@ -1840,6 +2105,8 @@ const NotesManagerPage: React.FC = () => {
         toggleNotePinned={ed.toggleNotePinned}
         copySelected={exp.copySelected}
         handleGenerateFlashcardsFromNote={handleGenerateFlashcardsFromNote}
+        handleCreateStudyPackFromNote={handleCreateStudyPackFromNote}
+        handleOpenNotesStudio={handleOpenNotesStudio}
         exportSelected={exp.exportSelected}
         saveNote={ed.saveNote}
         deleteNote={deleteNote}
@@ -1854,6 +2121,8 @@ const NotesManagerPage: React.FC = () => {
         openAttachmentPicker={openAttachmentPicker}
         handleAttachmentInputChange={handleAttachmentInputChange}
         runAssistAction={ed.runAssistAction}
+        switchStudioNoticeToMarkdown={switchNotesStudioToMarkdown}
+        dismissStudioMarkdownOnlyNotice={() => setNotesStudioMarkdownOnlyNoticeOpen(false)}
         handleTocJump={handleTocJump}
         handlePreviewLinkClick={handlePreviewLinkClick}
         handleWysiwygInput={handleWysiwygInput}
@@ -1863,144 +2132,47 @@ const NotesManagerPage: React.FC = () => {
         handleEditorSelectionUpdate={handleEditorSelectionUpdate}
         applyWikilinkSuggestion={wl.applyWikilinkSuggestion}
       />
-      <Modal
-        open={kw.keywordSuggestionOptions.length > 0}
-        onCancel={kw.closeKeywordSuggestionModal}
-        onOk={kw.applySelectedSuggestedKeywords}
-        okText={t('option:notesSearch.assistKeywordsApplySelectedAction', { defaultValue: 'Apply selected' })}
-        cancelText={t('common:cancel', { defaultValue: 'Cancel' })}
-        destroyOnHidden
-        title={t('option:notesSearch.assistKeywordsReviewTitle', { defaultValue: 'Review suggested keywords' })}
-      >
-        <div className="space-y-3" data-testid="notes-assist-keyword-suggestions-modal">
-          <Typography.Text type="secondary" className="block text-xs text-text-muted">
-            {t('option:notesSearch.assistKeywordsReviewHelp', { defaultValue: 'Select which suggested keywords to add to this note.' })}
-          </Typography.Text>
-          <div className="flex items-center gap-2">
-            <Button size="small" onClick={() => kw.setKeywordSuggestionSelection([...kw.keywordSuggestionOptions])} disabled={kw.keywordSuggestionOptions.length === 0} data-testid="notes-assist-keyword-select-all">
-              {t('option:notesSearch.keywordPickerSelectAll', { defaultValue: 'Select all' })}
-            </Button>
-            <Button size="small" onClick={() => kw.setKeywordSuggestionSelection([])} disabled={kw.keywordSuggestionSelection.length === 0} data-testid="notes-assist-keyword-clear-all">
-              {t('option:notesSearch.keywordPickerClear', { defaultValue: 'Clear' })}
-            </Button>
-          </div>
-          <Checkbox.Group value={kw.keywordSuggestionSelection} onChange={(values) => kw.setKeywordSuggestionSelection((values as string[]).map(String))} className="w-full">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-lg border border-border bg-surface2 p-3">
-              {kw.keywordSuggestionOptions.map((keyword) => (
-                <Checkbox key={`assist-keyword-${keyword}`} value={keyword} data-testid={`notes-assist-keyword-option-${toKeywordTestIdSegment(keyword)}`}>
-                  {kw.renderKeywordLabelWithFrequency(keyword, { includeCount: true, testIdPrefix: 'notes-assist-keyword-label' })}
-                </Checkbox>
-              ))}
-            </div>
-          </Checkbox.Group>
-        </div>
-      </Modal>
-      {kw.keywordPickerOpen && (
+      <NotesStudioCreateModal
+        open={notesStudioCreateOpen}
+        excerptText={notesStudioExcerptText}
+        templateType={notesStudioTemplateType}
+        handwritingMode={notesStudioHandwritingMode}
+        loading={notesStudioCreateLoading}
+        onClose={closeNotesStudioCreateModal}
+        onTemplateChange={setNotesStudioTemplateType}
+        onHandwritingChange={setNotesStudioHandwritingMode}
+        onSubmit={() => {
+          void handleCreateNotesStudio()
+        }}
+      />
+      <input ref={imp.importInputRef} type="file" multiple accept=".json,.md,.markdown,application/json,text/markdown,text/plain" className="hidden" data-testid="notes-import-input" onChange={(event) => { void imp.handleImportInputChange(event) }} />
+      {hasDeferredOverlayOpen && (
         <React.Suspense fallback={null}>
-          <KeywordPickerModal
-            open={kw.keywordPickerOpen}
-            availableKeywords={kw.availableKeywords}
-            filteredKeywordPickerOptions={kw.sortedKeywordPickerOptions}
-            recentKeywordPickerOptions={kw.recentKeywordPickerOptions}
-            keywordNoteCountByKey={kw.keywordNoteCountByKey}
-            sortMode={kw.keywordPickerSortMode}
-            keywordPickerQuery={kw.keywordPickerQuery}
-            keywordPickerSelection={kw.keywordPickerSelection}
-            onCancel={handleKeywordPickerCancel}
-            onApply={handleKeywordPickerApply}
-            onSortModeChange={handleKeywordPickerSortModeChange}
-            onToggleRecentKeyword={handleToggleRecentKeyword}
-            onQueryChange={handleKeywordPickerQueryChange}
-            onSelectionChange={handleKeywordPickerSelectionChange}
-            onSelectAll={handleKeywordPickerSelectAll}
-            onClear={handleKeywordPickerClear}
-            onOpenManager={kw.openKeywordManagerFromPicker}
-            managerDisabled={!isOnline}
+          <LazyNotesManagerOverlays
+            kw={kw}
+            imp={imp}
+            graph={{
+              graphModalOpen: ed.graphModalOpen,
+              selectedId: ed.selectedId,
+              graphMutationTick: ed.graphMutationTick,
+            }}
+            isOnline={isOnline}
+            shortcutHelpOpen={shortcutHelpOpen}
+            setShortcutHelpOpen={setShortcutHelpOpen}
+            closeGraphModal={closeGraphModal}
+            handleSelectNote={ed.handleSelectNote}
+            handleKeywordPickerCancel={handleKeywordPickerCancel}
+            handleKeywordPickerApply={handleKeywordPickerApply}
+            handleKeywordPickerSortModeChange={handleKeywordPickerSortModeChange}
+            handleToggleRecentKeyword={handleToggleRecentKeyword}
+            handleKeywordPickerQueryChange={handleKeywordPickerQueryChange}
+            handleKeywordPickerSelectionChange={handleKeywordPickerSelectionChange}
+            handleKeywordPickerSelectAll={handleKeywordPickerSelectAll}
+            handleKeywordPickerClear={handleKeywordPickerClear}
             t={t}
           />
         </React.Suspense>
       )}
-      <Modal open={kw.keywordManagerOpen} onCancel={kw.closeKeywordManager} title={t('option:notesSearch.keywordManagerTitle', { defaultValue: 'Manage keywords' })} destroyOnHidden footer={[<Button key="close" onClick={kw.closeKeywordManager}>{t('common:close', { defaultValue: 'Close' })}</Button>]}>
-        <div className="space-y-3" data-testid="notes-keyword-manager-modal">
-          <Typography.Text type="secondary" className="block text-xs text-text-muted">{t('option:notesSearch.keywordManagerHelp', { defaultValue: 'Rename, merge, or delete keywords from one place.' })}</Typography.Text>
-          <Input allowClear value={kw.keywordManagerQuery} onChange={(event) => kw.setKeywordManagerQuery(event.target.value)} placeholder={t('option:notesSearch.keywordManagerSearchPlaceholder', { defaultValue: 'Filter keywords' })} data-testid="notes-keyword-manager-search" />
-          <div className="max-h-80 overflow-auto rounded-lg border border-border bg-surface2 p-2">
-            {kw.keywordManagerLoading ? (
-              <Typography.Text type="secondary" className="text-xs text-text-muted">{t('option:notesSearch.keywordManagerLoading', { defaultValue: 'Loading keywords...' })}</Typography.Text>
-            ) : kw.keywordManagerVisibleItems.length === 0 ? (
-              <Typography.Text type="secondary" className="text-xs text-text-muted">{t('option:notesSearch.keywordManagerEmpty', { defaultValue: 'No keywords found.' })}</Typography.Text>
-            ) : (
-              <div className="space-y-2">
-                {kw.keywordManagerVisibleItems.map((item) => (
-                  <div key={`manager-${item.id}`} className="rounded border border-border bg-surface px-2 py-2" data-testid={`notes-keyword-manager-item-${item.id}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm text-text">{item.keyword}</div>
-                        <div className="text-[11px] text-text-muted">{t('option:notesSearch.keywordManagerUsage', { defaultValue: '{{count}} linked notes', count: item.noteCount })}</div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Button size="small" onClick={() => kw.setKeywordRenameDraft({ id: item.id, currentKeyword: item.keyword, expectedVersion: item.version, nextKeyword: item.keyword })} disabled={kw.keywordManagerActionLoading} data-testid={`notes-keyword-manager-rename-${item.id}`}>{t('option:notesSearch.keywordManagerRenameAction', { defaultValue: 'Rename' })}</Button>
-                        <Button size="small" onClick={() => kw.setKeywordMergeDraft({ source: item, targetKeywordId: null })} disabled={kw.keywordManagerActionLoading} data-testid={`notes-keyword-manager-merge-${item.id}`}>{t('option:notesSearch.keywordManagerMergeAction', { defaultValue: 'Merge' })}</Button>
-                        <Button size="small" danger onClick={() => { void kw.handleKeywordManagerDelete(item) }} disabled={kw.keywordManagerActionLoading} data-testid={`notes-keyword-manager-delete-${item.id}`}>{t('option:notesSearch.keywordManagerDeleteAction', { defaultValue: 'Delete' })}</Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </Modal>
-      <Modal open={kw.keywordRenameDraft != null} onCancel={() => kw.setKeywordRenameDraft(null)} onOk={() => { void kw.submitKeywordRename() }} okText={t('option:notesSearch.keywordManagerRenameAction', { defaultValue: 'Rename' })} cancelText={t('common:cancel', { defaultValue: 'Cancel' })} confirmLoading={kw.keywordManagerActionLoading} destroyOnHidden title={t('option:notesSearch.keywordManagerRenameTitle', { defaultValue: 'Rename keyword' })}>
-        <div className="space-y-2">
-          <Typography.Text type="secondary" className="block text-xs text-text-muted">{t('option:notesSearch.keywordManagerRenameHelp', { defaultValue: 'Choose a new name for this keyword.' })}</Typography.Text>
-          <Input autoFocus value={kw.keywordRenameDraft?.nextKeyword ?? ''} onChange={(event) => kw.setKeywordRenameDraft((current) => current ? { ...current, nextKeyword: event.target.value } : current)} data-testid="notes-keyword-manager-rename-input" />
-        </div>
-      </Modal>
-      <Modal open={kw.keywordMergeDraft != null} onCancel={() => kw.setKeywordMergeDraft(null)} onOk={() => { void kw.submitKeywordMerge() }} okText={t('option:notesSearch.keywordManagerMergeAction', { defaultValue: 'Merge' })} cancelText={t('common:cancel', { defaultValue: 'Cancel' })} confirmLoading={kw.keywordManagerActionLoading} destroyOnHidden title={t('option:notesSearch.keywordManagerMergeTitle', { defaultValue: 'Merge keyword' })}>
-        <div className="space-y-2">
-          <Typography.Text type="secondary" className="block text-xs text-text-muted">{t('option:notesSearch.keywordManagerMergeHelp', { defaultValue: 'Move all links from the source keyword to the selected target keyword.' })}</Typography.Text>
-          <div className="text-xs text-text-muted">{t('option:notesSearch.keywordManagerMergeSourceLabel', { defaultValue: 'Source' })}: <span className="font-medium text-text">{kw.keywordMergeDraft?.source.keyword ?? ''}</span></div>
-          <select className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" value={kw.keywordMergeDraft?.targetKeywordId ?? ''} onChange={(event) => { const parsed = Number(event.target.value); kw.setKeywordMergeDraft((current) => current ? { ...current, targetKeywordId: Number.isFinite(parsed) && parsed > 0 ? parsed : null } : current) }} data-testid="notes-keyword-manager-merge-target">
-            <option value="">{t('option:notesSearch.keywordManagerMergeTargetPlaceholder', { defaultValue: 'Select target keyword' })}</option>
-            {kw.keywordMergeTargetOptions.map((item) => (<option key={`keyword-merge-target-${item.id}`} value={item.id}>{item.keyword} ({item.noteCount})</option>))}
-          </select>
-        </div>
-      </Modal>
-      <input ref={imp.importInputRef} type="file" multiple accept=".json,.md,.markdown,application/json,text/markdown,text/plain" className="hidden" data-testid="notes-import-input" onChange={(event) => { void imp.handleImportInputChange(event) }} />
-      <Modal open={imp.importModalOpen} onCancel={imp.closeImportModal} onOk={() => { void imp.confirmImport() }} okText={t('option:notesSearch.importConfirmAction', { defaultValue: 'Import notes' })} cancelText={t('common:cancel', { defaultValue: 'Cancel' })} confirmLoading={imp.importSubmitting} destroyOnHidden title={t('option:notesSearch.importModalTitle', { defaultValue: 'Import notes' })}>
-        <div className="space-y-3" data-testid="notes-import-modal">
-          <Typography.Text type="secondary" className="block text-xs text-text-muted">{t('option:notesSearch.importModalHelp', { defaultValue: 'Upload JSON exports or markdown files. Choose how to handle imported IDs that already exist.' })}</Typography.Text>
-          <div className="space-y-1">
-            <label htmlFor="notes-import-strategy" className="text-xs font-medium text-text">{t('option:notesSearch.importDuplicateStrategyLabel', { defaultValue: 'Duplicate handling' })}</label>
-            <select id="notes-import-strategy" className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" value={imp.importDuplicateStrategy} onChange={(event) => imp.setImportDuplicateStrategy(event.target.value as any)} data-testid="notes-import-duplicate-strategy">
-              <option value="create_copy">{t('option:notesSearch.importDuplicateCreateCopy', { defaultValue: 'Create copy' })}</option>
-              <option value="skip">{t('option:notesSearch.importDuplicateSkip', { defaultValue: 'Skip duplicate IDs' })}</option>
-              <option value="overwrite">{t('option:notesSearch.importDuplicateOverwrite', { defaultValue: 'Overwrite duplicate IDs' })}</option>
-            </select>
-          </div>
-          <div className="rounded border border-border bg-surface2 px-2 py-2 text-xs text-text-muted" data-testid="notes-import-preview-summary">
-            {`Files: ${imp.pendingImportFiles.length} · Estimated notes: ${imp.pendingImportFiles.reduce((sum, item) => sum + item.detectedNotes, 0)}`}
-          </div>
-          <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-            {imp.pendingImportFiles.map((file) => (
-              <div key={`import-file-${file.fileName}`} className="rounded border border-border bg-surface px-2 py-2" data-testid={`notes-import-file-${file.fileName.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`}>
-                <div className="truncate text-sm text-text">{file.fileName}</div>
-                <div className="text-[11px] text-text-muted">{`${file.format.toUpperCase()} · ${file.detectedNotes} note${file.detectedNotes === 1 ? '' : 's'} detected`}</div>
-                {file.parseError && (<div className="mt-1 text-[11px] text-warn">{file.parseError}</div>)}
-              </div>
-            ))}
-          </div>
-        </div>
-      </Modal>
-      <NotesGraphModal open={ed.graphModalOpen} noteId={ed.selectedId} refreshToken={ed.graphMutationTick} onClose={closeGraphModal} onOpenNote={(noteId) => { void ed.handleSelectNote(noteId) }} />
-      <Modal open={shortcutHelpOpen} onCancel={() => setShortcutHelpOpen(false)} footer={null} title={t('option:notesSearch.shortcutHelpTitle', { defaultValue: 'Keyboard shortcuts' })} destroyOnHidden>
-        <div className="space-y-2 text-sm text-text" data-testid="notes-shortcuts-modal">
-          <div><strong>Ctrl/Cmd + S</strong>: {t('option:notesSearch.shortcutSaveDescription', { defaultValue: 'Save the current note.' })}</div>
-          <div><strong>?</strong>: {t('option:notesSearch.shortcutOpenHelpDescription', { defaultValue: 'Open keyboard shortcut help.' })}</div>
-          <div><strong>Esc</strong>: {t('option:notesSearch.shortcutCloseDialogDescription', { defaultValue: 'Close the current dialog.' })}</div>
-        </div>
-      </Modal>
     </div>
   )
 }

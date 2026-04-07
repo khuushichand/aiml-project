@@ -1138,6 +1138,12 @@ export const QuickIngestModal: React.FC<Props> = ({
       footer={null}
       width={760}
       style={{ maxWidth: "calc(100vw - 32px)" }}
+      styles={{
+        body: {
+          maxHeight: "calc(100vh - 160px)",
+          overflowY: "auto"
+        }
+      }}
       destroyOnHidden
       rootClassName="quick-ingest-modal"
       maskClosable={!running}

@@ -5,9 +5,15 @@ import { getStoredTldwServerURL } from "@/services/tldw-server"
 import { apiSend } from "@/services/api-send"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
+  resolveWebUiQuickstartServerUrl,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
+import {
   ConnectionPhase,
   type ConnectionState,
   type KnowledgeStatus,
+  type UserPersona,
   deriveConnectionUxState
 } from "@/types/connection"
 import { CONNECTED_THROTTLE_MS } from "@/config/connection-timing"
@@ -22,6 +28,7 @@ const KNOWLEDGE_RECHECK_INTERVAL_MS = 5 * 60_000
 const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
 const FIRST_RUN_COMPLETE_KEY = "__tldw_first_run_complete"
+const USER_PERSONA_KEY = "__tldw_user_persona"
 
 const coerceStorageFlag = (value: unknown): boolean | null => {
   if (typeof value === "boolean") return value
@@ -146,6 +153,89 @@ const setFirstRunCompleteFlag = async (complete: boolean): Promise<void> => {
   }
 }
 
+const VALID_PERSONAS = new Set<string>(["family", "researcher", "explorer"])
+
+const readLocalStoragePersona = (key: string): UserPersona => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(key)
+      if (raw != null && VALID_PERSONAS.has(raw)) {
+        return raw as UserPersona
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+
+  return null
+}
+
+/** Read a single key from chrome.storage.local (extension context only). */
+const chromeStorageGet = (key: string): Promise<string | undefined> =>
+  new Promise((resolve, reject) => {
+    chrome.storage.local.get(key, (res) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError)
+        return
+      }
+      resolve(
+        res && Object.prototype.hasOwnProperty.call(res, key)
+          ? (res[key] as string)
+          : undefined
+      )
+    })
+  })
+
+const getUserPersonaFlag = async (): Promise<UserPersona> => {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      const value = await chromeStorageGet(USER_PERSONA_KEY)
+      if (typeof value === "string" && VALID_PERSONAS.has(value)) {
+        return value as UserPersona
+      }
+      return readLocalStoragePersona(USER_PERSONA_KEY)
+    }
+  } catch {
+    // ignore storage read errors
+  }
+
+  return readLocalStoragePersona(USER_PERSONA_KEY)
+}
+
+const setUserPersonaFlag = async (persona: UserPersona): Promise<void> => {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      await new Promise<void>((resolve, reject) => {
+        const storage = chrome.storage.local
+        const cb = () => {
+          if (chrome.runtime.lastError) { reject(chrome.runtime.lastError); return }
+          resolve()
+        }
+        if (persona) {
+          storage.set({ [USER_PERSONA_KEY]: persona }, cb)
+        } else {
+          storage.remove(USER_PERSONA_KEY, cb)
+        }
+      })
+      return
+    }
+  } catch {
+    // ignore storage write errors
+  }
+
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (persona) {
+        localStorage.setItem(USER_PERSONA_KEY, persona)
+      } else {
+        localStorage.removeItem(USER_PERSONA_KEY)
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+}
+
 const ensurePlaceholderConfig = async (): Promise<string | null> => {
   try {
     const cfg = await tldwClient.getConfig()
@@ -219,6 +309,40 @@ const getCurrentBrowserOrigin = (): string | null => {
   }
 }
 
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin: getCurrentBrowserOrigin(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
+    })
+  } catch {
+    return null
+  }
+}
+
 const getCurrentBrowserHostname = (): string | null => {
   if (typeof window === "undefined") return null
   try {
@@ -284,7 +408,10 @@ const probeServerLiveness = async (
     if (controller) {
       timeoutId = setTimeout(() => controller.abort(), safeTimeoutMs)
     }
-    const response = await fetch(`${String(serverUrl).replace(/\/$/, "")}${HEALTH_LIVENESS_PATH}`, {
+    const response = await fetch(resolveBrowserRequestTransport({
+      config: { serverUrl },
+      path: HEALTH_LIVENESS_PATH
+    }).url, {
       method: "GET",
       credentials: "omit",
       signal: controller?.signal
@@ -371,6 +498,7 @@ type ConnectionStore = {
   testConnectionFromOnboarding: () => Promise<void>
   setDemoMode: () => void
   markFirstRunComplete: () => Promise<void>
+  setUserPersona: (persona: UserPersona) => Promise<void>
 }
 
 const initialState: ConnectionState = {
@@ -390,6 +518,7 @@ const initialState: ConnectionState = {
   configStep: "none",
   errorKind: "none",
   hasCompletedFirstRun: false,
+  userPersona: null,
   lastConfigUpdatedAt: null,
   checksSinceConfigChange: 0
 }
@@ -397,6 +526,10 @@ const initialState: ConnectionState = {
 const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const cfg = await tldwClient.getConfig()
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    if (quickstartWebUiServerUrl) {
+      return quickstartWebUiServerUrl
+    }
     if (cfg?.serverUrl) return cfg.serverUrl
   } catch {
     // ignore config read errors
@@ -405,6 +538,10 @@ const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const storage = createSafeStorage()
     const cfg = await storage.get<TldwConfig>("tldwConfig")
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    if (quickstartWebUiServerUrl) {
+      return quickstartWebUiServerUrl
+    }
     if (cfg?.serverUrl) return cfg.serverUrl
   } catch {
     // ignore storage read errors
@@ -464,15 +601,20 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
     // Load all persisted flags upfront
     const persistedFirstRun = await getFirstRunCompleteFlag()
+    const persistedUserPersona = await getUserPersonaFlag()
     const persistedServerUrl = await getPersistedServerUrl()
     const forceUnconfigured = await getForceUnconfiguredFlag()
     const bypass = await getOfflineBypassFlag()
 
+    const needsFirstRunSync = !prev.hasCompletedFirstRun && persistedFirstRun
+    const needsPersonaSync = prev.userPersona !== persistedUserPersona
+
     const currentState =
-      !prev.hasCompletedFirstRun && persistedFirstRun
+      needsFirstRunSync || needsPersonaSync
         ? {
             ...prev,
-            hasCompletedFirstRun: true
+            ...(needsFirstRunSync ? { hasCompletedFirstRun: true } : {}),
+            ...(needsPersonaSync ? { userPersona: persistedUserPersona } : {})
           }
         : prev
 
@@ -569,7 +711,22 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
     try {
       let cfg = await tldwClient.getConfig()
-      let serverUrl = cfg?.serverUrl ?? null
+      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+      const recoveryProbeSourceServerUrl = cfg?.serverUrl ?? currentState.serverUrl ?? null
+      let serverUrl = quickstartWebUiServerUrl ?? cfg?.serverUrl ?? null
+
+      if (
+        quickstartWebUiServerUrl &&
+        cfg?.serverUrl !== quickstartWebUiServerUrl
+      ) {
+        await tldwClient.updateConfig({ serverUrl: quickstartWebUiServerUrl })
+        cfg = {
+          ...(cfg || {}),
+          serverUrl: quickstartWebUiServerUrl,
+          authMode: cfg?.authMode || "single-user"
+        } as TldwConfig
+        serverUrl = quickstartWebUiServerUrl
+      }
 
       if (!serverUrl) {
         try {
@@ -677,7 +834,9 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         )
       ])
 
-      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(serverUrl)
+      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(
+        quickstartWebUiServerUrl ? recoveryProbeSourceServerUrl : serverUrl
+      )
       if (
         !healthResult.ok &&
         healthResult.status === 0 &&
@@ -689,12 +848,14 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           Math.min(5_000, CONNECTION_TIMEOUT_MS)
         )
         if (probeOk) {
-          await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
-          serverUrl = fallbackServerUrl
-          cfg = {
-            ...(cfg || {}),
-            serverUrl: fallbackServerUrl
-          } as TldwConfig
+          if (!quickstartWebUiServerUrl) {
+            await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
+            serverUrl = fallbackServerUrl
+            cfg = {
+              ...(cfg || {}),
+              serverUrl: fallbackServerUrl
+            } as TldwConfig
+          }
           const fallbackNoAuth = !cfg ||
             (!cfg.apiKey &&
               !cfg.accessToken &&
@@ -1048,6 +1209,16 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       state: {
         ...prev,
         hasCompletedFirstRun: true
+      }
+    })
+  },
+
+  async setUserPersona(persona: UserPersona) {
+    await setUserPersonaFlag(persona)
+    set({
+      state: {
+        ...get().state,
+        userPersona: persona
       }
     })
   }

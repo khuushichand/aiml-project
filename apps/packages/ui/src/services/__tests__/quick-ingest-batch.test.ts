@@ -96,6 +96,225 @@ describe("submitQuickIngestBatch", () => {
     })
   })
 
+  it("defaults perform_chunking to true when common options are omitted", async () => {
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-default-chunking",
+      jobs: [{ id: 202 }]
+    })
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: { media_id: "m-default-chunking" }
+      }
+    })
+
+    await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-default-chunking",
+          url: "https://example.com/default-chunking",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false
+    } as any)
+
+    expect(mocks.bgUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST",
+        fields: expect.objectContaining({
+          perform_chunking: true
+        })
+      })
+    )
+  })
+
+  it("captures direct batch tracking metadata before polling completes", async () => {
+    const onTrackingMetadata = vi.fn()
+
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-1",
+      jobs: [{ id: 1234 }]
+    })
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: { media_id: "m-track" }
+      }
+    })
+
+    await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-track-1",
+          url: "https://example.com/tracked",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      __quickIngestSessionId: "qi-direct-1",
+      onTrackingMetadata
+    } as any)
+
+    expect(onTrackingMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "webui-direct",
+        sessionId: "qi-direct-1",
+        batchId: "batch-1",
+        batchIds: ["batch-1"],
+        jobIds: [1234],
+        jobIdToItemId: {
+          "1234": "entry-track-1"
+        },
+        startedAt: expect.any(Number)
+      })
+    )
+  })
+
+  it("emits per-item direct tracking metadata for both url and file submissions", async () => {
+    const onTrackingMetadata = vi.fn()
+
+    mocks.bgUpload
+      .mockResolvedValueOnce({
+        batch_id: "batch-url-1",
+        jobs: [{ id: 501 }]
+      })
+      .mockResolvedValueOnce({
+        batch_id: "batch-file-1",
+        jobs: [{ id: 601 }]
+      })
+    mocks.bgRequest
+      .mockResolvedValueOnce({
+        ok: true,
+        data: {
+          status: "completed",
+          result: { media_id: "m-url-1" }
+        }
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        data: {
+          status: "completed",
+          result: { media_id: "m-file-1" }
+        }
+      })
+
+    await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-501",
+          url: "https://example.com/per-item-url",
+          type: "document"
+        }
+      ],
+      files: [
+        {
+          id: "file-601",
+          name: "session-restore.mkv",
+          type: "video/x-matroska",
+          data: [1, 2, 3]
+        }
+      ],
+      storeRemote: true,
+      processOnly: false,
+      __quickIngestSessionId: "qi-direct-per-item",
+      onTrackingMetadata
+    } as any)
+
+    expect(onTrackingMetadata).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: "qi-direct-per-item",
+        batchId: "batch-url-1",
+        batchIds: ["batch-url-1"],
+        jobIds: [501],
+        jobIdToItemId: {
+          "501": "entry-501"
+        }
+      })
+    )
+    expect(onTrackingMetadata).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: "qi-direct-per-item",
+        batchId: "batch-file-1",
+        batchIds: ["batch-file-1"],
+        jobIds: [601],
+        jobIdToItemId: {
+          "601": "file-601"
+        }
+      })
+    )
+  })
+
+  it("tracks only submitted direct items when later queue items fail before job creation", async () => {
+    const onTrackingMetadata = vi.fn()
+
+    mocks.bgUpload
+      .mockResolvedValueOnce({
+        batch_id: "batch-first-only",
+        jobs: [{ id: 701 }]
+      })
+      .mockRejectedValueOnce(new Error("submit failed for second item"))
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: { media_id: "m-first-only" }
+      }
+    })
+
+    const response = await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-first-submitted",
+          url: "https://example.com/first-submitted",
+          type: "document"
+        },
+        {
+          id: "entry-never-submitted",
+          url: "https://example.com/never-submitted",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      __quickIngestSessionId: "qi-direct-partial-submit",
+      onTrackingMetadata
+    } as any)
+
+    expect(onTrackingMetadata).toHaveBeenCalledTimes(1)
+    expect(onTrackingMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "qi-direct-partial-submit",
+        submittedItemIds: ["entry-first-submitted"],
+        jobIdToItemId: {
+          "701": "entry-first-submitted"
+        }
+      })
+    )
+    expect(response.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "entry-first-submitted",
+          status: "ok"
+        }),
+        expect.objectContaining({
+          id: "entry-never-submitted",
+          status: "error"
+        })
+      ])
+    )
+  })
+
   it("cancels direct-session tracked batches through backend cancel endpoint", async () => {
     mocks.bgUpload.mockResolvedValue({
       batch_id: "batch-direct-cancel",
@@ -163,6 +382,74 @@ describe("submitQuickIngestBatch", () => {
       id: "entry-cancel-1",
       status: "error"
     })
+  })
+
+  it("stops submitting later direct items once the session is cancelled", async () => {
+    vi.useFakeTimers()
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-stop-1",
+      jobs: [{ id: 901 }]
+    })
+
+    let statusPollCount = 0
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || "")
+      if (path.includes("/api/v1/media/ingest/jobs/cancel?batch_id=batch-stop-1")) {
+        return { ok: true, data: { success: true } }
+      }
+      if (path === "/api/v1/media/ingest/jobs/901") {
+        statusPollCount += 1
+        return {
+          ok: true,
+          data: { status: statusPollCount > 1 ? "cancelled" : "processing" }
+        }
+      }
+      return { ok: false, error: "unexpected path" }
+    })
+
+    const runPromise = submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-stop-1",
+          url: "https://example.com/stop-first",
+          type: "document"
+        },
+        {
+          id: "entry-stop-2",
+          url: "https://example.com/stop-second",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      __quickIngestSessionId: "direct-session-stop",
+      common: {
+        perform_analysis: true,
+        perform_chunking: false,
+        overwrite_existing: false
+      },
+      advancedValues: {}
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.bgRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: "/api/v1/media/ingest/jobs/901",
+          method: "GET"
+        })
+      )
+    })
+
+    await cancelQuickIngestSession({
+      sessionId: "direct-session-stop",
+      reason: "user_cancelled"
+    })
+    await vi.advanceTimersByTimeAsync(2_000)
+    const runResult = await runPromise
+
+    expect(mocks.bgUpload).toHaveBeenCalledTimes(1)
+    expect(runResult.results?.map((item) => item.id)).not.toContain("entry-stop-2")
   })
 
   it("uses extension message transport when extension runtime is available", async () => {
@@ -347,6 +634,73 @@ describe("submitQuickIngestBatch", () => {
     })
   })
 
+  it("falls back to persistent /media/add when ingest-job submission is rejected by the concurrent-job limit", async () => {
+    const queueLimitError = new Error(
+      "User 1 has reached the maximum concurrent job limit (5)"
+    ) as Error & { status?: number }
+    queueLimitError.status = 429
+
+    mocks.bgUpload
+      .mockRejectedValueOnce(queueLimitError)
+      .mockResolvedValueOnce({
+        results: [
+          {
+            status: "Success",
+            db_id: 321,
+            metadata: { title: "Queued article fallback" }
+          }
+        ]
+      })
+
+    const result = await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-queue-limit",
+          url: "https://example.com/article",
+          type: "auto"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      common: {
+        perform_analysis: true,
+        perform_chunking: false,
+        overwrite_existing: false
+      },
+      advancedValues: {}
+    })
+
+    expect(mocks.bgUpload).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST"
+      })
+    )
+    expect(mocks.bgUpload).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: "/api/v1/media/add",
+        method: "POST",
+        fields: expect.objectContaining({
+          urls: ["https://example.com/article"]
+        })
+      })
+    )
+    expect(result.results?.[0]).toMatchObject({
+      id: "entry-queue-limit",
+      status: "ok",
+      data: {
+        results: [
+          expect.objectContaining({
+            media_id: 321
+          })
+        ]
+      }
+    })
+  })
+
   it("starts a quick ingest session via extension transport and returns session id ack", async () => {
     mocks.runtimeId = "ext-1"
     mocks.sendMessage
@@ -460,5 +814,31 @@ describe("submitQuickIngestBatch", () => {
       })
     )
     expect(response).toEqual({ ok: true })
+  })
+
+  it("cancels persisted direct batches after refresh using tracking metadata", async () => {
+    const response = await cancelQuickIngestSession({
+      sessionId: "qi-direct-restored",
+      reason: "user_cancelled",
+      tracking: {
+        mode: "webui-direct",
+        batchIds: ["batch-restore-1", "batch-restore-2"],
+        batchId: "batch-restore-2"
+      }
+    } as any)
+
+    expect(response).toEqual({ ok: true })
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: expect.stringContaining("batch_id=batch-restore-1"),
+        method: "POST"
+      })
+    )
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: expect.stringContaining("batch_id=batch-restore-2"),
+        method: "POST"
+      })
+    )
   })
 })

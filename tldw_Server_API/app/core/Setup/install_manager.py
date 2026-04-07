@@ -29,6 +29,8 @@ from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     AUDIO_BUNDLE_CATALOG_VERSION,
+    AudioBundle,
+    AudioResourceProfile,
     AudioBundleStep,
     AutomationTier,
     DEFAULT_AUDIO_RESOURCE_PROFILE,
@@ -93,6 +95,13 @@ def _install_dependencies(plan: InstallPlan, status: InstallationStatus, errors:
         if key not in processed_backends:
             with contextlib.suppress(PipInstallBlockedError):
                 _install_backend_dependencies('stt', entry.engine, status, errors)
+            processed_backends.add(key)
+
+    if plan.stt:
+        key = "stt:silero_vad"
+        if key not in processed_backends:
+            with contextlib.suppress(PipInstallBlockedError):
+                _install_backend_dependencies('stt', 'silero_vad', status, errors)
             processed_backends.add(key)
 
     for entry in plan.tts:
@@ -308,6 +317,11 @@ def _cuda_available() -> bool:
     return True
 
 
+def cuda_available() -> bool:
+    """Public compatibility wrapper for machine-profile detection helpers."""
+    return _cuda_available()
+
+
 def _resolve_kitten_tts_prefetch_settings() -> dict[str, str | None]:
     cache_dir = "cache/kitten_tts"
 
@@ -449,6 +463,11 @@ def _downloads_allowed() -> bool:
     return flag.strip().lower() not in {'1', 'true', 'yes', 'y', 'on'}
 
 
+def downloads_allowed() -> bool:
+    """Public wrapper for setup download-policy checks."""
+    return _downloads_allowed()
+
+
 def _ensure_downloads_allowed(target: str) -> None:
     if _downloads_allowed():
         return
@@ -534,7 +553,7 @@ def get_install_status_snapshot() -> dict[str, Any] | None:
 def _utc_now() -> str:
     return datetime.utcnow().isoformat() + 'Z'
 
-def execute_install_plan(plan_payload: dict[str, Any]) -> None:
+def execute_install_plan(plan_payload: dict[str, Any]) -> dict[str, Any] | None:
     """Background entry point to execute an installation plan."""
     try:
         validate = getattr(InstallPlan, 'model_validate', None) or getattr(InstallPlan, 'parse_obj', None)
@@ -637,6 +656,7 @@ def _plan_step_names(
         step_names.add(f"{selection_key}:deps:stt:{entry.engine}")
         step_names.add(f"{selection_key}:stt:{entry.engine}:{_entry_suffix(entry, 'models')}")
     if plan.stt:
+        step_names.add(f"{selection_key}:deps:stt:silero_vad")
         step_names.add(f"{selection_key}:stt:silero_vad")
 
     for entry in plan.tts:
@@ -794,14 +814,14 @@ def execute_audio_bundle(
     )
     completed_steps = _completed_step_names(get_install_status_snapshot()) if safe_rerun else set()
     if safe_rerun and expected_steps and expected_steps.issubset(completed_steps):
-        for step_name in sorted(expected_steps):
-            result_steps.append(
-                {
-                    "name": step_name,
-                    "status": "skipped",
-                    "detail": "Already satisfied by a previous successful install run.",
-                }
-            )
+        result_steps.extend(
+            {
+                "name": step_name,
+                "status": "skipped",
+                "detail": "Already satisfied by a previous successful install run.",
+            }
+            for step_name in sorted(expected_steps)
+        )
         readiness.update(
             status="partial",
             remediation_items=["Run audio verification to confirm readiness."],
@@ -1160,14 +1180,19 @@ def _install_silero_vad() -> None:
     """
     _ensure_downloads_allowed("Silero VAD model")
     try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib import _lazy_import_silero_vad
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib import (
+            _lazy_import_silero_vad,
+            get_silero_vad_unavailable_reason,
+        )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("Silero VAD helper not available; ensure audio dependencies are installed.") from exc
 
     model, utils = _lazy_import_silero_vad()
     if not model or not utils:
-        # Defer to outer handler to log/mark as skipped vs failed
-        raise DownloadBlockedError("Silero VAD model could not be loaded; check network or torch hub configuration.")
+        reason = get_silero_vad_unavailable_reason()
+        if reason:
+            raise RuntimeError(f"Silero VAD model could not be loaded: {reason}")
+        raise RuntimeError("Silero VAD model could not be loaded; check network or torch hub configuration.")
 
 
 def _install_qwen2_audio() -> None:
@@ -1473,6 +1498,10 @@ class PipRequirement:
 STT_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     'faster_whisper': [
         PipRequirement(package='faster-whisper>=1.0.0', import_name='faster_whisper', cpu_package='faster-whisper>=1.0.0'),
+    ],
+    'silero_vad': [
+        PipRequirement(package='torch>=2.2.0', import_name='torch'),
+        PipRequirement(package='torchaudio>=2.2.0', import_name='torchaudio'),
     ],
     'qwen2_audio': [
         PipRequirement(package='torch>=2.2.0', import_name='torch'),

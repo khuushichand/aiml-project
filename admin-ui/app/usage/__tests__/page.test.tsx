@@ -540,6 +540,23 @@ describe('UsagePage router analytics status shell', () => {
     expect(screen.getByText('Offline')).toBeInTheDocument();
   });
 
+  it('exposes PP and TG headers with accessible names and hides the decorative tab separator', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<UsagePage />);
+
+    await screen.findByRole('heading', { name: 'Usage Stats' });
+    await user.click(screen.getByRole('tab', { name: /Providers/i }));
+
+    expect(await screen.findByRole('columnheader', { name: 'Prompt Tokens' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Total Generated Tokens' })).toBeInTheDocument();
+
+    const separator = Array.from(container.querySelectorAll('span')).find(
+      (element) => element.textContent === '|'
+    );
+    expect(separator).not.toBeNull();
+    expect(separator?.getAttribute('aria-hidden')).toBe('true');
+  });
+
   it('renders access tab data from router analytics access endpoint', async () => {
     const user = userEvent.setup();
     render(<UsagePage />);

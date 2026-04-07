@@ -106,4 +106,24 @@ describe('researchRuns api client', () => {
     ]);
     expect(mocks.buildAuthHeaders).toHaveBeenCalledWith('GET');
   });
+
+  it('builds relative research event SSE URLs when the api base is relative', async () => {
+    mocks.getApiBaseUrl.mockReturnValue('/api/v1');
+    mocks.streamStructuredSSE.mockImplementationOnce(async (url: string, _options: unknown, _onEvent: unknown) => {
+      expect(url).toBe('/api/v1/research/runs/rs_relative/events/stream?after_id=7');
+    });
+
+    const unsubscribe = subscribeResearchRunEvents({
+      sessionId: 'rs_relative',
+      afterId: 7,
+      onEvent: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.streamStructuredSSE).toHaveBeenCalledTimes(1);
+    });
+
+    unsubscribe();
+  });
 });

@@ -82,6 +82,30 @@ class AuthnzAdminMonitoringRepo:
         normalized = value.astimezone(timezone.utc).isoformat()
         return normalized.replace("+00:00", "Z")
 
+    @staticmethod
+    def _coerce_timestamp_input(value: Any) -> Any:
+        if value is None or value is _UNSET:
+            return value
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if not isinstance(value, str):
+            return value
+
+        text = value.strip()
+        if not text:
+            return value
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return value
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
     @classmethod
     def _normalize_row(cls, row: Any) -> dict[str, Any]:
         """Normalize backend-specific row objects into JSON-friendly dicts."""
@@ -299,10 +323,16 @@ class AuthnzAdminMonitoringRepo:
         if self._is_postgres_backend():
             insert_values = {
                 "assigned_to_user_id": None if assigned_to_user_id is _UNSET else assigned_to_user_id,
-                "snoozed_until": None if snoozed_until is _UNSET else snoozed_until,
+                "snoozed_until": (
+                    None if snoozed_until is _UNSET else self._coerce_timestamp_input(snoozed_until)
+                ),
                 "escalated_severity": None if escalated_severity is _UNSET else escalated_severity,
-                "acknowledged_at": None if acknowledged_at is _UNSET else acknowledged_at,
-                "dismissed_at": None if dismissed_at is _UNSET else dismissed_at,
+                "acknowledged_at": (
+                    None if acknowledged_at is _UNSET else self._coerce_timestamp_input(acknowledged_at)
+                ),
+                "dismissed_at": (
+                    None if dismissed_at is _UNSET else self._coerce_timestamp_input(dismissed_at)
+                ),
             }
             update_flags = {
                 "assigned_to_user_id": assigned_to_user_id is not _UNSET,
@@ -419,6 +449,7 @@ class AuthnzAdminMonitoringRepo:
 
         async with self.db_pool.transaction() as conn:
             if self._is_postgres_backend():
+                created_at_value = self._coerce_timestamp_input(created_at_value)
                 row = await conn.fetchrow(
                     """
                     INSERT INTO admin_alert_events (

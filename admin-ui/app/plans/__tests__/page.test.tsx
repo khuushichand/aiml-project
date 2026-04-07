@@ -7,6 +7,7 @@ import PlansPage from '../page';
 import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
@@ -25,8 +26,12 @@ vi.mock('@/components/ResponsiveLayout', () => ({
   ),
 }));
 
-vi.mock('@/components/ui/confirm-dialog', () => ({
-  useConfirm: () => confirmMock,
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -39,9 +44,11 @@ vi.mock('@/components/ui/toast', () => ({
 vi.mock('@/lib/api-client', () => ({
   api: {
     getPlans: vi.fn(),
+    getSubscriptions: vi.fn(),
     createPlan: vi.fn(),
     updatePlan: vi.fn(),
     deletePlan: vi.fn(),
+    getSubscriptions: vi.fn(),
   },
 }));
 
@@ -53,9 +60,11 @@ vi.mock('@/lib/billing', () => ({
 
 type ApiMock = {
   getPlans: ReturnType<typeof vi.fn>;
+  getSubscriptions: ReturnType<typeof vi.fn>;
   createPlan: ReturnType<typeof vi.fn>;
   updatePlan: ReturnType<typeof vi.fn>;
   deletePlan: ReturnType<typeof vi.fn>;
+  getSubscriptions: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -107,13 +116,16 @@ const samplePlans = [
 
 beforeEach(() => {
   billingEnabled = true;
-  confirmMock.mockResolvedValue(true);
+  confirmMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
+  privilegedActionMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   apiMock.getPlans.mockResolvedValue(samplePlans);
+  apiMock.getSubscriptions.mockResolvedValue([]);
   apiMock.createPlan.mockResolvedValue(samplePlans[0]);
   apiMock.updatePlan.mockResolvedValue(samplePlans[0]);
   apiMock.deletePlan.mockResolvedValue({});
+  apiMock.getSubscriptions.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -177,7 +189,35 @@ describe('PlansPage', () => {
     expect(screen.getByLabelText(/Stripe Price ID/)).toBeInTheDocument();
   });
 
-  it('calls deletePlan when delete is confirmed', async () => {
+  it('calls deletePlan when delete is confirmed (no subscribers)', async () => {
+    apiMock.getSubscriptions.mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<PlansPage />);
+
+    await screen.findByText('$0.00/mo');
+
+    const deleteButtons = screen.getAllByRole('button', { name: /Delete/ });
+    await user.click(deleteButtons[0]);
+
+    await waitFor(() => {
+      expect(privilegedActionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Delete Plan',
+          message: expect.stringContaining('Free'),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(apiMock.deletePlan).toHaveBeenCalledWith('plan_free');
+    });
+  });
+
+  it('warns about active subscribers before deletion', async () => {
+    apiMock.getSubscriptions.mockResolvedValue([
+      { id: 'sub_1', plan_id: 'plan_free', org_id: 1, status: 'active' },
+      { id: 'sub_2', plan_id: 'plan_free', org_id: 2, status: 'active' },
+    ]);
     const user = userEvent.setup();
     render(<PlansPage />);
 
@@ -189,14 +229,28 @@ describe('PlansPage', () => {
     await waitFor(() => {
       expect(confirmMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: 'Delete Plan',
-          message: expect.stringContaining('Free'),
+          message: expect.stringContaining('2 active subscription'),
         })
       );
     });
+  });
+
+  it('shows warning when subscriber check fails', async () => {
+    apiMock.getSubscriptions.mockRejectedValue(new Error('Network error'));
+    const user = userEvent.setup();
+    render(<PlansPage />);
+
+    await screen.findByText('$0.00/mo');
+
+    const deleteButtons = screen.getAllByRole('button', { name: /Delete/ });
+    await user.click(deleteButtons[0]);
 
     await waitFor(() => {
-      expect(apiMock.deletePlan).toHaveBeenCalledWith('plan_free');
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Could not verify'),
+        })
+      );
     });
   });
 });

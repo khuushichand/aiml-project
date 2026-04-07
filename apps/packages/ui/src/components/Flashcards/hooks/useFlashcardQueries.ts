@@ -2,6 +2,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   listDecks,
   listFlashcards,
+  listFlashcardTagSuggestions,
+  listRecentFlashcardReviewSessions,
+  endFlashcardReviewSession,
   createFlashcard,
   createFlashcardsBulk,
   updateFlashcardsBulk,
@@ -49,6 +52,21 @@ export interface DueCounts {
 
 export interface UseFlashcardQueriesOptions {
   enabled?: boolean
+  includeWorkspaceItems?: boolean
+  workspaceId?: string | null
+}
+
+export interface UseFlashcardDeckRecentCardsQueryOptions extends UseFlashcardQueriesOptions {
+}
+export interface UseGlobalFlashcardTagSuggestionsQueryOptions {
+  enabled?: boolean
+  limit?: number
+}
+
+export interface UseRecentFlashcardReviewSessionsQueryOptions extends UseFlashcardQueriesOptions {
+  limit?: number
+  scopeKey?: string | null
+  status?: string | null
 }
 
 const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
@@ -62,11 +80,63 @@ const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
 const getListTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
 const STUDY_ASSISTANT_ACTIONS = ["explain", "mnemonic", "follow_up", "fact_check", "freeform"] as const
 
-async function fetchDueCounts(deckId?: number | null): Promise<DueCounts> {
+const buildWorkspaceVisibilityParams = (options?: UseFlashcardQueriesOptions) => ({
+  workspace_id: options?.workspaceId ?? undefined,
+  include_workspace_items: options?.includeWorkspaceItems ?? false
+})
+
+const deckMatchesVisibility = (deck: Deck, options?: UseFlashcardQueriesOptions): boolean => {
+  const rawOptions = options as UseFlashcardQueriesOptions & {
+    workspace_id?: string | null
+    include_workspace_items?: boolean | null
+  } | undefined
+  const workspaceId = (rawOptions?.workspaceId ?? rawOptions?.workspace_id)?.trim() || null
+  const includeWorkspaceItems =
+    rawOptions?.includeWorkspaceItems ?? rawOptions?.include_workspace_items ?? false
+  const deckWorkspaceId = deck.workspace_id?.trim() || null
+  const isWorkspaceOwned = deckWorkspaceId != null
+
+  if (workspaceId != null) {
+    if (includeWorkspaceItems) {
+      return !isWorkspaceOwned || deckWorkspaceId === workspaceId
+    }
+    return deckWorkspaceId === workspaceId
+  }
+
+  if (includeWorkspaceItems) {
+    return true
+  }
+
+  return !isWorkspaceOwned
+}
+
+async function fetchDueCounts(
+  deckId?: number | null,
+  options?: UseFlashcardQueriesOptions
+): Promise<DueCounts> {
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
   const [due, newCards, learning] = await Promise.all([
-    listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 1, offset: 0 }),
-    listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 1, offset: 0 }),
-    listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 1, offset: 0 })
+    listFlashcards({
+      deck_id: deckId ?? undefined,
+      due_status: "due",
+      limit: 1,
+      offset: 0,
+      ...visibilityParams
+    }),
+    listFlashcards({
+      deck_id: deckId ?? undefined,
+      due_status: "new",
+      limit: 1,
+      offset: 0,
+      ...visibilityParams
+    }),
+    listFlashcards({
+      deck_id: deckId ?? undefined,
+      due_status: "learning",
+      limit: 1,
+      offset: 0,
+      ...visibilityParams
+    })
   ])
 
   const dueTotal = getListTotal(due)
@@ -85,10 +155,11 @@ async function fetchDueCounts(deckId?: number | null): Promise<DueCounts> {
  */
 export function useDecksQuery(options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:decks"],
-    queryFn: listDecks,
+    queryKey: ["flashcards:decks", visibilityParams],
+    queryFn: () => listDecks(visibilityParams),
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }
@@ -98,11 +169,12 @@ export function useDecksQuery(options?: UseFlashcardQueriesOptions) {
  */
 export function useReviewQuery(deckId: number | null | undefined, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:review:next", deckId],
+    queryKey: ["flashcards:review:next", deckId, visibilityParams],
     queryFn: async (): Promise<Flashcard | null> => {
-      const response = await getNextReviewCard(deckId ?? undefined)
+      const response = await getNextReviewCard(deckId ?? undefined, visibilityParams)
       return response.card ?? null
     },
     enabled: options?.enabled ?? flashcardsEnabled
@@ -123,6 +195,124 @@ export function useFlashcardAssistantQuery(
 }
 
 /**
+ * Hook for fetching recent cards for a deck reference view.
+ */
+export function useFlashcardDeckRecentCardsQuery(
+  deckId: number | null | undefined,
+  options?: UseFlashcardDeckRecentCardsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
+  const limit = options?.limit ?? 6
+
+  return useQuery({
+    queryKey: ["flashcards:deck:recent", deckId ?? null, limit, visibilityParams],
+    queryFn: async (): Promise<Flashcard[]> => {
+      if (deckId == null) {
+        return []
+      }
+      const response = await listFlashcards({
+        deck_id: deckId,
+        due_status: "all",
+        limit,
+        offset: 0,
+        order_by: "created_at",
+        ...visibilityParams
+      })
+      return response.items || []
+    },
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!deckId
+  })
+}
+
+/**
+ * Hook for searching cards in a deck reference view.
+ */
+export function useFlashcardDeckSearchQuery(
+  params: {
+    deckId: number | null | undefined
+    query: string
+    limit?: number
+  },
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
+  const trimmedQuery = params.query.trim()
+  const limit = params.limit ?? 20
+
+  return useQuery({
+    queryKey: [
+      "flashcards:deck:search",
+      params.deckId ?? null,
+      trimmedQuery,
+      limit,
+      visibilityParams
+    ],
+    queryFn: async (): Promise<Flashcard[]> => {
+      if (params.deckId == null || trimmedQuery.length === 0) {
+        return []
+      }
+      const response = await listFlashcards({
+        deck_id: params.deckId,
+        q: trimmedQuery,
+        due_status: "all",
+        limit,
+        offset: 0,
+        order_by: "created_at",
+        ...visibilityParams
+      })
+      return response.items || []
+    },
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!params.deckId && trimmedQuery.length > 0
+  })
+}
+
+export function useRecentFlashcardReviewSessionsQuery(
+  params: {
+    deckId?: number | null
+    scopeKey?: string | null
+    status?: string | null
+    limit?: number
+  } = {},
+  options?: UseRecentFlashcardReviewSessionsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const effectiveLimit = params.limit ?? options?.limit ?? 20
+
+  return useQuery({
+    queryKey: [
+      "flashcards:review-sessions:recent",
+      params.deckId ?? null,
+      params.scopeKey ?? null,
+      params.status ?? null,
+      effectiveLimit
+    ],
+    queryFn: () =>
+      listRecentFlashcardReviewSessions({
+        deck_id: params.deckId ?? undefined,
+        scope_key: params.scopeKey ?? undefined,
+        status: params.status ?? undefined,
+        limit: effectiveLimit
+      }),
+    enabled: options?.enabled ?? flashcardsEnabled,
+    refetchOnWindowFocus: false
+  })
+}
+
+export function useEndFlashcardReviewSessionMutation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:review-sessions:end"],
+    mutationFn: (reviewSessionId: number) => endFlashcardReviewSession(reviewSessionId),
+    onSuccess: async () => {
+      await invalidateFlashcardsQueries(queryClient)
+    }
+  })
+}
+
+/**
  * Hook for fetching a cram-mode queue (cards regardless of due state), optionally filtered by tag.
  */
 export function useCramQueueQuery(
@@ -133,9 +323,10 @@ export function useCramQueueQuery(
   const { flashcardsEnabled } = useFlashcardsEnabled()
   const MAX_QUEUE_SIZE = 1000
   const PAGE_SIZE = 200
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:review:cram-queue", deckId ?? null, tag ?? null],
+    queryKey: ["flashcards:review:cram-queue", deckId ?? null, tag ?? null, visibilityParams],
     queryFn: async (): Promise<Flashcard[]> => {
       const queue: Flashcard[] = []
       let offset = 0
@@ -147,7 +338,8 @@ export function useCramQueueQuery(
           due_status: "all",
           order_by: "due_at",
           limit: PAGE_SIZE,
-          offset
+          offset,
+          ...visibilityParams
         })
         const items = res.items || []
         if (items.length === 0) break
@@ -254,6 +446,7 @@ export const cardHasAllTags = (card: Flashcard, normalizedTags: string[]): boole
 
 export function useManageQuery(params: ManageQueryParams, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   const {
     deckId,
@@ -277,7 +470,8 @@ export function useManageQuery(params: ManageQueryParams, options?: UseFlashcard
       dueStatus,
       sortBy,
       page,
-      pageSize
+      pageSize,
+      visibilityParams
     ],
     queryFn: async () => {
       if (normalizedTags.length > 1) {
@@ -294,7 +488,8 @@ export function useManageQuery(params: ManageQueryParams, options?: UseFlashcard
             due_status: dueStatus,
             limit: PAGE_SCAN_SIZE,
             offset,
-            order_by: getManageServerOrderBy(sortBy)
+            order_by: getManageServerOrderBy(sortBy),
+            ...visibilityParams
           })
           const items = chunk.items || []
           if (items.length === 0) break
@@ -320,7 +515,8 @@ export function useManageQuery(params: ManageQueryParams, options?: UseFlashcard
         due_status: dueStatus,
         limit: pageSize,
         offset: (page - 1) * pageSize,
-        order_by: getManageServerOrderBy(sortBy)
+        order_by: getManageServerOrderBy(sortBy),
+        ...visibilityParams
       })
       return {
         ...response,
@@ -339,9 +535,10 @@ export function useTagSuggestionsQuery(
   options?: UseFlashcardQueriesOptions
 ) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:tags:suggestions", deckId ?? null],
+    queryKey: ["flashcards:tags:suggestions", deckId ?? null, visibilityParams],
     queryFn: async () => {
       const PAGE_SCAN_SIZE = 500
       const MAX_SCAN = 10000
@@ -354,7 +551,8 @@ export function useTagSuggestionsQuery(
           due_status: "all",
           limit: PAGE_SCAN_SIZE,
           offset,
-          order_by: "created_at"
+          order_by: "created_at",
+          ...visibilityParams
         })
         const items = response.items || []
         if (items.length === 0) break
@@ -373,6 +571,29 @@ export function useTagSuggestionsQuery(
         left.localeCompare(right, undefined, { sensitivity: "base" })
       )
     },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching global flashcard tag suggestions for create/edit tag autocompletion.
+ */
+export function useGlobalFlashcardTagSuggestionsQuery(
+  query: string | null | undefined,
+  options?: UseGlobalFlashcardTagSuggestionsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const limit = options?.limit ?? 50
+  const normalizedQuery = query?.trim() || undefined
+
+  return useQuery({
+    queryKey: ["flashcards:tags:suggestions:global", normalizedQuery ?? null, limit],
+    queryFn: ({ signal }) =>
+      listFlashcardTagSuggestions({
+        q: normalizedQuery,
+        limit,
+        signal
+      }),
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }
@@ -398,12 +619,14 @@ export function useReviewAnalyticsSummaryQuery(
   options?: UseFlashcardQueriesOptions
 ) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:analytics:summary", deckId ?? null],
+    queryKey: ["flashcards:analytics:summary", deckId ?? null, visibilityParams],
     queryFn: ({ signal }) =>
       getFlashcardsAnalyticsSummary({
         deck_id: deckId ?? undefined,
+        ...visibilityParams,
         signal
       }),
     enabled: options?.enabled ?? flashcardsEnabled
@@ -486,10 +709,16 @@ export function useUpdateDeckMutation() {
     mutationFn: (params: { deckId: number; update: DeckUpdate }) =>
       updateDeck(params.deckId, params.update),
     onSuccess: (deck) => {
-      qc.setQueryData<Deck[]>(["flashcards:decks"], (current) => {
-        if (!current) return current
-        return current.map((item) => (item.id === deck.id ? deck : item))
+      qc.getQueriesData<Deck[]>({ queryKey: ["flashcards:decks"] }).forEach(([queryKey, current]) => {
+        if (!current) return
+        const params = queryKey[1] as UseFlashcardQueriesOptions | undefined
+        const nextItems = current
+          .map((item) => (item.id === deck.id ? deck : item))
+          .filter((item) => deckMatchesVisibility(item, params))
+
+        qc.setQueryData(queryKey, nextItems)
       })
+      invalidateFlashcardsQueries(qc)
     },
     onError: (error) => {
       console.error("Failed to update flashcard deck:", error)
@@ -786,10 +1015,11 @@ export function useFlashcardsEnabled() {
  */
 export function useDueCountsQuery(deckId?: number | null, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:due-counts", deckId],
-    queryFn: () => fetchDueCounts(deckId),
+    queryKey: ["flashcards:due-counts", deckId, visibilityParams],
+    queryFn: () => fetchDueCounts(deckId, options),
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }
@@ -799,13 +1029,14 @@ export function useDueCountsQuery(deckId?: number | null, options?: UseFlashcard
  */
 export function useDeckDueCountsQuery(options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:due-counts:by-deck"],
+    queryKey: ["flashcards:due-counts:by-deck", visibilityParams],
     queryFn: async () => {
-      const decks = await listDecks()
+      const decks = await listDecks(visibilityParams)
       const entries = await Promise.all(
-        decks.map(async (deck) => [deck.id, await fetchDueCounts(deck.id)] as const)
+        decks.map(async (deck) => [deck.id, await fetchDueCounts(deck.id, options)] as const)
       )
       return Object.fromEntries(entries) as Record<number, DueCounts>
     },
@@ -818,11 +1049,16 @@ export function useDeckDueCountsQuery(options?: UseFlashcardQueriesOptions) {
  */
 export function useHasCardsQuery(options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:has-cards"],
+    queryKey: ["flashcards:has-cards", visibilityParams],
     queryFn: async () => {
-      const res = await listFlashcards({ limit: 1, offset: 0 })
+      const res = await listFlashcards({
+        limit: 1,
+        offset: 0,
+        ...visibilityParams
+      })
       return (res.total ?? res.count ?? 0) > 0
     },
     enabled: options?.enabled ?? flashcardsEnabled
@@ -834,9 +1070,10 @@ export function useHasCardsQuery(options?: UseFlashcardQueriesOptions) {
  */
 export function useNextDueQuery(deckId?: number | null, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const visibilityParams = buildWorkspaceVisibilityParams(options)
 
   return useQuery({
-    queryKey: ["flashcards:next-due", deckId],
+    queryKey: ["flashcards:next-due", deckId, visibilityParams],
     queryFn: async () => {
       const PAGE_SIZE = 200
       const MAX_PAGES = 10
@@ -856,7 +1093,8 @@ export function useNextDueQuery(deckId?: number | null, options?: UseFlashcardQu
           due_status: "all",
           order_by: "due_at",
           limit: PAGE_SIZE,
-          offset
+          offset,
+          ...visibilityParams
         })
         const items = res.items || []
         if (items.length === 0) break

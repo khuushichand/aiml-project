@@ -36,7 +36,7 @@ except KeyError:
     sys.modules['tldw_Server_API.app.core.Embeddings.Embeddings_Create'] = _mod
 
 # Import the MediaDatabase class for proper database creation
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 # Import the modules we're testing
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
@@ -71,6 +71,22 @@ def _disable_chromadb_force_stub_for_chromadb_unit_tests(monkeypatch):
     """
     monkeypatch.delenv("CHROMADB_FORCE_STUB", raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_chromadb_persistent_client_cache():
+    """Isolate process-level persistent client reuse across ChromaDB tests."""
+    from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+    cache_lock = getattr(cdl, "_PERSISTENT_CLIENTS_LOCK", None)
+    cache = getattr(cdl, "_PERSISTENT_CLIENTS", None)
+    if cache_lock is not None and cache is not None:
+        with cache_lock:
+            cache.clear()
+    yield
+    if cache_lock is not None and cache is not None:
+        with cache_lock:
+            cache.clear()
 
 # =====================================================================
 # Test Markers

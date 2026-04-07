@@ -139,6 +139,38 @@ class AudiobookJobError(Exception):
 
 
 DEFAULT_KITTEN_TTS_MODEL = "KittenML/kitten-tts-nano-0.8"
+DEFAULT_KITTEN_TTS_VOICE = "Bella"
+DEFAULT_KITTEN_TTS_PROVIDER = "kitten_tts"
+DEFAULT_OPENAI_TTS_VOICE = "alloy"
+DEFAULT_KOKORO_TTS_VOICE = "af_heart"
+CLONE_REQUIRED_TTS_VOICE = "clone_required"
+
+
+def _is_concrete_tts_voice(voice: str | None) -> bool:
+    if voice is None:
+        return False
+    normalized = str(voice).strip()
+    if not normalized:
+        return False
+    if normalized.lower() == "clone_required":
+        return False
+    if normalized.lower().startswith("custom:"):
+        return bool(normalized.split(":", 1)[-1].strip())
+    return True
+
+
+def _resolve_audiobook_generation_defaults(
+    provider: str | None,
+    model: str | None,
+    voice: str | None,
+) -> tuple[str, str, str]:
+    provider_hint = _normalize_tts_provider(provider) or _infer_tts_provider_from_model(model)
+    if provider_hint is None:
+        return DEFAULT_KITTEN_TTS_PROVIDER, DEFAULT_KITTEN_TTS_MODEL, voice or DEFAULT_KITTEN_TTS_VOICE
+
+    resolved_model = _resolve_tts_model(provider_hint, model)
+    resolved_voice = _resolve_tts_voice(provider_hint, voice)
+    return provider_hint, resolved_model, resolved_voice
 
 
 def _normalize_tts_provider(value: str | None) -> str | None:
@@ -159,7 +191,7 @@ def _is_kokoro_request(provider: str | None, model: str | None) -> bool:
         return str(provider).strip().lower() == "kokoro"
     if model:
         return str(model).strip().lower().startswith("kokoro")
-    return True
+    return False
 
 
 def _resolve_tts_model(provider: str | None, model: str | None) -> str:
@@ -170,9 +202,30 @@ def _resolve_tts_model(provider: str | None, model: str | None) -> str:
         return "tts-1"
     if provider_norm == "kitten_tts":
         return DEFAULT_KITTEN_TTS_MODEL
-    if provider_norm in {"", "kokoro"}:
+    if provider_norm == "":
+        return DEFAULT_KITTEN_TTS_MODEL
+    if provider_norm == "kokoro":
         return "kokoro"
+    if provider_norm == "pocket_tts_cpp":
+        return "pocket_tts_cpp"
+    if provider_norm == "pocket_tts":
+        return "pocket_tts"
     return ""
+
+
+def _resolve_tts_voice(provider: str | None, voice: str | None) -> str:
+    if voice is not None:
+        return str(voice)
+    provider_norm = str(provider).strip().lower() if provider else ""
+    if provider_norm in {"", "kitten_tts"}:
+        return DEFAULT_KITTEN_TTS_VOICE
+    if provider_norm == "openai":
+        return DEFAULT_OPENAI_TTS_VOICE
+    if provider_norm == "kokoro":
+        return DEFAULT_KOKORO_TTS_VOICE
+    if provider_norm in {"pocket_tts_cpp", "pocket_tts"}:
+        return CLONE_REQUIRED_TTS_VOICE
+    return DEFAULT_KITTEN_TTS_VOICE
 
 
 def _infer_tts_provider_from_model(model: str | None) -> str | None:
@@ -208,6 +261,8 @@ def _infer_tts_provider_from_model(model: str | None) -> str | None:
         return "supertonic2"
     if m.startswith("supertonic") or m.startswith("tts-supertonic"):
         return "supertonic"
+    if m.startswith("pocket_tts_cpp") or m.startswith("pocket-tts-cpp"):
+        return "pocket_tts_cpp"
     if m.startswith("pocket"):
         return "pocket_tts"
     if m.startswith("echo-tts") or m.startswith("echo_tts") or m.startswith("jordand/echo-tts"):
@@ -319,8 +374,10 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
     default_subtitles = payload.get("subtitles") or {}
     default_metadata = payload.get("metadata") or {}
     default_voice_profile_id = payload.get("voice_profile_id")
-    default_tts_provider = _normalize_tts_provider(payload.get("tts_provider"))
-    default_tts_model = payload.get("tts_model")
+    default_tts_provider = _normalize_tts_provider(
+        payload.get("tts_provider") or default_metadata.get("tts_provider")
+    )
+    default_tts_model = payload.get("tts_model") or default_metadata.get("tts_model")
 
     if items is None:
         source = payload.get("source") or {}
@@ -353,8 +410,11 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
         source = item.get("source") or {}
         if not source:
             raise AudiobookJobError("missing_item_source", retryable=False)
-        tts_provider = _normalize_tts_provider(item.get("tts_provider") or default_tts_provider)
-        tts_model = item.get("tts_model") or default_tts_model
+        item_override = item.get("metadata") or {}
+        tts_provider = _normalize_tts_provider(
+            item.get("tts_provider") or item_override.get("tts_provider") or default_tts_provider
+        )
+        tts_model = item.get("tts_model") or item_override.get("tts_model") or default_tts_model
         output_cfg = item.get("output") or default_output
         subtitle_cfg = item.get("subtitles") if "subtitles" in item else default_subtitles
         if not output_cfg:
@@ -364,7 +424,6 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
         item_metadata = {}
         if default_metadata:
             item_metadata.update(default_metadata)
-        item_override = item.get("metadata") or {}
         if item_override:
             item_metadata.update(item_override)
         resolved.append(
@@ -948,7 +1007,11 @@ def _resolve_output_formats(output_cfg: dict[str, Any]) -> tuple[list[str], bool
 
 def _validate_text(text: str, *, provider: str | None, model: str | None) -> str:
     validator = TTSInputValidator({"strict_validation": True})
-    provider_hint = provider or _infer_tts_provider_from_model(model) or "kokoro"
+    provider_hint, _resolved_model, _resolved_voice = _resolve_audiobook_generation_defaults(
+        provider,
+        model,
+        None,
+    )
     sanitized = validator.sanitize_text(text, provider=provider_hint)
     if not sanitized or not sanitized.strip():
         raise AudiobookJobError("empty_text_after_sanitization", retryable=False)
@@ -965,11 +1028,15 @@ async def _generate_tts_audio(
     response_format: str,
     user_id: int | None,
 ) -> tuple[bytes, dict | None]:
-    resolved_model = _resolve_tts_model(provider, model)
+    provider_hint, resolved_model, resolved_voice = _resolve_audiobook_generation_defaults(
+        provider,
+        model,
+        voice,
+    )
     request = OpenAISpeechRequest(
         model=resolved_model,
         input=text,
-        voice=voice or "af_heart",
+        voice=resolved_voice,
         response_format=response_format,
         speed=float(speed) if speed is not None else 1.0,
         stream=False,
@@ -977,7 +1044,7 @@ async def _generate_tts_audio(
     tts_service = await get_tts_service_v2()
     audio_iter = tts_service.generate_speech(
         request,
-        provider=provider,
+        provider=provider_hint,
         fallback=True,
         user_id=user_id,
     )
@@ -1074,19 +1141,20 @@ async def process_audiobook_job(
     try:
         project_source_ref = _build_project_source_ref(item_requests)
         queue_settings: dict[str, Any] = {}
-        try:
-            job_priority = job.get("priority")
-            if job_priority is not None:
-                queue_settings["priority"] = int(job_priority)
-        except (TypeError, ValueError):
-            pass
-        batch_group = job.get("batch_group")
-        if batch_group:
-            queue_settings["batch_group"] = str(batch_group)
-        if not queue_settings:
-            queue_payload = payload.get("queue")
-            if isinstance(queue_payload, dict):
-                queue_settings = {k: v for k, v in queue_payload.items() if v is not None}
+        queue_payload = payload.get("queue")
+        if isinstance(queue_payload, dict):
+            queue_settings = {k: v for k, v in queue_payload.items() if v is not None}
+        if "priority" not in queue_settings:
+            try:
+                job_priority = job.get("priority")
+                if job_priority is not None:
+                    queue_settings["priority"] = int(job_priority)
+            except (TypeError, ValueError):
+                pass
+        if "batch_group" not in queue_settings:
+            batch_group = job.get("batch_group")
+            if batch_group:
+                queue_settings["batch_group"] = str(batch_group)
 
         project_settings = {
             "project_id": project_id,
@@ -1098,8 +1166,8 @@ async def process_audiobook_job(
             "items_count": total_items,
             "metadata": payload.get("metadata") or {},
             "voice_profile_id": payload.get("voice_profile_id"),
-            "tts_provider": payload.get("tts_provider"),
-            "tts_model": payload.get("tts_model"),
+            "tts_provider": payload.get("tts_provider") or (payload.get("metadata") or {}).get("tts_provider"),
+            "tts_model": payload.get("tts_model") or (payload.get("metadata") or {}).get("tts_model"),
         }
         if queue_settings:
             project_settings["queue"] = queue_settings
@@ -1126,9 +1194,9 @@ async def process_audiobook_job(
             item_subtitle_cfg = item_subtitle_cfg_raw or {}
             item_chapter_specs = item.get("chapters")
             item_voice_profile_id = item.get("voice_profile_id")
-            item_tts_provider = item.get("tts_provider")
-            item_tts_model = item.get("tts_model")
             item_metadata = item.get("metadata") or {}
+            item_tts_provider = _normalize_tts_provider(item.get("tts_provider") or item_metadata.get("tts_provider"))
+            item_tts_model = item.get("tts_model") or item_metadata.get("tts_model")
 
             jm.update_job_progress(
                 job_id,

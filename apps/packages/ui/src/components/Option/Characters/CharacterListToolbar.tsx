@@ -85,6 +85,7 @@ export type CharacterListToolbarProps = {
   isImportBusy: boolean
   triggerImportPicker: () => void
   // new button
+  preloadCreateEditor: () => Promise<unknown>
   newButtonRef: React.RefObject<HTMLButtonElement | null>
   openCreateModal: () => void
   // tag manager
@@ -138,6 +139,7 @@ export const CharacterListToolbar: React.FC<CharacterListToolbarProps> = ({
   shortcutSummaryText,
   isImportBusy,
   triggerImportPicker,
+  preloadCreateEditor,
   newButtonRef,
   openCreateModal,
   openTagManager
@@ -156,6 +158,12 @@ export const CharacterListToolbar: React.FC<CharacterListToolbarProps> = ({
           <Button
             type="primary"
             ref={newButtonRef}
+            onMouseEnter={() => {
+              void preloadCreateEditor()
+            }}
+            onFocus={() => {
+              void preloadCreateEditor()
+            }}
             onClick={openCreateModal}
             data-testid="characters-new-button"
           >

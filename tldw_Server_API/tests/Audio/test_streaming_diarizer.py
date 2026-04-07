@@ -1,9 +1,15 @@
+import importlib
+
 import numpy as np
 import pytest
 
 from pathlib import Path
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import StreamingDiarizer
+
+def _reload_unified_module():
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+
+    return importlib.reload(unified)
 
 
 class _StubDiarizationService:
@@ -30,12 +36,10 @@ class _StubDiarizationService:
 
 @pytest.mark.asyncio
 async def test_streaming_diarizer_assigns_speakers(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified.DiarizationService",
-        _StubDiarizationService,
-    )
+    unified = _reload_unified_module()
+    monkeypatch.setattr(unified, "DiarizationService", _StubDiarizationService)
 
-    diarizer = StreamingDiarizer(
+    diarizer = unified.StreamingDiarizer(
         sample_rate=16000,
         store_audio=True,
         storage_dir=str(tmp_path),

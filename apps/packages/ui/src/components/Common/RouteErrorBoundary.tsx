@@ -1,5 +1,14 @@
 import React, { type ErrorInfo, type ReactNode } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
+import BackendUnavailableRecovery, {
+  type BackendUnavailableRecoveryDetails
+} from "@/components/Common/BackendUnavailableRecovery"
+import { useBackendRecoveryUi } from "@/components/Common/BackendRecoveryUiContext"
+import {
+  classifyBackendUnreachableError,
+  type BackendUnreachableClassification
+} from "@/services/backend-unreachable"
+import { createSafeStorage } from "@/utils/safe-storage"
 
 type RouteErrorBoundaryProps = {
   children: ReactNode
@@ -10,10 +19,13 @@ type RouteErrorBoundaryProps = {
 }
 
 type RouteErrorBoundaryInnerProps = RouteErrorBoundaryProps & {
+  backendRecoveryEnabled: boolean
   onNavigate: (path: string) => void
+  setFatalBackendRecoveryActive: (active: boolean) => void
 }
 
 type RouteErrorBoundaryState = {
+  backendRecovery: BackendUnavailableRecoveryDetails | null
   hasError: boolean
   error: Error | null
   errorInfo: ErrorInfo | null
@@ -21,8 +33,41 @@ type RouteErrorBoundaryState = {
 }
 
 const DEFAULT_CHAT_PATH = "/"
-const DEFAULT_SETTINGS_PATH = "/settings"
+const DEFAULT_SETTINGS_PATH = "/settings/tldw"
 export const ROUTE_ERROR_FIXTURE_QUERY_KEY = "__forceRouteError"
+const BACKEND_RECOVERY_FALLBACK_TITLE = "Can't reach your tldw server"
+const BACKEND_RECOVERY_FALLBACK_MESSAGE =
+  "The current route could not reach your configured tldw server. Check that the server is running and reachable from this browser."
+
+type StoredTldwConfig = {
+  serverUrl?: unknown
+}
+
+const getStoredServerUrl = (value: unknown): string | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const { serverUrl } = value as StoredTldwConfig
+  if (typeof serverUrl !== "string") return undefined
+  const trimmed = serverUrl.trim()
+  return trimmed || undefined
+}
+
+const toBackendRecoveryDetails = (
+  classification: BackendUnreachableClassification,
+  serverUrl?: string
+): BackendUnavailableRecoveryDetails => ({
+  title: classification.title || BACKEND_RECOVERY_FALLBACK_TITLE,
+  message: classification.message || BACKEND_RECOVERY_FALLBACK_MESSAGE,
+  fixHint: classification.fixHint,
+  subtype: classification.subtype,
+  method: classification.method,
+  path: classification.path,
+  serverUrl,
+  status: classification.status,
+  rawMessage: classification.rawMessage,
+  source: classification.source,
+  recentRequestError: classification.recentRequestError,
+  diagnostics: classification.diagnostics
+})
 
 const ForcedRouteErrorProbe: React.FC<{ routeId: string }> = ({ routeId }) => {
   throw new Error(`Forced route boundary error for ${routeId}`)
@@ -53,6 +98,7 @@ class RouteErrorBoundaryInner extends React.Component<
   RouteErrorBoundaryState
 > {
   state: RouteErrorBoundaryState = {
+    backendRecovery: null,
     hasError: false,
     error: null,
     errorInfo: null,
@@ -60,16 +106,85 @@ class RouteErrorBoundaryInner extends React.Component<
   }
 
   static getDerivedStateFromError(error: Error): Partial<RouteErrorBoundaryState> {
+    const classification = classifyBackendUnreachableError(error)
+    if (classification.kind === "backend_unreachable") {
+      return {
+        hasError: true,
+        error,
+        backendRecovery: toBackendRecoveryDetails(classification)
+      }
+    }
+
     return { hasError: true, error }
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     this.setState({ errorInfo })
     console.error(`[RouteErrorBoundary:${this.props.routeId}]`, error, errorInfo.componentStack)
+    void this.enrichBackendRecovery(error)
+  }
+
+  componentDidUpdate(
+    _prevProps: RouteErrorBoundaryInnerProps,
+    prevState: RouteErrorBoundaryState
+  ): void {
+    const wasActive = Boolean(prevState.backendRecovery)
+    const isActive = Boolean(this.state.backendRecovery)
+    if (
+      this.props.backendRecoveryEnabled &&
+      wasActive !== isActive
+    ) {
+      this.props.setFatalBackendRecoveryActive(isActive)
+    }
+  }
+
+  componentWillUnmount(): void {
+    if (this.props.backendRecoveryEnabled && this.state.backendRecovery) {
+      this.props.setFatalBackendRecoveryActive(false)
+    }
+  }
+
+  private async enrichBackendRecovery(reason: unknown): Promise<void> {
+    const initialClassification = classifyBackendUnreachableError(reason)
+    if (initialClassification.kind !== "backend_unreachable") {
+      return
+    }
+
+    try {
+      const storage = createSafeStorage({ area: "local" })
+      const [recentRequestError, config] = await Promise.all([
+        storage.get("__tldwLastRequestError").catch(() => null),
+        storage.get("tldwConfig").catch(() => null)
+      ])
+
+      const classification = classifyBackendUnreachableError(reason, {
+        recentRequestError
+      })
+      if (classification.kind !== "backend_unreachable") {
+        return
+      }
+
+      this.setState((prev) => {
+        if (!prev.backendRecovery) {
+          return prev
+        }
+
+        return {
+          ...prev,
+          backendRecovery: toBackendRecoveryDetails(
+            classification,
+            getStoredServerUrl(config)
+          )
+        }
+      })
+    } catch {
+      // Preserve the initial recovery UI if enrichment fails.
+    }
   }
 
   handleRetry = (): void => {
     this.setState((prev) => ({
+      backendRecovery: null,
       hasError: false,
       error: null,
       errorInfo: null,
@@ -94,6 +209,21 @@ class RouteErrorBoundaryInner extends React.Component<
 
     const chatPath = this.props.chatPath ?? DEFAULT_CHAT_PATH
     const settingsPath = this.props.settingsPath ?? DEFAULT_SETTINGS_PATH
+
+    if (
+      this.props.backendRecoveryEnabled &&
+      this.state.backendRecovery
+    ) {
+      return (
+        <BackendUnavailableRecovery
+          details={this.state.backendRecovery}
+          onRetry={this.handleRetry}
+          onReload={this.handleReload}
+          onOpenDiagnostics={() => this.handleNavigate("/settings/health")}
+          onOpenSettings={() => this.handleNavigate(settingsPath)}
+        />
+      )
+    }
     const showErrorDetails = process.env.NODE_ENV !== "production"
     const routeScopeId = `route-error-boundary-${this.props.routeId}`
 
@@ -168,6 +298,8 @@ export const RouteErrorBoundary: React.FC<RouteErrorBoundaryProps> = ({
   settingsPath = DEFAULT_SETTINGS_PATH,
   ...props
 }) => {
+  const { routeRecoveryEnabled, setFatalBackendRecoveryActive } =
+    useBackendRecoveryUi()
   const navigate = useNavigate()
   const location = useLocation()
   const forceError = React.useMemo(
@@ -190,9 +322,11 @@ export const RouteErrorBoundary: React.FC<RouteErrorBoundaryProps> = ({
   return (
     <RouteErrorBoundaryInner
       {...props}
+      backendRecoveryEnabled={routeRecoveryEnabled}
       chatPath={chatPath}
       settingsPath={settingsPath}
       onNavigate={onNavigate}
+      setFatalBackendRecoveryActive={setFatalBackendRecoveryActive}
     >
       {forceError ? <ForcedRouteErrorProbe routeId={props.routeId} /> : props.children}
     </RouteErrorBoundaryInner>

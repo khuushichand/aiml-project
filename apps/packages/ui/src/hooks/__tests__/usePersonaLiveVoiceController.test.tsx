@@ -21,6 +21,16 @@ const hookMocks = vi.hoisted(() => ({
   micChunkHandler: null as ((chunk: ArrayBuffer) => void) | null
 }))
 
+const audioCatalogState = vi.hoisted(() => ({
+  devices: [] as Array<{ deviceId: string; label: string }>,
+  isSettled: true
+}))
+
+const { storageValues, useStorageMock } = vi.hoisted(() => ({
+  storageValues: new Map<string, unknown>(),
+  useStorageMock: vi.fn()
+}))
+
 vi.mock("@/hooks/useStreamingAudioPlayer", () => ({
   useStreamingAudioPlayer: () => ({
     start: hookMocks.audioStart,
@@ -42,6 +52,14 @@ vi.mock("@/hooks/useMicStream", () => ({
   }
 }))
 
+vi.mock("@/hooks/useAudioSourceCatalog", () => ({
+  useAudioSourceCatalog: () => audioCatalogState
+}))
+
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: useStorageMock
+}))
+
 describe("usePersonaLiveVoiceController", () => {
   beforeEach(() => {
     hookMocks.audioStart.mockReset()
@@ -60,6 +78,18 @@ describe("usePersonaLiveVoiceController", () => {
     hookMocks.micStop.mockImplementation(() => {
       hookMocks.micActive = false
     })
+    audioCatalogState.devices = [
+      { deviceId: "default", label: "Default microphone" },
+      { deviceId: "usb-1", label: "USB microphone" }
+    ]
+    audioCatalogState.isSettled = true
+    storageValues.clear()
+    useStorageMock.mockReset()
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      vi.fn(),
+      { isLoading: false }
+    ])
   })
 
   afterEach(() => {
@@ -371,21 +401,37 @@ describe("usePersonaLiveVoiceController", () => {
       send: vi.fn()
     } as unknown as WebSocket
 
-    const { result, rerender } = renderHook(() =>
-      usePersonaLiveVoiceController({
-        ws,
-        connected: true,
-        sessionId: "sess-voice",
-        personaId: "persona-1",
-        resolvedDefaults,
-        canUseServerStt: true
-      })
+    const { result, rerender } = renderHook(
+      ({
+        sessionId,
+        personaId
+      }: {
+        sessionId: string
+        personaId: string
+      }) =>
+        usePersonaLiveVoiceController({
+          ws,
+          connected: true,
+          sessionId,
+          personaId,
+          resolvedDefaults,
+          canUseServerStt: true
+        }),
+      {
+        initialProps: {
+          sessionId: "sess-voice",
+          personaId: "persona-1"
+        }
+      }
     )
 
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     expect(hookMocks.micStart).toHaveBeenCalledTimes(1)
     expect(result.current.isListening).toBe(true)
@@ -420,7 +466,10 @@ describe("usePersonaLiveVoiceController", () => {
     act(() => {
       result.current.stopListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeStop + 1)
     expect(
@@ -428,6 +477,179 @@ describe("usePersonaLiveVoiceController", () => {
         (payload) => payload.type === "voice_commit"
       )
     ).toEqual([])
+  })
+
+  it("starts persona live voice with the remembered live_voice mic device", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+
+    expect(hookMocks.micStart).toHaveBeenCalledWith({ deviceId: "usb-1" })
+  })
+
+  it("waits for the live_voice preference to hydrate before starting listening", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+
+    let preferenceLoading = true
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      vi.fn(),
+      { isLoading: key === "liveVoiceAudioSourcePreference" ? preferenceLoading : false }
+    ])
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+
+    expect(result.current.isListening).toBe(true)
+    expect(hookMocks.micStart).not.toHaveBeenCalled()
+
+    preferenceLoading = false
+
+    await act(async () => {
+      rerender({
+        sessionId: "sess-voice",
+        personaId: "persona-1"
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(hookMocks.micStart).toHaveBeenCalledWith({ deviceId: "usb-1" })
+  })
+
+  it("cancels a queued live_voice start before hydration finishes", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+
+    let preferenceLoading = true
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      vi.fn(),
+      { isLoading: key === "liveVoiceAudioSourcePreference" ? preferenceLoading : false }
+    ])
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+
+    expect(result.current.isListening).toBe(true)
+    expect(hookMocks.micStart).not.toHaveBeenCalled()
+
+    act(() => {
+      result.current.toggleListening()
+    })
+
+    expect(result.current.isListening).toBe(false)
+
+    await act(async () => {
+      preferenceLoading = false
+      rerender({
+        sessionId: "sess-voice",
+        personaId: "persona-1"
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(hookMocks.micStart).not.toHaveBeenCalled()
+    expect(result.current.isListening).toBe(false)
+  })
+
+  it("falls back to the default microphone when the remembered live_voice device is missing", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-missing",
+      lastKnownLabel: "Studio microphone"
+    })
+    audioCatalogState.devices = [{ deviceId: "default", label: "Default microphone" }]
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+
+    expect(hookMocks.micStart).toHaveBeenCalledWith({ deviceId: null })
   })
 
   it("shows listening recovery after 4 seconds with transcript but no commit", async () => {
@@ -452,7 +674,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -490,7 +715,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -528,7 +756,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -583,7 +814,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -639,7 +873,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -657,7 +894,10 @@ describe("usePersonaLiveVoiceController", () => {
     act(() => {
       ;(result.current as any).resetTurn()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeReset + 1)
     expect(result.current.heardText).toBe("")
@@ -685,7 +925,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -704,7 +947,10 @@ describe("usePersonaLiveVoiceController", () => {
         commit_source: "vad_auto"
       })
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeCommit + 1)
     expect(result.current.state).toBe("thinking")
@@ -1162,7 +1408,10 @@ describe("usePersonaLiveVoiceController", () => {
     await act(async () => {
       await result.current.startListening()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     act(() => {
       result.current.handlePayload({
@@ -1188,7 +1437,10 @@ describe("usePersonaLiveVoiceController", () => {
     act(() => {
       result.current.sendCurrentTranscriptNow()
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeSend + 1)
     expect(ws.send).toHaveBeenLastCalledWith(
@@ -1226,13 +1478,78 @@ describe("usePersonaLiveVoiceController", () => {
         message: "Live TTS unavailable for this session. Continuing in text-only mode."
       })
     })
-    rerender()
+    rerender({
+      sessionId: "sess-voice",
+      personaId: "persona-1"
+    })
 
     await waitFor(() => {
       expect(hookMocks.micStart).toHaveBeenCalledTimes(1)
     })
     expect(result.current.textOnlyDueToTtsFailure).toBe(true)
     expect(result.current.warning).toContain("Continuing in text-only mode.")
+  })
+
+  it("cancels a queued auto-resume before hydration finishes", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+
+    let preferenceLoading = true
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      vi.fn(),
+      { isLoading: key === "liveVoiceAudioSourcePreference" ? preferenceLoading : false }
+    ])
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "TTS_UNAVAILABLE_TEXT_ONLY",
+        message: "Live TTS unavailable for this session. Continuing in text-only mode."
+      })
+    })
+
+    expect(result.current.isListening).toBe(true)
+    expect(hookMocks.micStart).not.toHaveBeenCalled()
+
+    act(() => {
+      result.current.toggleListening()
+    })
+
+    expect(result.current.isListening).toBe(false)
+
+    await act(async () => {
+      preferenceLoading = false
+      rerender({
+        sessionId: "sess-voice",
+        personaId: "persona-1"
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(hookMocks.micStart).not.toHaveBeenCalled()
+    expect(result.current.isListening).toBe(false)
   })
 
   it("resets session-local overrides when the persona session changes", async () => {

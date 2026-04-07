@@ -1,5 +1,7 @@
 import pytest
+from types import SimpleNamespace
 
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
 
@@ -72,3 +74,33 @@ async def test_unified_rag_rejects_unknown_source(monkeypatch):
 
     assert result.errors
     assert any("invalid_source" in err.lower() for err in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_unified_rag_does_not_build_sql_retriever_from_postgres_memory_placeholder(monkeypatch):
+    import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
+
+    class _RecordingSQLRetriever:
+        calls: list[dict[str, object]] = []
+
+        def __init__(self, **kwargs):
+            self.calls.append(kwargs)
+
+    monkeypatch.setattr(up, "SQLRetriever", _RecordingSQLRetriever, raising=False)
+    monkeypatch.setattr(up, "MultiDatabaseRetriever", _CapturingRetriever, raising=False)
+    monkeypatch.setattr(up, "RetrievalConfig", _StubRetrievalConfig, raising=False)
+
+    result = await up.unified_rag_pipeline(
+        query="SELECT 1",
+        sources=["sql"],
+        media_db=SimpleNamespace(
+            db_path=":memory:",
+            backend_type=BackendType.POSTGRESQL,
+        ),
+        enable_generation=False,
+        search_mode="fts",
+        top_k=5,
+    )
+
+    assert result is not None
+    assert _RecordingSQLRetriever.calls == []

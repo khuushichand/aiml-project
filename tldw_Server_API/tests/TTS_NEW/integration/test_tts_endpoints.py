@@ -9,6 +9,8 @@ import contextlib
 import json
 import base64
 import tempfile
+import wave
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +20,10 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_jobs
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.tts_jobs_worker import _handle_tts_job
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -101,15 +104,31 @@ class TestTTSGenerateEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test without provider",
+                    "model": "tts-1",
                     "voice": "nova",
                     "response_format": "mp3",
                     "stream": False
-                    # No provider specified, should use default
+                    # No provider override specified; model routing should resolve it.
                 },
                 headers=auth_headers
             )
 
             assert response.status_code == status.HTTP_200_OK
+
+    async def test_generate_requires_explicit_model(self, test_client, auth_headers):
+        """Public speech endpoint should reject omitted model instead of silently defaulting."""
+        response = test_client.post(
+            "/api/v1/audio/speech",
+            json={
+                "input": "Test without model",
+                "voice": "nova",
+                "response_format": "mp3",
+                "stream": False,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     async def test_generate_with_voice_settings(self, test_client, auth_headers):
         """Test generation with voice settings."""
@@ -123,6 +142,7 @@ class TestTTSGenerateEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Custom voice test",
+                    "model": "tts-1",
                     "voice": "rachel",
                     "response_format": "mp3",
                     "stream": False,
@@ -277,6 +297,7 @@ class TestTTSGenerateEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": long_text,
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "mp3",
                     "stream": False
@@ -309,6 +330,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Stream this text",
+                    "model": "tts-1",
                     "voice": "echo",
                     "response_format": "mp3",
                     "stream": True
@@ -341,6 +363,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Stream PCM",
+                    "model": "tts-1",
                     "voice": "echo",
                     "response_format": "pcm",
                     "stream": True,
@@ -386,6 +409,201 @@ class TestTTSStreamingEndpoint:
                 assert True
 
     @pytest.mark.streaming
+    async def test_streaming_pocket_tts_cpp_custom_voice_request(self, test_client, auth_headers):
+        """PocketTTS.cpp custom voices should reach the streaming path with PCM headers."""
+        seen_requests: list[Any] = []
+
+        async def mock_stream(request_obj, *args, **kwargs):  # noqa: ARG001
+            request_obj._tts_metadata = {"sample_rate": 24000}
+            seen_requests.append(request_obj)
+            yield b"chunk-a"
+            yield b"chunk-b"
+
+        with patch("tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech") as mock_stream_gen:
+            mock_stream_gen.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Stream PocketTTS.cpp custom voice",
+                    "voice": "custom:voice-1",
+                    "model": "pocket_tts_cpp",
+                    "response_format": "pcm",
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert response.headers.get("X-Audio-Sample-Rate") == "24000"
+            assert "audio/L16; rate=24000; channels=1" in response.headers.get("content-type", "")
+            assert b"".join(response.iter_bytes()) == b"chunk-achunk-b"
+            assert seen_requests
+            assert seen_requests[0].model == "pocket_tts_cpp"
+            assert seen_requests[0].voice == "custom:voice-1"
+            assert seen_requests[0].stream is True
+
+    @pytest.mark.streaming
+    async def test_streaming_pocket_tts_cpp_direct_reference_request(self, test_client, auth_headers):
+        """PocketTTS.cpp direct references should also reach the streaming path."""
+        seen_requests: list[Any] = []
+        voice_reference = base64.b64encode(b"RIFF\x24\x00\x00\x00WAVEfmt ").decode("ascii")
+
+        async def mock_stream(request_obj, *args, **kwargs):  # noqa: ARG001
+            request_obj._tts_metadata = {"sample_rate": 24000}
+            seen_requests.append(request_obj)
+            yield b"direct-ref-chunk"
+
+        with patch("tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech") as mock_stream_gen:
+            mock_stream_gen.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Stream PocketTTS.cpp direct reference",
+                    "voice": "clone",
+                    "model": "pocket_tts_cpp",
+                    "response_format": "pcm",
+                    "stream": True,
+                    "voice_reference": voice_reference,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert response.headers.get("X-Audio-Sample-Rate") == "24000"
+            assert "audio/L16; rate=24000; channels=1" in response.headers.get("content-type", "")
+            assert b"".join(response.iter_bytes()) == b"direct-ref-chunk"
+            assert seen_requests
+            assert seen_requests[0].model == "pocket_tts_cpp"
+            assert seen_requests[0].voice_reference == voice_reference
+            assert seen_requests[0].stream is True
+
+    @pytest.mark.streaming
+    async def test_streaming_pocket_tts_cpp_real_service_and_adapter_path(self, test_client, auth_headers, monkeypatch, tmp_path):
+        """PocketTTS.cpp streaming should flow through the real service and adapter gating."""
+        from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_adapter import PocketTTSCppAdapter
+        from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+            PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+            resolve_provider_managed_voice_path,
+        )
+        from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+        from tldw_Server_API.app.core.TTS import audio_converter as audio_converter_module
+
+        voices_root = tmp_path / "voices"
+        managed_voice = voices_root / "providers" / "pocket_tts_cpp" / "custom_voice-1.wav"
+        managed_voice.parent.mkdir(parents=True, exist_ok=True)
+        managed_voice.write_bytes(b"RIFF" + b"\x00" * 1000)
+        wav_buffer = BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(b"\x02\x03" * 8)
+        converted_wav = wav_buffer.getvalue()
+
+        class _FakeVoiceManager:
+            def get_user_voices_path(self, user_id):
+                assert str(user_id) == "1"
+                voices_root.mkdir(parents=True, exist_ok=True)
+                return voices_root
+
+            async def load_voice_reference_audio(self, user_id, voice_id):
+                assert str(user_id) == "1"
+                assert voice_id == "voice-1"
+                return b"RIFF" + b"\x00" * 1000
+
+            async def load_reference_metadata(self, user_id, voice_id):
+                return None
+
+        adapter = PocketTTSCppAdapter({})
+        adapter._initialized = True
+        adapter._status = None
+
+        seen: dict[str, str] = {}
+
+        async def _fake_probe():
+            return True
+
+        async def _fake_stream(request_obj, resolved_voice_path):  # noqa: ARG001
+            token = request_obj.extra_params[PROVIDER_MANAGED_VOICE_TOKEN_KEY]
+            voice_path = Path(request_obj.extra_params["pocket_tts_cpp_voice_path"])
+            seen["token"] = token
+            seen["voice_path"] = str(voice_path)
+            assert resolve_provider_managed_voice_path(token, voice_path) == voice_path.resolve()
+            request_obj._tts_metadata = {"sample_rate": 24000}
+            yield b"chunk-a"
+            yield b"chunk-b"
+
+        monkeypatch.setattr(adapter, "_probe_cli_streaming_support", _fake_probe)
+        monkeypatch.setattr(adapter, "_stream_via_cli_stdout", _fake_stream)
+
+        async def _fake_convert(input_path, output_path, sample_rate, channels, bit_depth):
+            output_path.write_bytes(converted_wav)
+            return True
+
+        monkeypatch.setattr(
+            runtime_module.AudioConverter,
+            "convert_to_wav",
+            _fake_convert,
+            raising=True,
+        )
+        monkeypatch.setattr(
+            audio_converter_module.AudioConverter,
+            "convert_to_wav",
+            _fake_convert,
+            raising=True,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+            lambda: _FakeVoiceManager(),
+            raising=True,
+        )
+
+        service = TTSServiceV2()
+
+        class _Factory:
+            def get_provider_for_model(self, _model):
+                return "pocket_tts_cpp"
+
+        service._ensure_factory = AsyncMock(return_value=_Factory())
+        service._get_adapter = AsyncMock(return_value=adapter)
+
+        async def _fake_get_tts_service_v2():
+            return service
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.TTS.tts_service_v2.get_tts_service_v2",
+            _fake_get_tts_service_v2,
+            raising=True,
+        )
+        test_client.app.dependency_overrides[audio_endpoints.get_tts_service] = _fake_get_tts_service_v2
+
+        try:
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Stream PocketTTS.cpp via real service",
+                    "voice": "custom:voice-1",
+                    "model": "pocket_tts_cpp",
+                    "response_format": "pcm",
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert response.headers.get("X-Audio-Sample-Rate") == "24000"
+            assert "audio/L16; rate=24000; channels=1" in response.headers.get("content-type", "")
+            assert b"".join(response.iter_bytes()) == b"chunk-achunk-b"
+            assert seen["voice_path"].endswith("/voices/providers/pocket_tts_cpp/custom_voice-1.wav")
+            assert seen["token"]
+            with pytest.raises(ValueError):
+                resolve_provider_managed_voice_path(seen["token"], Path(seen["voice_path"]))
+        finally:
+            test_client.app.dependency_overrides.pop(audio_endpoints.get_tts_service, None)
+
+    @pytest.mark.streaming
     async def test_streaming_failure_writes_history(self, test_client, auth_headers, monkeypatch, tmp_path):
         """Streaming failure should record a failed history row."""
         user_db_base = tmp_path / "user_dbs"
@@ -412,6 +630,7 @@ class TestTTSStreamingEndpoint:
                     "/api/v1/audio/speech",
                     json={
                         "input": "Error test history",
+                        "model": "tts-1",
                         "voice": "alloy",
                         "response_format": "mp3",
                         "stream": True
@@ -468,7 +687,7 @@ class TestTTSStreamingEndpoint:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech, \
                 patch(
-                    'tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase.create_tts_history_entry',
+                    'tldw_Server_API.app.core.DB_Management.media_db.native_class.MediaDatabase.create_tts_history_entry',
                     side_effect=RuntimeError("history insert failure"),
                 ):
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
@@ -477,6 +696,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "request id correlation test",
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "mp3",
                     "stream": False,
@@ -502,6 +722,7 @@ class TestTTSStreamingEndpoint:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "rachel",
                     "response_format": "mp3",
                     "stream": True
@@ -750,6 +971,7 @@ class TestFileDownloadEndpoints:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Download this audio",
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "wav",
                     "stream": False
@@ -780,6 +1002,7 @@ class TestErrorHandling:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "alloy",
                     "response_format": "mp3",
                     "stream": False
@@ -801,6 +1024,7 @@ class TestErrorHandling:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "rachel",
                     "response_format": "mp3",
                     "stream": False
@@ -823,6 +1047,7 @@ class TestErrorHandling:
                 "/api/v1/audio/speech",
                 json={
                     "input": "Test",
+                    "model": "tts-1",
                     "voice": "voice1",
                     "response_format": "mp3",
                     "stream": False
@@ -880,9 +1105,9 @@ class TestBatchProcessing:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
 
             payloads = [
-                {"input": "First text", "voice": "alloy", "response_format": "mp3", "stream": False},
-                {"input": "Second text", "voice": "echo", "response_format": "mp3", "stream": False},
-                {"input": "Third text", "voice": "nova", "response_format": "mp3", "stream": False},
+                {"input": "First text", "model": "tts-1", "voice": "alloy", "response_format": "mp3", "stream": False},
+                {"input": "Second text", "model": "tts-1", "voice": "echo", "response_format": "mp3", "stream": False},
+                {"input": "Third text", "model": "tts-1", "voice": "nova", "response_format": "mp3", "stream": False},
             ]
             responses = [
                 test_client.post("/api/v1/audio/speech", json=p, headers=auth_headers)
@@ -908,9 +1133,9 @@ class TestBatchProcessing:
             mock_generate_speech.side_effect = side_effect
 
             payloads = [
-                {"input": "Success 1", "voice": "alloy", "response_format": "mp3", "stream": False},
-                {"input": "Failure", "voice": "echo", "response_format": "mp3", "stream": False},
-                {"input": "Success 2", "voice": "nova", "response_format": "mp3", "stream": False},
+                {"input": "Success 1", "model": "tts-1", "voice": "alloy", "response_format": "mp3", "stream": False},
+                {"input": "Failure", "model": "tts-1", "voice": "echo", "response_format": "mp3", "stream": False},
+                {"input": "Success 2", "model": "tts-1", "voice": "nova", "response_format": "mp3", "stream": False},
             ]
             responses = [
                 test_client.post("/api/v1/audio/speech", json=p, headers=auth_headers)

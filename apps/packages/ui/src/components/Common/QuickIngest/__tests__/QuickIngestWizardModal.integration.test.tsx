@@ -6,6 +6,9 @@ import userEvent from "@testing-library/user-event"
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before any imports that reference them
 // ---------------------------------------------------------------------------
+const getTranscriptionModelsMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ all_models: [] })
+)
 
 // react-i18next
 vi.mock("react-i18next", () => ({
@@ -48,19 +51,58 @@ vi.mock("antd", () => ({
       {...props}
     />
   ),
-  Select: ({ value, onChange, options, ...props }: any) => (
-    <select
-      value={value}
-      onChange={(e: any) => onChange?.(e.target.value)}
-      {...props}
-    >
-      {options?.map((o: any) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  ),
+  Select: ({
+    value,
+    onChange,
+    onClear,
+    options,
+    placeholder,
+    allowClear,
+    popupMatchSelectWidth,
+    ...props
+  }: any) => {
+    const selectProps: any = { ...props }
+    const clearAriaLabel = props["aria-label"]
+      ? `Clear ${String(props["aria-label"])}`
+      : "Clear"
+    if (value !== undefined) {
+      selectProps.value = value
+    }
+    if (popupMatchSelectWidth !== undefined) {
+      selectProps["data-popup-match-select-width"] = String(
+        popupMatchSelectWidth
+      )
+    }
+
+    return (
+      <React.Fragment>
+        <select
+          onChange={(e: any) => onChange?.(e.target.value)}
+          {...selectProps}
+        >
+          {placeholder ? (
+            <option value="" disabled hidden>
+              {placeholder}
+            </option>
+          ) : null}
+          {options?.map((o: any) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {allowClear ? (
+          <button
+            type="button"
+            aria-label={clearAriaLabel}
+            onClick={() => onClear?.()}
+          >
+            Clear
+          </button>
+        ) : null}
+      </React.Fragment>
+    )
+  },
   Radio: Object.assign(
     ({ children, value, ...props }: any) => (
       <label>
@@ -79,6 +121,7 @@ vi.mock("antd", () => ({
       ))}
     </div>
   ),
+  Tooltip: ({ children }: any) => <>{children}</>,
   Input: Object.assign(
     (props: any) => <input {...props} />,
     {
@@ -101,6 +144,7 @@ vi.mock("antd", () => ({
   ),
   Tag: ({ children, ...props }: any) => <span {...props}>{children}</span>,
   Typography: {
+    Title: ({ children, ...props }: any) => <div {...props}>{children}</div>,
     Text: ({ children, ...props }: any) => <span {...props}>{children}</span>,
   },
   Progress: ({ percent, ...props }: any) => (
@@ -114,6 +158,7 @@ vi.mock("lucide-react", () => {
     "ArrowLeft",
     "ArrowRight",
     "ChevronDown",
+    "ChevronRight",
     "Minimize2",
     "XCircle",
     "Info",
@@ -147,6 +192,17 @@ vi.mock("lucide-react", () => {
   return mocks
 })
 
+vi.mock("wxt/browser", () => ({
+  browser: {
+    runtime: {
+      onMessage: {
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      },
+    },
+  },
+}))
+
 // SSE hook — no-op
 vi.mock("@/components/Common/QuickIngest/useIngestSSE", () => ({
   useIngestSSE: () => {},
@@ -171,10 +227,28 @@ vi.mock("@/services/background-proxy", () => ({
   bgRequest: vi.fn().mockResolvedValue({}),
 }))
 
+vi.mock("@/services/tldw/quick-ingest-batch", () => ({
+  cancelQuickIngestSession: vi.fn().mockResolvedValue({ ok: true }),
+  startQuickIngestSession: vi.fn().mockResolvedValue({ ok: true, sessionId: "qi-test" }),
+  submitQuickIngestBatch: vi.fn().mockResolvedValue({ ok: true, results: [] }),
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    initialize: vi.fn().mockResolvedValue(undefined),
+    getTranscriptionModels: getTranscriptionModelsMock,
+  },
+}))
+
+vi.mock("@/components/Common/QuickIngest/FloatingProgressWidget", () => ({
+  FloatingProgressWidget: () => null,
+}))
+
 // Deterministic UUIDs
 let uuidCounter = 0
 beforeEach(() => {
   uuidCounter = 0
+  getTranscriptionModelsMock.mockReset().mockResolvedValue({ all_models: [] })
 })
 vi.stubGlobal(
   "crypto",
@@ -191,10 +265,11 @@ import {
   useIngestWizard,
 } from "@/components/Common/QuickIngest/IngestWizardContext"
 import { AddContentStep } from "@/components/Common/QuickIngest/AddContentStep"
+import { WizardConfigureStep } from "@/components/Common/QuickIngest/WizardConfigureStep"
 import { ReviewStep } from "@/components/Common/QuickIngest/ReviewStep"
 import { ProcessingStep } from "@/components/Common/QuickIngest/ProcessingStep"
 import { WizardResultsStep } from "@/components/Common/QuickIngest/WizardResultsStep"
-import { PresetSelector } from "@/components/Common/QuickIngest/PresetSelector"
+import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -207,13 +282,23 @@ import { PresetSelector } from "@/components/Common/QuickIngest/PresetSelector"
 let ctxRef: ReturnType<typeof useIngestWizard> | null = null
 
 const ContextSpy: React.FC = () => {
-  ctxRef = useIngestWizard()
+  const ctx = useIngestWizard()
+
+  React.useEffect(() => {
+    ctxRef = ctx
+
+    return () => {
+      ctxRef = null
+    }
+  }, [ctx])
+
   return null
 }
 
-const InnerWizardContent: React.FC<{ onClose: () => void }> = ({
-  onClose,
-}) => {
+const InnerWizardContent: React.FC<{
+  onClose: () => void
+  isStepVisible?: boolean
+}> = ({ onClose, isStepVisible = true }) => {
   const ctx = useIngestWizard()
   const { currentStep } = ctx.state
 
@@ -229,30 +314,12 @@ const InnerWizardContent: React.FC<{ onClose: () => void }> = ({
         <span>Results</span>
       </nav>
       {currentStep === 1 && <AddContentStep />}
-      {currentStep === 2 && <ConfigureStepProxy />}
+      {currentStep === 2 && (
+        <WizardConfigureStep isStepVisible={isStepVisible} />
+      )}
       {currentStep === 3 && <ReviewStep />}
       {currentStep === 4 && <ProcessingStep />}
       {currentStep === 5 && <WizardResultsStep onClose={onClose} />}
-    </div>
-  )
-}
-
-const ConfigureStepProxy: React.FC = () => {
-  const { state, setPreset, goNext, goBack } = useIngestWizard()
-  return (
-    <div>
-      <PresetSelector
-        qi={(key, dv) => dv}
-        value={state.selectedPreset}
-        onChange={setPreset}
-        queueItems={state.queueItems}
-      />
-      <div>
-        <button onClick={goBack}>Back</button>
-        <button onClick={goNext} data-type="primary">
-          Next
-        </button>
-      </div>
     </div>
   )
 }
@@ -267,6 +334,41 @@ const WizardTestHarness: React.FC<{ onClose: () => void }> = ({
       <InnerWizardContent onClose={onClose} />
     </IngestWizardProvider>
   )
+}
+
+const ReopenableConfigStepHarness: React.FC<{ onClose: () => void }> = ({
+  onClose,
+}) => {
+  const [stepVisible, setStepVisible] = React.useState(true)
+
+  return (
+    <IngestWizardProvider>
+      <ContextSpy />
+      <button type="button" onClick={() => setStepVisible(false)}>
+        Hide configure step
+      </button>
+      <button type="button" onClick={() => setStepVisible(true)}>
+        Show configure step
+      </button>
+      <InnerWizardContent
+        onClose={onClose}
+        isStepVisible={stepVisible}
+      />
+    </IngestWizardProvider>
+  )
+}
+
+/**
+ * Expand the "Advanced options" collapsible in the configure step.
+ * Must be called after navigating to step 2 (configure).
+ * No-ops if already expanded (toggle shows "Hide advanced options").
+ */
+const expandAdvancedOptions = async (user: ReturnType<typeof userEvent.setup>) => {
+  const collapsed = screen.queryByText("Advanced options")
+  if (collapsed) {
+    await user.click(collapsed)
+  }
+  // If already expanded ("Hide advanced options" is showing), nothing to do.
 }
 
 // ---------------------------------------------------------------------------
@@ -635,5 +737,545 @@ describe("QuickIngestWizardModal — full wizard flow integration", () => {
 
     // The file drop zone should be visible again
     expect(screen.getByTestId("file-drop-zone")).toBeTruthy()
+  })
+})
+
+describe("QuickIngestWizardModal — real configure step", () => {
+  beforeEach(() => {
+    useQuickIngestSessionStore.setState({
+      session: null,
+      triggerSummary: { count: 0, label: null, hadFailure: false },
+    })
+    useQuickIngestSessionStore.getState().createDraftSession()
+  })
+
+  it("shows the full inline options surface without forcing the old full-modal placeholder", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /standard preset/i })
+      ).toBeTruthy()
+    })
+
+    expect(
+      screen.queryByText(/advanced options are available in the full ingest modal/i)
+    ).not.toBeInTheDocument()
+    const analysisToggle = screen.getByRole("checkbox", {
+      name: /ingestion options – analysis/i,
+    })
+    expect(analysisToggle).toBeInTheDocument()
+    expect(screen.getByText("Next")).toBeInTheDocument()
+
+    // Advanced controls are hidden by default
+    expect(screen.queryByTitle("Captions toggle")).not.toBeInTheDocument()
+    expect(screen.queryByText("Review before saving")).not.toBeInTheDocument()
+
+    // Expand advanced options to reveal them
+    await expandAdvancedOptions(user)
+    expect(screen.getByText("Review before saving")).toBeInTheDocument()
+    expect(screen.getByTitle("Captions toggle")).toBeInTheDocument()
+
+    await user.click(analysisToggle)
+
+    expect(screen.getByText(/using custom settings/i)).toBeInTheDocument()
+  })
+
+  it("keeps review mode anchored to remote storage and leaves audio defaults available for video-only batches", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    const audioLanguageInput = await screen.findByTitle("Audio language")
+    const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
+    const transcriptionModelSelect = screen.getByLabelText("Transcription model")
+
+    expect(audioLanguageInput).not.toBeDisabled()
+    expect(diarizationToggle).not.toBeDisabled()
+    expect(transcriptionModelSelect).not.toBeDisabled()
+
+    await user.click(
+      screen.getByLabelText(/store ingest results on your tldw server/i)
+    )
+
+    const reviewToggle = screen.getByLabelText(/review before saving/i)
+    await user.click(reviewToggle)
+
+    expect(
+      screen.getByLabelText(/store ingest results on your tldw server/i)
+    ).toBeChecked()
+  })
+
+  it("disables audio transcription controls for document-only batches", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/research-paper.pdf"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("https://example.com/research-paper.pdf")).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    const audioLanguageInput = await screen.findByTitle("Audio language")
+    const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
+    const transcriptionModelSelect = screen.getByLabelText("Transcription model")
+
+    expect(audioLanguageInput).toBeDisabled()
+    expect(diarizationToggle).toBeDisabled()
+    expect(transcriptionModelSelect).toBeDisabled()
+  })
+
+  it("stores a standard audio language option when selected", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await user.selectOptions(audioLanguageSelect, "en-US")
+
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.typeDefaults.audio?.language
+      ).toBe("en-US")
+    })
+  })
+
+  it("clears a selected standard audio language back to unset", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await user.selectOptions(audioLanguageSelect, "en-US")
+
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.typeDefaults.audio?.language
+      ).toBe("en-US")
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: /clear audio language/i })
+    )
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.typeDefaults.audio?.language
+      ).toBeUndefined()
+    })
+    expect(audioLanguageSelect).not.toHaveAttribute("value")
+    expect(screen.getByText("Select language")).toBeInTheDocument()
+  })
+
+  it("maps an unknown saved audio language to a custom entry field", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      typeDefaults: {
+        audio: {
+          language: "zz-Unknown",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(audioLanguageSelect).toHaveValue("__custom__")
+    })
+
+    const customInput = await screen.findByLabelText("Custom audio language")
+    await waitFor(() => {
+      expect(customInput).toHaveValue("zz-Unknown")
+    })
+  })
+
+  it("reopens custom audio language with current stored value after unknown-to-standard then custom", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      typeDefaults: {
+        audio: {
+          language: "zz-Unknown",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(audioLanguageSelect).toHaveValue("__custom__")
+    })
+
+    let customInput = await screen.findByLabelText("Custom audio language")
+    await waitFor(() => {
+      expect(customInput).toHaveValue("zz-Unknown")
+    })
+
+    await user.selectOptions(audioLanguageSelect, "en-US")
+    await waitFor(() => {
+      expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("en-US")
+    })
+
+    await user.selectOptions(audioLanguageSelect, "__custom__")
+    await waitFor(() => {
+      customInput = screen.getByLabelText("Custom audio language")
+      expect(customInput).toHaveValue("en-US")
+    })
+  })
+
+  it("keeps audio language unselected when no value is saved", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      common: {
+        perform_analysis: false,
+      },
+      typeDefaults: {
+        audio: {
+          language: "",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("")
+    })
+    expect(screen.getByText("Select language")).toBeInTheDocument()
+    expect(audioLanguageSelect).not.toHaveAttribute("value")
+    expect(screen.queryByLabelText("Custom audio language")).toBeNull()
+  })
+
+  it("selecting the custom option keeps stored language until custom input is edited", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      typeDefaults: {
+        audio: {
+          language: "en-US",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(audioLanguageSelect).toHaveValue("en-US")
+      expect(screen.queryByLabelText("Custom audio language")).toBeNull()
+    })
+
+    await user.selectOptions(audioLanguageSelect, "__custom__")
+
+    const customInput = await screen.findByLabelText("Custom audio language")
+    expect(customInput).toBeInTheDocument()
+
+    expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("en-US")
+  })
+
+  it("loads transcription models from the backend catalog", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-large-v3", "parakeet-standard"],
+    })
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    const transcriptionModelSelect = await screen.findByLabelText(
+      "Transcription model"
+    )
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
+      expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()
+    })
+    expect(transcriptionModelSelect).toHaveAttribute(
+      "data-popup-match-select-width",
+      "false"
+    )
+
+    await user.selectOptions(
+      transcriptionModelSelect,
+      "whisper-large-v3"
+    )
+
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.advancedValues?.transcription_model
+      ).toBe("whisper-large-v3")
+    })
+  })
+
+  it("preserves a current transcription model not returned by the backend catalog", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-large-v3"],
+    })
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      advancedValues: {
+        transcription_model: "provider/custom-model",
+      },
+    })
+
+    const transcriptionModelSelect = await screen.findByLabelText(
+      "Transcription model"
+    )
+    await waitFor(() => {
+      expect(transcriptionModelSelect).toHaveValue("provider/custom-model")
+      expect(screen.getByRole("option", { name: "provider/custom-model" })).toBeTruthy()
+    })
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.advancedValues?.transcription_model
+      ).toBe("provider/custom-model")
+    })
+  })
+
+  it("clears transcription model selection via clear action", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-large-v3"],
+    })
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      advancedValues: {
+        transcription_model: "provider/custom-model",
+      },
+    })
+
+    await screen.findByLabelText("Transcription model")
+
+    await user.click(await screen.findByRole("button", { name: /clear transcription model/i }))
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.advancedValues?.transcription_model
+      ).toBeUndefined()
+    })
+  })
+
+  it("refetches transcription model catalog when the configure step is hidden then shown again", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock
+      .mockResolvedValueOnce({
+        all_models: ["whisper-large-v3"],
+      })
+      .mockResolvedValueOnce({
+        all_models: ["parakeet-standard"],
+      })
+    render(<ReopenableConfigStepHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
+    })
+    expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole("button", { name: /hide configure step/i }))
+    await user.click(screen.getByRole("button", { name: /show configure step/i }))
+
+    await expandAdvancedOptions(user)
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()
+      expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(2)
+    })
   })
 })

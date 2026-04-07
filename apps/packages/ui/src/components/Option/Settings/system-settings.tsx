@@ -7,6 +7,8 @@ import {
   importPageAssistData
 } from "@/libs/export-import"
 import {
+  CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH,
+  CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB,
   CHAT_BACKGROUND_IMAGE_SETTING,
   UI_MODE_SETTING
 } from "@/services/settings/ui-settings"
@@ -286,15 +288,12 @@ export const SystemSettings = () => {
 
         const base64String = await toBase64(file)
 
-        // Guard against exceeding extension storage per-item quota.
-        // Chrome's underlying quotas are in bytes; base64 length is a good proxy.
-        const maxLength = 3_000_000 // ~3 MB of base64 data
-        if (base64String.length > maxLength) {
+        if (base64String.length > CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH) {
           notification.error({
             message: t("settings:chatBackground.tooLargeTitle", "Image too large"),
             description: t(
               "settings:chatBackground.tooLargeDescription",
-              "Please choose a smaller image (around 3 MB or less) for the chat background. Try compressing or resizing it and upload again."
+              `Please choose a smaller image (around ${CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB} MB or less) for the chat background. Try compressing or resizing it and upload again.`
             )
           })
           return

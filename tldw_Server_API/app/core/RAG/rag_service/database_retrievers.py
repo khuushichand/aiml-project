@@ -8,6 +8,7 @@ including media database, notes, prompts, and character cards.
 
 import asyncio
 import contextlib
+from difflib import SequenceMatcher
 import json
 import os
 import re
@@ -27,6 +28,7 @@ from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQu
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     create_media_database,
+    search_media,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError as MediaDatabaseError,
@@ -163,6 +165,178 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     return text
 
 
+_MEDIA_FALLBACK_STOP_WORDS = {
+    "a",
+    "about",
+    "according",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "can",
+    "did",
+    "do",
+    "does",
+    "during",
+    "each",
+    "explain",
+    "explains",
+    "fight",
+    "for",
+    "from",
+    "how",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "mention",
+    "mentions",
+    "new",
+    "of",
+    "on",
+    "or",
+    "issue",
+    "issues",
+    "reveal",
+    "reveals",
+    "said",
+    "says",
+    "tell",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "to",
+    "toward",
+    "under",
+    "was",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
+
+
+def _derive_bounded_media_term_query(query: Optional[str], *, max_terms: int = 3) -> Optional[str]:
+    if query is None:
+        return None
+    try:
+        raw_text = str(query).strip()
+    except (TypeError, ValueError):
+        return None
+    if not raw_text:
+        return None
+
+    candidates = re.findall(r"[A-Za-z0-9']+", raw_text.lower())
+    filtered_terms: list[str] = []
+    seen: set[str] = set()
+    for token in candidates:
+        normalized = token.strip("'")
+        if len(normalized) < 4 or normalized in _MEDIA_FALLBACK_STOP_WORDS or normalized in seen:
+            continue
+        seen.add(normalized)
+        filtered_terms.append(normalized)
+
+    if not filtered_terms:
+        return None
+
+    if len(filtered_terms) <= max_terms:
+        return " OR ".join(filtered_terms)
+
+    selected_terms: set[str] = {filtered_terms[0], filtered_terms[-1]}
+    middle_terms = filtered_terms[1:-1]
+    if middle_terms and len(selected_terms) < max_terms:
+        ranked_middle_terms = sorted(
+            middle_terms,
+            key=lambda term: (-len(term), filtered_terms.index(term)),
+        )
+        for term in ranked_middle_terms:
+            selected_terms.add(term)
+            if len(selected_terms) >= max_terms:
+                break
+
+    ordered_terms = [term for term in filtered_terms if term in selected_terms]
+    return " OR ".join(ordered_terms)
+
+
+def _extract_media_query_terms(query: Optional[str], *, max_terms: int = 8) -> list[str]:
+    if query is None:
+        return []
+    try:
+        raw_text = str(query).strip().lower()
+    except (TypeError, ValueError):
+        return []
+    if not raw_text:
+        return []
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9']+", raw_text):
+        normalized = token.strip("'")
+        if len(normalized) < 3 or normalized in _MEDIA_FALLBACK_STOP_WORDS or normalized in seen:
+            continue
+        seen.add(normalized)
+        terms.append(normalized)
+        if len(terms) >= max_terms:
+            break
+    return terms
+
+
+def _score_media_chunk_text(
+    chunk_text: str,
+    query_terms: list[str],
+    *,
+    title: Optional[str] = None,
+) -> float:
+    lowered = chunk_text.lower()
+    if not query_terms:
+        return 0.0
+
+    combined_text = f"{title or ''}\n{chunk_text}".lower()
+    doc_terms = {
+        token.strip("'")
+        for token in re.findall(r"[A-Za-z0-9']+", combined_text)
+        if len(token.strip("'")) >= 3
+    }
+
+    matched_score = 0.0
+    total_occurrences = 0.0
+    for term in query_terms:
+        if term in combined_text:
+            matched_score += 1.0
+            total_occurrences += min(combined_text.count(term), 3) * 0.05
+            continue
+
+        if len(term) < 5:
+            continue
+
+        best_similarity = 0.0
+        for doc_term in doc_terms:
+            if abs(len(doc_term) - len(term)) > 2:
+                continue
+            similarity = SequenceMatcher(None, term, doc_term).ratio()
+            if similarity > best_similarity:
+                best_similarity = similarity
+        if best_similarity >= 0.76:
+            matched_score += 0.9 * best_similarity
+            total_occurrences += 0.03
+
+    return (matched_score / max(len(query_terms), 1)) + min(total_occurrences, 0.25)
+
+
 _SQL_INPUT_PREFIX_RE = re.compile(
     r"^(?:\s|--[^\n]*\n|/\*.*?\*/)*(select|with)\b",
     flags=re.IGNORECASE | re.DOTALL,
@@ -261,6 +435,13 @@ class RetrievalConfig:
     source_filter: Optional[list[str]] = None
     # FTS search level: media-level (default) or chunk-level (UnvectorizedMediaChunks)
     fts_level: Literal['media', 'chunk'] = 'media'
+    # Query-scoped text late chunking: bypass stored chunks and rechunk
+    # matched media in memory without persisting replacements.
+    enable_text_late_chunking: bool = False
+    chunk_method: Optional[str] = None
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    chunk_language: Optional[str] = None
 
 
 class BaseRetriever(ABC):
@@ -489,11 +670,11 @@ class MediaDBRetriever(BaseRetriever):
             # Try to get vector store from settings
             from tldw_Server_API.app.core.config import settings
             settings_dict: dict[str, Any] = dict(settings)
-            if settings_dict.get("RAG", {}).get("vector_store_type"):
-                self.vector_store = create_from_settings_for_user(
-                    settings_dict,
-                    self.user_id
-                )
+            self.vector_store = create_from_settings_for_user(
+                settings_dict,
+                self.user_id
+            )
+            if self.vector_store is not None:
                 logger.info(f"Vector store adapter initialized for MediaDBRetriever with user_id={self.user_id}")
         except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Could not initialize vector store: {e}")
@@ -510,7 +691,44 @@ class MediaDBRetriever(BaseRetriever):
             # Branch on FTS level when FTS search is enabled
             try:
                 if self.config.use_fts and getattr(self.config, 'fts_level', 'media') == 'chunk':
-                    return self._retrieve_chunk_fts(query, media_type, **kwargs)
+                    if "enable_text_late_chunking" in kwargs:
+                        prefer_text_late_chunking = bool(kwargs.get("enable_text_late_chunking"))
+                    else:
+                        prefer_text_late_chunking = bool(
+                            getattr(self.config, "enable_text_late_chunking", False)
+                        )
+                    if prefer_text_late_chunking:
+                        media_documents = self._retrieve_via_backend(
+                            query,
+                            media_type,
+                            apply_min_score=False,
+                            **kwargs,
+                        )
+                        late_chunk_documents = self._late_chunk_media_documents(
+                            query,
+                            media_documents,
+                            **kwargs,
+                        )
+                        if late_chunk_documents:
+                            return late_chunk_documents
+                        return media_documents
+                    chunk_documents, chunk_raw_count = self._retrieve_chunk_fts_with_stats(query, media_type, **kwargs)
+                    if chunk_raw_count > 0:
+                        return chunk_documents
+                    media_documents = self._retrieve_via_backend(
+                        query,
+                        media_type,
+                        apply_min_score=False,
+                        **kwargs,
+                    )
+                    late_chunk_documents = self._late_chunk_media_documents(
+                        query,
+                        media_documents,
+                        **kwargs,
+                    )
+                    if late_chunk_documents:
+                        return late_chunk_documents
+                    return media_documents
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Fall back gracefully to media-level
                 pass
@@ -564,9 +782,23 @@ class MediaDBRetriever(BaseRetriever):
         # Optional restriction to specific media IDs
         allowed_media_ids = kwargs.get("allowed_media_ids")
         if allowed_media_ids and isinstance(allowed_media_ids, (list, tuple)):
-            placeholders = ",".join(["?"] * len(allowed_media_ids))
-            sql += f" AND m.id IN ({placeholders})"
-            params.extend(list(allowed_media_ids))
+            if not all(isinstance(mid, (int, str)) for mid in allowed_media_ids):
+                raise ValueError("allowed_media_ids must be a list of ints or strings.")
+
+            int_ids = [mid for mid in allowed_media_ids if isinstance(mid, int)]
+            uuid_ids = [mid for mid in allowed_media_ids if isinstance(mid, str) and mid]
+            filter_parts: list[str] = []
+
+            if int_ids:
+                placeholders = ",".join(["?"] * len(int_ids))
+                filter_parts.append(f"m.id IN ({placeholders})")
+                params.extend(int_ids)
+            if uuid_ids:
+                placeholders = ",".join(["?"] * len(uuid_ids))
+                filter_parts.append(f"m.uuid IN ({placeholders})")
+                params.extend(uuid_ids)
+            if filter_parts:
+                sql += f" AND ({' OR '.join(filter_parts)})"
 
         # Add ordering and limit (bm25: lower is better on SQLite)
         sql += " ORDER BY rank ASC LIMIT ?"
@@ -604,13 +836,151 @@ class MediaDBRetriever(BaseRetriever):
         return documents
 
     def _retrieve_chunk_fts(self, query: str, media_type: Optional[str], **kwargs) -> list[Document]:
+        documents, _raw_count = self._retrieve_chunk_fts_with_stats(query, media_type, **kwargs)
+        return documents
+
+    def _late_chunk_media_documents(
+        self,
+        query: str,
+        media_documents: list[Document],
+        **kwargs,
+    ) -> list[Document]:
+        if not media_documents:
+            return []
+
+        try:
+            from tldw_Server_API.app.core.Chunking.chunker import Chunker  # type: ignore
+        except ImportError:
+            logger.debug("Late chunk media retrieval skipped because Chunker is unavailable")
+            return []
+
+        chunk_method = str(
+            kwargs.get("chunk_method")
+            or getattr(self.config, "chunk_method", None)
+            or "sentences"
+        )
+        chunk_size = (
+            _coerce_int(kwargs.get("chunk_size") or kwargs.get("max_chunk_size"))
+            or _coerce_int(getattr(self.config, "chunk_size", None))
+            or 500
+        )
+        chunk_overlap = (
+            _coerce_int(kwargs.get("chunk_overlap"))
+            or _coerce_int(getattr(self.config, "chunk_overlap", None))
+            or 50
+        )
+        chunk_language = kwargs.get("chunk_language") or getattr(self.config, "chunk_language", None)
+        query_terms = _extract_media_query_terms(query)
+
+        try:
+            chunker = Chunker()
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            logger.debug(f"Late chunk media retrieval skipped because Chunker could not initialize: {exc}")
+            return []
+
+        late_chunk_docs: list[Document] = []
+        for parent_rank, media_doc in enumerate(media_documents[: max(1, self.config.max_results)]):
+            parent_text = str(media_doc.content or "").strip()
+            if not parent_text:
+                continue
+
+            try:
+                flat_chunks = chunker.chunk_text_hierarchical_flat(
+                    parent_text,
+                    method=chunk_method,
+                    max_size=chunk_size,
+                    overlap=chunk_overlap,
+                    language=chunk_language,
+                )
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "Late chunking failed for media document {}: {}",
+                    media_doc.id,
+                    exc,
+                )
+                continue
+
+            if not isinstance(flat_chunks, list) or not flat_chunks:
+                continue
+
+            total_chunks = len(flat_chunks)
+            parent_score = float(getattr(media_doc, "score", 0.0) or 0.0)
+            for idx, chunk_item in enumerate(flat_chunks):
+                if not isinstance(chunk_item, dict):
+                    continue
+                chunk_text = str(chunk_item.get("text") or "").strip()
+                if not chunk_text:
+                    continue
+
+                chunk_metadata = chunk_item.get("metadata") or {}
+                if not isinstance(chunk_metadata, dict):
+                    chunk_metadata = {}
+
+                md: dict[str, Any] = dict(media_doc.metadata or {})
+                md.update(
+                    {
+                        "media_id": str(media_doc.id),
+                        "chunk_index": idx,
+                        "total_chunks": total_chunks,
+                        "retrieval_mode": "late_chunk",
+                        "source": "media_db",
+                    }
+                )
+
+                for key in ("start_offset", "start_index"):
+                    if key in chunk_metadata and chunk_metadata.get(key) is not None:
+                        md["start_char"] = chunk_metadata.get(key)
+                        break
+                for key in ("end_offset", "end_index"):
+                    if key in chunk_metadata and chunk_metadata.get(key) is not None:
+                        md["end_char"] = chunk_metadata.get(key)
+                        break
+                for key in ("chunk_type", "paragraph_kind", "section_path", "ancestry_titles"):
+                    if key in chunk_metadata and chunk_metadata.get(key) is not None and key not in md:
+                        md[key] = chunk_metadata.get(key)
+
+                chunk_score = _score_media_chunk_text(
+                    chunk_text,
+                    query_terms,
+                    title=str(media_doc.metadata.get("title") or ""),
+                )
+                combined_score = (parent_score * 0.1) + (chunk_score * 0.9)
+                # Earlier parent matches and earlier chunks should win ties.
+                combined_score -= (parent_rank * 0.0001) + (idx * 0.00001)
+
+                doc = Document(
+                    id=f"late_chunk:{media_doc.id}:{idx}",
+                    content=chunk_text,
+                    source=DataSource.MEDIA_DB,
+                    metadata=md,
+                    score=combined_score,
+                    source_document_id=str(media_doc.id),
+                    source_document_metadata=dict(media_doc.metadata or {}),
+                    parent_id=str(media_doc.id),
+                    chunk_index=idx,
+                    total_chunks=total_chunks,
+                    start_char=md.get("start_char"),
+                    end_char=md.get("end_char"),
+                )
+                _apply_location_metadata(doc)
+                late_chunk_docs.append(doc)
+
+        late_chunk_docs.sort(key=lambda item: float(getattr(item, "score", 0.0)), reverse=True)
+        return late_chunk_docs[: self.config.max_results]
+
+    def _retrieve_chunk_fts_with_stats(
+        self,
+        query: str,
+        media_type: Optional[str],
+        **kwargs,
+    ) -> tuple[list[Document], int]:
         """Retrieve chunk-level matches using FTS5 over UnvectorizedMediaChunks.
 
         For SQLite: uses virtual table `unvectorized_chunks_fts`.
         For Postgres: uses tsvector column on `unvectorized_media_chunks` (created via backend).
         """
         if self.media_db is None:
-            return []
+            return [], 0
 
         backend_type = getattr(self.media_db, 'backend_type', None)
         if backend_type == BackendType.SQLITE:
@@ -674,9 +1044,23 @@ class MediaDBRetriever(BaseRetriever):
         # Optional restriction to specific media IDs
         allowed_media_ids = kwargs.get("allowed_media_ids")
         if allowed_media_ids and isinstance(allowed_media_ids, (list, tuple)):
-            placeholders = ",".join(["?"] * len(allowed_media_ids))
-            sql += f" AND m.id IN ({placeholders})"
-            params.extend(list(allowed_media_ids))
+            if not all(isinstance(mid, (int, str)) for mid in allowed_media_ids):
+                raise ValueError("allowed_media_ids must be a list of ints or strings.")
+
+            int_ids = [mid for mid in allowed_media_ids if isinstance(mid, int)]
+            uuid_ids = [mid for mid in allowed_media_ids if isinstance(mid, str) and mid]
+            filter_parts: list[str] = []
+
+            if int_ids:
+                placeholders = ",".join(["?"] * len(int_ids))
+                filter_parts.append(f"m.id IN ({placeholders})")
+                params.extend(int_ids)
+            if uuid_ids:
+                placeholders = ",".join(["?"] * len(uuid_ids))
+                filter_parts.append(f"m.uuid IN ({placeholders})")
+                params.extend(uuid_ids)
+            if filter_parts:
+                sql += f" AND ({' OR '.join(filter_parts)})"
 
         # Optional date filter against Media.ingestion_date
         if self.config.date_filter:
@@ -695,12 +1079,12 @@ class MediaDBRetriever(BaseRetriever):
             execute_query = getattr(self.media_db, "execute_query", None)
             if not callable(execute_query):
                 logger.error("Media DB adapter missing execute_query() for chunk FTS")
-                return []
+                return [], 0
             cursor = execute_query(sql, tuple(params))
             rows = cursor.fetchall() if cursor is not None else []
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Chunk FTS query failed: {exc}")
-            return []
+            return [], 0
 
         docs: list[Document] = []
 
@@ -800,9 +1184,16 @@ class MediaDBRetriever(BaseRetriever):
             _apply_location_metadata(doc)
             docs.append(doc)
 
-        return docs
+        return docs, len(rows)
 
-    def _retrieve_via_backend(self, query: str, media_type: Optional[str], **kwargs) -> list[Document]:
+    def _retrieve_via_backend(
+        self,
+        query: str,
+        media_type: Optional[str],
+        *,
+        apply_min_score: bool = True,
+        **kwargs,
+    ) -> list[Document]:
         if self.media_db is None:
             return []
         date_range = None
@@ -815,9 +1206,54 @@ class MediaDBRetriever(BaseRetriever):
         search_query = query
         if backend_type == BackendType.SQLITE:
             search_query = _sanitize_media_fts_query(query) or query
+        results, raw_row_count = self._search_media_db(
+            search_query=search_query,
+            media_types=media_types,
+            date_range=date_range,
+            sort_by=sort_by,
+            **kwargs,
+        )
+        if apply_min_score:
+            documents = self._build_media_documents(results, backend_type=backend_type)
+        else:
+            documents = self._build_media_documents(
+                results,
+                backend_type=backend_type,
+                apply_min_score=False,
+            )
+        if documents or not self.config.use_fts:
+            return documents
+        if raw_row_count > 0:
+            return documents
+
+        fallback_query = _derive_bounded_media_term_query(query)
+        if not fallback_query:
+            return documents
+        if _sanitize_media_fts_query(fallback_query) == search_query:
+            return documents
+        return self._retrieve_media_term_fallback(
+            fallback_query,
+            media_type,
+            apply_min_score=apply_min_score,
+            **kwargs,
+        )
+
+    def _search_media_db(
+        self,
+        *,
+        search_query: str,
+        media_types: Optional[list[str]],
+        date_range: Optional[dict[str, datetime]],
+        sort_by: str,
+        **kwargs,
+    ) -> tuple[list[dict[str, Any]], int]:
+        if self.media_db is None:
+            return [], 0
+
         try:
             allowed_media_ids = kwargs.get("allowed_media_ids")
-            results, _total = self.media_db.search_media_db(
+            results, _total = search_media(
+                self.media_db,
                 search_query=search_query,
                 search_fields=['title', 'content'],
                 media_types=media_types,
@@ -831,7 +1267,17 @@ class MediaDBRetriever(BaseRetriever):
             )
         except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"MediaDatabase search failed: {exc}")
-            return []
+            return [], 0
+
+        return results, len(results)
+
+    def _build_media_documents(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        backend_type: Any,
+        apply_min_score: bool = True,
+    ) -> list[Document]:
         documents: list[Document] = []
 
         # Normalize scores across results to [0,1] (higher is better)
@@ -850,7 +1296,7 @@ class MediaDBRetriever(BaseRetriever):
         else:
             norm_vals = _normalize_scores(raw_vals, method="minmax") if raw_vals else []
 
-        min_score = float(self.config.min_score or 0.0)
+        min_score = float(self.config.min_score or 0.0) if apply_min_score else 0.0
         for row, score_val in zip(results, norm_vals):
             if float(score_val) < min_score:
                 continue
@@ -888,6 +1334,34 @@ class MediaDBRetriever(BaseRetriever):
             _apply_location_metadata(doc)
         return documents
 
+    def _retrieve_media_term_fallback(
+        self,
+        fallback_query: str,
+        media_type: Optional[str],
+        *,
+        apply_min_score: bool = True,
+        **kwargs,
+    ) -> list[Document]:
+        backend_type = getattr(self.media_db, 'backend_type', None)
+        search_query = _sanitize_media_fts_query(fallback_query) or fallback_query
+        results, _raw_row_count = self._search_media_db(
+            search_query=search_query,
+            media_types=[media_type] if media_type else None,
+            date_range=self.config.date_filter and {
+                'start_date': self.config.date_filter[0],
+                'end_date': self.config.date_filter[1],
+            },
+            sort_by='relevance' if self.config.use_fts else 'last_modified_desc',
+            **kwargs,
+        )
+        if apply_min_score:
+            return self._build_media_documents(results, backend_type=backend_type)
+        return self._build_media_documents(
+            results,
+            backend_type=backend_type,
+            apply_min_score=False,
+        )
+
     async def retrieve_with_keywords(
         self,
         query: str,
@@ -916,6 +1390,174 @@ class MediaDBRetriever(BaseRetriever):
     ) -> list[Document]:
         """Internal method for FTS retrieval (same as retrieve)."""
         return await self.retrieve(query, media_type, **kwargs)
+
+    @staticmethod
+    def _normalize_allowed_media_ids_for_vector_filter(
+        allowed_media_ids: Any,
+    ) -> list[str]:
+        if not isinstance(allowed_media_ids, (list, tuple)):
+            return []
+
+        normalized: list[str] = []
+        for candidate in allowed_media_ids:
+            try:
+                media_id_str = str(int(candidate))
+            except (TypeError, ValueError):
+                continue
+            if media_id_str not in normalized:
+                normalized.append(media_id_str)
+        return normalized
+
+    @staticmethod
+    def _build_allowed_media_vector_filter(
+        allowed_media_ids: Any,
+    ) -> Optional[dict[str, Any]]:
+        normalized_ids = MediaDBRetriever._normalize_allowed_media_ids_for_vector_filter(
+            allowed_media_ids
+        )
+        if not normalized_ids:
+            return None
+        if len(normalized_ids) == 1:
+            return {"media_id": normalized_ids[0]}
+        return {"media_id": {"$in": normalized_ids}}
+
+    @staticmethod
+    def _merge_vector_filters(
+        base_filter: Optional[dict[str, Any]],
+        scoped_filter: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not base_filter:
+            return scoped_filter or {}
+        if not scoped_filter:
+            return base_filter
+        return {"$and": [base_filter, scoped_filter]}
+
+    @staticmethod
+    def _extract_collection_metadatas(payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        raw_metadatas = payload.get("metadatas")
+        if not isinstance(raw_metadatas, list):
+            return []
+        if raw_metadatas and isinstance(raw_metadatas[0], list):
+            flattened: list[dict[str, Any]] = []
+            for block in raw_metadatas:
+                if not isinstance(block, list):
+                    continue
+                flattened.extend(item for item in block if isinstance(item, dict))
+            return flattened
+        return [item for item in raw_metadatas if isinstance(item, dict)]
+
+    def _resolve_scoped_query_embedding_override(
+        self,
+        *,
+        collection_name: Optional[str],
+        allowed_media_ids: Any,
+    ) -> Optional[str]:
+        if not collection_name:
+            return None
+
+        scoped_filter = self._build_allowed_media_vector_filter(allowed_media_ids)
+        scoped_media_ids = set(
+            self._normalize_allowed_media_ids_for_vector_filter(allowed_media_ids)
+        )
+        if not scoped_filter or not scoped_media_ids:
+            return None
+
+        vector_store = self.vector_store
+        manager = getattr(vector_store, "manager", None) if vector_store is not None else None
+        if manager is None:
+            return None
+
+        get_collection = getattr(manager, "get_collection", None)
+        get_or_create_collection = getattr(manager, "get_or_create_collection", None)
+        if not callable(get_collection) and not callable(get_or_create_collection):
+            return None
+
+        try:
+            if callable(get_collection):
+                collection = get_collection(collection_name)
+            elif callable(get_or_create_collection):
+                collection = get_or_create_collection(collection_name)
+            else:
+                return None
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+            if not callable(get_or_create_collection):
+                logger.debug(
+                    "Unable to inspect vector collection '{}' for scoped embedding metadata: {}",
+                    collection_name,
+                    exc,
+                )
+                return None
+            try:
+                # Fresh Chroma clients can momentarily miss a just-written collection;
+                # fall back to the same access path used by vector search.
+                collection = get_or_create_collection(collection_name)
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as fallback_exc:
+                logger.debug(
+                    "Unable to inspect vector collection '{}' for scoped embedding metadata: {}",
+                    collection_name,
+                    fallback_exc,
+                )
+                return None
+
+        get_items = getattr(collection, "get", None)
+        if not callable(get_items):
+            return None
+
+        try:
+            metadata_payload = get_items(
+                where=scoped_filter,
+                include=["metadatas"],
+                limit=5,
+            )
+        except TypeError:
+            try:
+                metadata_payload = get_items(include=["metadatas"], limit=5)
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "Vector metadata lookup fallback failed for collection '{}': {}",
+                    collection_name,
+                    exc,
+                )
+                return None
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            logger.debug(
+                "Vector metadata lookup failed for collection '{}': {}",
+                collection_name,
+                exc,
+            )
+            return None
+
+        metadatas = self._extract_collection_metadatas(metadata_payload)
+        if scoped_media_ids:
+            metadatas = [
+                item
+                for item in metadatas
+                if str(item.get("media_id")) in scoped_media_ids
+            ]
+
+        model_overrides: set[str] = set()
+        for metadata in metadatas:
+            embedding_model = str(metadata.get("embedding_model") or "").strip()
+            if not embedding_model:
+                continue
+            embedding_provider = str(metadata.get("embedding_provider") or "").strip()
+            if embedding_provider:
+                model_overrides.add(f"{embedding_provider}:{embedding_model}")
+            else:
+                model_overrides.add(embedding_model)
+
+        if len(model_overrides) == 1:
+            return next(iter(model_overrides))
+
+        if len(model_overrides) > 1:
+            logger.warning(
+                "Scoped media selection spans multiple embedding models in collection '{}': {}",
+                collection_name,
+                sorted(model_overrides),
+            )
+        return None
 
     async def _retrieve_vector(
         self,
@@ -950,6 +1592,24 @@ class MediaDBRetriever(BaseRetriever):
             if not vector_store._initialized:
                 await vector_store.initialize()
 
+            # Search collection selection; support multi-search via wildcard/list namespace
+            index_namespace = kwargs.get("index_namespace")
+            multi_namespace: Optional[list[str]] = None
+            collection_name: Optional[str] = None
+            if index_namespace:
+                # If a list/tuple of patterns provided, use multi_search
+                if isinstance(index_namespace, (list, tuple)):
+                    multi_namespace = [str(x) for x in index_namespace]
+                # If a single string contains a wildcard, treat as pattern
+                elif isinstance(index_namespace, str) and ("*" in index_namespace or "?" in index_namespace):
+                    multi_namespace = [index_namespace]
+                else:
+                    # Use provided namespace directly (already includes user prefix if desired)
+                    collection_name = str(index_namespace)
+            else:
+                # Default: user-specific media collection
+                collection_name = f"user_{self.user_id}_media_embeddings"
+
             # Get embedding for query (or use provided)
             if provided_vector is not None:
                 query_vector = provided_vector
@@ -962,12 +1622,16 @@ class MediaDBRetriever(BaseRetriever):
                         get_embedding_config,
                     )
                     user_app_config = get_embedding_config()
+                    model_id_override = self._resolve_scoped_query_embedding_override(
+                        collection_name=collection_name,
+                        allowed_media_ids=kwargs.get("allowed_media_ids"),
+                    )
                     embeddings = await asyncio.get_event_loop().run_in_executor(
                         None,
                         create_embeddings_batch,
                         [query],  # texts
                         user_app_config,
-                        None,
+                        model_id_override,
                     )
 
                     if not embeddings or not embeddings[0]:
@@ -994,24 +1658,10 @@ class MediaDBRetriever(BaseRetriever):
                     base_filter = {"$and": [base_filter, metadata_filter]}
                 else:
                     base_filter = metadata_filter
-
-            # Search collection selection; support multi-search via wildcard/list namespace
-            index_namespace = kwargs.get("index_namespace")
-            multi_namespace: Optional[list[str]] = None
-            collection_name: Optional[str] = None
-            if index_namespace:
-                # If a list/tuple of patterns provided, use multi_search
-                if isinstance(index_namespace, (list, tuple)):
-                    multi_namespace = [str(x) for x in index_namespace]
-                # If a single string contains a wildcard, treat as pattern
-                elif isinstance(index_namespace, str) and ("*" in index_namespace or "?" in index_namespace):
-                    multi_namespace = [index_namespace]
-                else:
-                    # Use provided namespace directly (already includes user prefix if desired)
-                    collection_name = str(index_namespace)
-            else:
-                # Default: user-specific media collection
-                collection_name = f"user_{self.user_id}_media_embeddings"
+            base_filter = self._merge_vector_filters(
+                base_filter if base_filter else None,
+                self._build_allowed_media_vector_filter(kwargs.get("allowed_media_ids")),
+            )
 
             # HYDE-aware retrieval and merge
             try:
@@ -2417,9 +3067,12 @@ class MultiDatabaseRetriever:
         self.retrievers: dict[DataSource, BaseRetriever] = {}
 
         # Initialize retrievers for available databases
-        if "media_db" in db_paths:
+        media_db_path = db_paths.get("media_db")
+        if media_db_path is not None or media_db is not None:
             self.retrievers[DataSource.MEDIA_DB] = MediaDBRetriever(
-                db_paths["media_db"], user_id=user_id, media_db=media_db
+                media_db_path,
+                user_id=user_id,
+                media_db=media_db,
             )
 
         if "notes_db" in db_paths:

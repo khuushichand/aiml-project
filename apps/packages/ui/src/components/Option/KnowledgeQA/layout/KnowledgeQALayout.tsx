@@ -3,17 +3,30 @@ import { Download, PanelLeftOpen, PanelLeftClose } from "lucide-react"
 import { cn } from "@/libs/utils"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { isKnowledgeQaHistoryItem, sortHistoryNewestFirst } from "../historyUtils"
-import { HistoryPane } from "../history/HistoryPane"
 import { KnowledgeContextBar } from "../context/KnowledgeContextBar"
 import { CompactToolbar } from "../context/CompactToolbar"
 import { KnowledgeComposer } from "../composer/KnowledgeComposer"
 import { KnowledgeReadyState } from "../empty/KnowledgeReadyState"
-import { InlineRecentSessions } from "../empty/InlineRecentSessions"
 import { AnswerWorkspace } from "../panels/AnswerWorkspace"
-import { NoResultsRecovery } from "../panels/NoResultsRecovery"
-import { EvidenceRail } from "../evidence/EvidenceRail"
 import { useLayoutMode } from "../hooks/useLayoutMode"
 import { useMobile } from "@/hooks/useMediaQuery"
+
+const LazyHistoryPane = React.lazy(() =>
+  import("../history/HistoryPane").then((module) => ({ default: module.HistoryPane })),
+)
+const LazyInlineRecentSessions = React.lazy(() =>
+  import("../empty/InlineRecentSessions").then((module) => ({
+    default: module.InlineRecentSessions,
+  })),
+)
+const LazyNoResultsRecovery = React.lazy(() =>
+  import("../panels/NoResultsRecovery").then((module) => ({
+    default: module.NoResultsRecovery,
+  })),
+)
+const LazyEvidenceRail = React.lazy(() =>
+  import("../evidence/EvidenceRail").then((module) => ({ default: module.EvidenceRail })),
+)
 
 type KnowledgeQALayoutProps = {
   onExportClick: () => void
@@ -167,6 +180,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     settings.sources.length > 0
       ? READY_STATE_SUGGESTIONS
       : READY_STATE_ONBOARDING_SUGGESTIONS
+  const isDesktopReadyState = effectiveSimple && !isMobile && !hasVisibleResultsArea
 
   const contextChangedSinceLastRun = useMemo(() => {
     if (!lastSearchScope) return false
@@ -210,8 +224,10 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   }, [latestUserTurnKey])
 
   useEffect(() => {
+    const resultsCount = results?.length ?? 0
     if (
       hasResults &&
+      resultsCount >= 3 &&
       queryStage !== "searching" &&
       !settingsPanelOpen &&
       !evidenceRailOpen &&
@@ -227,6 +243,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     evidenceRailOpen,
     hasResults,
     queryStage,
+    results?.length,
     setEvidenceRailOpen,
     settingsPanelOpen,
   ])
@@ -288,7 +305,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   }
 
   return (
-    <div className="relative flex h-full min-h-0">
+    <div className="relative flex h-full min-h-0 w-full min-w-0 flex-1">
       <a
         href="#knowledge-search-input"
         className="sr-only z-50 rounded-md bg-surface px-3 py-2 text-sm text-text focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:ring-2 focus:ring-primary"
@@ -302,7 +319,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
           aria-label="Search history"
           className="transition-all duration-300"
         >
-          <HistoryPane />
+          <React.Suspense fallback={null}>
+            <LazyHistoryPane />
+          </React.Suspense>
         </aside>
       )}
 
@@ -313,16 +332,18 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
             className={cn(
               "transition-all duration-300",
               effectiveSimple && !hasVisibleResultsArea
-                ? "mx-auto flex flex-1 w-full max-w-3xl items-center justify-center px-4 py-10 md:px-6"
+                ? "mx-auto flex flex-1 w-full max-w-5xl items-start justify-center px-4 py-10 md:px-6"
                 : effectiveSimple
                   ? "mx-auto w-full max-w-3xl px-4 pt-6 pb-4 md:px-6"
                   : "px-4 pt-6 pb-4 md:px-6"
             )}
           >
-            <div className={cn(
-              "w-full space-y-4",
-              effectiveSimple ? "" : "mx-auto max-w-4xl"
-            )}>
+            <div
+              className={cn(
+                "w-full space-y-4",
+                isDesktopReadyState && "mx-auto flex max-w-5xl flex-col items-center"
+              )}
+            >
               {/* Compact toolbar in Simple mode, full context bar in Research mode */}
               {effectiveSimple ? (
                 <CompactToolbar
@@ -334,7 +355,16 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   }
                   onOpenSourceSelector={handleOpenSourceSelector}
                   onOpenSettings={() => setSettingsPanelOpen(true)}
+                  generationProvider={settings.generation_provider ?? null}
+                  generationModel={settings.generation_model ?? null}
+                  onGenerationProviderChange={(provider) =>
+                    updateSetting("generation_provider", provider)
+                  }
+                  onGenerationModelChange={(model) =>
+                    updateSetting("generation_model", model)
+                  }
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
+                  className={isDesktopReadyState ? "justify-center" : undefined}
                 />
               ) : (
                 <KnowledgeContextBar
@@ -351,6 +381,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   webEnabled={settings.enable_web_fallback}
                   onToggleWeb={() =>
                     updateSetting("enable_web_fallback", !settings.enable_web_fallback)
+                  }
+                  generationProvider={settings.generation_provider ?? null}
+                  generationModel={settings.generation_model ?? null}
+                  onGenerationProviderChange={(provider) =>
+                    updateSetting("generation_provider", provider)
+                  }
+                  onGenerationModelChange={(model) =>
+                    updateSetting("generation_model", model)
                   }
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
                   onOpenSettings={() => setSettingsPanelOpen(true)}
@@ -373,10 +411,13 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   />
                   {/* Inline recent sessions for returning users in Simple mode */}
                   {effectiveSimple && recentSessions.length > 0 && (
-                    <InlineRecentSessions
-                      items={recentSessions}
-                      onRestore={(item) => void restoreFromHistory(item)}
-                    />
+                    <React.Suspense fallback={null}>
+                      <LazyInlineRecentSessions
+                        items={recentSessions}
+                        onRestore={(item) => void restoreFromHistory(item)}
+                        className={isDesktopReadyState ? "max-w-5xl" : undefined}
+                      />
+                    </React.Suspense>
                   )}
                 </>
               ) : null}
@@ -384,6 +425,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
               <KnowledgeComposer
                 autoFocus={!hasVisibleResultsArea}
                 showWebToggle={false}
+                widthMode={isDesktopReadyState ? "wide" : effectiveSimple ? "compact" : "wide"}
               />
             </div>
           </div>
@@ -398,10 +440,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   : "px-4 md:px-6"
               )}
             >
-              <div className={cn(
-                "w-full space-y-6",
-                effectiveSimple ? "" : "mx-auto max-w-4xl"
-              )}>
+              <div className="w-full space-y-6">
                 {hasResults ? (
                   <div className="flex justify-end">
                     <button
@@ -415,12 +454,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                 ) : null}
 
                 {showNoResultsState ? (
-                  <NoResultsRecovery
-                    onBroadenScope={handleBroadenScope}
-                    onEnableWeb={handleEnableWeb}
-                    onShowNearestMatches={handleShowNearestMatches}
-                    webEnabled={settings.enable_web_fallback}
-                  />
+                  <React.Suspense fallback={null}>
+                    <LazyNoResultsRecovery
+                      onBroadenScope={handleBroadenScope}
+                      onEnableWeb={handleEnableWeb}
+                      onShowNearestMatches={handleShowNearestMatches}
+                      webEnabled={settings.enable_web_fallback}
+                    />
+                  </React.Suspense>
                 ) : null}
 
                 <AnswerWorkspace queryStage={queryStage} />
@@ -430,20 +471,22 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
         </section>
 
         {hasVisibleResultsArea ? (
-          <EvidenceRail
-            open={isEvidenceRailOpen}
-            tab={evidenceRailTab}
-            onOpenChange={(open) => {
-              if (!open && hasResults) {
-                userClosedRailRef.current = true
-              }
-              setEvidenceRailOpen(open)
-            }}
-            onTabChange={setEvidenceRailTab}
-            resultsCount={results.length}
-            citationsCount={citations.length}
-            className="bg-surface/20"
-          />
+          <React.Suspense fallback={null}>
+            <LazyEvidenceRail
+              open={isEvidenceRailOpen}
+              tab={evidenceRailTab}
+              onOpenChange={(open) => {
+                if (!open && hasResults) {
+                  userClosedRailRef.current = true
+                }
+                setEvidenceRailOpen(open)
+              }}
+              onTabChange={setEvidenceRailTab}
+              resultsCount={results.length}
+              citationsCount={citations.length}
+              className="bg-surface/20"
+            />
+          </React.Suspense>
         ) : null}
       </main>
 

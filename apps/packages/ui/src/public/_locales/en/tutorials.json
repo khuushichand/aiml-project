@@ -432,10 +432,10 @@
     "message": "Flashcards Basics"
   },
   "flashcards_basics_description": {
-    "message": "Use study, manage, and transfer flows to maintain spaced-repetition decks"
+    "message": "Use study, manage, and import / export flows to maintain spaced-repetition decks"
   },
   "flashcards_basics_tabsTitle": {
-    "message": "Study, Manage, Transfer"
+    "message": "Study, Manage, Import / Export"
   },
   "flashcards_basics_tabsContent": {
     "message": "Switch tabs to study cards, manage deck contents, and import or export card data."
@@ -452,11 +452,11 @@
   "flashcards_basics_manageContent": {
     "message": "Open the Manage tab to search cards, filter by deck/tags, and perform bulk updates."
   },
-  "flashcards_basics_transferTitle": {
-    "message": "Transfer Tab"
+  "flashcards_basics_importExportTitle": {
+    "message": "Import / Export Tab"
   },
-  "flashcards_basics_transferContent": {
-    "message": "Use Transfer for CSV/JSON/APKG import and export workflows."
+  "flashcards_basics_importExportContent": {
+    "message": "Use Import / Export for CSV/JSON/APKG import and export workflows."
   },
   "flashcards_basics_quizTitle": {
     "message": "Bridge to Quiz"
@@ -499,5 +499,23 @@
   },
   "worldBooks_basics_actionsContent": {
     "message": "Create a new world book or import an existing JSON bundle to seed your knowledge base."
-  }
+  },
+  "watchlists_basics_label": { "message": "Watchlists Basics" },
+  "watchlists_basics_description": { "message": "Learn how to add feeds, create monitors, and review collected articles" },
+  "watchlists_basics_setupTitle": { "message": "Quick Setup" },
+  "watchlists_basics_setupContent": { "message": "Start here to add your first feed and create a monitor. The guided setup walks you through it step by step." },
+  "watchlists_basics_feedsTitle": { "message": "Add Feeds" },
+  "watchlists_basics_feedsContent": { "message": "Feeds are sources like RSS feeds or websites that your monitors check for new content." },
+  "watchlists_basics_monitorsTitle": { "message": "Create Monitors" },
+  "watchlists_basics_monitorsContent": { "message": "Monitors run on a schedule to fetch and process content from your feeds. Choose a preset schedule like daily or hourly." },
+  "watchlists_basics_articlesTitle": { "message": "Review Articles" },
+  "watchlists_basics_articlesContent": { "message": "Articles are collected content from successful monitor runs. Switch to the Articles tab to browse and read them." },
+  "monitoring_basics_label": { "message": "Monitoring Basics" },
+  "monitoring_basics_description": { "message": "Learn how to monitor server health and set up alert rules" },
+  "monitoring_basics_overviewTitle": { "message": "System Overview" },
+  "monitoring_basics_overviewContent": { "message": "This section shows your server's current health metrics and security status. Use the refresh button or enable auto-refresh to keep it up to date." },
+  "monitoring_basics_createRuleTitle": { "message": "Create Alert Rules" },
+  "monitoring_basics_createRuleContent": { "message": "Set up rules to be notified when metrics cross thresholds. Pick a metric name, set a threshold and duration, then choose a severity level." },
+  "monitoring_basics_historyTitle": { "message": "Alert History" },
+  "monitoring_basics_historyContent": { "message": "When alerts trigger, they appear here. You can assign alerts to yourself, snooze them, or escalate to critical." }
 }

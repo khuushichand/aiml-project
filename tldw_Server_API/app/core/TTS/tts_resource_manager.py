@@ -5,6 +5,7 @@
 import asyncio
 import gc
 import os
+import sys
 import threading
 import time
 import weakref
@@ -771,8 +772,10 @@ class TTSResourceManager:
     def _cleanup_device_cache() -> None:
         """Best-effort device cleanup after model eviction."""
         gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is None:
+            return
         try:
-            import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             if hasattr(torch, "mps") and torch.backends.mps.is_available():
@@ -1114,6 +1117,11 @@ class TTSResourceManager:
 # Global resource manager instance
 _resource_manager: Optional[TTSResourceManager] = None
 _manager_lock = asyncio.Lock()
+
+
+def get_existing_resource_manager() -> Optional[TTSResourceManager]:
+    """Return the global resource manager only when it already exists."""
+    return _resource_manager
 
 
 async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSResourceManager:

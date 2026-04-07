@@ -2,17 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Button,
   Form,
-  Input,
-  Modal,
-  Select,
-  InputNumber
+  Upload
 } from "antd"
 import type { InputRef, FormInstance } from "antd"
 import React from "react"
 import { fetchChatModels } from "@/services/tldw-server"
-import { ChevronDown, ChevronUp } from "lucide-react"
-import { CharacterPreview } from "./CharacterPreview"
-import { AvatarField, extractAvatarValues } from "./AvatarField"
 import {
   useCharacterFiltering,
   useCharacterInlineEdit,
@@ -25,15 +19,10 @@ import {
   useCharacterCrud,
   useCharacterBulkOps
 } from "./hooks"
-import { GenerateFieldButton } from "./GenerateFieldButton"
 import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
 import { useFormDraft } from "@/hooks/useFormDraft"
 import { useCharacterShortcuts } from "@/hooks/useCharacterShortcuts"
-import { CHARACTER_TEMPLATES, type CharacterTemplate } from "@/data/character-templates"
-import {
-  CHARACTER_PROMPT_PRESETS,
-  DEFAULT_CHARACTER_PROMPT_PRESET
-} from "@/data/character-prompt-presets"
+import type { CharacterTemplate } from "@/data/character-templates"
 import type { GeneratedCharacter, CharacterField } from "@/services/character-generation"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
@@ -47,23 +36,29 @@ import {
   resolveCharacterSelectionId
 } from "@/utils/default-character-preference"
 import {
-  MAX_NAME_LENGTH,
+  IMPORT_UPLOAD_ACCEPT,
   TEMPLATE_CHOOSER_SEEN_KEY,
-  SYSTEM_PROMPT_EXAMPLE,
-  getCharacterVisibleTags,
-  normalizeCharacterFolderId,
-  hasAdvancedData,
   parseCharacterImportPreview,
-  type AdvancedSectionKey,
   type CharacterWorldBookOption,
-  type CharacterFolderOption,
 } from "./utils"
 export { withCharacterNameInLabel } from "./utils"
 
 // --- Extracted sub-components ---
 import { CharacterListToolbar } from "./CharacterListToolbar"
 import { CharacterListContent } from "./CharacterListContent"
-import { CharacterDialogs } from "./CharacterDialogs"
+
+const loadCharacterDialogs = () =>
+  import("./CharacterDialogs").then((module) => ({
+    default: module.CharacterDialogs,
+  }))
+const LazyCharacterDialogs = React.lazy(() => loadCharacterDialogs())
+const loadCharacterEditorForm = () =>
+  import("./CharacterEditorForm").then((module) => ({
+    default: module.CharacterEditorForm,
+  }))
+const LazyCharacterEditorForm = React.lazy(() =>
+  loadCharacterEditorForm(),
+)
 
 type CharactersManagerProps = {
   forwardedNewButtonRef?: React.RefObject<HTMLButtonElement | null>
@@ -94,17 +89,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   autoOpenCreate = false
 }) => {
   const { t } = useTranslation(["settings", "common"])
-  const promptPresetOptions = React.useMemo(
-    () =>
-      CHARACTER_PROMPT_PRESETS.map((preset) => ({
-        value: preset.id,
-        label: t(
-          `settings:manageCharacters.promptPresets.${preset.id}.label`,
-          { defaultValue: preset.label }
-        )
-      })),
-    [t]
-  )
   const qc = useQueryClient()
   const navigate = useNavigate()
   const notification = useAntdNotification()
@@ -122,6 +106,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     )
   const createNameRef = React.useRef<InputRef>(null)
   const editNameRef = React.useRef<InputRef>(null)
+  const hasPreloadedCharacterEditorRef = React.useRef(false)
 
   // --- Extracted hooks ---
   const filtering = useCharacterFiltering({ t })
@@ -385,6 +370,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   }, [])
 
   const openCreateModal = React.useCallback(() => {
+    void loadCharacterDialogs()
+    void loadCharacterEditorForm()
     if (!hasSeenTemplateChooser) {
       setShowTemplates(true)
       markTemplateChooserSeen()
@@ -416,47 +403,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
     },
     [createForm, markTemplateChooserSeen, notification, t]
-  )
-
-  const applySystemPromptExample = React.useCallback(
-    (mode: "create" | "edit") => {
-      const targetForm = mode === "create" ? createForm : editForm
-      const currentValue = String(targetForm.getFieldValue("system_prompt") ?? "").trim()
-      const shouldConfirmOverwrite =
-        currentValue.length > 0 && currentValue !== SYSTEM_PROMPT_EXAMPLE
-
-      const apply = () => {
-        targetForm.setFieldValue("system_prompt", SYSTEM_PROMPT_EXAMPLE)
-        if (mode === "create") {
-          setCreateFormDirty(true)
-          setShowCreateSystemPromptExample(false)
-        } else {
-          setEditFormDirty(true)
-          setShowEditSystemPromptExample(false)
-        }
-      }
-
-      if (!shouldConfirmOverwrite) {
-        apply()
-        return
-      }
-
-      Modal.confirm({
-        title: t("settings:manageCharacters.form.systemPrompt.exampleOverwrite.title", {
-          defaultValue: "Replace current system prompt?"
-        }),
-        content: t("settings:manageCharacters.form.systemPrompt.exampleOverwrite.content", {
-          defaultValue:
-            "This will replace your current system prompt with the Writing Assistant example."
-        }),
-        okText: t("settings:manageCharacters.form.systemPrompt.exampleOverwrite.confirm", {
-          defaultValue: "Replace"
-        }),
-        cancelText: t("common:cancel", { defaultValue: "Cancel" }),
-        onOk: apply
-      })
-    },
-    [createForm, editForm, t]
   )
 
   // Keyboard shortcuts (H1)
@@ -612,930 +558,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
   }
 
-  const renderSystemPromptField = React.useCallback(
-    (form: FormInstance, mode: "create" | "edit") => {
-      const showExample =
-        mode === "create"
-          ? showCreateSystemPromptExample
-          : showEditSystemPromptExample
-      const toggleExample =
-        mode === "create"
-          ? setShowCreateSystemPromptExample
-          : setShowEditSystemPromptExample
-
-      return (
-        <>
-          <Form.Item
-            name="system_prompt"
-            label={
-              <span>
-                {t(
-                  "settings:manageCharacters.form.systemPrompt.label",
-                  { defaultValue: "Behavior / instructions" }
-                )}
-                <span className="text-danger ml-0.5" aria-hidden="true">*</span>
-                <span className="sr-only"> ({t("common:required", { defaultValue: "required" })})</span>
-                <GenerateFieldButton
-                  isGenerating={generatingField === "system_prompt"}
-                  disabled={isGenerating}
-                  onClick={() =>
-                    handleGenerateField("system_prompt", form, mode)
-                  }
-                />
-              </span>
-            }
-          help={t(
-            "settings:manageCharacters.form.systemPrompt.help",
-            {
-              defaultValue:
-                "System prompt: full behavioral instructions sent to the model, including role, tone, and constraints. (max 2000 characters)"
-            }
-          )}
-            extra={
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-                  onClick={() => toggleExample((value) => !value)}>
-                  {showExample
-                    ? t("settings:manageCharacters.form.systemPrompt.hideExample", {
-                        defaultValue: "Hide example"
-                      })
-                    : t("settings:manageCharacters.form.systemPrompt.showExample", {
-                        defaultValue: "Show example"
-                      })}
-                </button>
-                {showExample && (
-                  <div className="rounded border border-border bg-surface2 p-2">
-                    <p className="mb-2 text-xs font-medium text-text">
-                      {t("settings:manageCharacters.form.systemPrompt.exampleLabel", {
-                        defaultValue: "Writing Assistant example"
-                      })}
-                    </p>
-                    <p className="whitespace-pre-wrap text-xs text-text-muted">
-                      {SYSTEM_PROMPT_EXAMPLE}
-                    </p>
-                    <Button
-                      type="link"
-                      size="small"
-                      className="mt-2 p-0"
-                      onClick={() => applySystemPromptExample(mode)}>
-                      {t("settings:manageCharacters.form.systemPrompt.useExample", {
-                        defaultValue: "Use this example"
-                      })}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            }
-            rules={[
-              {
-                required: true,
-                message: t(
-                  "settings:manageCharacters.form.systemPrompt.required",
-                  {
-                    defaultValue:
-                      "Please add instructions for how the character should respond."
-                  }
-                )
-              },
-              {
-                min: 10,
-                message: t(
-                  "settings:manageCharacters.form.systemPrompt.min",
-                  {
-                    defaultValue:
-                      "Add a short description so the character knows how to respond."
-                  }
-                )
-              },
-              {
-                max: 2000,
-                message: t(
-                  "settings:manageCharacters.form.systemPrompt.max",
-                  {
-                    defaultValue:
-                      "System prompt must be 2000 characters or less."
-                  }
-                )
-              }
-            ]}>
-            <Input.TextArea
-              autoSize={{ minRows: 3, maxRows: 8 }}
-              showCount
-              maxLength={2000}
-              placeholder={t(
-                "settings:manageCharacters.form.systemPrompt.placeholder",
-                {
-                  defaultValue:
-                    "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples."
-                }
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="prompt_preset"
-            label={t(
-              "settings:manageCharacters.form.promptPreset.label",
-              { defaultValue: "Prompt preset" }
-            )}
-            help={t(
-              "settings:manageCharacters.form.promptPreset.help",
-              {
-                defaultValue:
-                  "Controls how character fields are formatted in system prompts for character chats."
-              }
-            )}>
-            <Select options={promptPresetOptions} />
-          </Form.Item>
-        </>
-      )
-    },
-    [
-      applySystemPromptExample,
-      generatingField,
-      handleGenerateField,
-      isGenerating,
-      promptPresetOptions,
-      showCreateSystemPromptExample,
-      showEditSystemPromptExample,
-      t
-    ]
-  )
-
-  const renderAlternateGreetingsField = React.useCallback(
-    (form: FormInstance, mode: "create" | "edit") => {
-      const markDirty =
-        mode === "create" ? () => setCreateFormDirty(true) : () => setEditFormDirty(true)
-
-      return (
-        <Form.Item
-          label={
-            <span>
-              {t(
-                "settings:manageCharacters.form.alternateGreetings.label",
-                {
-                  defaultValue: "Alternate greetings"
-                }
-              )}
-              <GenerateFieldButton
-                isGenerating={generatingField === "alternate_greetings"}
-                disabled={isGenerating}
-                onClick={() =>
-                  handleGenerateField("alternate_greetings", form, mode)
-                }
-              />
-            </span>
-          }
-          help={t(
-            "settings:manageCharacters.form.alternateGreetings.help",
-            {
-              defaultValue:
-                "Optional alternate greetings to rotate between when starting chats."
-            }
-          )}>
-          <Form.List name="alternate_greetings">
-            {(fields, { add, remove, move }) => (
-              <div className="space-y-2">
-                {fields.length === 0 && (
-                  <p className="text-xs text-text-subtle">
-                    {t(
-                      "settings:manageCharacters.form.alternateGreetings.empty",
-                      {
-                        defaultValue:
-                          "No alternate greetings yet. Add one to vary how chats start."
-                      }
-                    )}
-                  </p>
-                )}
-                {fields.map((field, index) => {
-                  const { key, ...fieldProps } = field
-                  return (
-                    <div
-                      key={key}
-                      className="rounded-md border border-border bg-surface2 p-2">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-text-muted">
-                          {t(
-                            "settings:manageCharacters.form.alternateGreetings.itemLabel",
-                            {
-                              defaultValue: "Greeting {{index}}",
-                              index: index + 1
-                            }
-                          )}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<ChevronUp className="h-4 w-4" />}
-                            aria-label={t(
-                              "settings:manageCharacters.form.alternateGreetings.moveUp",
-                              { defaultValue: "Move greeting up" }
-                            )}
-                            disabled={index === 0}
-                            onClick={() => {
-                              move(index, index - 1)
-                              markDirty()
-                            }}
-                          />
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<ChevronDown className="h-4 w-4" />}
-                            aria-label={t(
-                              "settings:manageCharacters.form.alternateGreetings.moveDown",
-                              { defaultValue: "Move greeting down" }
-                            )}
-                            disabled={index === fields.length - 1}
-                            onClick={() => {
-                              move(index, index + 1)
-                              markDirty()
-                            }}
-                          />
-                          <Button
-                            type="text"
-                            size="small"
-                            danger
-                            icon={<span className="text-xs font-medium">X</span>}
-                            aria-label={t(
-                              "settings:manageCharacters.form.alternateGreetings.remove",
-                              { defaultValue: "Remove greeting" }
-                            )}
-                            onClick={() => {
-                              remove(field.name)
-                              markDirty()
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <Form.Item
-                        {...fieldProps}
-                        className="mb-0"
-                        rules={[
-                          {
-                            validator: async (_rule, value) => {
-                              if (!value || String(value).trim().length === 0) {
-                                return Promise.resolve()
-                              }
-                              if (String(value).trim().length > 1000) {
-                                return Promise.reject(
-                                  new Error(
-                                    t(
-                                      "settings:manageCharacters.form.alternateGreetings.max",
-                                      {
-                                        defaultValue:
-                                          "Alternate greeting must be 1000 characters or less."
-                                      }
-                                    )
-                                  )
-                                )
-                              }
-                              return Promise.resolve()
-                            }
-                          }
-                        ]}>
-                        <Input.TextArea
-                          autoSize={{ minRows: 2, maxRows: 6 }}
-                          showCount
-                          maxLength={1000}
-                          placeholder={t(
-                            "settings:manageCharacters.form.alternateGreetings.itemPlaceholder",
-                            {
-                              defaultValue:
-                                "Enter an alternate greeting message"
-                            }
-                          )}
-                          onChange={() => markDirty()}
-                        />
-                      </Form.Item>
-                    </div>
-                  )
-                })}
-                <Button
-                  type="dashed"
-                  size="small"
-                  onClick={() => {
-                    add("")
-                    markDirty()
-                  }}>
-                  {t(
-                    "settings:manageCharacters.form.alternateGreetings.add",
-                    { defaultValue: "Add alternate greeting" }
-                  )}
-                </Button>
-              </div>
-            )}
-          </Form.List>
-        </Form.Item>
-      )
-    },
-    [generatingField, handleGenerateField, isGenerating, t]
-  )
-
-  const renderNameField = React.useCallback(
-    (form: FormInstance, mode: "create" | "edit") => (
-      <Form.Item
-        name="name"
-        label={
-          <span>
-            {t("settings:manageCharacters.form.name.label", {
-              defaultValue: "Name"
-            })}
-            <span className="text-danger ml-0.5">*</span>
-            <GenerateFieldButton
-              isGenerating={generatingField === "name"}
-              disabled={isGenerating}
-              onClick={() => handleGenerateField("name", form, mode)}
-            />
-          </span>
-        }
-        rules={[
-          {
-            required: true,
-            message: t(
-              "settings:manageCharacters.form.name.required",
-              { defaultValue: "Please enter a name" }
-            )
-          },
-          {
-            max: MAX_NAME_LENGTH,
-            message: t(
-              "settings:manageCharacters.form.name.maxLength",
-              {
-                defaultValue: `Name must be ${MAX_NAME_LENGTH} characters or fewer`
-              }
-            )
-          }
-        ]}>
-        <Input
-          ref={mode === "create" ? createNameRef : editNameRef}
-          placeholder={t(
-            "settings:manageCharacters.form.name.placeholder",
-            { defaultValue: "e.g. Writing coach" }
-          )}
-          maxLength={MAX_NAME_LENGTH}
-          showCount
-        />
-      </Form.Item>
-    ),
-    [editNameRef, createNameRef, generatingField, handleGenerateField, isGenerating, t]
-  )
-
-  const renderGreetingField = React.useCallback(
-    (form: FormInstance, mode: "create" | "edit") => (
-      <Form.Item
-        name="greeting"
-        label={
-          <span>
-            {t("settings:manageCharacters.form.greeting.label", {
-              defaultValue: "Greeting message (optional)"
-            })}
-            <GenerateFieldButton
-              isGenerating={generatingField === "first_message"}
-              disabled={isGenerating}
-              onClick={() => handleGenerateField("first_message", form, mode)}
-            />
-          </span>
-        }
-        help={t("settings:manageCharacters.form.greeting.help", {
-          defaultValue:
-            "Optional first message the character will send when you start a chat."
-        })}>
-        <Input.TextArea
-          autoSize={{ minRows: 2, maxRows: 6 }}
-          placeholder={t(
-            "settings:manageCharacters.form.greeting.placeholder",
-            {
-              defaultValue:
-                "Hi there! I'm your writing coach. Paste your draft and I'll help you tighten it up."
-            }
-          )}
-          showCount
-          maxLength={1000}
-        />
-      </Form.Item>
-    ),
-    [generatingField, handleGenerateField, isGenerating, t]
-  )
-
-  const renderDescriptionField = React.useCallback(
-    (form: FormInstance, mode: "create" | "edit") => (
-      <Form.Item
-        name="description"
-        label={
-          <span>
-            {t("settings:manageCharacters.form.description.label", {
-              defaultValue: "Description"
-            })}
-            <GenerateFieldButton
-              isGenerating={generatingField === "description"}
-              disabled={isGenerating}
-              onClick={() => handleGenerateField("description", form, mode)}
-            />
-          </span>
-        }
-        help={t("settings:manageCharacters.form.description.help", {
-          defaultValue: "Description: brief blurb shown in character lists and cards."
-        })}>
-        <Input
-          placeholder={t(
-            "settings:manageCharacters.form.description.placeholder",
-            { defaultValue: "Short description" }
-          )}
-        />
-      </Form.Item>
-    ),
-    [generatingField, handleGenerateField, isGenerating, t]
-  )
-
-  const renderTagsField = (form: FormInstance, mode: "create" | "edit") => (
-    <Form.Item
-      name="tags"
-      label={
-        <span>
-          {t("settings:manageCharacters.tags.label", {
-            defaultValue: "Tags"
-          })}
-          <GenerateFieldButton
-            isGenerating={generatingField === "tags"}
-            disabled={isGenerating}
-            onClick={() => handleGenerateField("tags", form, mode)}
-          />
-        </span>
-      }
-      help={t("settings:manageCharacters.tags.help", {
-        defaultValue:
-          "Use tags to group characters by use case (e.g., 'writing', 'teaching')."
-      })}>
-      <div className="space-y-2">
-        {popularTags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            <span className="text-xs text-text-subtle mr-1">
-              {t("settings:manageCharacters.tags.popular", { defaultValue: "Popular:" })}
-            </span>
-            {popularTags.map(({ tag, count }) => {
-              const currentTags = form.getFieldValue("tags") || []
-              const isSelected = currentTags.includes(tag)
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors motion-reduce:transition-none ${
-                    isSelected
-                      ? "bg-primary/10 border-primary text-primary"
-                      : "bg-surface border-border text-text-muted hover:border-primary/50 hover:text-primary"
-                  }`}
-                  onClick={() => {
-                    const current = form.getFieldValue("tags") || []
-                    if (isSelected) {
-                      form.setFieldValue(
-                        "tags",
-                        current.filter((t: string) => t !== tag)
-                      )
-                    } else {
-                      form.setFieldValue("tags", [...current, tag])
-                    }
-                    markModeDirty(mode)
-                  }}>
-                  {tag}
-                  <span className="text-text-subtle">({count})</span>
-                </button>
-              )
-            })}
-          </div>
-        )}
-        <Form.Item name="tags" noStyle>
-          <Select
-            mode="tags"
-            allowClear
-            placeholder={t(
-              "settings:manageCharacters.tags.placeholder",
-              {
-                defaultValue: "Add tags"
-              }
-            )}
-            options={tagOptionsWithCounts}
-            onChange={(value) => {
-              form.setFieldValue("tags", getCharacterVisibleTags(value))
-              markModeDirty(mode)
-            }}
-            filterOption={(input, option) =>
-              option?.value?.toString().toLowerCase().includes(input.toLowerCase()) ?? false
-            }
-          />
-        </Form.Item>
-      </div>
-    </Form.Item>
-  )
-
-  const renderAvatarField = React.useCallback(
-    (form: FormInstance) => (
-      <Form.Item
-        noStyle
-        shouldUpdate={(prev, cur) =>
-          prev?.name !== cur?.name || prev?.description !== cur?.description
-        }>
-        {({ getFieldValue }) => (
-          <Form.Item
-            name="avatar"
-            label={t("settings:manageCharacters.avatar.label", {
-              defaultValue: "Avatar (optional)"
-            })}>
-            <AvatarField
-              characterName={getFieldValue("name")}
-              characterDescription={getFieldValue("description")}
-            />
-          </Form.Item>
-        )}
-      </Form.Item>
-    ),
-    [t]
-  )
-
-  const renderAdvancedFields = (
-    form: FormInstance,
-    mode: "create" | "edit",
-    worldBookFieldContext: SharedCharacterFormProps["worldBookFieldContext"]
-  ) => {
-      const worldBookOptions_local = worldBookFieldContext.options
-      const worldBookOptionsLoading_local = worldBookFieldContext.loading
-      const worldBookEditCharacterNumericId =
-        worldBookFieldContext.editCharacterNumericId
-      const showAdvanced = mode === "create" ? showCreateAdvanced : showEditAdvanced
-      const setShowAdvanced =
-        mode === "create" ? setShowCreateAdvanced : setShowEditAdvanced
-      const sectionState =
-        mode === "create" ? createAdvancedSections : editAdvancedSections
-      const setSectionState =
-        mode === "create" ? setCreateAdvancedSections : setEditAdvancedSections
-      const toggleSection = (section: AdvancedSectionKey) => {
-        setSectionState((prev) => ({ ...prev, [section]: !prev[section] }))
-      }
-      const renderSection = (
-        section: AdvancedSectionKey,
-        title: string,
-        children: React.ReactNode
-      ) => (
-        <div className="rounded-md border border-border/70 bg-bg/40">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between px-3 py-2 text-left"
-            aria-expanded={sectionState[section]}
-            onClick={() => toggleSection(section)}>
-            <span className="text-sm font-medium text-text">{title}</span>
-            {sectionState[section] ? (
-              <ChevronUp className="h-4 w-4 text-text-subtle" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-text-subtle" />
-            )}
-          </button>
-          {sectionState[section] && (
-            <div className="space-y-3 border-t border-border/60 p-3">
-              {children}
-            </div>
-          )}
-        </div>
-      )
-
-      return (
-        <>
-          <button
-            type="button"
-            className="mb-2 text-xs font-medium text-primary underline-offset-2 hover:underline"
-            onClick={() => setShowAdvanced((v) => !v)}>
-            {showAdvanced
-              ? t("settings:manageCharacters.advanced.hide", {
-                  defaultValue: "Hide advanced fields"
-                })
-              : t("settings:manageCharacters.advanced.show", {
-                  defaultValue: "Show advanced fields"
-                })}
-          </button>
-          {showAdvanced && (
-            <div className="space-y-3 rounded-md border border-dashed border-border p-3">
-              {renderSection(
-                "promptControl",
-                t("settings:manageCharacters.advanced.section.promptControl", {
-                  defaultValue: "Prompt control"
-                }),
-                <>
-                  <Form.Item
-                    name="personality"
-                    label={
-                      <span>
-                        {t("settings:manageCharacters.form.personality.label", {
-                          defaultValue: "Personality"
-                        })}
-                        <GenerateFieldButton
-                          isGenerating={generatingField === "personality"}
-                          disabled={isGenerating}
-                          onClick={() => handleGenerateField("personality", form, mode)}
-                        />
-                      </span>
-                    }
-                    help={t("settings:manageCharacters.form.personality.help", {
-                      defaultValue:
-                        "Personality: adjectives and traits injected into context to shape voice and behavior."
-                    })}>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  <Form.Item
-                    name="scenario"
-                    label={
-                      <span>
-                        {t("settings:manageCharacters.form.scenario.label", {
-                          defaultValue: "Scenario"
-                        })}
-                        <GenerateFieldButton
-                          isGenerating={generatingField === "scenario"}
-                          disabled={isGenerating}
-                          onClick={() => handleGenerateField("scenario", form, mode)}
-                        />
-                      </span>
-                    }>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  <Form.Item
-                    name="post_history_instructions"
-                    label={t("settings:manageCharacters.form.postHistory.label", {
-                      defaultValue: "Post-history instructions"
-                    })}>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  <Form.Item
-                    name="message_example"
-                    label={
-                      <span>
-                        {t(
-                          "settings:manageCharacters.form.messageExample.label",
-                          {
-                            defaultValue: "Message example"
-                          }
-                        )}
-                        <GenerateFieldButton
-                          isGenerating={generatingField === "message_example"}
-                          disabled={isGenerating}
-                          onClick={() => handleGenerateField("message_example", form, mode)}
-                        />
-                      </span>
-                    }>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  <Form.Item
-                    name="creator_notes"
-                    label={
-                      <span>
-                        {t(
-                          "settings:manageCharacters.form.creatorNotes.label",
-                          {
-                            defaultValue: "Creator notes"
-                          }
-                        )}
-                        <GenerateFieldButton
-                          isGenerating={generatingField === "creator_notes"}
-                          disabled={isGenerating}
-                          onClick={() => handleGenerateField("creator_notes", form, mode)}
-                        />
-                      </span>
-                    }>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  {renderAlternateGreetingsField(form, mode)}
-                  <Form.Item
-                    name="default_author_note"
-                    label={t(
-                      "settings:manageCharacters.form.defaultAuthorNote.label",
-                      { defaultValue: "Default author note" }
-                    )}
-                    help={t(
-                      "settings:manageCharacters.form.defaultAuthorNote.help",
-                      {
-                        defaultValue:
-                          "Optional default note used by character chats when the chat-level author note is empty."
-                      }
-                    )}>
-                    <Input.TextArea
-                      autoSize={{ minRows: 2, maxRows: 6 }}
-                      showCount
-                      maxLength={2000}
-                      placeholder={t(
-                        "settings:manageCharacters.form.defaultAuthorNote.placeholder",
-                        {
-                          defaultValue:
-                            "E.g., Keep replies concise, grounded, and in first-person voice."
-                        }
-                      )}
-                    />
-                  </Form.Item>
-                </>
-              )}
-
-              {renderSection(
-                "generationSettings",
-                t("settings:manageCharacters.advanced.section.generationSettings", {
-                  defaultValue: "Generation settings"
-                }),
-                <>
-                  <Form.Item
-                    name="generation_temperature"
-                    label={t(
-                      "settings:manageCharacters.form.generationTemperature.label",
-                      { defaultValue: "Generation temperature" }
-                    )}
-                    help={t(
-                      "settings:manageCharacters.form.generationTemperature.help",
-                      {
-                        defaultValue:
-                          "Optional per-character sampling temperature for character chat completions."
-                      }
-                    )}>
-                    <InputNumber min={0} max={2} step={0.01} className="w-full" />
-                  </Form.Item>
-                  <Form.Item
-                    name="generation_top_p"
-                    label={t(
-                      "settings:manageCharacters.form.generationTopP.label",
-                      { defaultValue: "Generation top_p" }
-                    )}
-                    help={t(
-                      "settings:manageCharacters.form.generationTopP.help",
-                      {
-                        defaultValue:
-                          "Optional per-character nucleus sampling value (0.0 to 1.0)."
-                      }
-                    )}>
-                    <InputNumber min={0} max={1} step={0.01} className="w-full" />
-                  </Form.Item>
-                  <Form.Item
-                    name="generation_repetition_penalty"
-                    label={t(
-                      "settings:manageCharacters.form.generationRepetitionPenalty.label",
-                      { defaultValue: "Repetition penalty" }
-                    )}
-                    help={t(
-                      "settings:manageCharacters.form.generationRepetitionPenalty.help",
-                      {
-                        defaultValue:
-                          "Optional per-character repetition penalty used for character chat completions."
-                      }
-                    )}>
-                    <InputNumber min={0} max={3} step={0.01} className="w-full" />
-                  </Form.Item>
-                  <Form.Item
-                    name="generation_stop_strings"
-                    label={t(
-                      "settings:manageCharacters.form.generationStopStrings.label",
-                      { defaultValue: "Stop strings" }
-                    )}
-                    help={t(
-                      "settings:manageCharacters.form.generationStopStrings.help",
-                      {
-                        defaultValue:
-                          "Optional stop sequences for this character. Use one per line."
-                      }
-                    )}>
-                    <Input.TextArea
-                      autoSize={{ minRows: 2, maxRows: 6 }}
-                      placeholder={t(
-                        "settings:manageCharacters.form.generationStopStrings.placeholder",
-                        {
-                          defaultValue:
-                            "Example:\n###\nEND"
-                        }
-                      )}
-                    />
-                  </Form.Item>
-                </>
-              )}
-
-              {renderSection(
-                "metadata",
-                t("settings:manageCharacters.advanced.section.metadata", {
-                  defaultValue: "Metadata"
-                }),
-                <>
-                  <Form.Item
-                    name="folder_id"
-                    label={t("settings:manageCharacters.folder.label", {
-                      defaultValue: "Folder"
-                    })}
-                    help={t("settings:manageCharacters.folder.help", {
-                      defaultValue:
-                        "Assign a single folder for organization. This does not change your visible tags."
-                    })}
-                  >
-                    <Select
-                      allowClear
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder={t(
-                        "settings:manageCharacters.folder.placeholder",
-                        {
-                          defaultValue: "Select folder"
-                        }
-                      )}
-                      options={characterFolderOptions.map((folder) => ({
-                        value: String(folder.id),
-                        label: folder.name
-                      }))}
-                      loading={characterFolderOptionsLoading}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    name="creator"
-                    label={t("settings:manageCharacters.form.creator.label", {
-                      defaultValue: "Creator"
-                    })}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    name="character_version"
-                    label={t(
-                      "settings:manageCharacters.form.characterVersion.label",
-                      {
-                        defaultValue: "Character version"
-                      }
-                    )}
-                    help={t(
-                      "settings:manageCharacters.form.characterVersion.help",
-                      {
-                        defaultValue: "Free text, e.g. \"1.0\" or \"2024-01\""
-                      }
-                    )}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    name="extensions"
-                    label={t("settings:manageCharacters.form.extensions.label", {
-                      defaultValue: "Extensions (JSON)"
-                    })}
-                    help={t(
-                      "settings:manageCharacters.form.extensions.help",
-                      {
-                        defaultValue:
-                          "Optional JSON object with additional metadata; invalid JSON will be sent as raw text."
-                      }
-                    )}>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
-                  </Form.Item>
-                  <Form.Item
-                    name="world_book_ids"
-                    label={t("settings:manageCharacters.worldBooks.editorTitle", {
-                      defaultValue: "World book attachments"
-                    })}
-                    help={t("settings:manageCharacters.worldBooks.editorDescription", {
-                      defaultValue:
-                        "Attach or detach world books used for character context injection."
-                    })}
-                  >
-                    <Select
-                      mode="multiple"
-                      allowClear
-                      optionFilterProp="label"
-                      placeholder={t(
-                        "settings:manageCharacters.worldBooks.attachPlaceholder",
-                        {
-                          defaultValue: "Select world book to attach"
-                        }
-                      )}
-                      options={worldBookOptions_local.map((worldBook) => ({
-                        value: worldBook.id,
-                        label: worldBook.name
-                      }))}
-                      loading={worldBookOptionsLoading_local}
-                    />
-                  </Form.Item>
-                  {mode === "edit" && worldBookEditCharacterNumericId == null && (
-                    <div className="-mt-2 text-xs text-text-muted">
-                      {t("settings:manageCharacters.worldBooks.unsyncedCharacter", {
-                        defaultValue:
-                          "Save this character to the server before attaching world books."
-                      })}
-                    </div>
-                  )}
-                  <div className="rounded-md border border-dashed border-border px-3 py-2">
-                    <p className="text-xs font-medium text-text">
-                      {t("settings:manageCharacters.form.moodImages.placeholderTitle", {
-                        defaultValue: "Mood images (coming soon)"
-                      })}
-                    </p>
-                    <p className="mt-1 text-xs text-text-muted">
-                      {t("settings:manageCharacters.form.moodImages.placeholderBody", {
-                        defaultValue:
-                          "Per-mood image variants are planned but not yet available in the character editor."
-                      })}
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </>
-      )
-    }
-
   const renderSharedCharacterForm = ({
     form,
     mode,
@@ -1550,72 +572,53 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     onValuesChange,
     onFinish
   }: SharedCharacterFormProps) => (
-    <Form
-      layout="vertical"
-      form={form}
-      initialValues={initialValues}
-      className="space-y-3"
-      onValuesChange={(_, allValues) => {
-        onValuesChange(allValues)
-      }}
-      onFinish={onFinish}>
-      {/* Field order: Name -> System Prompt (required) -> Greeting -> Description -> Tags -> Avatar */}
-      {renderNameField(form, mode)}
-      {renderSystemPromptField(form, mode)}
-      {renderGreetingField(form, mode)}
-      {renderDescriptionField(form, mode)}
-      {renderTagsField(form, mode)}
-      {renderAvatarField(form)}
-      {renderAdvancedFields(form, mode, worldBookFieldContext)}
-
-      {/* Preview toggle */}
-      <button
-        type="button"
-        className="mt-4 mb-2 flex items-center gap-1 text-xs font-medium text-text-muted hover:text-text"
-        onClick={onTogglePreview}>
-        {showPreview ? (
-          <ChevronUp className="w-4 h-4" />
-        ) : (
-          <ChevronDown className="w-4 h-4" />
-        )}
-        {showPreview
-          ? t("settings:manageCharacters.preview.hide", {
-              defaultValue: "Hide preview"
-            })
-          : t("settings:manageCharacters.preview.show", {
-              defaultValue: "Show preview"
-            })}
-      </button>
-
-      {/* Character Preview */}
-      {showPreview && (
-        <Form.Item noStyle shouldUpdate>
-          {() => {
-            const avatar = form.getFieldValue("avatar")
-            const avatarValues = avatar ? extractAvatarValues(avatar) : {}
-            return (
-              <CharacterPreview
-                name={form.getFieldValue("name")}
-                description={form.getFieldValue("description")}
-                avatar_url={avatarValues.avatar_url}
-                image_base64={avatarValues.image_base64}
-                system_prompt={form.getFieldValue("system_prompt")}
-                greeting={form.getFieldValue("greeting")}
-                tags={form.getFieldValue("tags")}
-              />
-            )
-          }}
-        </Form.Item>
-      )}
-
-      <Button
-        type="primary"
-        htmlType="submit"
-        loading={isSubmitting}
-        className={submitButtonClassName}>
-        {isSubmitting ? submitPendingLabel : submitIdleLabel}
-      </Button>
-    </Form>
+    <React.Suspense fallback={null}>
+      <LazyCharacterEditorForm
+        t={t}
+        form={form}
+        mode={mode}
+        initialValues={initialValues}
+        worldBookFieldContext={worldBookFieldContext}
+        isSubmitting={isSubmitting}
+        submitButtonClassName={submitButtonClassName}
+        submitPendingLabel={submitPendingLabel}
+        submitIdleLabel={submitIdleLabel}
+        showPreview={showPreview}
+        onTogglePreview={onTogglePreview}
+        onValuesChange={onValuesChange}
+        onFinish={onFinish}
+        generatingField={generatingField}
+        isGenerating={isGenerating}
+        handleGenerateField={handleGenerateField}
+        showSystemPromptExample={
+          mode === "create"
+            ? showCreateSystemPromptExample
+            : showEditSystemPromptExample
+        }
+        setShowSystemPromptExample={
+          mode === "create"
+            ? setShowCreateSystemPromptExample
+            : setShowEditSystemPromptExample
+        }
+        markModeDirty={markModeDirty}
+        popularTags={popularTags}
+        tagOptionsWithCounts={tagOptionsWithCounts}
+        characterFolderOptions={characterFolderOptions}
+        characterFolderOptionsLoading={characterFolderOptionsLoading}
+        showAdvanced={mode === "create" ? showCreateAdvanced : showEditAdvanced}
+        setShowAdvanced={
+          mode === "create" ? setShowCreateAdvanced : setShowEditAdvanced
+        }
+        advancedSections={
+          mode === "create" ? createAdvancedSections : editAdvancedSections
+        }
+        setAdvancedSections={
+          mode === "create" ? setCreateAdvancedSections : setEditAdvancedSections
+        }
+        createNameRef={createNameRef}
+        editNameRef={editNameRef}
+      />
+    </React.Suspense>
   )
 
   // Apply generated data to form
@@ -1775,6 +778,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     crossNavigationContext
   } = characterData
 
+  React.useEffect(() => {
+    if (hasPreloadedCharacterEditorRef.current || totalCharacters < 1) {
+      return
+    }
+
+    hasPreloadedCharacterEditorRef.current = true
+    const preloadTimer = window.setTimeout(() => {
+      void loadCharacterDialogs()
+      void loadCharacterEditorForm()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(preloadTimer)
+    }
+  }, [totalCharacters])
+
   // --- useCharacterCrud hook ---
   const crud = useCharacterCrud({
     t,
@@ -1856,6 +875,15 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     restoreCharacter
   } = crud
 
+  const handleEditWithPrefetch = React.useCallback(
+    (record: any, triggerRef?: HTMLButtonElement | null) => {
+      void loadCharacterDialogs()
+      void loadCharacterEditorForm()
+      handleEdit(record, triggerRef)
+    },
+    [handleEdit]
+  )
+
   React.useEffect(() => {
     if (open) {
       setTimeout(() => {
@@ -1933,6 +961,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     handleCopyComparisonSummary,
     handleExportComparisonSummary
   } = bulkOps
+  const shouldRenderCharacterDialogs =
+    importPreviewOpen ||
+    open ||
+    openEdit ||
+    conversationsOpen ||
+    Boolean(quickChatCharacter) ||
+    generationPreviewOpen ||
+    versionHistoryOpen ||
+    compareModalOpen ||
+    tagManagerOpen ||
+    bulkTagModalOpen
 
   return (
     <div className="characters-page" data-testid="characters-page">
@@ -1955,6 +994,25 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         onDrop={(event) => {
           void handleImportDrop(event)
         }}>
+      <div
+        ref={importButtonContainerRef}
+        data-testid="character-import-dropzone"
+        className="sr-only"
+      >
+        <Upload
+          accept={IMPORT_UPLOAD_ACCEPT}
+          multiple
+          showUploadList={false}
+          beforeUpload={handleImportUpload}
+          disabled={isImportBusy}
+        >
+          <button type="button" tabIndex={-1} aria-hidden="true">
+            {t("settings:manageCharacters.import.button", {
+              defaultValue: "Upload character"
+            })}
+          </button>
+        </Upload>
+      </div>
 
       <CharacterListToolbar
         t={t}
@@ -2003,6 +1061,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         shortcutSummaryText={shortcutSummaryText}
         isImportBusy={isImportBusy}
         triggerImportPicker={triggerImportPicker}
+        preloadCreateEditor={loadCharacterEditorForm}
         newButtonRef={newButtonRef}
         openCreateModal={openCreateModal}
         openTagManager={openTagManager}
@@ -2073,7 +1132,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         setBulkTagModalOpen={setBulkTagModalOpen}
         handleChat={handleChat}
         handleChatInNewTab={handleChatInNewTab}
-        handleEdit={handleEdit}
+        preloadCharacterEditor={loadCharacterEditorForm}
+        handleEdit={handleEditWithPrefetch}
         handleDuplicate={handleDuplicate}
         handleDelete={handleDelete}
         handleExport={handleExport}
@@ -2104,7 +1164,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         confirmDanger={confirmDanger}
       />
 
-      <CharacterDialogs
+      {shouldRenderCharacterDialogs ? (
+        <React.Suspense fallback={null}>
+          <LazyCharacterDialogs
         t={t}
         navigate={navigate}
         // import
@@ -2123,13 +1185,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         handleConfirmImportPreview={handleConfirmImportPreview}
         getImportQueueStateLabel={getImportQueueStateLabel}
         getImportQueueStateColor={getImportQueueStateColor}
-        importButtonContainerRef={importButtonContainerRef}
-        isImportBusy={isImportBusy}
-        handleImportUpload={handleImportUpload}
-        handleImportDragEnter={handleImportDragEnter}
-        handleImportDragLeave={handleImportDragLeave}
-        handleImportDragOver={handleImportDragOver}
-        handleImportDrop={handleImportDrop}
         // quick chat
         quickChatCharacter={quickChatCharacter}
         closeQuickChat={closeQuickChat}
@@ -2289,7 +1344,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         // shared form
         renderSharedCharacterForm={renderSharedCharacterForm}
         data={data}
-      />
+          />
+        </React.Suspense>
+      ) : null}
       </div>
     </div>
   )

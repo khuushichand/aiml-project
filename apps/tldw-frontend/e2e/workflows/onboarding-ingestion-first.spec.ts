@@ -7,7 +7,8 @@ import {
   assertNoCriticalErrors,
   skipIfServerUnavailable,
 } from "../utils/fixtures"
-import { TEST_CONFIG, waitForConnection } from "../utils/helpers"
+import { TEST_CONFIG, dismissConnectionModals, waitForConnection } from "../utils/helpers"
+import { openQuickIngestDialog } from "../utils/journey-helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -148,6 +149,15 @@ async function assertCardOrder(page: Page) {
   expect((mediaBox?.y ?? 0) < (chatBox?.y ?? 0)).toBeTruthy()
 }
 
+async function clearOnboardingBlockingOverlays(page: Page): Promise<void> {
+  const splash = page.getByRole("dialog", { name: "Splash screen" }).first()
+  if (await splash.isVisible().catch(() => false)) {
+    await splash.click({ force: true })
+    await splash.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
+  }
+  await dismissConnectionModals(page)
+}
+
 async function openOnboardingSuccessScreen(
   page: Page
 ): Promise<"connected-now" | "already-connected"> {
@@ -161,8 +171,16 @@ async function openOnboardingSuccessScreen(
     success.waitFor({ state: "visible", timeout: 25_000 }),
   ])
 
+  await clearOnboardingBlockingOverlays(page)
+
+  const alreadyConnected = await success.isVisible().catch(() => false)
+  if (alreadyConnected) {
+    return "already-connected"
+  }
+
   const needsConnect = await connect.isVisible().catch(() => false)
   if (needsConnect) {
+    await clearOnboardingBlockingOverlays(page)
     await connect.click()
   }
 
@@ -186,6 +204,7 @@ async function clickOnboardingCtaAndExpectRoute(
   let lastError: unknown
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    await clearOnboardingBlockingOverlays(page)
     await expect(cta).toBeVisible({ timeout: 15_000 })
     await cta.click()
     try {
@@ -205,9 +224,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
   test.beforeEach(async ({ authedPage }) => {
     ensureEvidenceDirectory()
     await authedPage.addInitScript((cfg) => {
-      try {
-        localStorage.setItem("ff_newOnboarding", JSON.stringify(true))
-      } catch {}
       try {
         localStorage.setItem(
           "tldwConfig",
@@ -314,19 +330,19 @@ test.describe("Onboarding Ingestion-First Journey", () => {
 
       await openOnboardingSuccessScreen(authedPage)
 
-      await authedPage
-        .getByTestId("onboarding-success-ingest")
-        .evaluate((el: HTMLElement) => el.click())
-      const quickIngestDialog = authedPage
-        .getByRole("dialog", { name: /quick ingest/i })
-        .first()
-      await expect(quickIngestDialog).toBeVisible({ timeout: 15_000 })
+      await clickOnboardingCtaAndExpectRoute(
+        authedPage,
+        "onboarding-success-ingest",
+        /\/media(?:[/?#].*)?$/
+      )
+      await waitForConnection(authedPage)
+      const quickIngestDialog = await openQuickIngestDialog(authedPage, 20_000)
       await captureStep(
         authedPage,
         evidenceRows,
         viewport.label,
         "05-quick-ingest-modal",
-        "Quick Ingest modal reachable from onboarding ingest CTA."
+        "Onboarding ingest CTA routes to Media, where Quick Ingest remains reachable."
       )
 
       const quickIngestClose = quickIngestDialog
@@ -339,7 +355,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await expect(authedPage).toHaveURL(/\/(?:[/?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/media(?:[/?#].*)?$/, {
         timeout: 20_000,
       })
       await openOnboardingSuccessScreen(authedPage)

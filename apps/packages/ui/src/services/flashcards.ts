@@ -13,6 +13,12 @@ const flashcardsClient = createResourceClient({
   basePath: "/api/v1/flashcards" as AllowedPath
 })
 
+const flashcardTagsClient = createResourceClient({
+  basePath: "/api/v1/flashcards/tags" as AllowedPath
+})
+
+export const FLASHCARD_GENERATION_TIMEOUT_MS = 120000
+
 export type DeckSchedulerSettings = {
   new_steps_minutes: number[]
   relearn_steps_minutes: number[]
@@ -120,11 +126,73 @@ export type StudyAssistantRespondResponse = {
   context_snapshot: Record<string, unknown>
 }
 
+export type StudyPackSourceType = "note" | "media" | "message"
+
+export type StudyPackSourceSelection = {
+  source_type: StudyPackSourceType
+  source_id: string
+  label?: string | null
+  source_title?: string | null
+  excerpt_text?: string | null
+  locator?: Record<string, unknown> | null
+}
+
+export type StudyPackCreateJobRequest = {
+  title: string
+  workspace_id?: string | null
+  deck_mode?: "new" | null
+  source_items: StudyPackSourceSelection[]
+}
+
+export type StudyPackStatus = "active" | "superseded"
+
+export type StudyPackJobApiStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export type StudyPackSummaryResponse = {
+  id: number
+  workspace_id?: string | null
+  title: string
+  deck_id?: number | null
+  source_bundle_json: Record<string, unknown>
+  generation_options_json?: Record<string, unknown> | null
+  status: StudyPackStatus
+  superseded_by_pack_id?: number | null
+  created_at?: string | null
+  last_modified?: string | null
+  deleted: boolean
+  client_id: string
+  version: number
+}
+
+export type StudyPackJobSummaryResponse = {
+  id: number
+  status: StudyPackJobApiStatus
+  domain: string
+  queue: string
+  job_type: string
+}
+
+export type StudyPackJobAcceptedResponse = {
+  job: StudyPackJobSummaryResponse
+}
+
+export type StudyPackJobStatusResponse = {
+  job: StudyPackJobSummaryResponse
+  study_pack?: StudyPackSummaryResponse | null
+  error?: string | null
+}
+
 // Minimal client types based on openapi.json
 export type Deck = {
   id: number
   name: string
   description?: string | null
+  workspace_id?: string | null
   deleted: boolean
   client_id: string
   version: number
@@ -171,6 +239,7 @@ export type Flashcard = {
 export type DeckUpdate = {
   name?: string | null
   description?: string | null
+  workspace_id?: string | null
   scheduler_type?: DeckSchedulerType | null
   scheduler_settings?: DeckSchedulerSettingsEnvelopeUpdate | null
   expected_version?: number | null
@@ -179,6 +248,7 @@ export type DeckUpdate = {
 export type DeckCreateInput = {
   name: string
   description?: string | null
+  workspace_id?: string | null
   scheduler_type?: DeckSchedulerType | null
   scheduler_settings?: DeckSchedulerSettingsEnvelope | null
 }
@@ -287,11 +357,35 @@ export type FlashcardReviewResponse = {
   step_index?: number | null
   suspended_reason?: Flashcard["suspended_reason"]
   next_intervals: FlashcardIntervalPreviews
+  review_session_id?: number | null
 }
 
 export type FlashcardNextReviewResponse = {
   card?: Flashcard | null
   selection_reason?: "learning_due" | "review_due" | "new" | "none" | null
+}
+
+export type FlashcardReviewSessionSummary = {
+  id: number
+  deck_id?: number | null
+  review_mode: string
+  tag_filter?: string | null
+  scope_key: string
+  status: string
+  started_at?: string | null
+  last_activity_at?: string | null
+  completed_at?: string | null
+  client_id: string
+}
+
+export type FlashcardTagSuggestionItem = {
+  tag: string
+  count: number
+}
+
+export type FlashcardTagSuggestionsResponse = {
+  items: FlashcardTagSuggestionItem[]
+  count: number
 }
 
 export type FlashcardsImportRequest = {
@@ -308,6 +402,12 @@ export type FlashcardsImportJsonRequest = {
 export type FlashcardsImportApkgRequest = {
   bytes: Uint8Array
   filename?: string | null
+}
+
+export type DeckListParams = {
+  workspace_id?: string | null
+  include_workspace_items?: boolean | null
+  signal?: AbortSignal
 }
 
 export type StructuredQaImportPreviewRequest = {
@@ -350,7 +450,7 @@ export type FlashcardsExportParams = {
   deck_id?: number | null
   tag?: string | null
   q?: string | null
-  format?: "csv" | "apkg" | null
+  format?: "csv" | "apkg" | "json" | null
   include_reverse?: boolean | null
   delimiter?: string | null
   include_header?: boolean | null
@@ -378,8 +478,11 @@ export type FlashcardAnalyticsSummary = {
 }
 
 // Decks
-export async function listDecks(options?: { signal?: AbortSignal }): Promise<Deck[]> {
-  return await decksClient.list<Deck[]>(undefined, {
+export async function listDecks(options?: DeckListParams): Promise<Deck[]> {
+  return await decksClient.list<Deck[]>({
+    workspace_id: options?.workspace_id,
+    include_workspace_items: options?.include_workspace_items ?? false
+  }, {
     abortSignal: options?.signal
   })
 }
@@ -409,6 +512,8 @@ export async function listFlashcards(params: {
   tag?: string | null
   due_status?: "new" | "learning" | "due" | "all" | null
   q?: string | null
+  workspace_id?: string | null
+  include_workspace_items?: boolean | null
   limit?: number
   offset?: number
   order_by?: "due_at" | "created_at" | null
@@ -418,9 +523,26 @@ export async function listFlashcards(params: {
     tag: params.tag,
     due_status: params.due_status,
     q: params.q,
+    workspace_id: params.workspace_id,
+    include_workspace_items: params.include_workspace_items ?? false,
     limit: params.limit,
     offset: params.offset,
     order_by: params.order_by
+  })
+}
+
+export async function listFlashcardTagSuggestions(params?: {
+  q?: string | null
+  limit?: number | null
+  signal?: AbortSignal
+}): Promise<FlashcardTagSuggestionsResponse> {
+  const normalizedQuery = params?.q?.trim()
+
+  return await flashcardTagsClient.list<FlashcardTagSuggestionsResponse>({
+    ...(normalizedQuery ? { q: normalizedQuery } : {}),
+    limit: params?.limit
+  }, {
+    abortSignal: params?.signal
   })
 }
 
@@ -434,13 +556,15 @@ export async function createFlashcard(
 }
 
 export async function createFlashcardsBulk(
-  input: FlashcardCreate[]
+  input: FlashcardCreate[],
+  options?: { signal?: AbortSignal }
 ): Promise<FlashcardListResponse> {
   return await bgRequest<FlashcardListResponse, AllowedPath, "POST">({
     path: "/api/v1/flashcards/bulk",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: input
+    body: input,
+    abortSignal: options?.signal
   })
 }
 
@@ -517,14 +641,55 @@ export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<Fl
 }
 
 export async function getNextReviewCard(
-  deck_id?: number | null
+  deck_id?: number | null,
+  params?: {
+    workspace_id?: string | null
+    include_workspace_items?: boolean | null
+  }
 ): Promise<FlashcardNextReviewResponse> {
   const query = buildQuery({
-    deck_id
+    deck_id,
+    workspace_id: params?.workspace_id,
+    include_workspace_items: params?.include_workspace_items ?? false
   })
   return await bgRequest<FlashcardNextReviewResponse, AllowedPath, "GET">({
     path: `/api/v1/flashcards/review/next${query}` as AllowedPath,
     method: "GET"
+  })
+}
+
+export async function listRecentFlashcardReviewSessions(params?: {
+  deck_id?: number | null
+  scope_key?: string | null
+  status?: string | null
+  limit?: number | null
+  signal?: AbortSignal
+}): Promise<FlashcardReviewSessionSummary[]> {
+  const query = buildQuery({
+    deck_id: params?.deck_id,
+    scope_key: params?.scope_key,
+    status: params?.status,
+    limit: params?.limit ?? 20
+  })
+  return await bgRequest<FlashcardReviewSessionSummary[], AllowedPath, "GET">({
+    path: `/api/v1/flashcards/review-sessions${query}` as any,
+    method: "GET",
+    abortSignal: params?.signal
+  })
+}
+
+export async function endFlashcardReviewSession(
+  reviewSessionId: number,
+  options?: { signal?: AbortSignal }
+): Promise<FlashcardReviewSessionSummary> {
+  return await bgRequest<FlashcardReviewSessionSummary, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/review-sessions/end" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      review_session_id: reviewSessionId
+    },
+    abortSignal: options?.signal
   })
 }
 
@@ -535,9 +700,93 @@ export async function generateFlashcards(
     path: "/api/v1/flashcards/generate",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: input
+    body: input,
+    timeoutMs: FLASHCARD_GENERATION_TIMEOUT_MS
   })
 }
+
+const sanitizeStudyPackSourceItem = (
+  item: StudyPackSourceSelection
+): StudyPackSourceSelection => {
+  const sanitized: StudyPackSourceSelection = {
+    source_type: item.source_type,
+    source_id: item.source_id
+  }
+
+  const label = typeof item.label === "string" ? item.label.trim() : ""
+  const sourceTitle = typeof item.source_title === "string" ? item.source_title.trim() : ""
+  const excerptText = typeof item.excerpt_text === "string" ? item.excerpt_text.trim() : ""
+
+  if (label) sanitized.label = label
+  else if (sourceTitle) sanitized.source_title = sourceTitle
+
+  if (excerptText) sanitized.excerpt_text = excerptText
+  if (item.locator && typeof item.locator === "object" && !Array.isArray(item.locator)) {
+    sanitized.locator = item.locator
+  }
+
+  return sanitized
+}
+
+const sanitizeStudyPackRequest = (
+  request: StudyPackCreateJobRequest
+): Omit<StudyPackCreateJobRequest, "source_items"> & {
+  deck_mode: "new"
+  source_items: StudyPackSourceSelection[]
+} => ({
+  title: request.title,
+  workspace_id: request.workspace_id,
+  deck_mode: "new",
+  source_items: request.source_items.map(sanitizeStudyPackSourceItem)
+})
+
+export async function createStudyPackJob(
+  request: StudyPackCreateJobRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackJobAcceptedResponse> {
+  return await bgRequest<StudyPackJobAcceptedResponse, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/study-packs/jobs",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: sanitizeStudyPackRequest(request),
+    abortSignal: options?.signal
+  })
+}
+
+export async function getStudyPackJob(
+  jobId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackJobStatusResponse> {
+  return await bgRequest<StudyPackJobStatusResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/study-packs/jobs/${jobId}` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function getStudyPack(
+  packId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackSummaryResponse> {
+  return await bgRequest<StudyPackSummaryResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/study-packs/${packId}` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function regenerateStudyPackJob(
+  packId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyPackJobAcceptedResponse> {
+  return await bgRequest<StudyPackJobAcceptedResponse, AllowedPath, "POST">({
+    path: `/api/v1/flashcards/study-packs/${packId}/regenerate` as AllowedPath,
+    method: "POST",
+    abortSignal: options?.signal
+  })
+}
+
+export const regenerateStudyPack = regenerateStudyPackJob
 
 // Import
 export async function getFlashcardsImportLimits(): Promise<any> {
@@ -648,10 +897,14 @@ export async function importFlashcardsApkg(
 
 export async function getFlashcardsAnalyticsSummary(params?: {
   deck_id?: number | null
+  workspace_id?: string | null
+  include_workspace_items?: boolean | null
   signal?: AbortSignal
 }): Promise<FlashcardAnalyticsSummary> {
   const query = buildQuery({
-    deck_id: params?.deck_id
+    deck_id: params?.deck_id,
+    workspace_id: params?.workspace_id,
+    include_workspace_items: params?.include_workspace_items ?? false
   })
   const path = `/api/v1/flashcards/analytics/summary${query}` as AllowedPath
   return await bgRequest<FlashcardAnalyticsSummary, AllowedPath, "GET">({

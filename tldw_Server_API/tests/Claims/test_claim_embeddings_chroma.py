@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from tldw_Server_API.app.core.Claims_Extraction import ingestion_claims
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 

@@ -6,6 +6,14 @@
 - [TTS Providers Getting Started](../User_Guides/WebUI_Extension/TTS_Getting_Started.md) — provider selection and first successful synthesis.
 - [TTS Provider Setup Guide](../User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md) — runbook index for deep provider setup/tuning.
 
+PocketTTS note:
+
+- `pocket_tts` is the Python/ONNX runtime.
+- `pocket_tts_cpp` is the compiled native runtime.
+- Both use the same public request fields and the same `/api/v1/audio/speech` route.
+- For either provider, voice cloning requests must supply either a direct base64 `voice_reference` or `voice: "custom:<voice_id>"` for a stored reference.
+- `pocket_tts_cpp` only exposes streaming when the local CLI probe proves the install is truly incremental; otherwise the adapter fails closed.
+- This page documents public request inputs only. Provider-internal `extra_params` keys are intentionally omitted.
 
 1. Client pattern (Python)
 

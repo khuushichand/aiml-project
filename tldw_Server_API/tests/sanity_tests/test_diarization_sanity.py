@@ -119,3 +119,78 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
 
     model, utils = vlib._lazy_import_silero_vad()
     assert model is None and utils is None
+
+
+def test_lazy_import_silero_vad_uses_local_source_for_local_repo(monkeypatch, tmp_path):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
+
+    monkeypatch.setattr(vlib, "_silero_vad_model", None)
+    monkeypatch.setattr(vlib, "_silero_vad_utils", None)
+    monkeypatch.setattr(vlib, "_torch_available", lambda: True)
+
+    repo_root = tmp_path / "repo"
+    models_dir = repo_root / "models"
+    local_repo = models_dir / "snakers4_silero-vad_master"
+    hubconf = local_repo / "hubconf.py"
+    hubconf.parent.mkdir(parents=True, exist_ok=True)
+    hubconf.write_text("# fake hubconf\n", encoding="utf-8")
+
+    calls = []
+
+    class _FakeHub:
+        def set_dir(self, path):
+            self._dir = path
+
+        def load(self, *args, **kwargs):
+            calls.append({"args": args, "kwargs": kwargs})
+            return (
+                object(),
+                (
+                    lambda *a, **k: [],
+                    lambda *a, **k: None,
+                    lambda *a, **k: None,
+                    type("FakeVADIterator", (), {}),
+                    lambda *a, **k: b"",
+                ),
+            )
+
+    class _FakeTorch:
+        def __init__(self):
+            self.hub = _FakeHub()
+
+    monkeypatch.setattr(vlib, "_lazy_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(vlib, "_repo_root_with_models", lambda: repo_root)
+
+    model, utils = vlib._lazy_import_silero_vad()
+
+    assert model is not None
+    assert isinstance(utils, tuple)
+    assert calls, "Expected torch.hub.load to be called"
+    assert calls[0]["kwargs"]["repo_or_dir"] == str(local_repo)
+    assert calls[0]["kwargs"]["source"] == "local"
+
+
+def test_lazy_import_silero_vad_reports_missing_torchaudio(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
+
+    monkeypatch.setattr(vlib, "_silero_vad_model", None)
+    monkeypatch.setattr(vlib, "_silero_vad_utils", None)
+    monkeypatch.setattr(vlib, "_torch_available", lambda: True)
+
+    class _FakeHub:
+        def set_dir(self, path):
+            self._dir = path
+
+        def load(self, *args, **kwargs):
+            raise ModuleNotFoundError("No module named 'torchaudio'")
+
+    class _FakeTorch:
+        def __init__(self):
+            self.hub = _FakeHub()
+
+    monkeypatch.setattr(vlib, "_lazy_import_torch", lambda: _FakeTorch())
+
+    model, utils = vlib._lazy_import_silero_vad()
+
+    assert model is None and utils is None
+    assert "torchaudio" in str(vlib.get_silero_vad_unavailable_reason() or "")

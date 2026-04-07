@@ -74,3 +74,25 @@ def test_setup_audio_verification_endpoint_persists_readiness(mocker, tmp_path):
     assert readiness.status_code == 200
     assert readiness.json()["status"] == "ready"
     assert readiness.json()["selected_resource_profile"] == "balanced"
+
+
+def test_setup_audio_verification_masks_internal_failures(mocker):
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        return_value={"enabled": True, "needs_setup": False},
+    )
+    mocker.patch.object(
+        setup_endpoint.install_manager,
+        "verify_audio_bundle_async",
+        new=AsyncMock(side_effect=RuntimeError("verification internals leaked")),
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/verify",
+            json={"bundle_id": "cpu_local", "resource_profile": "balanced"},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Failed to verify audio bundle."

@@ -26,6 +26,10 @@ type QASearchTabProps = {
   onStrategyChange: (strategy: "standard" | "agentic") => void
   selectedSources: RagSource[]
   onSourcesChange: (sources: RagSource[]) => void
+  generationProvider: string | null
+  onGenerationProviderChange: (provider: string | null) => void
+  generationModel: string
+  onGenerationModelChange: (model: string) => void
 
   // Results
   response: QASearchResponse | null
@@ -66,6 +70,10 @@ export const QASearchTab: React.FC<QASearchTabProps> = ({
   onStrategyChange,
   selectedSources,
   onSourcesChange,
+  generationProvider,
+  onGenerationProviderChange,
+  generationModel,
+  onGenerationModelChange,
   response,
   hasAttemptedSearch,
   timedOut,
@@ -108,6 +116,10 @@ export const QASearchTab: React.FC<QASearchTabProps> = ({
         onStrategyChange={onStrategyChange}
         selectedSources={selectedSources}
         onSourcesChange={onSourcesChange}
+        generationProvider={generationProvider}
+        onGenerationProviderChange={onGenerationProviderChange}
+        generationModel={generationModel}
+        onGenerationModelChange={onGenerationModelChange}
         disabled={!isConnected}
       />
 

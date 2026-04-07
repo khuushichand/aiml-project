@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useStorage } from '@plasmohq/storage/hook'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { setSetting } from '@/services/settings/registry'
+import { bgRequest } from '@/services/background-proxy'
 import {
   LAST_MEDIA_ID_SETTING,
   MEDIA_REVIEW_SELECTION_SETTING

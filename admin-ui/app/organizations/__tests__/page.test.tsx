@@ -7,6 +7,7 @@ import OrganizationsPage from '../page';
 import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 const setPageMock = vi.hoisted(() => vi.fn());
@@ -32,6 +33,10 @@ vi.mock('@/components/ui/confirm-dialog', () => ({
   useConfirm: () => confirmMock,
 }));
 
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
+}));
+
 vi.mock('@/components/ui/toast', () => ({
   useToast: () => ({
     success: toastSuccessMock,
@@ -53,6 +58,7 @@ vi.mock('@/lib/use-url-state', () => ({
 vi.mock('@/lib/api-client', () => ({
   api: {
     getOrganizations: vi.fn(),
+    getSubscriptions: vi.fn(),
     createOrganization: vi.fn(),
     updateOrganization: vi.fn(),
     getOrgMembers: vi.fn(),
@@ -62,6 +68,7 @@ vi.mock('@/lib/api-client', () => ({
 
 type ApiMock = {
   getOrganizations: ReturnType<typeof vi.fn>;
+  getSubscriptions: ReturnType<typeof vi.fn>;
   createOrganization: ReturnType<typeof vi.fn>;
   updateOrganization: ReturnType<typeof vi.fn>;
   getOrgMembers: ReturnType<typeof vi.fn>;
@@ -72,6 +79,7 @@ const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
   confirmMock.mockResolvedValue(true);
+  privilegedActionMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
 
@@ -86,6 +94,7 @@ beforeEach(() => {
     ],
     total: 1,
   });
+  apiMock.getSubscriptions.mockResolvedValue([]);
   apiMock.getOrgMembers.mockResolvedValue([
     { user_id: 11 },
     { user_id: 12 },
@@ -132,7 +141,7 @@ describe('OrganizationsPage critical CRUD controls', () => {
     await user.click(within(row as HTMLElement).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           title: 'Delete organization',
           message: expect.stringContaining('This organization has 2 members'),

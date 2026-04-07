@@ -3,7 +3,10 @@ import { act, renderHook } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useReadingProgressAutoSave } from "@/hooks/document-workspace/useReadingProgress"
+import {
+  useReadingProgressAutoSave,
+  useReadingProgressSaveOnClose,
+} from "@/hooks/document-workspace/useReadingProgress"
 import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 
@@ -115,5 +118,73 @@ describe("useReadingProgressAutoSave", () => {
     })
 
     expect(mocks.updateReadingProgress).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("useReadingProgressSaveOnClose", () => {
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  const originalNavigator = globalThis.navigator
+  let initialConnectionStore: ReturnType<typeof useConnectionStore.getState>
+  let initialWorkspaceStore: ReturnType<typeof useDocumentWorkspaceStore.getState>
+
+  beforeEach(() => {
+    initialConnectionStore = useConnectionStore.getState()
+    initialWorkspaceStore = useDocumentWorkspaceStore.getState()
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    useConnectionStore.setState({
+      state: {
+        ...initialConnectionStore.state,
+        serverUrl: "http://127.0.0.1:8000",
+      },
+    })
+    useDocumentWorkspaceStore.setState({
+      ...initialWorkspaceStore,
+      currentPage: 3,
+      totalPages: 12,
+      zoomLevel: 125,
+      viewMode: "single",
+      currentCfi: null,
+      currentPercentage: 25,
+    })
+  })
+
+  afterEach(() => {
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+    Object.defineProperty(globalThis, "navigator", {
+      value: originalNavigator,
+      configurable: true,
+    })
+    useConnectionStore.setState(initialConnectionStore, true)
+    useDocumentWorkspaceStore.setState(initialWorkspaceStore, true)
+    vi.restoreAllMocks()
+  })
+
+  it("uses the webui origin for quickstart beacon saves", () => {
+    const sendBeacon = vi.fn().mockReturnValue(true)
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        ...originalNavigator,
+        sendBeacon,
+      },
+      configurable: true,
+    })
+
+    const forceSave = vi.fn()
+    renderHook(() => useReadingProgressSaveOnClose(42, forceSave))
+
+    act(() => {
+      window.dispatchEvent(new Event("beforeunload"))
+    })
+
+    expect(sendBeacon).toHaveBeenCalledWith(
+      "/api/v1/media/42/progress",
+      expect.any(Blob)
+    )
+    expect(forceSave).not.toHaveBeenCalled()
   })
 })

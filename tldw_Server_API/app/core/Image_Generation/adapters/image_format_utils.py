@@ -6,9 +6,11 @@ import base64
 import binascii
 import contextlib
 import io
+from pathlib import Path
 from typing import Any
 
 from tldw_Server_API.app.core.http_client import fetch
+from tldw_Server_API.app.core.Image_Generation.capabilities import ResolvedReferenceImage
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageGenerationError
 
 try:
@@ -58,6 +60,27 @@ def maybe_decode_base64_image(encoded: str | None) -> bytes | None:
         return base64.b64decode(raw, validate=True)
     except (binascii.Error, TypeError, ValueError):
         return None
+
+
+def reference_image_data_url(reference_image: ResolvedReferenceImage) -> str:
+    """Encode a normalized reference image into a Model Studio-compatible data URL."""
+
+    content = reference_image.content
+    if content is None:
+        if not reference_image.temp_path:
+            raise ImageGenerationError("invalid reference image data")
+        try:
+            content = Path(reference_image.temp_path).read_bytes()
+        except Exception as exc:
+            raise ImageGenerationError("invalid reference image data") from exc
+    if not content:
+        raise ImageGenerationError("invalid reference image data")
+
+    mime_type = (reference_image.mime_type or "application/octet-stream").split(";", 1)[0].strip().lower()
+    if not mime_type:
+        mime_type = "application/octet-stream"
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def format_from_content_type(content_type: str) -> str | None:
@@ -164,4 +187,3 @@ def fetch_image_bytes(
     with contextlib.suppress(Exception):
         response.close()
     return content, content_type.split(";", 1)[0].strip().lower()
-

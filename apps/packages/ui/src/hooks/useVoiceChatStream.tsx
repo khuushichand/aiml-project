@@ -1,10 +1,21 @@
 import React from "react"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
 import { useSttSettings } from "@/hooks/useSttSettings"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
 import { useMicStream } from "@/hooks/useMicStream"
+import {
+  buildVoiceConversationPreflight,
+  normalizeVoiceConversationRuntimeError
+} from "@/services/tldw/voice-conversation"
 import { arrayBufferToBase64 } from "@/utils/compress"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TLDW_TTS_VOICE,
+  DEFAULT_TTS_PROVIDER
+} from "@/services/tts"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
@@ -108,10 +119,19 @@ export const useVoiceChatStream = ({
   } = useVoiceChatSettings()
   const [speechToTextLanguage] = useStorage("speechToTextLanguage", "en-US")
   const { selectedModel } = useSelectedModel()
+  const {
+    preference: liveVoiceSourcePreference,
+    isLoading: liveVoiceSourceLoading
+  } =
+    useAudioSourcePreferences("live_voice")
+  const {
+    devices: audioInputDevices,
+    isSettled: hasAudioCatalogSettled
+  } = useAudioSourceCatalog()
 
-  const [ttsProvider] = useStorage("ttsProvider", "browser")
-  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
-  const [tldwTtsVoice] = useStorage("tldwTtsVoice", "af_heart")
+  const [ttsProvider] = useStorage("ttsProvider", DEFAULT_TTS_PROVIDER)
+  const [tldwTtsModel] = useStorage("tldwTtsModel", DEFAULT_TLDW_TTS_MODEL)
+  const [tldwTtsVoice] = useStorage("tldwTtsVoice", DEFAULT_TLDW_TTS_VOICE)
   const [tldwTtsResponseFormat] = useStorage("tldwTtsResponseFormat", "mp3")
   const [tldwTtsSpeed] = useStorage("tldwTtsSpeed", 1)
   const [openAITTSModel] = useStorage("openAITTSModel", "tts-1")
@@ -127,6 +147,9 @@ export const useVoiceChatStream = ({
   const pendingResumeRef = React.useRef(false)
   const resolvedTtsFormatRef = React.useRef<string | null>(null)
   const errorRef = React.useRef<string | null>(null)
+  const startAttemptRef = React.useRef(0)
+  const didRunActiveEffectRef = React.useRef(false)
+  const manualSessionRef = React.useRef(false)
 
   const [state, setState] = React.useState<VoiceChatState>("idle")
   const [error, setError] = React.useState<string | null>(null)
@@ -177,6 +200,11 @@ export const useVoiceChatStream = ({
     callbacksRef.current.onStateChange?.(next)
   }, [])
 
+  const isStartAttemptCurrent = React.useCallback(
+    (attemptId: number) => startAttemptRef.current === attemptId,
+    []
+  )
+
   const {
     start: audioStart,
     append: audioAppend,
@@ -205,67 +233,40 @@ export const useVoiceChatStream = ({
     () => normalizeTriggerList(voiceChatTriggerPhrases),
     [voiceChatTriggerPhrases]
   )
-
-  const resolveTtsFormat = React.useCallback((): string => {
-    const preferred = String(tldwTtsResponseFormat || "mp3").toLowerCase()
-    if (!isPlayableFormat(preferred)) return "mp3"
-    if (voiceChatTtsMode === "stream" && preferred === "pcm") return "mp3"
-    return preferred
-  }, [tldwTtsResponseFormat, voiceChatTtsMode])
-
-  const buildTtsConfig = React.useCallback(() => {
-    const provider = String(ttsProvider || "").toLowerCase()
-    let model = ""
-    let voice = ""
-    let speed = 1
-    let format = "mp3"
-
-    if (!provider || provider === "browser") {
-      model = tldwTtsModel
-      voice = tldwTtsVoice
-      speed = tldwTtsSpeed
-      format = resolveTtsFormat()
-    } else if (provider === "tldw") {
-      model = tldwTtsModel
-      voice = tldwTtsVoice
-      speed = tldwTtsSpeed
-      format = resolveTtsFormat()
-    } else if (provider === "openai") {
-      model = openAITTSModel
-      voice = openAITTSVoice
-      speed = speechPlaybackSpeed
-      format = "mp3"
-    } else if (provider === "elevenlabs") {
-      model = elevenLabsModel
-      voice = elevenLabsVoiceId
-      speed = speechPlaybackSpeed
-      format = "mp3"
+  const liveVoiceSourceReady = hasAudioCatalogSettled && !liveVoiceSourceLoading
+  const liveVoiceResolvedSource = React.useMemo(() => {
+    if (!liveVoiceSourceReady) {
+      return liveVoiceSourcePreference
     }
 
-    const resolvedFormat = format || "mp3"
-    resolvedTtsFormatRef.current = resolvedFormat
+    if (liveVoiceSourcePreference.sourceKind !== "mic_device") {
+      return liveVoiceSourcePreference
+    }
+
+    const requestedDeviceId = String(liveVoiceSourcePreference.deviceId || "").trim()
+    const deviceStillAvailable = audioInputDevices.some(
+      (device) => device.deviceId === requestedDeviceId
+    )
+
+    if (deviceStillAvailable) {
+      return liveVoiceSourcePreference
+    }
 
     return {
-      provider: provider && provider !== "browser" ? provider : undefined,
-      model,
-      voice,
-      speed,
-      format: resolvedFormat
+      featureGroup: "live_voice" as const,
+      sourceKind: "default_mic" as const,
+      deviceId: null,
+      lastKnownLabel: null
     }
-  }, [
-    ttsProvider,
-    tldwTtsModel,
-    tldwTtsVoice,
-    tldwTtsSpeed,
-    openAITTSModel,
-    openAITTSVoice,
-    elevenLabsModel,
-    elevenLabsVoiceId,
-    speechPlaybackSpeed,
-    resolveTtsFormat
-  ])
+  }, [audioInputDevices, liveVoiceSourcePreference, liveVoiceSourceReady])
+  const liveVoiceDeviceId =
+    liveVoiceResolvedSource.sourceKind === "mic_device"
+      ? liveVoiceResolvedSource.deviceId
+      : null
 
   const cleanupSession = React.useCallback(() => {
+    manualSessionRef.current = false
+    startAttemptRef.current += 1
     try {
       micStop()
     } catch {}
@@ -281,7 +282,9 @@ export const useVoiceChatStream = ({
   }, [audioStop, micStop])
 
   const stop = React.useCallback(() => {
+    manualSessionRef.current = false
     const ws = wsRef.current
+    startAttemptRef.current += 1
     closingRef.current = Boolean(ws)
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
@@ -307,6 +310,15 @@ export const useVoiceChatStream = ({
     },
     [stop, updateState]
   )
+
+  const normalizeStartupErrorMessage = React.useCallback((error: unknown): string => {
+    const message =
+      error instanceof Error ? String(error.message || "").trim() : String(error || "").trim()
+    if (message === "Voice conversation TTS configuration is incomplete") {
+      return "Voice conversation needs a server TTS model and voice."
+    }
+    return message || "Voice chat failed to start"
+  }, [])
 
   const sendCommit = React.useCallback(() => {
     const ws = wsRef.current
@@ -417,7 +429,11 @@ export const useVoiceChatStream = ({
   )
 
   const start = React.useCallback(async () => {
+    if (!liveVoiceSourceReady) return
     if (connectingRef.current || wsRef.current) return
+    manualSessionRef.current = !activeRef.current
+    const attemptId = startAttemptRef.current + 1
+    startAttemptRef.current = attemptId
     connectingRef.current = true
     errorRef.current = null
     setError(null)
@@ -425,21 +441,39 @@ export const useVoiceChatStream = ({
 
     try {
       const config = await tldwClient.getConfig()
-      const serverUrl = String(config?.serverUrl || "").trim()
-      if (!serverUrl) {
-        throw new Error("tldw server not configured")
-      }
       const token =
         config?.authMode === "multi-user"
           ? String(config?.accessToken || "").trim()
           : String(config?.apiKey || "").trim()
-      if (!token) {
-        throw new Error("Not authenticated. Configure tldw credentials in Settings.")
+      const requestedModel = String(voiceChatModel || selectedModel || "").trim()
+      const preflight = await buildVoiceConversationPreflight({
+        serverUrl: String(config?.serverUrl || ""),
+        token,
+        requestedModel,
+        ttsProvider,
+        tldwTtsModel,
+        tldwTtsVoice,
+        tldwTtsSpeed,
+        tldwTtsResponseFormat,
+        openAITTSModel,
+        openAITTSVoice,
+        elevenLabsModel,
+        elevenLabsVoiceId,
+        speechPlaybackSpeed,
+        voiceChatTtsMode,
+        resolveProvider: ({ modelId }) =>
+          resolveApiProviderForModel({
+            modelId
+          })
+      })
+      if (!isStartAttemptCurrent(attemptId)) {
+        return
       }
+      resolvedTtsFormatRef.current = isPlayableFormat(preflight.tts.format)
+        ? preflight.tts.format
+        : "mp3"
 
-      const base = serverUrl.replace(/^http/i, "ws").replace(/\/$/, "")
-      const url = `${base}/api/v1/audio/chat/stream?token=${encodeURIComponent(token)}`
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(preflight.websocketUrl)
       ws.binaryType = "arraybuffer"
       wsRef.current = ws
 
@@ -463,7 +497,9 @@ export const useVoiceChatStream = ({
         closingRef.current = false
         cleanupSession()
         if (!wasClosing && activeRef.current && !errorRef.current) {
-          const message = "Voice chat disconnected"
+          const message = normalizeVoiceConversationRuntimeError(
+            new Error("websocket disconnected")
+          ).message
           errorRef.current = message
           setError(message)
           callbacksRef.current.onError?.(message)
@@ -476,12 +512,12 @@ export const useVoiceChatStream = ({
       ws.onopen = () => {
         void (async () => {
           try {
-            const model = String(voiceChatModel || selectedModel || "").trim()
-            const llmProvider = await resolveApiProviderForModel({
-              modelId: model
-            })
-            const ttsConfig = buildTtsConfig()
-
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
             const sttConfig: Record<string, any> = {
               enable_vad: true,
               min_silence_ms: voiceChatPauseMs,
@@ -536,36 +572,63 @@ export const useVoiceChatStream = ({
               JSON.stringify({
                 type: "config",
                 stt: sttConfig,
-                llm: {
-                  model,
-                  provider: llmProvider
-                },
-                tts: ttsConfig
+                llm: preflight.llm,
+                tts: preflight.tts
               })
             )
 
-            await micStart()
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
+
+            await micStart({ deviceId: liveVoiceDeviceId })
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                micStop()
+              } catch {}
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
             setConnected(true)
             connectingRef.current = false
             updateState("listening")
           } catch (err: any) {
-            handleError(err?.message || "Voice chat failed to start")
+            handleError(normalizeStartupErrorMessage(err))
           }
         })()
       }
     } catch (err: any) {
-      handleError(err?.message || "Unable to connect to voice chat")
+      handleError(normalizeStartupErrorMessage(err))
     }
   }, [
     audioAppend,
-    buildTtsConfig,
     cleanupSession,
     handleError,
     handleMessage,
+    isStartAttemptCurrent,
     micStart,
+    micStop,
+    normalizeStartupErrorMessage,
+    normalizeVoiceConversationRuntimeError,
+    ttsProvider,
+    tldwTtsModel,
+    tldwTtsVoice,
+    tldwTtsSpeed,
+    tldwTtsResponseFormat,
+    openAITTSModel,
+    openAITTSVoice,
+    elevenLabsModel,
+    elevenLabsVoiceId,
+    speechPlaybackSpeed,
     resolveApiProviderForModel,
     selectedModel,
     speechToTextLanguage,
+    liveVoiceDeviceId,
     sttSettings.model,
     sttSettings.temperature,
     sttSettings.task,
@@ -579,45 +642,78 @@ export const useVoiceChatStream = ({
     sttSettings.segUtteranceExpansionWidth,
     sttSettings.segEmbeddingsProvider,
     sttSettings.segEmbeddingsModel,
+    liveVoiceSourceReady,
     updateState,
     voiceChatModel,
-    voiceChatPauseMs
+    voiceChatPauseMs,
+    voiceChatTtsMode
   ])
 
   React.useEffect(() => {
+    if (!didRunActiveEffectRef.current) {
+      didRunActiveEffectRef.current = true
+      if (!active) {
+        errorRef.current = null
+        setError(null)
+        updateState("idle")
+        return
+      }
+    }
+
     if (active) {
+      manualSessionRef.current = false
+      if (!liveVoiceSourceReady) return
       void start()
       return
     }
-    stop()
+    if (manualSessionRef.current) {
+      return
+    }
+    if (
+      wsRef.current ||
+      connectingRef.current ||
+      stateRef.current !== "idle" ||
+      errorRef.current
+    ) {
+      stop()
+    }
     errorRef.current = null
     setError(null)
     updateState("idle")
-  }, [active, start, stop, updateState])
+  }, [active, liveVoiceSourceReady, start, stop, updateState])
 
   React.useEffect(() => {
     if (!pendingResumeRef.current) return
     if (audioState.playing) return
-    pendingResumeRef.current = false
     if (!active) {
+      pendingResumeRef.current = false
       updateState("idle")
       return
     }
+    if (!liveVoiceSourceReady) {
+      return
+    }
     if (voiceChatAutoResume) {
+      pendingResumeRef.current = false
       if (!voiceChatBargeIn) {
-        void micStart().then(() => updateState("listening")).catch(() => {
-          handleError("Unable to restart microphone")
-        })
+        void micStart({ deviceId: liveVoiceDeviceId })
+          .then(() => updateState("listening"))
+          .catch(() => {
+            handleError("Unable to restart microphone")
+          })
       } else {
         updateState("listening")
       }
     } else {
+      pendingResumeRef.current = false
       updateState("idle")
     }
   }, [
     active,
     audioState.playing,
     handleError,
+    liveVoiceDeviceId,
+    liveVoiceSourceReady,
     micStart,
     updateState,
     voiceChatAutoResume,

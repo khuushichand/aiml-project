@@ -4,7 +4,6 @@ import { StyleProvider } from "@ant-design/cssinjs"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { useTheme } from "@/hooks/useTheme"
 import { PageAssistProvider } from "@/components/Common/PageAssistProvider"
-import { LocaleJsonDiagnostics } from "@/components/Common/LocaleJsonDiagnostics"
 import { SplashOverlay } from "@/components/Common/SplashScreen"
 import { useSplashScreen } from "@/hooks/useSplashScreen"
 import { FontSizeProvider } from "@/context/FontSizeProvider"
@@ -24,6 +23,14 @@ type AppShellProps = {
 }
 
 const queryClient = getQueryClient()
+const DevLocaleJsonDiagnostics =
+  import.meta.env.DEV
+    ? React.lazy(() =>
+        import("@/components/Common/LocaleJsonDiagnostics").then((module) => ({
+          default: module.LocaleJsonDiagnostics
+        }))
+      )
+    : null
 
 export const AppShell: React.FC<AppShellProps> = ({
   router: Router,
@@ -91,7 +98,11 @@ export const AppShell: React.FC<AppShellProps> = ({
       <QueryClientProvider client={queryClient}>
         <PageAssistProvider>
           <FontSizeProvider>
-            <LocaleJsonDiagnostics />
+            {DevLocaleJsonDiagnostics ? (
+              <React.Suspense fallback={null}>
+                <DevLocaleJsonDiagnostics />
+              </React.Suspense>
+            ) : null}
             {suspendWhenHidden && !isVisible && !keepMountedWhileHidden
               ? null
               : children}

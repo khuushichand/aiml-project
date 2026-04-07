@@ -45,6 +45,8 @@ export type ComposerToolbarProps = {
   modelUsageBadge: React.ReactNode
   // Prompt select
   selectedSystemPrompt: string | undefined
+  systemPrompt: string | undefined
+  setSystemPrompt: (prompt: string) => void
   setSelectedSystemPrompt: (id: string | undefined) => void
   setSelectedQuickPrompt: (prompt: string | undefined) => void
   // Ephemeral toggle
@@ -122,6 +124,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     voiceChatButton,
     modelUsageBadge,
     selectedSystemPrompt,
+    systemPrompt,
+    setSystemPrompt,
     setSelectedSystemPrompt,
     setSelectedQuickPrompt,
     temporaryChat,
@@ -431,13 +435,21 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     () => (
       <PromptSelect
         selectedSystemPrompt={selectedSystemPrompt}
+        systemPrompt={systemPrompt}
+        setSystemPrompt={setSystemPrompt}
         setSelectedSystemPrompt={setSelectedSystemPrompt}
         setSelectedQuickPrompt={setSelectedQuickPrompt}
         iconClassName="h-4 w-4"
         className="text-text-muted hover:text-text"
       />
     ),
-    [selectedSystemPrompt, setSelectedQuickPrompt, setSelectedSystemPrompt]
+    [
+      selectedSystemPrompt,
+      setSelectedQuickPrompt,
+      setSelectedSystemPrompt,
+      setSystemPrompt,
+      systemPrompt
+    ]
   )
 
   const characterSelectControl = React.useMemo(

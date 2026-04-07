@@ -1,7 +1,6 @@
 import i18n from "i18next"
 import ICU from "./icu-format"
 import { initReactI18next } from "react-i18next"
-import { en } from "./lang/en"
 
 const isMacPlatform =
     typeof navigator !== "undefined" &&
@@ -24,17 +23,9 @@ const NAMESPACES = [
     "tutorials"
 ] as const
 
-type Namespace = typeof NAMESPACES[number]
+export type Namespace = typeof NAMESPACES[number]
 
-const BASE_NAMESPACES: Namespace[] = [
-    "common",
-    "sidepanel",
-    "settings",
-    "playground",
-    "knowledge",
-    "audiobook",
-    "sources"
-]
+const BASE_NAMESPACES: Namespace[] = ["common"]
 
 const LANGUAGE_ALIASES: Record<string, string> = {
     en: "en",
@@ -141,7 +132,6 @@ i18n
     .use(ICU)
     .use(initReactI18next)
     .init({
-        resources: { en },
         fallbackLng: "en",
         lng: normalizeLanguage(getStoredLanguage()),
         ns: [...NAMESPACES],

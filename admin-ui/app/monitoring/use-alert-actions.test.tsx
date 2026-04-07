@@ -140,6 +140,38 @@ describe('useAlertActions', () => {
     expect(setSuccess).toHaveBeenCalledWith('Alert acknowledged');
   });
 
+  it('rolls back optimistic acknowledgement state when the backend call fails', async () => {
+    const apiClient = buildApiClient();
+    apiClient.acknowledgeAlert.mockRejectedValue(new Error('Ack failed'));
+    const confirm = vi.fn().mockResolvedValue(true);
+    const setError = vi.fn();
+    const setSuccess = vi.fn();
+    const onReloadRequested = vi.fn();
+
+    render(
+      <Harness
+        apiClient={apiClient}
+        confirm={confirm}
+        setError={setError}
+        setSuccess={setSuccess}
+        onReloadRequested={onReloadRequested}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ack A1' }));
+
+    await waitFor(() => {
+      expect(apiClient.acknowledgeAlert).toHaveBeenCalledWith('1');
+      expect(setError).toHaveBeenCalledWith('Ack failed');
+    });
+
+    const updatedA1 = readAlerts().find((item) => item.id === '1');
+    expect(updatedA1?.acknowledged).toBe(false);
+    expect(updatedA1?.acknowledged_at).toBeUndefined();
+    expect(onReloadRequested).not.toHaveBeenCalled();
+    expect(setSuccess).not.toHaveBeenCalled();
+  });
+
   it('aborts dismiss when confirmation is rejected', async () => {
     const apiClient = buildApiClient();
     const confirm = vi.fn().mockResolvedValue(false);

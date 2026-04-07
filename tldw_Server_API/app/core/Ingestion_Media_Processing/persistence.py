@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.config import loaded_config_data, settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
 from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
     media_dedupe_url_candidates,
     normalize_media_dedupe_url,
@@ -53,6 +54,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Metrics.stt_metrics import emit_stt_run_write_total
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled,
     is_explicit_pytest_runtime,
@@ -1631,6 +1633,45 @@ def _resolve_media_add_embeddings_mode(form_data: Any) -> str:
     return "auto"
 
 
+def _mark_media_embeddings_complete(db: Any, media_id: int) -> bool:
+    """Mark embeddings generation as completed for a media row."""
+    try:
+        mark_media_as_processed(db_instance=db, media_id=media_id)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to mark embeddings complete for media {}: {}",
+            media_id,
+            exc,
+        )
+        return False
+    return True
+
+
+def _mark_media_embeddings_error(db: Any, media_id: int, error_detail: Any) -> bool:
+    """Record an embeddings failure against a media row when possible."""
+    detail = str(error_detail or "Embedding generation failed").strip() or "Embedding generation failed"
+    try:
+        mark_error = getattr(db, "mark_embeddings_error", None)
+        if not callable(mark_error):
+            raise AttributeError("Database instance does not expose mark_embeddings_error")
+        mark_error(media_id, detail)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to mark embeddings error for media {}: {}",
+            media_id,
+            exc,
+        )
+        return False
+    except AttributeError as exc:
+        logger.warning(
+            "Failed to mark embeddings error for media {}: {}",
+            media_id,
+            exc,
+        )
+        return False
+    return True
+
+
 def _coerce_positive_int(value: Any, default: int) -> int:
     try:
         parsed = int(value)
@@ -1849,13 +1890,30 @@ async def schedule_media_add_embeddings(
                         embedding_provider=embedding_provider,
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
+                        user_id=user_id,
                     )
+                    if result_emb.get("status") == "success":
+                        if not _mark_media_embeddings_complete(db, media_id):
+                            _mark_media_embeddings_error(
+                                db,
+                                media_id,
+                                "Failed to persist embeddings completion status",
+                            )
+                    else:
+                        _mark_media_embeddings_error(
+                            db,
+                            media_id,
+                            result_emb.get("error")
+                            or result_emb.get("message")
+                            or "Embedding generation failed",
+                        )
                     logger.info(
                         "Embedding generation result for media {}: {}",
                         media_id,
                         result_emb,
                     )
                 except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as embed_err:
+                    _mark_media_embeddings_error(db, media_id, embed_err)
                     logger.error(
                         "Failed to generate embeddings for media {}: {}",
                         media_id,
@@ -3008,10 +3066,21 @@ async def persist_primary_av_item(
             raw_source_hash_str = str(raw_source_hash).strip()
             source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
 
+        effective_chunk_options = chunk_options
+        if effective_chunk_options is None and getattr(form_data, "perform_chunking", False):
+            try:
+                effective_chunk_options = prepare_chunking_options_dict(form_data)
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as chunk_opts_err:
+                logger.warning(
+                    "Failed to derive chunk options during AV persistence for {}: {}",
+                    original_input_ref,
+                    chunk_opts_err,
+                )
+
         # Build plaintext chunks for chunk-level FTS if chunking is requested.
         chunks_for_sql: list[dict[str, Any]] | None = None
         try:
-            _opts = chunk_options or {}
+            _opts = effective_chunk_options or {}
             if _opts:
                 from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
                     Chunker as _Chunker,
@@ -3042,7 +3111,12 @@ async def persist_primary_av_item(
                             "metadata": _small,
                         }
                     )
-        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as chunk_err:
+            logger.warning(
+                "Failed to build AV chunks during persistence for {}: {}",
+                original_input_ref,
+                chunk_err,
+            )
             chunks_for_sql = None
 
         # Merge processor-provided and analysis-derived extra chunks (VLM/OCR)
@@ -3111,7 +3185,7 @@ async def persist_primary_av_item(
             "transcription_model": transcription_model_used,
             "author": author_for_db,
             "overwrite": getattr(form_data, "overwrite_existing", False),
-            "chunk_options": chunk_options,
+            "chunk_options": effective_chunk_options,
             "chunks": chunks_for_sql,
         }
 
@@ -3149,7 +3223,7 @@ async def persist_primary_av_item(
         )
         _emit_ingestion_chunks_metric(
             media_type=media_type,
-            chunk_method=(chunk_options or {}).get("method"),
+            chunk_method=(effective_chunk_options or {}).get("method"),
             chunk_count=len(chunks_for_sql) if isinstance(chunks_for_sql, list) else 0,
         )
 
@@ -3185,8 +3259,8 @@ async def persist_primary_av_item(
                 )
                 serialized_artifact = json.dumps(artifact, default=str)
 
-                def _upsert_worker() -> None:
-                    _with_media_db_session(
+                def _upsert_worker() -> dict[str, Any]:
+                    return _with_media_db_session(
                         db_path=db_path,
                         client_id=client_id,
                         operation=lambda db: upsert_transcript(
@@ -3197,10 +3271,20 @@ async def persist_primary_av_item(
                         ),
                     )
 
-                await loop.run_in_executor(None, _upsert_worker)
+                write_payload = await loop.run_in_executor(None, _upsert_worker)
+                with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                    emit_stt_run_write_total(
+                        provider=provider_name,
+                        write_result=(write_payload or {}).get("write_result", "created"),
+                    )
                 # Attach normalized artifact to the process_result for callers
                 process_result["normalized_stt"] = artifact
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as stt_err:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                emit_stt_run_write_total(
+                    provider=locals().get("provider_name"),
+                    write_result="failed",
+                )
             logger.debug(
                 "STT transcript upsert skipped/failed for {} (media_id={}): {}",
                 original_input_ref,

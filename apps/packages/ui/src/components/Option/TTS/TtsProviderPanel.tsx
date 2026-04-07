@@ -12,7 +12,11 @@ import {
 import { useTranslation } from "react-i18next"
 import { TTSModeSettings } from "@/components/Option/Settings/TTSModeSettings"
 import { TtsProviderCatalog } from "@/components/Option/TTS/TtsProviderCatalog"
-import type { getTTSSettings } from "@/services/tts"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TLDW_TTS_VOICE,
+  type getTTSSettings
+} from "@/services/tts"
 import type {
   TldwTtsProviderCapabilities,
   TldwTtsProvidersInfo,
@@ -85,11 +89,15 @@ export const TtsProviderPanel: React.FC<Props> = ({
               <div className="text-xs text-text-subtle space-y-0.5">
                 <div>
                   <Text strong>Model:</Text>{" "}
-                  <Text code>{ttsSettings.tldwTtsModel || "kokoro"}</Text>
+                  <Text code>
+                    {ttsSettings.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL}
+                  </Text>
                 </div>
                 <div>
                   <Text strong>Voice:</Text>{" "}
-                  <Text code>{ttsSettings.tldwTtsVoice || "af_heart"}</Text>
+                  <Text code>
+                    {ttsSettings.tldwTtsVoice || DEFAULT_TLDW_TTS_VOICE}
+                  </Text>
                 </div>
                 <div>
                   <Text strong>Response format:</Text>{" "}

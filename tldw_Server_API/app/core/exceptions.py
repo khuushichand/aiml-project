@@ -38,6 +38,19 @@ class BadRequestError(ValueError):
     """Raised when a caller provides invalid arguments for an operation."""
 
 
+class RecipeEnqueueError(RuntimeError):
+    """Raised when a recipe run cannot be enqueued into Jobs."""
+
+    def __init__(
+        self,
+        message: str = "Failed to enqueue recipe run.",
+        *,
+        error_code: str = "recipe_run_enqueue_failed",
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
 class AuditLogError(RuntimeError):
     """Raised when persisting an audit event fails."""
 
@@ -48,6 +61,10 @@ class ValidationError(BadRequestError):
 
 class IngestionSourceValidationError(ValidationError):
     """Raised when an ingestion source payload fails validation."""
+
+
+class ReferenceImportError(RuntimeError):
+    """Raised when a reference-manager item cannot be persisted correctly."""
 
 
 class StructuredOutputParseError(ValueError):
@@ -290,6 +307,11 @@ FILE_ARTIFACTS_ERROR_STATUS: dict[str, int] = {
     "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
     "persist_required": status.HTTP_400_BAD_REQUEST,
     "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
+    "reference_image_invalid": DEFAULT_VALIDATION_STATUS,
+    "reference_image_not_found": DEFAULT_VALIDATION_STATUS,
+    "reference_image_unsupported_by_backend": DEFAULT_VALIDATION_STATUS,
+    "reference_image_unsupported_by_model": DEFAULT_VALIDATION_STATUS,
+    "reference_image_storage_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
     "storage_quota_exceeded": status.HTTP_507_INSUFFICIENT_STORAGE,
     "storage_persist_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
     "unsupported_export_format": DEFAULT_VALIDATION_STATUS,

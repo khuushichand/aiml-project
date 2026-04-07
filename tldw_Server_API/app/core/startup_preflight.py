@@ -125,6 +125,38 @@ def check_python_dependencies() -> dict[str, Any]:
     return {"name": name, "status": "ok"}
 
 
+def check_database_connectivity() -> dict[str, Any]:
+    """Attempt a basic TCP connection test for Postgres DATABASE_URLs.
+
+    This only verifies network reachability, not authentication or schema.
+    """
+    name = "database_connectivity"
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url.startswith(("postgresql", "postgres")):
+        return {"name": name, "status": "ok", "message": "SQLite (no remote check needed)"}
+    try:
+        import socket
+        from urllib.parse import urlparse
+        parsed = urlparse(db_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5432
+        sock = socket.create_connection((host, port), timeout=5)
+        sock.close()
+        return {
+            "name": name,
+            "status": "ok",
+            "message": f"Postgres TCP reachable at {host}:{port} (auth not verified)",
+        }
+    except OSError as exc:
+        return {
+            "name": name,
+            "status": "fail",
+            "message": f"Cannot reach Postgres at {host}:{port}: {exc}",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "status": "warn", "message": f"Could not parse DATABASE_URL: {exc}"}
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -146,6 +178,7 @@ def run_preflight_checks() -> PreflightResult:
         check_disk_space,
         check_database_directories,
         check_python_dependencies,
+        check_database_connectivity,
     ):
         try:
             result.checks.append(check_fn())

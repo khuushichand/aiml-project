@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { ManageTab } from "../ManageTab"
+import { ManageTab, buildFlashcardsWorkspaceVisibilityOptions } from "../ManageTab"
 import { clearSetting } from "@/services/settings/registry"
 import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import type { Flashcard } from "@/services/flashcards"
@@ -12,14 +13,21 @@ import {
   useManageQuery,
   useTagSuggestionsQuery,
   useUpdateFlashcardMutation,
+  useUpdateDeckMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
   getManageServerOrderBy
 } from "../../hooks"
 
-const { trackShortcutHintTelemetryMock } = vi.hoisted(() => ({
-  trackShortcutHintTelemetryMock: vi.fn().mockResolvedValue(undefined)
+const { trackShortcutHintTelemetryMock, markdownSnippetMock, markdownWithBoundaryMock } = vi.hoisted(() => ({
+  trackShortcutHintTelemetryMock: vi.fn().mockResolvedValue(undefined),
+  markdownSnippetMock: vi.fn(({ content }: { content: string }) => (
+    <div data-testid="markdown-snippet">{content}</div>
+  )),
+  markdownWithBoundaryMock: vi.fn(({ content }: { content: string }) => (
+    <div data-testid="markdown-with-boundary">{content}</div>
+  ))
 }))
 
 vi.mock("react-i18next", () => ({
@@ -89,6 +97,7 @@ vi.mock("../../hooks", () => ({
   useManageQuery: vi.fn(),
   useTagSuggestionsQuery: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
+  useUpdateDeckMutation: vi.fn(),
   useUpdateFlashcardsBulkMutation: vi.fn(),
   useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
@@ -97,7 +106,8 @@ vi.mock("../../hooks", () => ({
 }))
 
 vi.mock("../../components", () => ({
-  MarkdownWithBoundary: ({ content }: { content: string }) => <div>{content}</div>,
+  FlashcardMarkdownSnippet: (props: { content: string }) => markdownSnippetMock(props),
+  MarkdownWithBoundary: (props: { content: string }) => markdownWithBoundaryMock(props),
   FlashcardActionsMenu: () => <div />,
   FlashcardEditDrawer: () => null,
   FlashcardCreateDrawer: () => null
@@ -154,8 +164,12 @@ const sampleCard: Flashcard = {
 }
 
 describe("ManageTab scheduling metadata visibility", () => {
+  const updateDeckMutateAsync = vi.fn(async () => undefined)
+
   beforeEach(async () => {
     vi.clearAllMocks()
+    markdownSnippetMock.mockClear()
+    markdownWithBoundaryMock.mockClear()
     await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [
@@ -207,6 +221,10 @@ describe("ManageTab scheduling metadata visibility", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    vi.mocked(useUpdateDeckMutation).mockReturnValue({
+      mutateAsync: updateDeckMutateAsync,
+      isPending: false
+    } as any)
     vi.mocked(useUpdateFlashcardsBulkMutation).mockReturnValue({
       mutateAsync: vi.fn().mockResolvedValue({ results: [] }),
       isPending: false
@@ -241,6 +259,37 @@ describe("ManageTab scheduling metadata visibility", () => {
     expect(screen.getByText("Sort: Due date")).toBeInTheDocument()
   }, 15000)
 
+  it("uses the markdown renderer for compact flashcard snippets", () => {
+    const markdownFront = "**Important** concept"
+    vi.mocked(useManageQuery).mockReturnValue({
+      data: {
+        items: [
+          {
+            ...sampleCard,
+            front: markdownFront
+          }
+        ],
+        count: 1,
+        total: 1
+      },
+      isFetching: false
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    expect(
+      markdownSnippetMock.mock.calls.some(
+        ([props]) => (props as { content?: string }).content === markdownFront
+      )
+    ).toBe(true)
+  })
+
   it("shows scheduling metadata in expanded list rows", () => {
     render(
       <ManageTab
@@ -258,6 +307,52 @@ describe("ManageTab scheduling metadata visibility", () => {
     expect(screen.getByText("Relearns 1")).toBeInTheDocument()
     expect(screen.getByText("Media #42")).toBeInTheDocument()
   }, 15000)
+
+  it("uses lightweight snippets in expanded rows and the full renderer for the answer preview", () => {
+    const markdownFront = "## Heading"
+    const markdownBack = "*Answer* details"
+    vi.mocked(useManageQuery).mockReturnValue({
+      data: {
+        items: [
+          {
+            ...sampleCard,
+            front: markdownFront,
+            back: markdownBack
+          }
+        ],
+        count: 1,
+        total: 1
+      },
+      isFetching: false
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("flashcards-density-toggle"))
+    fireEvent.click(screen.getByTestId(`flashcard-item-${sampleCard.uuid}`))
+
+    expect(
+      markdownSnippetMock.mock.calls.some(
+        ([props]) => (props as { content?: string }).content === markdownFront
+      )
+    ).toBe(true)
+    expect(
+      markdownSnippetMock.mock.calls.some(
+        ([props]) => (props as { content?: string }).content === markdownBack
+      )
+    ).toBe(true)
+    expect(
+      markdownWithBoundaryMock.mock.calls.some(
+        ([props]) => (props as { content?: string }).content === markdownBack
+      )
+    ).toBe(true)
+  })
 
   it("does not render source badges for manual cards", () => {
     vi.mocked(useManageQuery).mockReturnValue({
@@ -360,4 +455,145 @@ describe("ManageTab scheduling metadata visibility", () => {
       })
     })
   }, 15000)
+
+  it("hides workspace decks by default and reveals them when the toggle is enabled", async () => {
+    vi.mocked(useDecksQuery).mockImplementation((params: any) => ({
+      data: params?.include_workspace_items
+        ? [
+            {
+              id: 1,
+              name: "Biology",
+              description: null,
+              deleted: false,
+              client_id: "test",
+              version: 1,
+              scheduler_type: "sm2_plus",
+              scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+            },
+            {
+              id: 9,
+              name: "Biology",
+              description: "Scoped deck",
+              workspace_id: "workspace-77",
+              deleted: false,
+              client_id: "test",
+              version: 1,
+              scheduler_type: "sm2_plus",
+              scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+            }
+          ]
+        : [
+            {
+              id: 1,
+              name: "Biology",
+              description: null,
+              deleted: false,
+              client_id: "test",
+              version: 1,
+              scheduler_type: "sm2_plus",
+              scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+            }
+          ],
+      isLoading: false
+    } as any))
+    vi.mocked(useManageQuery).mockReturnValue({
+      data: {
+        items: [
+          {
+            ...sampleCard,
+            deck_id: 9
+          }
+        ],
+        count: 1
+      },
+      isFetching: false
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    expect(screen.getByText("Deck 9")).toBeInTheDocument()
+    expect(screen.queryByText("Biology · workspace-77")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Show workspace decks/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Biology · workspace-77")).toBeInTheDocument()
+    })
+    expect(vi.mocked(useDecksQuery)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        include_workspace_items: true
+      })
+    )
+
+    const deckSelect = within(
+      screen.getByTestId("flashcards-manage-deck-select")
+    ).getByRole("combobox")
+    fireEvent.mouseDown(deckSelect)
+    expect(screen.getAllByText("Biology · workspace-77").length).toBeGreaterThan(1)
+  })
+
+  it("filters decks and card queries to a selected workspace", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    await user.click(screen.getByRole("checkbox", { name: /Show workspace decks/i }))
+    expect(screen.getByTestId("flashcards-manage-workspace-filter")).toBeInTheDocument()
+    expect(
+      buildFlashcardsWorkspaceVisibilityOptions(true, "workspace-77")
+    ).toEqual(
+      expect.objectContaining({
+        workspaceId: "workspace-77",
+        includeWorkspaceItems: false
+      })
+    )
+  })
+
+  it("moves deck scope by patching workspace_id in the update payload", async () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    const deckSelect = within(
+      screen.getByTestId("flashcards-manage-deck-select")
+    ).getByRole("combobox")
+    fireEvent.mouseDown(deckSelect)
+    fireEvent.keyDown(deckSelect, { key: "ArrowDown", code: "ArrowDown" })
+    fireEvent.keyDown(deckSelect, { key: "Enter", code: "Enter" })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("flashcards-manage-move-scope")).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getByTestId("flashcards-manage-move-scope"))
+
+    fireEvent.change(screen.getByPlaceholderText("Leave blank for general scope"), {
+      target: { value: "workspace-77" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Save/i }))
+
+    await waitFor(() => {
+      expect(updateDeckMutateAsync).toHaveBeenCalledWith({
+        deckId: 1,
+        update: {
+          workspace_id: "workspace-77",
+          expected_version: 1
+        }
+      })
+    })
+  })
 })

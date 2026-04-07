@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { AnswerWorkspace } from "../panels/AnswerWorkspace"
 
 const state = {
-  results: [] as Array<{ id: string }>,
+  results: [] as Array<{ id: string; score?: number }>,
   error: null as string | null,
   messages: [] as Array<{
     id: string
@@ -11,6 +11,8 @@ const state = {
     content?: string
   }>,
   currentThreadId: null as string | null,
+  citations: [] as Array<{ index: number; documentId: string }>,
+  settings: { strip_min_relevance: 0.3 } as Record<string, unknown>,
 }
 
 vi.mock("../KnowledgeQAProvider", () => ({
@@ -19,6 +21,10 @@ vi.mock("../KnowledgeQAProvider", () => ({
     error: state.error,
     messages: state.messages,
     currentThreadId: state.currentThreadId,
+    citations: state.citations,
+    settings: state.settings,
+    setSettingsPanelOpen: vi.fn(),
+    updateSetting: vi.fn(),
   }),
 }))
 
@@ -40,6 +46,8 @@ describe("AnswerWorkspace accessibility announcements", () => {
     state.error = null
     state.messages = []
     state.currentThreadId = null
+    state.citations = []
+    state.settings = { strip_min_relevance: 0.3 }
   })
 
   it("announces active and completed search stages through live regions", () => {
@@ -77,13 +85,13 @@ describe("AnswerWorkspace accessibility announcements", () => {
 
     expect(screen.getByText("Conversation • 2 turns")).toBeInTheDocument()
     expect(screen.getByText("Using context from turn 1.")).toBeInTheDocument()
-    expect(screen.getByText("Context previews (1)")).toBeInTheDocument()
-    expect(screen.getByText("Turn 1")).toBeInTheDocument()
+    expect(screen.getByText("Previous turn")).toBeInTheDocument()
     expect(
       screen.getByText("What changed in this release?")
     ).toBeInTheDocument()
     expect(
       screen.getByText("The release improves indexing speed and citation quality.")
     ).toBeInTheDocument()
+    expect(screen.queryByText("Context previews (1)")).not.toBeInTheDocument()
   })
 })

@@ -3,8 +3,33 @@ import { ACPRestClient, ACPWebSocketClient } from "@/services/acp/client"
 import type { ACPWSPermissionRequestMessage } from "@/services/acp/types"
 
 describe("ACPRestClient", () => {
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  const originalWindow = globalThis.window
+
   beforeEach(() => {
     vi.restoreAllMocks()
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "https://webui.example.test",
+          protocol: "https:"
+        }
+      },
+      configurable: true
+    })
+  })
+
+  afterEach(() => {
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+    Object.defineProperty(globalThis, "window", {
+      value: originalWindow,
+      configurable: true
+    })
   })
 
   const createClient = () =>
@@ -102,6 +127,28 @@ describe("ACPRestClient", () => {
     )
   })
 
+  it("uses the shared quickstart http base for rest calls", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ sessions: [], total: 0 }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const client = createClient()
+    await client.listSessions({ limit: 10 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/acp/sessions?limit=10",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-API-KEY": "test-key",
+        }),
+      })
+    )
+  })
+
   it("keeps tier while exposing permission policy metadata", () => {
     const message: ACPWSPermissionRequestMessage = {
       type: "permission_request",
@@ -163,6 +210,9 @@ describe("ACPWebSocketClient", () => {
     }
   }
 
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  const originalWindow = globalThis.window
+
   const createClient = () =>
     new ACPWebSocketClient({
       serverUrl: "http://localhost:8000",
@@ -174,12 +224,42 @@ describe("ACPWebSocketClient", () => {
     vi.useFakeTimers()
     MockWebSocket.instances = []
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket)
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "http://127.0.0.1:8080",
+          protocol: "http:"
+        }
+      },
+      configurable: true
+    })
   })
 
   afterEach(() => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+    Object.defineProperty(globalThis, "window", {
+      value: originalWindow,
+      configurable: true
+    })
+  })
+
+  it("uses the webui origin for quickstart websocket sessions", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    const client = createClient()
+    await client.connect("sess-1")
+
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(MockWebSocket.instances[0].url).toBe(
+      "ws://127.0.0.1:8080/api/v1/acp/sessions/sess-1/stream?api_key=test-key"
+    )
   })
 
   it.each([4401, 4404, 4429])("does not reconnect for fatal close code %s", async (code) => {

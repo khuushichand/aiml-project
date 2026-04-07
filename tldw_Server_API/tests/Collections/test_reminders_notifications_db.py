@@ -80,6 +80,30 @@ def test_notification_unread_mark_read_and_dismiss(collections_db: CollectionsDa
     assert all(row.id != n2.id for row in listed_after)
 
 
+def test_create_user_notification_returns_existing_row_for_duplicate_dedupe_key(
+    collections_db: CollectionsDatabase,
+) -> None:
+    first = collections_db.create_user_notification(
+        kind="job_completed",
+        title="Job done",
+        message="Background job completed",
+        severity="info",
+        dedupe_key="jobs-event:123",
+    )
+
+    second = collections_db.create_user_notification(
+        kind="job_completed",
+        title="Job done",
+        message="Background job completed",
+        severity="info",
+        dedupe_key="jobs-event:123",
+    )
+
+    assert second.id == first.id
+    rows = collections_db.list_user_notifications(limit=10, offset=0)
+    assert [row.id for row in rows] == [first.id]
+
+
 def test_notification_preferences_defaults_and_update(collections_db: CollectionsDatabase) -> None:
     prefs = collections_db.get_notification_preferences()
     assert prefs.reminder_enabled is True
@@ -94,6 +118,58 @@ def test_notification_preferences_defaults_and_update(collections_db: Collection
     assert updated.reminder_enabled is False
     assert updated.job_completed_enabled is True
     assert updated.job_failed_enabled is False
+
+
+def test_update_notification_delivery_status_returns_boolean(collections_db: CollectionsDatabase) -> None:
+    row = collections_db.create_user_notification(
+        kind="job_completed",
+        title="Job done",
+        message="Background job completed",
+        severity="info",
+    )
+
+    delivered_at = "2026-03-01T10:00:00+00:00"
+    updated = collections_db.update_notification_delivery_status(
+        row.id,
+        "delivered",
+        delivered_at=delivered_at,
+    )
+
+    assert updated is True
+
+    refreshed = collections_db.get_user_notification(row.id)
+    assert refreshed.delivery_status == "delivered"
+    assert refreshed.delivered_at == delivered_at
+
+    missing = collections_db.update_notification_delivery_status(999999, "failed")
+    assert missing is False
+
+
+def test_update_notification_delivery_status_can_clear_existing_timestamp(
+    collections_db: CollectionsDatabase,
+) -> None:
+    row = collections_db.create_user_notification(
+        kind="job_completed",
+        title="Job done",
+        message="Background job completed",
+        severity="info",
+    )
+
+    collections_db.update_notification_delivery_status(
+        row.id,
+        "delivered",
+        delivered_at="2026-03-01T10:00:00+00:00",
+    )
+    cleared = collections_db.update_notification_delivery_status(
+        row.id,
+        "pending",
+        delivered_at=None,
+    )
+
+    assert cleared is True
+    refreshed = collections_db.get_user_notification(row.id)
+    assert refreshed.delivery_status == "pending"
+    assert refreshed.delivered_at is None
 
 
 def test_prune_user_notifications_archives_and_deletes(collections_db: CollectionsDatabase) -> None:

@@ -8,7 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
@@ -19,7 +21,32 @@ pytestmark = pytest.mark.integration
 def client_with_auth():
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+
+    async def override_principal(request=None):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="single-user",
+            token_type="single_user",
+            jti=None,
+            roles=["admin"],
+            permissions=["*"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        return principal
+
     app.dependency_overrides[get_request_user] = override_user
+    app.dependency_overrides[get_auth_principal] = override_principal
     settings = get_settings()
     headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:

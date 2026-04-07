@@ -9,8 +9,7 @@ import {
   Tooltip,
   Select,
   Alert,
-  Segmented,
-  Upload
+  Segmented
 } from "antd"
 import type { FormInstance } from "antd"
 import {
@@ -32,7 +31,6 @@ import {
 } from "@/data/character-prompt-presets"
 import type { GeneratedCharacter } from "@/services/character-generation"
 import {
-  IMPORT_UPLOAD_ACCEPT,
   CHARACTER_VERSION_DIFF_FIELD_KEYS,
   CHARACTER_VERSION_FIELD_LABELS,
   normalizeVersionSnapshotValue,
@@ -103,15 +101,6 @@ export type CharacterDialogsProps = {
   handleConfirmImportPreview: () => Promise<void>
   getImportQueueStateLabel: (state: string) => string
   getImportQueueStateColor: (state: string) => string
-  // import dropzone
-  importButtonContainerRef: React.RefObject<HTMLDivElement | null>
-  isImportBusy: boolean
-  handleImportUpload: (file: any) => boolean
-  // drag-and-drop import
-  handleImportDragEnter: (e: React.DragEvent) => void
-  handleImportDragLeave: (e: React.DragEvent) => void
-  handleImportDragOver: (e: React.DragEvent) => void
-  handleImportDrop: (e: React.DragEvent) => Promise<void>
 
   // --- quick chat ---
   quickChatCharacter: any | null
@@ -316,9 +305,6 @@ export const CharacterDialogs: React.FC<CharacterDialogsProps> = (props) => {
     handleConfirmImportPreview,
     getImportQueueStateLabel,
     getImportQueueStateColor,
-    importButtonContainerRef,
-    isImportBusy,
-    handleImportUpload,
     // quick chat
     quickChatCharacter,
     closeQuickChat,
@@ -595,26 +581,6 @@ export const CharacterDialogs: React.FC<CharacterDialogsProps> = (props) => {
 
   return (
     <>
-      {/* Hidden import dropzone -- keeps Upload for triggerImportPicker + drag-and-drop */}
-      <div
-        ref={importButtonContainerRef}
-        data-testid="character-import-dropzone"
-        className="sr-only"
-      >
-        <Upload
-          accept={IMPORT_UPLOAD_ACCEPT}
-          multiple
-          showUploadList={false}
-          beforeUpload={handleImportUpload}
-          disabled={isImportBusy}>
-          <button type="button" tabIndex={-1} aria-hidden="true">
-            {t("settings:manageCharacters.import.button", {
-              defaultValue: "Upload character"
-            })}
-          </button>
-        </Upload>
-      </div>
-
       {/* Import Preview Modal */}
       <Modal
         title={t("settings:manageCharacters.import.previewTitle", {

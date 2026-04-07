@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_by_id
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.jobs_adapter import EmbeddingsJobsAdapter
 
@@ -57,9 +58,14 @@ _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
 
 def _user_embedding_config() -> dict[str, Any]:
     cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
-    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
-    if not user_db_base_dir:
+    try:
         user_db_base_dir = str(DatabasePaths.get_user_db_base_dir())
+    except Exception as exc:
+        logger.warning(
+            "Falling back to USER_DB_BASE_DIR setting after user DB base resolution failed: {}",
+            exc,
+        )
+        user_db_base_dir = settings.get("USER_DB_BASE_DIR")
     cfg["USER_DB_BASE_DIR"] = user_db_base_dir
     return cfg
 
@@ -222,7 +228,7 @@ async def get_media_content(media_id: int, db: Any) -> dict[str, Any]:
     """Retrieve media content from database"""
     try:
         # Get media item details
-        media_item = db.get_media_by_id(media_id)
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise HTTPException(
                 status_code=http_status.HTTP_404_NOT_FOUND,
@@ -232,7 +238,7 @@ async def get_media_content(media_id: int, db: Any) -> dict[str, Any]:
         # Fall back to latest document version content when Media.content is empty.
         try:
             if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
-                from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+                from tldw_Server_API.app.core.DB_Management.media_db.api import (
                     get_document_version,
                 )
                 latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
@@ -396,6 +402,20 @@ async def generate_embeddings_for_media(
                 "chunks_processed": 0,
             }
 
+        def _chunk_type_for_metadata(chunk: dict[str, Any]) -> str:
+            chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+            raw_chunk_type = (
+                chunk.get("chunk_type")
+                or chunk_metadata.get("chunk_type")
+                or chunk_metadata.get("paragraph_kind")
+                or chunk_metadata.get("type")
+                or chunk_metadata.get("kind")
+            )
+            try:
+                return Chunker.normalize_chunk_type(raw_chunk_type) or "text"
+            except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                return "text"
+
         def _validate_embeddings_result(embeddings, expected_count: int) -> Optional[str]:
             if not embeddings:
                 return "Embedding service returned no embeddings"
@@ -447,6 +467,7 @@ async def generate_embeddings_for_media(
                     "chunk_index": chunk["index"],
                     "chunk_start": chunk["start"],
                     "chunk_end": chunk["end"],
+                    "chunk_type": _chunk_type_for_metadata(chunk),
                     "title": media_content["media_item"].get("title", ""),
                     "author": media_content["media_item"].get("author", ""),
                     "embedding_model": embedding_model,
@@ -526,6 +547,7 @@ async def generate_embeddings_for_media(
                         "chunk_index": chunk["index"],
                         "chunk_start": chunk["start"],
                         "chunk_end": chunk["end"],
+                        "chunk_type": _chunk_type_for_metadata(chunk),
                         "title": media_content["media_item"].get("title", ""),
                         "author": media_content["media_item"].get("author", ""),
                         "embedding_model": FALLBACK_EMBEDDING_MODEL,
@@ -589,7 +611,7 @@ async def get_embeddings_status(
     """Check if embeddings exist for a media item"""
     try:
         # Check if media exists
-        media_item = db.get_media_by_id(media_id)
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise HTTPException(
                 status_code=http_status.HTTP_404_NOT_FOUND,
@@ -675,7 +697,7 @@ async def generate_embeddings(
             )
 
         adapter = EmbeddingsJobsAdapter()
-        media_item = db.get_media_by_id(media_id)
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise HTTPException(
                 status_code=http_status.HTTP_404_NOT_FOUND,
@@ -772,7 +794,7 @@ async def generate_embeddings_batch(
     failed_media_ids: list[int] = []
     failure_reasons: list[str] = []
     for media_id in media_ids:
-        media_item = db.get_media_by_id(media_id)
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise HTTPException(
                 status_code=http_status.HTTP_404_NOT_FOUND,
@@ -930,7 +952,7 @@ async def delete_embeddings(
     """Delete embeddings for a media item"""
     try:
         # Check if media exists
-        media_item = db.get_media_by_id(media_id)
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise HTTPException(
                 status_code=http_status.HTTP_404_NOT_FOUND,

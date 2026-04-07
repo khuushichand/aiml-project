@@ -1,4 +1,5 @@
 import React from "react"
+import { Link } from "react-router-dom"
 import {
   Alert,
   Button,
@@ -299,14 +300,23 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   const { data: attemptsData } = useAttemptsQuery({ limit: 200, offset: 0 })
   const detailQuizId = pendingQuizId ?? activeQuizId
   const { data: quizDetails } = useQuizQuery(detailQuizId, { enabled: detailQuizId != null })
+  const directPreviewQuizId = startQuizId ?? highlightQuizId ?? null
+  const { data: directPreviewQuiz } = useQuizQuery(directPreviewQuizId, {
+    enabled: directPreviewQuizId != null && detailQuizId == null
+  })
   const startAttemptMutation = useStartAttemptMutation()
   const submitAttemptMutation = useSubmitAttemptMutation()
 
   const quizzes = data?.items ?? []
   const attempts = attemptsData?.items ?? []
   const total = data?.count ?? 0
+  const injectedDirectPreview = directPreviewQuiz != null && !quizzes.some((quiz) => quiz.id === directPreviewQuiz.id)
+  const visibleTotal = total + (injectedDirectPreview ? 1 : 0)
   const sortedQuizzes = React.useMemo(() => {
     const items = [...quizzes]
+    if (directPreviewQuiz && !items.some((quiz) => quiz.id === directPreviewQuiz.id)) {
+      items.unshift(directPreviewQuiz)
+    }
     if (sortBy === "name_asc") {
       items.sort((left, right) => left.name.localeCompare(right.name))
     } else if (sortBy === "questions_desc") {
@@ -319,7 +329,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       })
     }
     return items
-  }, [quizzes, sortBy])
+  }, [directPreviewQuiz, quizzes, sortBy])
 
   const {
     storageUnavailable,
@@ -2288,9 +2298,16 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                 })}
               </p>
               <p className="text-sm text-text-subtle">
-                {t("option:quiz.empty.createFirst", {
-                  defaultValue:
-                    "Generate one from media or create one manually, then come back to take it"
+                {t("option:quiz.empty.createFirstPrefix", {
+                  defaultValue: "Generate one from your "
+                })}
+                <Link to="/media" className="text-primary hover:text-primary/80 underline">
+                  {t("option:quiz.empty.mediaLibrary", {
+                    defaultValue: "media library"
+                  })}
+                </Link>
+                {t("option:quiz.empty.createFirstSuffix", {
+                  defaultValue: " or create one manually, then come back to take it."
                 })}
               </p>
             </div>
@@ -2438,7 +2455,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         pagination={{
           current: page,
           pageSize,
-          total,
+          total: visibleTotal,
           showSizeChanger: true,
           locale: {
             items_per_page: t("option:quiz.itemsPerPage", { defaultValue: "items/page" })

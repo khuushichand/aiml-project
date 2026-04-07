@@ -7,14 +7,16 @@ Ensures consistent database file locations across the application.
 import hashlib
 import os
 import re
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Callable, Optional, Union
 
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_identifiers import (
-    LEGACY_MEDIA_DB_FILENAME,
+from tldw_Server_API.app.core.DB_Management.media_db.constants import (
+    MEDIA_DB_FILENAME,
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -23,10 +25,20 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SAFE_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_TEST_FALLBACK_RUN_TAG = uuid.uuid4().hex[:8]
 
 
 def _is_test_context() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+
+
+def _get_test_fallback_run_tag() -> str:
+    explicit_tag = str(os.getenv("TLDW_TEST_RUN_ID") or "").strip()
+    if explicit_tag:
+        return explicit_tag
+
+    worker_tag = str(os.getenv("PYTEST_XDIST_WORKER") or "").strip() or "default"
+    return f"{worker_tag}-{_TEST_FALLBACK_RUN_TAG}"
 
 
 def _normalize_user_id(user_id: UserId) -> str:
@@ -103,6 +115,67 @@ def _ensure_dir(path: Path, *, label: str) -> None:
     except OSError as e:
         logger.error(f"Failed to create {label} directory {path}: {e}")
         raise StorageUnavailableError(f"Failed to create {label} directory") from e
+
+
+def resolve_trusted_database_path(
+    db_path: str | Path,
+    *,
+    label: str = "database",
+    extra_roots: Optional[list[Path]] = None,
+) -> Path:
+    """Resolve a database path and require containment within trusted roots."""
+    raw_path = str(db_path or "").strip()
+    if not raw_path:
+        raise InvalidStoragePathError("invalid_path")
+
+    trusted_roots: list[Path] = []
+    project_root = Path(get_project_root()).resolve()
+    trusted_roots.append(project_root)
+
+    try:
+        user_db_base_dir = DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True).resolve()
+    except Exception as exc:
+        logger.debug("Skipping user database trusted root discovery: {}", exc)
+    else:
+        trusted_roots.append(user_db_base_dir)
+
+    if extra_roots:
+        for root in extra_roots:
+            try:
+                resolved_root = Path(root).expanduser().resolve(strict=False)
+            except Exception as exc:
+                logger.debug("Skipping invalid trusted root {}: {}", root, exc)
+            else:
+                trusted_roots.append(resolved_root)
+
+    if _is_test_context():
+        trusted_roots.append(Path(tempfile.gettempdir()).resolve())
+        trusted_roots.append(Path.cwd().resolve())
+
+    unique_roots: list[Path] = []
+    for root in trusted_roots:
+        if root not in unique_roots:
+            unique_roots.append(root)
+
+    try:
+        candidate = Path(raw_path).expanduser()
+    except Exception as exc:
+        raise InvalidStoragePathError("invalid_path") from exc
+
+    if candidate.is_absolute():
+        normalized = Path(os.path.normpath(str(candidate)))
+    else:
+        normalized = Path(os.path.normpath(str(project_root / candidate)))
+
+    for root in unique_roots:
+        try:
+            normalized.relative_to(root)
+            return normalized
+        except ValueError:
+            continue
+
+    logger.warning("Rejected {} path outside trusted roots: {}", label, normalized)
+    raise InvalidStoragePathError("invalid_path")
 
 
 def _build_user_dir(base_path: Path, user_id: Optional[UserId]) -> Path:
@@ -201,7 +274,7 @@ class DatabasePaths:
     """Centralized database path management."""
 
     # Database file names
-    MEDIA_DB_NAME = LEGACY_MEDIA_DB_FILENAME
+    MEDIA_DB_NAME = MEDIA_DB_FILENAME
     CHACHA_DB_NAME = "ChaChaNotes.db"
     PROMPTS_DB_NAME = "user_prompts_v2.sqlite"
     AUDIT_DB_NAME = "unified_audit.db"
@@ -238,12 +311,22 @@ class DatabasePaths:
     def get_user_db_base_dir(*, allow_legacy_alias: bool = False) -> Path:
         env_user_db_base = os.getenv("USER_DB_BASE_DIR")
         settings_user_db_base = settings.get("USER_DB_BASE_DIR")
-        if _is_test_context() and env_user_db_base:
-            user_db_base = env_user_db_base
-        else:
-            user_db_base = settings_user_db_base or env_user_db_base
         project_root = Path(get_project_root())
         default_base = (project_root / "Databases" / "user_databases").resolve()
+        user_db_base = settings_user_db_base or env_user_db_base
+        if _is_test_context() and env_user_db_base:
+            try:
+                settings_candidate = Path(settings_user_db_base) if settings_user_db_base else None
+                if settings_candidate is not None:
+                    settings_candidate = settings_candidate.expanduser()
+                    if not settings_candidate.is_absolute():
+                        settings_candidate = (project_root / settings_candidate).resolve()
+                    else:
+                        settings_candidate = settings_candidate.resolve()
+            except Exception:
+                settings_candidate = None
+            if settings_candidate is None or settings_candidate == default_base:
+                user_db_base = env_user_db_base
         if _is_test_context() and not env_user_db_base:
             try:
                 candidate = Path(settings_user_db_base) if settings_user_db_base else None
@@ -269,11 +352,7 @@ class DatabasePaths:
             if _is_test_context():
                 import tempfile
 
-                run_tag = (
-                    os.getenv("TLDW_TEST_RUN_ID")
-                    or os.getenv("PYTEST_XDIST_WORKER")
-                    or "default"
-                )
+                run_tag = _get_test_fallback_run_tag()
                 safe_run_tag = "".join(
                     ch if ch.isalnum() or ch in "-_." else "_"
                     for ch in str(run_tag)

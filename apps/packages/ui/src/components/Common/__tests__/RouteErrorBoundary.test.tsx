@@ -129,7 +129,7 @@ describe("RouteErrorBoundary", () => {
     expect(screen.getByTestId("route-path")).toHaveTextContent("/knowledge")
     await user.click(screen.getByTestId("route-error-open-settings"))
     await waitFor(() => {
-      expect(screen.getByTestId("route-path")).toHaveTextContent("/settings")
+      expect(screen.getByTestId("route-path")).toHaveTextContent("/settings/tldw")
     })
 
     await user.click(screen.getByTestId("route-error-go-chat"))

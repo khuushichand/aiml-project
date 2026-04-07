@@ -320,6 +320,39 @@ export function useArtifactExport(deps: UseArtifactExportDeps) {
         return
       }
 
+      if (artifact.type === "flashcards") {
+        const flashcards =
+          isRecord(artifact.data) && Array.isArray(artifact.data.flashcards)
+            ? artifact.data.flashcards
+            : null
+
+        if (flashcards) {
+          const flashcardsBlob = new Blob(
+            [
+              JSON.stringify(
+                {
+                  title: artifact.title,
+                  flashcards
+                },
+                null,
+                2
+              )
+            ],
+            { type: "application/json" }
+          )
+          downloadBlobFile(flashcardsBlob, `${artifact.title}.json`)
+          return
+        }
+
+        if (artifact.content) {
+          const flashcardsTextBlob = new Blob([artifact.content], {
+            type: "text/plain"
+          })
+          downloadBlobFile(flashcardsTextBlob, `${artifact.title}.txt`)
+        }
+        return
+      }
+
       if (artifact.serverId && artifact.type !== "mindmap") {
         try {
           const blob = await tldwClient.downloadOutput(String(artifact.serverId))

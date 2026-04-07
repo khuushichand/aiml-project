@@ -1,7 +1,5 @@
 import "../styles/globals.css"
-// react-pdf text/annotation layer styles for Document Workspace
-import "react-pdf/dist/esm/Page/AnnotationLayer.css"
-import "react-pdf/dist/esm/Page/TextLayer.css"
+import "@/assets/react-pdf.css"
 import "@web/extension/shims/runtime-bootstrap"
 // Use web-specific i18n that works with SSR/static generation
 import "@web/lib/i18n-web"
@@ -9,7 +7,11 @@ import type { AppProps } from "next/app"
 import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
 import React from "react"
+import { BackendRecoveryUiProvider } from "@/components/Common/BackendRecoveryUiContext"
 import { AppProviders } from "@web/components/AppProviders"
+import ErrorBoundary from "@web/components/ErrorBoundary"
+import { ConfigurationGuard } from "@web/components/networking/ConfigurationGuard"
+import { ServerReadinessGate } from "@web/components/networking/ServerReadinessGate"
 import { loadTldwAuth, loadTldwClient } from "@web/lib/configured-auth-state"
 
 const OptionLayout = dynamic(
@@ -254,17 +256,25 @@ export default function App({ Component, pageProps }: AppProps) {
 
   return (
     <AppProviders>
-      {isPublicAuthRoute ? (
-        <Component {...pageProps} />
-      ) : (
-        <OptionLayout
-          hideHeader={hideShellNav}
-          hideSidebar={hideShellNav || isSettingsRoute}
-          allowNestedHideHeader={!isSettingsRoute}
-        >
-          <Component {...pageProps} />
-        </OptionLayout>
-      )}
+      <ServerReadinessGate>
+      <ConfigurationGuard>
+        <BackendRecoveryUiProvider routeRecoveryEnabled>
+          <ErrorBoundary>
+            {isPublicAuthRoute ? (
+              <Component {...pageProps} />
+            ) : (
+              <OptionLayout
+                hideHeader={hideShellNav}
+                hideSidebar={hideShellNav || isSettingsRoute}
+                allowNestedHideHeader={!isSettingsRoute}
+              >
+                <Component {...pageProps} />
+              </OptionLayout>
+            )}
+          </ErrorBoundary>
+        </BackendRecoveryUiProvider>
+      </ConfigurationGuard>
+      </ServerReadinessGate>
     </AppProviders>
   )
 }

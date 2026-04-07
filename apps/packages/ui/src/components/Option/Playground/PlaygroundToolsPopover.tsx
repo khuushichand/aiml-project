@@ -64,6 +64,7 @@ export interface PlaygroundToolsPopoverProps {
 
   // Voice
   voiceChatAvailable: boolean
+  voiceChatUnavailableReason?: string | null
   voiceChatEnabled: boolean
   voiceChatState: string
   voiceChatStatusLabel: string
@@ -113,6 +114,7 @@ export const PlaygroundToolsPopover: React.FC<PlaygroundToolsPopoverProps> =
       onShowMoodConfidenceChange,
       onOpenRawRequest,
       voiceChatAvailable,
+      voiceChatUnavailableReason,
       voiceChatEnabled,
       voiceChatState,
       voiceChatStatusLabel,
@@ -372,32 +374,35 @@ export const PlaygroundToolsPopover: React.FC<PlaygroundToolsPopoverProps> =
                 title={
                   voiceChatAvailable
                     ? voiceChatStatusLabel
-                    : t(
+                    : voiceChatUnavailableReason ??
+                      t(
                         "playground:voiceChat.unavailableTitle",
                         "Voice chat unavailable"
                       )
                 }
               >
-                <button
-                  type="button"
-                  onClick={onVoiceChatToggle}
-                  disabled={!voiceChatAvailable || isSending}
-                  className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                    voiceChatState === "error"
-                      ? "text-danger"
-                      : voiceChatEnabled && voiceChatState !== "idle"
-                        ? "bg-surface2 text-primaryStrong"
-                        : "text-text hover:bg-surface2"
-                  }`}
-                >
-                  <span>
-                    {t(
-                      "playground:tools.voiceSettings",
-                      "Voice settings"
-                    )}
-                  </span>
-                  <Headphones className="h-4 w-4" />
-                </button>
+                <span className="inline-flex w-full">
+                  <button
+                    type="button"
+                    onClick={onVoiceChatToggle}
+                    disabled={!voiceChatAvailable || isSending}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      voiceChatState === "error"
+                        ? "text-danger"
+                        : voiceChatEnabled && voiceChatState !== "idle"
+                          ? "bg-surface2 text-primaryStrong"
+                          : "text-text hover:bg-surface2"
+                    }`}
+                  >
+                    <span>
+                      {t(
+                        "playground:tools.voiceSettings",
+                        "Voice settings"
+                      )}
+                    </span>
+                    <Headphones className="h-4 w-4" />
+                  </button>
+                </span>
               </Tooltip>
               <div
                 className={`flex flex-col gap-2 text-xs ${

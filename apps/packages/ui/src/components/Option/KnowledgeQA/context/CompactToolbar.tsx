@@ -2,6 +2,7 @@ import React from "react"
 import { Layers, Globe, ChevronDown, Settings } from "lucide-react"
 import { cn } from "@/libs/utils"
 import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
+import { AnswerModelMenu } from "./AnswerModelMenu"
 
 type CompactToolbarProps = {
   sources: RagSource[]
@@ -10,7 +11,12 @@ type CompactToolbarProps = {
   onToggleWeb: () => void
   onOpenSourceSelector: () => void
   onOpenSettings: () => void
+  generationProvider: string | null
+  generationModel: string | null
+  onGenerationProviderChange: (provider: string | null) => void
+  onGenerationModelChange: (model: string | null) => void
   contextChangedSinceLastRun: boolean
+  className?: string
 }
 
 const ALL_SOURCES_THRESHOLD = 5
@@ -44,10 +50,15 @@ export function CompactToolbar({
   onToggleWeb,
   onOpenSourceSelector,
   onOpenSettings,
+  generationProvider,
+  generationModel,
+  onGenerationProviderChange,
+  onGenerationModelChange,
   contextChangedSinceLastRun,
+  className,
 }: CompactToolbarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className={cn("flex flex-wrap items-center gap-2", className)}>
       {/* Sources pill */}
       <button
         type="button"
@@ -87,6 +98,13 @@ export function CompactToolbar({
         <Globe className={cn("h-3.5 w-3.5", webEnabled ? "fill-current" : "")} />
         Web
       </button>
+
+      <AnswerModelMenu
+        generationProvider={generationProvider}
+        generationModel={generationModel}
+        onGenerationProviderChange={onGenerationProviderChange}
+        onGenerationModelChange={onGenerationModelChange}
+      />
 
       {/* Settings gear */}
       <button

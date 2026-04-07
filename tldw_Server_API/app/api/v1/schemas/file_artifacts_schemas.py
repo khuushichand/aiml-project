@@ -100,6 +100,23 @@ class FileDeleteResponse(BaseModel):
     file_deleted: bool = False
 
 
+class ReferenceImageListItem(BaseModel):
+    """Picker-safe metadata for a reference image candidate."""
+
+    file_id: int
+    title: str
+    mime_type: str
+    width: int | None = None
+    height: int | None = None
+    created_at: datetime
+
+
+class ReferenceImageListResponse(BaseModel):
+    """Response wrapper for picker-safe reference image candidates."""
+
+    items: list[ReferenceImageListItem] = Field(default_factory=list)
+
+
 class FileArtifactsPurgeRequest(BaseModel):
     """Request to purge file artifacts."""
     delete_files: bool = False

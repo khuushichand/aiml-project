@@ -108,6 +108,7 @@ from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
     normalize_fsrs_settings,
     simulate_fsrs_review_transition,
 )
+from tldw_Server_API.app.core.Persona.buddy import resolve_persona_buddy_profile  # noqa: E402
 
 #
 ########################################################################################################################
@@ -115,6 +116,14 @@ from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
 # Functions:
 
 _SUPPORTED_FLASHCARD_SCHEDULERS = {"sm2_plus", "fsrs"}
+_SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES = {"lined", "grid", "cornell"}
+_SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES = {"off", "accented"}
+_FLASHCARD_REVIEW_SESSION_STATUSES = frozenset({"active", "completed", "abandoned"})
+_FLASHCARD_REVIEW_MODES = frozenset({"due", "cram"})
+_FLASHCARD_REVIEW_SESSION_TIMEOUT = timedelta(minutes=30)
+_SUPPORTED_WEB_CLIPPER_DESTINATIONS = {"note", "workspace", "both"}
+_SUPPORTED_WEB_CLIPPER_OUTCOME_STATES = {"saved", "saved_with_warnings", "partially_saved", "failed"}
+_SUPPORTED_WEB_CLIPPER_ENRICHMENT_TYPES = {"ocr", "vlm"}
 
 
 def _coerce_scheduler_type(value: Any) -> str:
@@ -528,7 +537,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 38  # Schema v38 adds quiz remediation conversion state
+    _CURRENT_SCHEMA_VERSION = 44  # Schema v44 adds sync metadata to scene-link tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -618,9 +627,15 @@ class CharactersRAGDB:
         ("decks", "id"),
         ("flashcards", "id"),
         ("flashcard_reviews", "id"),
+        ("flashcard_review_sessions", "id"),
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("study_packs", "id"),
+        ("study_pack_cards", "id"),
+        ("flashcard_citations", "id"),
+        ("suggestion_snapshots", "id"),
+        ("suggestion_generation_links", "id"),
         ("study_assistant_threads", "id"),
         ("study_assistant_messages", "id"),
         ("writing_templates", "id"),
@@ -1410,6 +1425,7 @@ CREATE TABLE IF NOT EXISTS decks(
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT UNIQUE NOT NULL,
   description   TEXT,
+  workspace_id  TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted       BOOLEAN  NOT NULL DEFAULT 0,
@@ -1418,6 +1434,7 @@ CREATE TABLE IF NOT EXISTS decks(
 );
 CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks(deleted);
 CREATE INDEX IF NOT EXISTS idx_decks_last_modified ON decks(last_modified);
+CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id);
 
 /* Flashcards table - with integer id for FTS external-content */
 CREATE TABLE IF NOT EXISTS flashcards(
@@ -1509,6 +1526,24 @@ CREATE TABLE IF NOT EXISTS flashcard_reviews(
 );
 CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(card_id);
 CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_time ON flashcard_reviews(reviewed_at);
+
+/* Review session persistence for grouped flashcard study runs */
+CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  deck_id          INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+  review_mode      TEXT NOT NULL DEFAULT 'due',
+  tag_filter       TEXT,
+  scope_key        TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'active',
+  started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at     DATETIME,
+  client_id        TEXT NOT NULL DEFAULT 'unknown'
+);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id);
+CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_activity ON flashcard_review_sessions(last_activity_at);
 
 /* Sync triggers for decks */
 DROP TRIGGER IF EXISTS decks_sync_create;
@@ -1933,6 +1968,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
   name TEXT NOT NULL,
   description TEXT,
   workspace_tag TEXT,
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   media_id INTEGER,
   total_questions INTEGER DEFAULT 0,
   time_limit_seconds INTEGER,
@@ -1946,6 +1982,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
 CREATE INDEX IF NOT EXISTS idx_quizzes_media_id ON quizzes(media_id);
 CREATE INDEX IF NOT EXISTS idx_quizzes_deleted ON quizzes(deleted);
 CREATE INDEX IF NOT EXISTS idx_quizzes_last_modified ON quizzes(last_modified);
+CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id);
 
 /* Quiz questions */
 CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -3150,6 +3187,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     name          TEXT    NOT NULL,
     description   TEXT,
     metadata_json TEXT    NOT NULL DEFAULT '{}',
+    study_materials_policy TEXT NOT NULL DEFAULT 'general',
     archived      BOOLEAN NOT NULL DEFAULT false,
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3259,6 +3297,1714 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 38;
 """
+    _MIGRATION_SQL_V38_TO_V39 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 39 - Workspace ownership for quizzes/decks + workspace policy (2026-03-27)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 39
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 39;
+"""
+    _MIGRATION_SQL_V38_TO_V39_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 39 - Workspace ownership for quizzes/decks + workspace policy (2026-03-27)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 39
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 39;
+"""
+    _MIGRATION_SQL_V39_TO_V40 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31)
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+    _MIGRATION_SQL_V39_TO_V40_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 40 - Persona buddy storage contract (2026-03-31) [Postgres]
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_buddies (
+  persona_id TEXT PRIMARY KEY REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  derivation_version INTEGER NOT NULL DEFAULT 1,
+  source_fingerprint TEXT NOT NULL,
+  derived_core_json TEXT NOT NULL DEFAULT '{}',
+  overlay_preferences_json TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_persona_buddies_user
+  ON persona_buddies(user_id, persona_id);
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+    _MIGRATION_SQL_V40_TO_V41 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 41 - Manuscript management tables (2026-04-03)
+───────────────────────────────────────────────────────────────*/
+
+/* ── manuscript_projects ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_projects (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL,
+  subtitle         TEXT,
+  author           TEXT,
+  genre            TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK(status IN ('draft','outlining','writing','revising','complete','archived')),
+  synopsis         TEXT,
+  target_word_count INTEGER,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  settings_json    TEXT NOT NULL DEFAULT '{}',
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_projects_deleted
+  ON manuscript_projects(deleted);
+
+/* ── manuscript_parts ──────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_parts (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_deleted
+  ON manuscript_parts(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_project
+  ON manuscript_parts(project_id, sort_order);
+
+/* ── manuscript_chapters ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_chapters (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  part_id          TEXT REFERENCES manuscript_parts(id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  pov_character_id TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_deleted
+  ON manuscript_chapters(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_project
+  ON manuscript_chapters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_part
+  ON manuscript_chapters(part_id, sort_order);
+
+/* ── manuscript_scenes ─────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_scenes (
+  id               TEXT PRIMARY KEY,
+  chapter_id       TEXT NOT NULL REFERENCES manuscript_chapters(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  content_json     TEXT,
+  content_plain    TEXT,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  pov_character_id TEXT,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT 0,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_deleted
+  ON manuscript_scenes(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_chapter
+  ON manuscript_scenes(chapter_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
+  ON manuscript_scenes(project_id);
+
+/* ── manuscript_scenes FTS5 ────────────────────────────────── */
+CREATE VIRTUAL TABLE IF NOT EXISTS manuscript_scenes_fts
+USING fts5(
+  title, content_plain, synopsis,
+  content='manuscript_scenes',
+  content_rowid='rowid'
+);
+
+DROP TRIGGER IF EXISTS manuscript_scenes_ai;
+DROP TRIGGER IF EXISTS manuscript_scenes_au;
+DROP TRIGGER IF EXISTS manuscript_scenes_ad;
+
+CREATE TRIGGER manuscript_scenes_ai
+AFTER INSERT ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(rowid, title, content_plain, synopsis)
+  SELECT new.rowid, new.title, new.content_plain, new.synopsis
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER manuscript_scenes_au
+AFTER UPDATE ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(manuscript_scenes_fts, rowid, title, content_plain, synopsis)
+  SELECT 'delete', old.rowid, old.title, old.content_plain, old.synopsis
+  WHERE old.deleted = 0;
+
+  INSERT INTO manuscript_scenes_fts(rowid, title, content_plain, synopsis)
+  SELECT new.rowid, new.title, new.content_plain, new.synopsis
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER manuscript_scenes_ad
+AFTER DELETE ON manuscript_scenes BEGIN
+  INSERT INTO manuscript_scenes_fts(manuscript_scenes_fts, rowid, title, content_plain, synopsis)
+  VALUES('delete', old.rowid, old.title, old.content_plain, old.synopsis);
+END;
+
+/* ── sync triggers: manuscript_projects ────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_projects_sync_create;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_update;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_projects_sync_undelete;
+
+CREATE TRIGGER manuscript_projects_sync_create
+AFTER INSERT ON manuscript_projects BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_update
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.subtitle IS NOT NEW.subtitle OR
+     OLD.author IS NOT NEW.author OR
+     OLD.genre IS NOT NEW.genre OR
+     OLD.status IS NOT NEW.status OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.target_word_count IS NOT NEW.target_word_count OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.settings_json IS NOT NEW.settings_json OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_delete
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_projects_sync_undelete
+AFTER UPDATE ON manuscript_projects
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_projects', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'title',NEW.title,'subtitle',NEW.subtitle,'author',NEW.author,
+                     'genre',NEW.genre,'status',NEW.status,'synopsis',NEW.synopsis,
+                     'target_word_count',NEW.target_word_count,'word_count',NEW.word_count,
+                     'settings_json',NEW.settings_json,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_parts ───────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_parts_sync_create;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_update;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_parts_sync_undelete;
+
+CREATE TRIGGER manuscript_parts_sync_create
+AFTER INSERT ON manuscript_parts BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_update
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_delete
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_parts_sync_undelete
+AFTER UPDATE ON manuscript_parts
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_parts', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,'word_count',NEW.word_count,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_chapters ────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_create;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_update;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_chapters_sync_undelete;
+
+CREATE TRIGGER manuscript_chapters_sync_create
+AFTER INSERT ON manuscript_chapters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_update
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.part_id IS NOT NEW.part_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.pov_character_id IS NOT NEW.pov_character_id OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.status IS NOT NEW.status OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_delete
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_chapters_sync_undelete
+AFTER UPDATE ON manuscript_chapters
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_chapters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'part_id',NEW.part_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,'synopsis',NEW.synopsis,
+                     'pov_character_id',NEW.pov_character_id,'word_count',NEW.word_count,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_scenes ──────────────────────── */
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_create;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_update;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_scenes_sync_undelete;
+
+CREATE TRIGGER manuscript_scenes_sync_create
+AFTER INSERT ON manuscript_scenes BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_update
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.content_json IS NOT NEW.content_json OR
+     OLD.content_plain IS NOT NEW.content_plain OR
+     OLD.synopsis IS NOT NEW.synopsis OR
+     OLD.word_count IS NOT NEW.word_count OR
+     OLD.pov_character_id IS NOT NEW.pov_character_id OR
+     OLD.status IS NOT NEW.status OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_delete
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_scenes_sync_undelete
+AFTER UPDATE ON manuscript_scenes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scenes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'chapter_id',NEW.chapter_id,'project_id',NEW.project_id,
+                     'title',NEW.title,'sort_order',NEW.sort_order,
+                     'content_json',NEW.content_json,'content_plain',NEW.content_plain,
+                     'synopsis',NEW.synopsis,
+                     'word_count',NEW.word_count,'pov_character_id',NEW.pov_character_id,
+                     'status',NEW.status,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── FK consistency triggers: parent project_id must match ─── */
+DROP TRIGGER IF EXISTS manuscript_chapters_check_project;
+DROP TRIGGER IF EXISTS manuscript_chapters_check_project_update;
+DROP TRIGGER IF EXISTS manuscript_scenes_check_project;
+DROP TRIGGER IF EXISTS manuscript_scenes_check_project_update;
+
+CREATE TRIGGER manuscript_chapters_check_project
+BEFORE INSERT ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
+    THEN RAISE(ABORT, 'chapter project_id must match its parent part project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_chapters_check_project_update
+BEFORE UPDATE ON manuscript_chapters
+WHEN NEW.part_id IS NOT NULL
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_parts WHERE id = NEW.part_id) != NEW.project_id
+    THEN RAISE(ABORT, 'chapter project_id must match its parent part project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_scenes_check_project
+BEFORE INSERT ON manuscript_scenes
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_chapters WHERE id = NEW.chapter_id) != NEW.project_id
+    THEN RAISE(ABORT, 'scene project_id must match its parent chapter project_id')
+  END;
+END;
+
+CREATE TRIGGER manuscript_scenes_check_project_update
+BEFORE UPDATE ON manuscript_scenes
+BEGIN
+  SELECT CASE
+    WHEN (SELECT project_id FROM manuscript_chapters WHERE id = NEW.chapter_id) != NEW.project_id
+    THEN RAISE(ABORT, 'scene project_id must match its parent chapter project_id')
+  END;
+END;
+
+UPDATE db_schema_version
+   SET version = 41
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 41;
+"""
+
+    _MIGRATION_SQL_V40_TO_V41_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 41 - Manuscript management tables (2026-04-03) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+/* ── manuscript_projects ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_projects (
+  id               TEXT PRIMARY KEY,
+  title            TEXT NOT NULL,
+  subtitle         TEXT,
+  author           TEXT,
+  genre            TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK(status IN ('draft','outlining','writing','revising','complete','archived')),
+  synopsis         TEXT,
+  target_word_count INTEGER,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  settings_json    TEXT NOT NULL DEFAULT '{}',
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_projects_deleted
+  ON manuscript_projects(deleted);
+
+/* ── manuscript_parts ──────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_parts (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_deleted
+  ON manuscript_parts(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_parts_project
+  ON manuscript_parts(project_id, sort_order);
+
+/* ── manuscript_chapters ───────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_chapters (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  part_id          TEXT REFERENCES manuscript_parts(id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  synopsis         TEXT,
+  pov_character_id TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_deleted
+  ON manuscript_chapters(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_project
+  ON manuscript_chapters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_chapters_part
+  ON manuscript_chapters(part_id, sort_order);
+
+/* ── manuscript_scenes ─────────────────────────────────────── */
+CREATE TABLE IF NOT EXISTS manuscript_scenes (
+  id               TEXT PRIMARY KEY,
+  chapter_id       TEXT NOT NULL REFERENCES manuscript_chapters(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title            TEXT,
+  sort_order       REAL NOT NULL DEFAULT 0,
+  content_json     TEXT,
+  content_plain    TEXT,
+  synopsis         TEXT,
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  pov_character_id TEXT,
+  status           TEXT NOT NULL DEFAULT 'outline'
+                     CHECK(status IN ('outline','draft','revising','final')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted          BOOLEAN  NOT NULL DEFAULT FALSE,
+  client_id        TEXT     NOT NULL,
+  version          INTEGER  NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_deleted
+  ON manuscript_scenes(deleted);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_chapter
+  ON manuscript_scenes(chapter_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_manuscript_scenes_project
+  ON manuscript_scenes(project_id);
+
+/* Note: FTS5 is SQLite-only; Postgres would use tsvector/GIN instead.
+   Sync triggers also use SQLite-specific json_object(); Postgres equivalent
+   would use jsonb_build_object(). Skipped for now — only tables + indexes. */
+
+-- Postgres v40→v41 adds manuscript tables only (FTS5 and sync triggers are SQLite-specific)
+-- Version stays at 40 until Postgres equivalents (tsvector search, NOTIFY-based sync) are added
+UPDATE db_schema_version
+   SET version = 40
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 40;
+"""
+
+    # --- Migration: V41 -> V42 (Characters, world info, plot, citations) ---
+    _MIGRATION_SQL_V41_TO_V42 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 42 — Characters, world info, plot, citations (2026-04-XX)
+───────────────────────────────────────────────────────────────*/
+
+-- CHARACTERS
+CREATE TABLE IF NOT EXISTS manuscript_characters (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'supporting'
+                    CHECK(role IN ('protagonist','antagonist','supporting','minor','mentioned')),
+  cast_group      TEXT,
+  full_name       TEXT,
+  age             TEXT,
+  gender          TEXT,
+  appearance      TEXT,
+  personality     TEXT,
+  backstory       TEXT,
+  motivation      TEXT,
+  arc_summary     TEXT,
+  notes           TEXT,
+  custom_fields_json TEXT NOT NULL DEFAULT '{}',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mchr_project ON manuscript_characters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mchr_role ON manuscript_characters(project_id, role);
+CREATE INDEX IF NOT EXISTS idx_mchr_deleted ON manuscript_characters(deleted);
+
+-- CHARACTER RELATIONSHIPS
+CREATE TABLE IF NOT EXISTS manuscript_character_relationships (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  from_character_id TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  to_character_id   TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL,
+  description       TEXT,
+  bidirectional     BOOLEAN NOT NULL DEFAULT 1,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted           BOOLEAN NOT NULL DEFAULT 0,
+  client_id         TEXT NOT NULL DEFAULT 'unknown',
+  version           INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcrel_project ON manuscript_character_relationships(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_from ON manuscript_character_relationships(from_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_to ON manuscript_character_relationships(to_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_deleted ON manuscript_character_relationships(deleted);
+
+-- WORLD INFO
+CREATE TABLE IF NOT EXISTS manuscript_world_info (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK(kind IN ('location','item','faction','concept','event','custom')),
+  name            TEXT NOT NULL,
+  description     TEXT,
+  parent_id       TEXT REFERENCES manuscript_world_info(id) ON DELETE SET NULL,
+  properties_json TEXT NOT NULL DEFAULT '{}',
+  tags_json       TEXT NOT NULL DEFAULT '[]',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mwi_project_kind ON manuscript_world_info(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_mwi_parent ON manuscript_world_info(parent_id);
+CREATE INDEX IF NOT EXISTS idx_mwi_deleted ON manuscript_world_info(deleted);
+
+-- PLOT LINES
+CREATE TABLE IF NOT EXISTS manuscript_plot_lines (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'active'
+                  CHECK(status IN ('active','resolved','abandoned','dormant')),
+  color         TEXT,
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpl_project ON manuscript_plot_lines(project_id);
+CREATE INDEX IF NOT EXISTS idx_mpl_deleted ON manuscript_plot_lines(deleted);
+
+-- PLOT EVENTS
+CREATE TABLE IF NOT EXISTS manuscript_plot_events (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  plot_line_id  TEXT NOT NULL REFERENCES manuscript_plot_lines(id) ON DELETE CASCADE,
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  event_type    TEXT NOT NULL DEFAULT 'plot'
+                  CHECK(event_type IN ('setup','conflict','action','emotional','plot','resolution')),
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpe_plot_line ON manuscript_plot_events(plot_line_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mpe_scene ON manuscript_plot_events(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mpe_deleted ON manuscript_plot_events(deleted);
+
+-- PLOT HOLES
+CREATE TABLE IF NOT EXISTS manuscript_plot_holes (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  severity      TEXT NOT NULL DEFAULT 'medium'
+                  CHECK(severity IN ('low','medium','high','critical')),
+  status        TEXT NOT NULL DEFAULT 'open'
+                  CHECK(status IN ('open','investigating','resolved','wontfix')),
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  plot_line_id  TEXT REFERENCES manuscript_plot_lines(id) ON DELETE SET NULL,
+  resolution    TEXT,
+  detected_by   TEXT NOT NULL DEFAULT 'manual'
+                  CHECK(detected_by IN ('manual','ai')),
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mph_project ON manuscript_plot_holes(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_mph_deleted ON manuscript_plot_holes(deleted);
+
+-- SCENE-CHARACTER LINKING (no soft delete, no version — simple join table)
+CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  is_pov        BOOLEAN NOT NULL DEFAULT 0,
+  last_modified TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (scene_id, character_id)
+);
+
+-- SCENE-WORLD_INFO LINKING
+CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
+  scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  last_modified   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  deleted         BOOLEAN NOT NULL DEFAULT 0,
+  client_id       TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (scene_id, world_info_id)
+);
+
+-- CITATIONS (references from RAG into manuscript)
+CREATE TABLE IF NOT EXISTS manuscript_citations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  source_type   TEXT NOT NULL,
+  source_id     TEXT,
+  source_title  TEXT,
+  excerpt       TEXT,
+  query_used    TEXT,
+  anchor_offset INTEGER,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcit_scene ON manuscript_citations(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_project ON manuscript_citations(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_deleted ON manuscript_citations(deleted);
+
+/* ── sync triggers: manuscript_characters ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_characters_sync_create;
+DROP TRIGGER IF EXISTS manuscript_characters_sync_update;
+DROP TRIGGER IF EXISTS manuscript_characters_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_characters_sync_undelete;
+
+CREATE TRIGGER manuscript_characters_sync_create
+AFTER INSERT ON manuscript_characters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_characters_sync_update
+AFTER UPDATE ON manuscript_characters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.role IS NOT NEW.role OR
+     OLD.cast_group IS NOT NEW.cast_group OR
+     OLD.full_name IS NOT NEW.full_name OR
+     OLD.age IS NOT NEW.age OR
+     OLD.gender IS NOT NEW.gender OR
+     OLD.appearance IS NOT NEW.appearance OR
+     OLD.personality IS NOT NEW.personality OR
+     OLD.backstory IS NOT NEW.backstory OR
+     OLD.motivation IS NOT NEW.motivation OR
+     OLD.arc_summary IS NOT NEW.arc_summary OR
+     OLD.notes IS NOT NEW.notes OR
+     OLD.custom_fields_json IS NOT NEW.custom_fields_json OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.age IS NOT NEW.age OR
+     OLD.gender IS NOT NEW.gender OR
+     OLD.notes IS NOT NEW.notes OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_characters_sync_delete
+AFTER UPDATE ON manuscript_characters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_characters_sync_undelete
+AFTER UPDATE ON manuscript_characters
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_characters', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'name',NEW.name,'role',NEW.role,
+                     'cast_group',NEW.cast_group,'full_name',NEW.full_name,
+                     'age',NEW.age,'gender',NEW.gender,
+                     'appearance',NEW.appearance,'personality',NEW.personality,
+                     'backstory',NEW.backstory,'motivation',NEW.motivation,
+                     'arc_summary',NEW.arc_summary,'notes',NEW.notes,
+                     'custom_fields_json',NEW.custom_fields_json,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_character_relationships ─────── */
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_create;
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_update;
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_character_relationships_sync_undelete;
+
+CREATE TRIGGER manuscript_character_relationships_sync_create
+AFTER INSERT ON manuscript_character_relationships BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,
+                     'from_character_id',NEW.from_character_id,'to_character_id',NEW.to_character_id,
+                     'relationship_type',NEW.relationship_type,'description',NEW.description,
+                     'bidirectional',NEW.bidirectional,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_character_relationships_sync_update
+AFTER UPDATE ON manuscript_character_relationships
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.relationship_type IS NOT NEW.relationship_type OR
+     OLD.description IS NOT NEW.description OR
+     OLD.bidirectional IS NOT NEW.bidirectional OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,
+                     'from_character_id',NEW.from_character_id,'to_character_id',NEW.to_character_id,
+                     'relationship_type',NEW.relationship_type,'description',NEW.description,
+                     'bidirectional',NEW.bidirectional,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_character_relationships_sync_delete
+AFTER UPDATE ON manuscript_character_relationships
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_character_relationships_sync_undelete
+AFTER UPDATE ON manuscript_character_relationships
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_character_relationships', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,
+                     'from_character_id',NEW.from_character_id,'to_character_id',NEW.to_character_id,
+                     'relationship_type',NEW.relationship_type,'description',NEW.description,
+                     'bidirectional',NEW.bidirectional,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_world_info ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_create;
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_update;
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_world_info_sync_undelete;
+
+CREATE TRIGGER manuscript_world_info_sync_create
+AFTER INSERT ON manuscript_world_info BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
+                     'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_world_info_sync_update
+AFTER UPDATE ON manuscript_world_info
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.kind IS NOT NEW.kind OR
+     OLD.name IS NOT NEW.name OR
+     OLD.description IS NOT NEW.description OR
+     OLD.parent_id IS NOT NEW.parent_id OR
+     OLD.properties_json IS NOT NEW.properties_json OR
+     OLD.tags_json IS NOT NEW.tags_json OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
+                     'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_world_info_sync_delete
+AFTER UPDATE ON manuscript_world_info
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_world_info_sync_undelete
+AFTER UPDATE ON manuscript_world_info
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_world_info', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'kind',NEW.kind,'name',NEW.name,
+                     'description',NEW.description,'parent_id',NEW.parent_id,
+                     'properties_json',NEW.properties_json,'tags_json',NEW.tags_json,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_plot_lines ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_create;
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_update;
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_plot_lines_sync_undelete;
+
+CREATE TRIGGER manuscript_plot_lines_sync_create
+AFTER INSERT ON manuscript_plot_lines BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'status',NEW.status,'color',NEW.color,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_lines_sync_update
+AFTER UPDATE ON manuscript_plot_lines
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.description IS NOT NEW.description OR
+     OLD.status IS NOT NEW.status OR
+     OLD.color IS NOT NEW.color OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'status',NEW.status,'color',NEW.color,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_lines_sync_delete
+AFTER UPDATE ON manuscript_plot_lines
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_plot_lines_sync_undelete
+AFTER UPDATE ON manuscript_plot_lines
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_lines', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'status',NEW.status,'color',NEW.color,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_plot_events ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_create;
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_update;
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_plot_events_sync_undelete;
+
+CREATE TRIGGER manuscript_plot_events_sync_create
+AFTER INSERT ON manuscript_plot_events BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'plot_line_id',NEW.plot_line_id,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,
+                     'title',NEW.title,'description',NEW.description,'event_type',NEW.event_type,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_events_sync_update
+AFTER UPDATE ON manuscript_plot_events
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.description IS NOT NEW.description OR
+     OLD.event_type IS NOT NEW.event_type OR
+     OLD.scene_id IS NOT NEW.scene_id OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.plot_line_id IS NOT NEW.plot_line_id OR
+     OLD.sort_order IS NOT NEW.sort_order OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'plot_line_id',NEW.plot_line_id,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,
+                     'title',NEW.title,'description',NEW.description,'event_type',NEW.event_type,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_events_sync_delete
+AFTER UPDATE ON manuscript_plot_events
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_plot_events_sync_undelete
+AFTER UPDATE ON manuscript_plot_events
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_events', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'plot_line_id',NEW.plot_line_id,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,
+                     'title',NEW.title,'description',NEW.description,'event_type',NEW.event_type,
+                     'sort_order',NEW.sort_order,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_plot_holes ──────────────────── */
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_create;
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_update;
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_plot_holes_sync_undelete;
+
+CREATE TRIGGER manuscript_plot_holes_sync_create
+AFTER INSERT ON manuscript_plot_holes BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'severity',NEW.severity,'status',NEW.status,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,'plot_line_id',NEW.plot_line_id,
+                     'resolution',NEW.resolution,'detected_by',NEW.detected_by,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_holes_sync_update
+AFTER UPDATE ON manuscript_plot_holes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.title IS NOT NEW.title OR
+     OLD.description IS NOT NEW.description OR
+     OLD.severity IS NOT NEW.severity OR
+     OLD.status IS NOT NEW.status OR
+     OLD.resolution IS NOT NEW.resolution OR
+     OLD.scene_id IS NOT NEW.scene_id OR
+     OLD.chapter_id IS NOT NEW.chapter_id OR
+     OLD.plot_line_id IS NOT NEW.plot_line_id OR
+     OLD.detected_by IS NOT NEW.detected_by OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'severity',NEW.severity,'status',NEW.status,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,'plot_line_id',NEW.plot_line_id,
+                     'resolution',NEW.resolution,'detected_by',NEW.detected_by,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_plot_holes_sync_delete
+AFTER UPDATE ON manuscript_plot_holes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_plot_holes_sync_undelete
+AFTER UPDATE ON manuscript_plot_holes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_plot_holes', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'title',NEW.title,
+                     'description',NEW.description,'severity',NEW.severity,'status',NEW.status,
+                     'scene_id',NEW.scene_id,'chapter_id',NEW.chapter_id,'plot_line_id',NEW.plot_line_id,
+                     'resolution',NEW.resolution,'detected_by',NEW.detected_by,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+/* ── sync triggers: manuscript_citations ───────────────────── */
+DROP TRIGGER IF EXISTS manuscript_citations_sync_create;
+DROP TRIGGER IF EXISTS manuscript_citations_sync_update;
+DROP TRIGGER IF EXISTS manuscript_citations_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_citations_sync_undelete;
+
+CREATE TRIGGER manuscript_citations_sync_create
+AFTER INSERT ON manuscript_citations BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scene_id',NEW.scene_id,
+                     'source_type',NEW.source_type,'source_id',NEW.source_id,
+                     'source_title',NEW.source_title,'excerpt',NEW.excerpt,
+                     'query_used',NEW.query_used,'anchor_offset',NEW.anchor_offset,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_citations_sync_update
+AFTER UPDATE ON manuscript_citations
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.source_type IS NOT NEW.source_type OR
+     OLD.source_id IS NOT NEW.source_id OR
+     OLD.source_title IS NOT NEW.source_title OR
+     OLD.excerpt IS NOT NEW.excerpt OR
+     OLD.query_used IS NOT NEW.query_used OR
+     OLD.anchor_offset IS NOT NEW.anchor_offset OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scene_id',NEW.scene_id,
+                     'source_type',NEW.source_type,'source_id',NEW.source_id,
+                     'source_title',NEW.source_title,'excerpt',NEW.excerpt,
+                     'query_used',NEW.query_used,'anchor_offset',NEW.anchor_offset,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_citations_sync_delete
+AFTER UPDATE ON manuscript_citations
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_citations_sync_undelete
+AFTER UPDATE ON manuscript_citations
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_citations', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scene_id',NEW.scene_id,
+                     'source_type',NEW.source_type,'source_id',NEW.source_id,
+                     'source_title',NEW.source_title,'excerpt',NEW.excerpt,
+                     'query_used',NEW.query_used,'anchor_offset',NEW.anchor_offset,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 42
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 42;
+"""
+
+    _MIGRATION_SQL_V41_TO_V42_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 42 — Characters, world info, plot, citations (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_characters (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'supporting'
+                    CHECK(role IN ('protagonist','antagonist','supporting','minor','mentioned')),
+  cast_group      TEXT,
+  full_name       TEXT,
+  age             TEXT,
+  gender          TEXT,
+  appearance      TEXT,
+  personality     TEXT,
+  backstory       TEXT,
+  motivation      TEXT,
+  arc_summary     TEXT,
+  notes           TEXT,
+  custom_fields_json TEXT NOT NULL DEFAULT '{}',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mchr_project ON manuscript_characters(project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mchr_role ON manuscript_characters(project_id, role);
+CREATE INDEX IF NOT EXISTS idx_mchr_deleted ON manuscript_characters(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_character_relationships (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  from_character_id TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  to_character_id   TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL,
+  description       TEXT,
+  bidirectional     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted           BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id         TEXT NOT NULL DEFAULT 'unknown',
+  version           INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcrel_project ON manuscript_character_relationships(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_from ON manuscript_character_relationships(from_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_to ON manuscript_character_relationships(to_character_id);
+CREATE INDEX IF NOT EXISTS idx_mcrel_deleted ON manuscript_character_relationships(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_world_info (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK(kind IN ('location','item','faction','concept','event','custom')),
+  name            TEXT NOT NULL,
+  description     TEXT,
+  parent_id       TEXT REFERENCES manuscript_world_info(id) ON DELETE SET NULL,
+  properties_json TEXT NOT NULL DEFAULT '{}',
+  tags_json       TEXT NOT NULL DEFAULT '[]',
+  sort_order      REAL NOT NULL DEFAULT 0,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT NOT NULL DEFAULT 'unknown',
+  version         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mwi_project_kind ON manuscript_world_info(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_mwi_parent ON manuscript_world_info(parent_id);
+CREATE INDEX IF NOT EXISTS idx_mwi_deleted ON manuscript_world_info(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_plot_lines (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'active'
+                  CHECK(status IN ('active','resolved','abandoned','dormant')),
+  color         TEXT,
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpl_project ON manuscript_plot_lines(project_id);
+CREATE INDEX IF NOT EXISTS idx_mpl_deleted ON manuscript_plot_lines(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_plot_events (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  plot_line_id  TEXT NOT NULL REFERENCES manuscript_plot_lines(id) ON DELETE CASCADE,
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  event_type    TEXT NOT NULL DEFAULT 'plot'
+                  CHECK(event_type IN ('setup','conflict','action','emotional','plot','resolution')),
+  sort_order    REAL NOT NULL DEFAULT 0,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mpe_plot_line ON manuscript_plot_events(plot_line_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mpe_scene ON manuscript_plot_events(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mpe_deleted ON manuscript_plot_events(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_plot_holes (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  severity      TEXT NOT NULL DEFAULT 'medium'
+                  CHECK(severity IN ('low','medium','high','critical')),
+  status        TEXT NOT NULL DEFAULT 'open'
+                  CHECK(status IN ('open','investigating','resolved','wontfix')),
+  scene_id      TEXT REFERENCES manuscript_scenes(id) ON DELETE SET NULL,
+  chapter_id    TEXT REFERENCES manuscript_chapters(id) ON DELETE SET NULL,
+  plot_line_id  TEXT REFERENCES manuscript_plot_lines(id) ON DELETE SET NULL,
+  resolution    TEXT,
+  detected_by   TEXT NOT NULL DEFAULT 'manual'
+                  CHECK(detected_by IN ('manual','ai')),
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mph_project ON manuscript_plot_holes(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_mph_deleted ON manuscript_plot_holes(deleted);
+
+CREATE TABLE IF NOT EXISTS manuscript_scene_characters (
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL REFERENCES manuscript_characters(id) ON DELETE CASCADE,
+  is_pov        BOOLEAN NOT NULL DEFAULT FALSE,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (scene_id, character_id)
+);
+
+CREATE TABLE IF NOT EXISTS manuscript_scene_world_info (
+  scene_id        TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  world_info_id   TEXT NOT NULL REFERENCES manuscript_world_info(id) ON DELETE CASCADE,
+  last_modified   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id       TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (scene_id, world_info_id)
+);
+
+CREATE TABLE IF NOT EXISTS manuscript_citations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scene_id      TEXT NOT NULL REFERENCES manuscript_scenes(id) ON DELETE CASCADE,
+  source_type   TEXT NOT NULL,
+  source_id     TEXT,
+  source_title  TEXT,
+  excerpt       TEXT,
+  query_used    TEXT,
+  anchor_offset INTEGER,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcit_scene ON manuscript_citations(scene_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_project ON manuscript_citations(project_id);
+CREATE INDEX IF NOT EXISTS idx_mcit_deleted ON manuscript_citations(deleted);
+
+UPDATE db_schema_version
+   SET version = 42
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 42;
+"""
+
+    # --- Migration: V42 -> V43 (AI Analyses) ---
+    _MIGRATION_SQL_V42_TO_V43 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 43 — Manuscript AI Analyses (2026-04-XX)
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_ai_analyses (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scope_type    TEXT NOT NULL CHECK(scope_type IN ('scene','chapter','part','project')),
+  scope_id      TEXT NOT NULL,
+  analysis_type TEXT NOT NULL,
+  provider      TEXT,
+  model         TEXT,
+  result_json   TEXT NOT NULL DEFAULT '{}',
+  score         REAL,
+  stale         BOOLEAN NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_maa_scope ON manuscript_ai_analyses(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_maa_project_type ON manuscript_ai_analyses(project_id, analysis_type);
+CREATE INDEX IF NOT EXISTS idx_maa_stale ON manuscript_ai_analyses(stale);
+CREATE INDEX IF NOT EXISTS idx_maa_deleted ON manuscript_ai_analyses(deleted);
+
+/* ── sync triggers: manuscript_ai_analyses ─────────────────── */
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_create;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_update;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_delete;
+DROP TRIGGER IF EXISTS manuscript_ai_analyses_sync_undelete;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_create
+AFTER INSERT ON manuscript_ai_analyses BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'create', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'result_json',NEW.result_json,
+                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_update
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.analysis_type IS NOT NEW.analysis_type OR
+     OLD.result_json IS NOT NEW.result_json OR
+     OLD.score IS NOT NEW.score OR
+     OLD.stale IS NOT NEW.stale OR
+     OLD.provider IS NOT NEW.provider OR
+     OLD.model IS NOT NEW.model OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'result_json',NEW.result_json,
+                     'provider',NEW.provider,'model',NEW.model,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_delete
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'delete', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER manuscript_ai_analyses_sync_undelete
+AFTER UPDATE ON manuscript_ai_analyses
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_ai_analyses', NEW.id, 'update', NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('id',NEW.id,'project_id',NEW.project_id,'scope_type',NEW.scope_type,
+                     'scope_id',NEW.scope_id,'analysis_type',NEW.analysis_type,
+                     'provider',NEW.provider,'model',NEW.model,'result_json',NEW.result_json,'score',NEW.score,
+                     'stale',NEW.stale,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 43
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 43;
+"""
+
+    _MIGRATION_SQL_V42_TO_V43_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 43 — Manuscript AI Analyses (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+CREATE TABLE IF NOT EXISTS manuscript_ai_analyses (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES manuscript_projects(id) ON DELETE CASCADE,
+  scope_type    TEXT NOT NULL CHECK(scope_type IN ('scene','chapter','part','project')),
+  scope_id      TEXT NOT NULL,
+  analysis_type TEXT NOT NULL,
+  provider      TEXT,
+  model         TEXT,
+  result_json   TEXT NOT NULL DEFAULT '{}',
+  score         REAL,
+  stale         BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+  client_id     TEXT NOT NULL DEFAULT 'unknown',
+  version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_maa_scope ON manuscript_ai_analyses(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_maa_project_type ON manuscript_ai_analyses(project_id, analysis_type);
+CREATE INDEX IF NOT EXISTS idx_maa_stale ON manuscript_ai_analyses(stale);
+CREATE INDEX IF NOT EXISTS idx_maa_deleted ON manuscript_ai_analyses(deleted);
+
+UPDATE db_schema_version
+   SET version = 43
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 43;
+"""
+
+    _MIGRATION_SQL_V43_TO_V44 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 44 — Sync metadata on scene-link tables (2026-04-XX)
+  NOTE: ALTER TABLE ADD COLUMN is handled in _migrate_from_v43_to_v44()
+  to avoid errors on fresh databases that already have the columns.
+───────────────────────────────────────────────────────────────*/
+
+-- Backfill last_modified for existing rows (no-op on fresh DBs)
+UPDATE manuscript_scene_characters SET last_modified = strftime('%Y-%m-%dT%H:%M:%f','now') WHERE last_modified = '';
+UPDATE manuscript_scene_world_info SET last_modified = strftime('%Y-%m-%dT%H:%M:%f','now') WHERE last_modified = '';
+
+/* ── sync triggers: manuscript_scene_characters ────────────── */
+DROP TRIGGER IF EXISTS msc_sync_create;
+DROP TRIGGER IF EXISTS msc_sync_update;
+DROP TRIGGER IF EXISTS msc_sync_delete;
+
+CREATE TRIGGER msc_sync_create
+AFTER INSERT ON manuscript_scene_characters BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'create',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'is_pov',NEW.is_pov,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER msc_sync_update
+AFTER UPDATE ON manuscript_scene_characters
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.is_pov IS NOT NEW.is_pov OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'update',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'is_pov',NEW.is_pov,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER msc_sync_delete
+AFTER UPDATE ON manuscript_scene_characters
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_characters', NEW.scene_id || ':' || NEW.character_id, 'delete',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'character_id',NEW.character_id,
+                     'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+/* ── sync triggers: manuscript_scene_world_info ────────────── */
+DROP TRIGGER IF EXISTS mswi_sync_create;
+DROP TRIGGER IF EXISTS mswi_sync_update;
+DROP TRIGGER IF EXISTS mswi_sync_delete;
+
+CREATE TRIGGER mswi_sync_create
+AFTER INSERT ON manuscript_scene_world_info BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'create',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER mswi_sync_update
+AFTER UPDATE ON manuscript_scene_world_info
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'update',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER mswi_sync_delete
+AFTER UPDATE ON manuscript_scene_world_info
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+  VALUES('manuscript_scene_world_info', NEW.scene_id || ':' || NEW.world_info_id, 'delete',
+         NEW.last_modified, NEW.client_id, NEW.version,
+         json_object('scene_id',NEW.scene_id,'world_info_id',NEW.world_info_id,
+                     'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+UPDATE db_schema_version
+   SET version = 44
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 44;
+"""
+
+    _MIGRATION_SQL_V43_TO_V44_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 44 — Sync metadata on scene-link tables (2026-04-XX) [Postgres]
+───────────────────────────────────────────────────────────────*/
+
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE manuscript_scene_characters ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE manuscript_scene_world_info ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+UPDATE db_schema_version
+   SET version = 44
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 44;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5041,6 +6787,140 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V37->V38: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V38 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v38_to_v39(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V38 to V39 (workspace ownership and workspace study materials policy)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V38 to V39 for DB: {self.db_path_str}...")
+        try:
+            self._ensure_workspace_study_material_schema_sqlite(conn)
+            conn.executescript(self._MIGRATION_SQL_V38_TO_V39)
+            final_version = self._get_db_version(conn)
+            if final_version != 39:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V38->V39 failed version check. Expected 39, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V39 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V38->V39 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V38->V39 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V38->V39: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V39 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v39_to_v40(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V39 to V40 (persona buddy storage contract)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V39 to V40 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V39_TO_V40)
+            final_version = self._get_db_version(conn)
+            if final_version != 40:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V39->V40 failed version check. Expected 40, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V40 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V39->V40 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V39->V40 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V39->V40: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V40 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v40_to_v41(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V40 to V41 (manuscript management tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V40 to V41 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V40_TO_V41)
+            final_version = self._get_db_version(conn)
+            if final_version != 41:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V40->V41 failed version check. Expected 41, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V41 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V40->V41 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V40->V41 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V40->V41: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V41 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v41_to_v42(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V41 to V42 (characters, world info, plot, citations)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V41 to V42 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V41_TO_V42)
+            final_version = self._get_db_version(conn)
+            if final_version != 42:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V41->V42 failed version check. Expected 42, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V42 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V41->V42 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V41->V42 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V41->V42: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V42 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v42_to_v43(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V42 to V43 (manuscript AI analyses)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V42 to V43 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V42_TO_V43)
+            final_version = self._get_db_version(conn)
+            if final_version != 43:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V42->V43 failed version check. Expected 43, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V43 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V42->V43 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V42->V43 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V42->V43: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V43 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v43_to_v44(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V43 to V44 (sync metadata on scene-link tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V43 to V44 for DB: {self.db_path_str}...")
+        try:
+            # Only add columns if they don't exist (fresh DBs already have them).
+            for table in ("manuscript_scene_characters", "manuscript_scene_world_info"):
+                existing_cols = {row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+                for col, coldef in (
+                    ("last_modified", "TEXT NOT NULL DEFAULT ''"),
+                    ("deleted", "BOOLEAN NOT NULL DEFAULT 0"),
+                    ("client_id", "TEXT"),
+                    ("version", "INTEGER NOT NULL DEFAULT 1"),
+                ):
+                    if col not in existing_cols:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")  # nosec B608
+
+            # Backfill and create triggers (idempotent via IF EXISTS/IF NOT EXISTS).
+            conn.executescript(self._MIGRATION_SQL_V43_TO_V44)
+            final_version = self._get_db_version(conn)
+            if final_version != 44:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V43->V44 failed version check. Expected 44, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V44 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V43->V44 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V43->V44 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V43->V44: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V44 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -5469,6 +7349,441 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for statement in statements:
             self.backend.execute(statement, connection=conn)
 
+    def _ensure_note_studio_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure the Studio sidecar table exists for SQLite deployments."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_studio_documents(
+                  note_id                 TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  payload_json            TEXT NOT NULL,
+                  template_type           TEXT NOT NULL CHECK(template_type IN ('lined', 'grid', 'cornell')),
+                  handwriting_mode        TEXT NOT NULL CHECK(handwriting_mode IN ('off', 'accented')),
+                  source_note_id          TEXT REFERENCES notes(id) ON DELETE SET NULL ON UPDATE CASCADE,
+                  excerpt_snapshot        TEXT,
+                  excerpt_hash            TEXT,
+                  diagram_manifest_json   TEXT,
+                  companion_content_hash  TEXT,
+                  render_version          INTEGER NOT NULL DEFAULT 1 CHECK(render_version >= 1),
+                  created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_studio_documents_source_note_id ON note_studio_documents(source_note_id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite note studio schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_note_studio_schema_postgres(self, conn: Any) -> None:
+        """Ensure the Studio sidecar table exists for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_studio_documents(
+              note_id                 TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              payload_json            TEXT NOT NULL,
+              template_type           TEXT NOT NULL CHECK(template_type IN ('lined', 'grid', 'cornell')),
+              handwriting_mode        TEXT NOT NULL CHECK(handwriting_mode IN ('off', 'accented')),
+              source_note_id          TEXT REFERENCES notes(id) ON DELETE SET NULL ON UPDATE CASCADE,
+              excerpt_snapshot        TEXT,
+              excerpt_hash            TEXT,
+              diagram_manifest_json   TEXT,
+              companion_content_hash  TEXT,
+              render_version          INTEGER NOT NULL DEFAULT 1 CHECK(render_version >= 1),
+              created_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_studio_documents_source_note_id ON note_studio_documents(source_note_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_web_clipper_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure the web clipper sidecar tables exist for SQLite deployments."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_clipper_documents(
+                  clip_id               TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  note_id               TEXT NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  clip_type             TEXT NOT NULL,
+                  source_url            TEXT,
+                  source_title          TEXT,
+                  capture_metadata_json TEXT NOT NULL DEFAULT '{}',
+                  analysis_json         TEXT NOT NULL DEFAULT '{}',
+                  content_budget_json   TEXT NOT NULL DEFAULT '{}',
+                  source_note_version   INTEGER,
+                  created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted               BOOLEAN NOT NULL DEFAULT 0,
+                  CHECK(clip_id = note_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_clipper_documents_note_id ON note_clipper_documents(note_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_clipper_workspace_placements(
+                  clip_id             TEXT NOT NULL REFERENCES note_clipper_documents(clip_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  workspace_id        TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  workspace_note_id   INTEGER,
+                  source_note_id      TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                  source_note_version INTEGER,
+                  created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted             BOOLEAN NOT NULL DEFAULT 0,
+                  PRIMARY KEY (clip_id, workspace_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_workspace ON note_clipper_workspace_placements(workspace_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_source_note ON note_clipper_workspace_placements(source_note_id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite web clipper schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_web_clipper_schema_postgres(self, conn: Any) -> None:
+        """Ensure the web clipper sidecar tables exist for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_clipper_documents(
+              clip_id               TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              note_id               TEXT NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              clip_type             TEXT NOT NULL,
+              source_url            TEXT,
+              source_title          TEXT,
+              capture_metadata_json TEXT NOT NULL DEFAULT '{}',
+              analysis_json         TEXT NOT NULL DEFAULT '{}',
+              content_budget_json   TEXT NOT NULL DEFAULT '{}',
+              source_note_version   INTEGER,
+              created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted               BOOLEAN NOT NULL DEFAULT FALSE,
+              CHECK(clip_id = note_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_clipper_documents_note_id ON note_clipper_documents(note_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_clipper_workspace_placements(
+              clip_id             TEXT NOT NULL REFERENCES note_clipper_documents(clip_id) ON DELETE CASCADE ON UPDATE CASCADE,
+              workspace_id        TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              workspace_note_id   INTEGER,
+              source_note_id      TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_note_version INTEGER,
+              created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted             BOOLEAN NOT NULL DEFAULT FALSE,
+              PRIMARY KEY (clip_id, workspace_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_workspace ON note_clipper_workspace_placements(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_clipper_workspace_placements_source_note ON note_clipper_workspace_placements(source_note_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    @staticmethod
+    def _serialize_note_clipper_json_field(value: Any, field_name: str) -> str:
+        if value is None:
+            return "{}"
+        if isinstance(value, str):
+            try:
+                json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise InputError(f"{field_name} must be valid JSON when provided as a string.") from exc  # noqa: TRY003
+            return value
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value)
+            except TypeError as exc:
+                raise InputError(f"{field_name} must be JSON serializable.") from exc  # noqa: TRY003
+        raise InputError(f"{field_name} must be a mapping, list, JSON string, or None.")  # noqa: TRY003
+
+    def _fetch_note_clipper_document_row(
+        self,
+        *,
+        column: str,
+        value: str,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        if column not in {"clip_id", "note_id"}:
+            raise InputError("Unsupported note clipper document lookup column.")  # noqa: TRY003
+        query = f"SELECT * FROM note_clipper_documents WHERE {column} = ?"  # nosec B608
+        params: list[Any] = [value]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if conn is None:
+            cursor = self.execute_query(query, tuple(params))
+        else:
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+        row = cursor.fetchone()
+        return self._deserialize_row_fields(
+            row,
+            ["capture_metadata_json", "analysis_json", "content_budget_json"],
+        ) if row else None
+
+    def get_note_clipper_document_by_clip_id(self, clip_id: str) -> dict[str, Any] | None:
+        """Return the active clipper document for a clip id."""
+        return self._fetch_note_clipper_document_row(column="clip_id", value=clip_id)
+
+    def get_note_clipper_document_by_note_id(self, note_id: str) -> dict[str, Any] | None:
+        """Return the active clipper document for a note id."""
+        return self._fetch_note_clipper_document_row(column="note_id", value=note_id)
+
+    def list_note_clipper_workspace_placements(self, clip_id: str) -> list[dict[str, Any]]:
+        """Return active workspace placements for a clip."""
+        query = (
+            "SELECT clip_id, workspace_id, workspace_note_id, source_note_id, source_note_version "
+            "FROM note_clipper_workspace_placements WHERE clip_id = ? AND deleted = ? "
+            "ORDER BY workspace_id"
+        )
+        params = (clip_id, False if self.backend_type == BackendType.POSTGRESQL else 0)
+        cursor = self.execute_query(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _invalidate_note_clipper_sidecars(
+        self,
+        note_id: str,
+        *,
+        conn: sqlite3.Connection,
+        deleted: bool,
+    ) -> None:
+        deleted_value = True if self.backend_type == BackendType.POSTGRESQL else 1
+        active_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        flag_value = deleted_value if deleted else active_value
+        now = self._get_current_utc_timestamp_iso()
+
+        document = conn.execute(
+            "SELECT clip_id FROM note_clipper_documents WHERE note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if document is None:
+            return
+        clip_id = document["clip_id"]
+        conn.execute(
+            "UPDATE note_clipper_documents SET deleted = ?, last_modified = ? WHERE clip_id = ?",
+            (flag_value, now, clip_id),
+        )
+        conn.execute(
+            "UPDATE note_clipper_workspace_placements SET deleted = ?, last_modified = ? WHERE clip_id = ?",
+            (flag_value, now, clip_id),
+        )
+
+    def _delete_note_clipper_sidecars(self, note_id: str, *, conn: sqlite3.Connection) -> None:
+        document = conn.execute(
+            "SELECT clip_id FROM note_clipper_documents WHERE note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if document is None:
+            conn.execute("DELETE FROM note_clipper_workspace_placements WHERE source_note_id = ?", (note_id,))
+            return
+        clip_id = document["clip_id"]
+        conn.execute("DELETE FROM note_clipper_workspace_placements WHERE clip_id = ?", (clip_id,))
+        conn.execute("DELETE FROM note_clipper_documents WHERE clip_id = ?", (clip_id,))
+
+    def upsert_note_clipper_document(
+        self,
+        *,
+        clip_id: str,
+        note_id: str,
+        clip_type: str,
+        source_url: str | None = None,
+        source_title: str | None = None,
+        capture_metadata: dict[str, Any] | list[Any] | str | None = None,
+        enrichments: dict[str, Any] | list[Any] | str | None = None,
+        content_budget: dict[str, Any] | list[Any] | str | None = None,
+        source_note_version: int | None = None,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+    ) -> dict[str, Any]:
+        normalized_clip_id = str(clip_id).strip()
+        normalized_note_id = str(note_id).strip()
+        normalized_clip_type = str(clip_type).strip()
+        if not normalized_clip_id or not normalized_note_id:
+            raise InputError("clip_id and note_id are required.")  # noqa: TRY003
+        if normalized_clip_id != normalized_note_id:
+            raise InputError("clip_id and note_id must match for the canonical clip record.")  # noqa: TRY003
+        if not normalized_clip_type:
+            raise InputError("clip_type cannot be empty.")  # noqa: TRY003
+        if source_note_version is not None and (not isinstance(source_note_version, int) or source_note_version < 1):
+            raise InputError("source_note_version must be an integer >= 1 when provided.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        capture_metadata_json = self._serialize_note_clipper_json_field(capture_metadata, "capture_metadata")
+        analysis_json = self._serialize_note_clipper_json_field(enrichments, "enrichments")
+        content_budget_json = self._serialize_note_clipper_json_field(content_budget, "content_budget")
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        query = (
+            "INSERT INTO note_clipper_documents ("
+            "clip_id, note_id, clip_type, source_url, source_title, capture_metadata_json, "
+            "analysis_json, content_budget_json, source_note_version, created_at, last_modified, deleted"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(clip_id) DO UPDATE SET "
+            "note_id = excluded.note_id, "
+            "clip_type = excluded.clip_type, "
+            "source_url = excluded.source_url, "
+            "source_title = excluded.source_title, "
+            "capture_metadata_json = excluded.capture_metadata_json, "
+            "analysis_json = excluded.analysis_json, "
+            "content_budget_json = excluded.content_budget_json, "
+            "source_note_version = excluded.source_note_version, "
+            "last_modified = excluded.last_modified, "
+            "deleted = excluded.deleted"
+        )
+        params = (
+            normalized_clip_id,
+            normalized_note_id,
+            normalized_clip_type,
+            source_url,
+            source_title,
+            capture_metadata_json,
+            analysis_json,
+            content_budget_json,
+            source_note_version,
+            now,
+            now,
+            deleted_value,
+        )
+
+        def _execute(inner_conn: sqlite3.Connection | BackendConnectionWrapper) -> dict[str, Any]:
+            note_row = inner_conn.execute(
+                "SELECT id FROM notes WHERE id = ? AND deleted = ?",
+                (
+                    normalized_note_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if note_row is None:
+                raise ConflictError(
+                    "Canonical note not found or deleted.",
+                    entity="notes",
+                    entity_id=normalized_note_id,
+                )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            inner_conn.execute(prepared_query, prepared_params or ())
+            document = self._fetch_note_clipper_document_row(
+                column="clip_id",
+                value=normalized_clip_id,
+                conn=inner_conn if isinstance(inner_conn, sqlite3.Connection) else None,
+            )
+            if document is None:
+                raise CharactersRAGDBError(
+                    f"Failed to read web clipper document for clip ID '{normalized_clip_id}'."
+                )
+            return document
+
+        if conn is None:
+            with self.transaction() as transaction_conn:
+                return _execute(transaction_conn)
+        return _execute(conn)
+
+    def upsert_note_clipper_workspace_placement(
+        self,
+        *,
+        clip_id: str,
+        workspace_id: str,
+        workspace_note_id: int | None = None,
+        source_note_id: str | None = None,
+        source_note_version: int | None = None,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+    ) -> dict[str, Any]:
+        normalized_clip_id = str(clip_id).strip()
+        normalized_workspace_id = str(workspace_id).strip()
+        normalized_source_note_id = str(source_note_id).strip() if source_note_id is not None else normalized_clip_id
+        if not normalized_clip_id or not normalized_workspace_id:
+            raise InputError("clip_id and workspace_id are required.")  # noqa: TRY003
+        if normalized_source_note_id != normalized_clip_id:
+            raise InputError("source_note_id must match clip_id for the canonical clip placement.")  # noqa: TRY003
+        if source_note_version is not None and (not isinstance(source_note_version, int) or source_note_version < 1):
+            raise InputError("source_note_version must be an integer >= 1 when provided.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        query = (
+            "INSERT INTO note_clipper_workspace_placements ("
+            "clip_id, workspace_id, workspace_note_id, source_note_id, source_note_version, "
+            "created_at, last_modified, deleted"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(clip_id, workspace_id) DO UPDATE SET "
+            "workspace_note_id = excluded.workspace_note_id, "
+            "source_note_id = excluded.source_note_id, "
+            "source_note_version = excluded.source_note_version, "
+            "last_modified = excluded.last_modified, "
+            "deleted = excluded.deleted"
+        )
+        params = (
+            normalized_clip_id,
+            normalized_workspace_id,
+            workspace_note_id,
+            normalized_source_note_id,
+            source_note_version,
+            now,
+            now,
+            deleted_value,
+        )
+
+        def _execute(inner_conn: sqlite3.Connection | BackendConnectionWrapper) -> dict[str, Any]:
+            workspace_row = inner_conn.execute(
+                "SELECT id FROM workspaces WHERE id = ? AND deleted = ?",
+                (
+                    normalized_workspace_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if workspace_row is None:
+                raise ConflictError(
+                    "Workspace not found or deleted.",
+                    entity="workspaces",
+                    entity_id=normalized_workspace_id,
+                )
+            clip_row = inner_conn.execute(
+                "SELECT clip_id FROM note_clipper_documents WHERE clip_id = ? AND deleted = ?",
+                (
+                    normalized_clip_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if clip_row is None:
+                raise ConflictError(
+                    "Canonical clip document not found or deleted.",
+                    entity="note_clipper_documents",
+                    entity_id=normalized_clip_id,
+                )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            inner_conn.execute(prepared_query, prepared_params or ())
+            result = inner_conn.execute(
+                "SELECT clip_id, workspace_id, workspace_note_id, source_note_id, source_note_version "
+                "FROM note_clipper_workspace_placements WHERE clip_id = ? AND workspace_id = ? AND deleted = ?",
+                (
+                    normalized_clip_id,
+                    normalized_workspace_id,
+                    False if self.backend_type == BackendType.POSTGRESQL else 0,
+                ),
+            ).fetchone()
+            if result is None:
+                raise CharactersRAGDBError(
+                    f"Failed to read workspace placement for clip ID '{normalized_clip_id}' and workspace '{normalized_workspace_id}'."
+                )
+            return dict(result)
+
+        if conn is None:
+            with self.transaction() as transaction_conn:
+                return _execute(transaction_conn)
+        return _execute(conn)
+
     def _ensure_workspace_subresource_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure workspace settings columns and sub-resource tables exist for SQLite."""
         try:
@@ -5605,6 +7920,56 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             """,
             "CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_workspace_study_material_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure workspace ownership columns and workspace study-material policy exist for SQLite."""
+        try:
+            existing_tables = {
+                str(row[0])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+            if "workspaces" in existing_tables:
+                workspace_cols = {row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()}
+                if "study_materials_policy" not in workspace_cols:
+                    conn.execute(
+                        "ALTER TABLE workspaces ADD COLUMN study_materials_policy TEXT NOT NULL DEFAULT 'general'"
+                    )
+                conn.execute(
+                    "UPDATE workspaces SET study_materials_policy = 'general' "
+                    "WHERE study_materials_policy IS NULL OR trim(study_materials_policy) = ''"
+                )
+
+            if "quizzes" in existing_tables:
+                quiz_cols = {row[1] for row in conn.execute("PRAGMA table_info('quizzes')").fetchall()}
+                if "workspace_id" not in quiz_cols:
+                    conn.execute(
+                        "ALTER TABLE quizzes ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                    )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id)")
+
+            if "decks" in existing_tables:
+                deck_cols = {row[1] for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+                if "workspace_id" not in deck_cols:
+                    conn.execute(
+                        "ALTER TABLE decks ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                    )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id)")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite workspace study-material schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_workspace_study_material_schema_postgres(self, conn: Any) -> None:
+        """Ensure workspace ownership columns and workspace study-material policy exist for PostgreSQL."""
+        statements = [
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS study_materials_policy TEXT NOT NULL DEFAULT 'general'",
+            "UPDATE workspaces SET study_materials_policy = 'general' "
+            "WHERE study_materials_policy IS NULL OR btrim(study_materials_policy) = ''",
+            "ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id)",
+            "ALTER TABLE decks ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id)",
         ]
         for statement in statements:
             self.backend.execute(statement, connection=conn)
@@ -5762,6 +8127,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_workspace_subresource_schema_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                    self._ensure_study_pack_schema_sqlite(conn)
                     self._ensure_study_assistant_schema_sqlite(conn)
                     self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                     self._ensure_flashcard_fts_triggers_sqlite(conn)
@@ -5770,6 +8136,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_recent_persona_schema_sqlite(conn)
                     self._ensure_recent_voice_command_schema_sqlite(conn)
                     self._ensure_note_folder_schema_sqlite(conn)
+                    self._ensure_note_studio_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -5884,6 +8251,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 38 and current_db_version == 37:
                         self._migrate_from_v37_to_v38(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 39 and current_db_version == 38:
+                        self._migrate_from_v38_to_v39(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 40 and current_db_version == 39:
+                        self._migrate_from_v39_to_v40(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 41 and current_db_version == 40:
+                        self._migrate_from_v40_to_v41(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 42 and current_db_version == 41:
+                        self._migrate_from_v41_to_v42(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 43 and current_db_version == 42:
+                        self._migrate_from_v42_to_v43(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 44 and current_db_version == 43:
+                        self._migrate_from_v43_to_v44(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -5922,6 +8307,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_character ON character_exemplars(character_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_scenario_emotion ON character_exemplars(scenario, emotion)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_novelty ON character_exemplars(novelty_hint)")
+                    self._ensure_workspace_study_material_schema_sqlite(conn)
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -6214,6 +8600,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v36_to_v37(conn)
                             elif fallback_version == 37:
                                 self._migrate_from_v37_to_v38(conn)
+                            elif fallback_version == 38:
+                                self._migrate_from_v38_to_v39(conn)
+                            elif fallback_version == 39:
+                                self._migrate_from_v39_to_v40(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -6304,10 +8694,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 38 and current_db_version == 37:
                     self._migrate_from_v37_to_v38(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 39 and current_db_version == 38:
+                    self._migrate_from_v38_to_v39(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 40 and current_db_version == 39:
+                    self._migrate_from_v39_to_v40(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 41 and current_db_version == 40:
+                    self._migrate_from_v40_to_v41(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 42 and current_db_version == 41:
+                    self._migrate_from_v41_to_v42(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 43 and current_db_version == 42:
+                    self._migrate_from_v42_to_v43(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 44 and current_db_version == 43:
+                    self._migrate_from_v43_to_v44(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
                 self._ensure_note_folder_schema_sqlite(conn)
+                self._ensure_note_studio_schema_sqlite(conn)
+                self._ensure_web_clipper_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -6316,10 +8726,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_workspace_subresource_schema_sqlite(conn)
+                self._ensure_workspace_study_material_schema_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                self._ensure_study_pack_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
                 self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
+                self._ensure_web_clipper_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
@@ -6673,16 +9086,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return "learning"
         return "review"
 
-    def _ensure_flashcard_scheduler_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+    def _ensure_flashcard_scheduler_sync_triggers_sqlite(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        decks_exists: bool = True,
+        flashcards_exists: bool = True,
+        sync_log_exists: bool = True,
+    ) -> None:
         """Ensure deck and flashcard sync triggers include scheduler fields."""
-        try:
-            conn.executescript(
-                """
-                DROP TRIGGER IF EXISTS decks_sync_create;
-                DROP TRIGGER IF EXISTS decks_sync_update;
-                DROP TRIGGER IF EXISTS decks_sync_delete;
-                DROP TRIGGER IF EXISTS decks_sync_undelete;
+        if not sync_log_exists:
+            return
 
+        deck_script = ""
+        if decks_exists:
+            deck_script = """
                 CREATE TRIGGER decks_sync_create
                 AFTER INSERT ON decks BEGIN
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -6735,12 +9153,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
+            """
 
-                DROP TRIGGER IF EXISTS flashcards_sync_create;
-                DROP TRIGGER IF EXISTS flashcards_sync_update;
-                DROP TRIGGER IF EXISTS flashcards_sync_delete;
-                DROP TRIGGER IF EXISTS flashcards_sync_undelete;
-
+        flashcard_script = ""
+        if flashcards_exists:
+            flashcard_script = """
                 CREATE TRIGGER flashcards_sync_create
                 AFTER INSERT ON flashcards BEGIN
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -6830,6 +9247,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
+            """
+
+        try:
+            conn.executescript(
+                f"""
+                DROP TRIGGER IF EXISTS decks_sync_create;
+                DROP TRIGGER IF EXISTS decks_sync_update;
+                DROP TRIGGER IF EXISTS decks_sync_delete;
+                DROP TRIGGER IF EXISTS decks_sync_undelete;
+                {deck_script}
+                DROP TRIGGER IF EXISTS flashcards_sync_create;
+                DROP TRIGGER IF EXISTS flashcards_sync_update;
+                DROP TRIGGER IF EXISTS flashcards_sync_delete;
+                DROP TRIGGER IF EXISTS flashcards_sync_undelete;
+                {flashcard_script}
                 """
             )
         except sqlite3.Error as exc:
@@ -6839,101 +9271,207 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Ensure scheduler-related deck, flashcard, and review columns exist for SQLite."""
         default_settings_json = scheduler_settings_to_json(None)
         try:
-            deck_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
-            if "scheduler_settings_json" not in deck_cols:
+            existing_tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading flashcard scheduler table inventory: {exc}") from exc  # noqa: TRY003
+
+        decks_exists = "decks" in existing_tables
+        flashcards_exists = "flashcards" in existing_tables
+        flashcard_reviews_exists = "flashcard_reviews" in existing_tables
+        sync_log_exists = "sync_log" in existing_tables
+
+        if not decks_exists and not flashcards_exists:
+            return
+
+        try:
+            if decks_exists:
+                deck_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+                if "scheduler_settings_json" not in deck_cols:
+                    conn.execute(
+                        f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
+                    )
+                if "scheduler_type" not in deck_cols:
+                    conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
                 conn.execute(
-                    f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
+                    """
+                    UPDATE decks
+                       SET scheduler_settings_json = ?
+                     WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
+                    """,
+                    (default_settings_json,),
                 )
-            if "scheduler_type" not in deck_cols:
-                conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
-            conn.execute(
-                """
-                UPDATE decks
-                   SET scheduler_settings_json = ?
-                 WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
-                """,
-                (default_settings_json,),
-            )
-            conn.execute(
-                """
-                UPDATE decks
-                   SET scheduler_type = 'sm2_plus'
-                 WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
-                """
-            )
+                conn.execute(
+                    """
+                    UPDATE decks
+                       SET scheduler_type = 'sm2_plus'
+                     WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
+                    """
+                )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring decks.scheduler_settings_json: {exc}") from exc  # noqa: TRY003
 
         try:
-            flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
-            if "queue_state" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN queue_state TEXT NOT NULL DEFAULT 'new'")
-            if "step_index" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
-            if "suspended_reason" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
-            if "scheduler_state_json" not in flashcard_cols:
-                conn.execute("ALTER TABLE flashcards ADD COLUMN scheduler_state_json TEXT NOT NULL DEFAULT '{}'")
-            conn.execute(
-                """
-                UPDATE flashcards
-                   SET scheduler_state_json = '{}'
-                 WHERE scheduler_state_json IS NULL OR trim(scheduler_state_json) = ''
-                """
-            )
-
-            rows = conn.execute(
-                """
-                SELECT id, queue_state, last_reviewed_at, repetitions, lapses, interval_days, due_at, created_at
-                  FROM flashcards
-                """
-            ).fetchall()
-            scheduler_params: list[tuple[str, int]] = []
-            due_params: list[tuple[str, int]] = []
-            now_iso = self._get_current_utc_timestamp_iso()
-            for row in rows:
-                record = {
-                    "queue_state": row["queue_state"],
-                    "last_reviewed_at": row["last_reviewed_at"],
-                    "repetitions": row["repetitions"],
-                    "lapses": row["lapses"],
-                    "interval_days": row["interval_days"],
-                    "due_at": row["due_at"],
+            if flashcards_exists:
+                flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
+                legacy_flashcard_column_defs = {
+                    "uuid": "TEXT",
+                    "deck_id": "INTEGER",
+                    "extra": "TEXT",
+                    "is_cloze": "BOOLEAN NOT NULL DEFAULT 0",
+                    "tags_json": "TEXT",
+                    "source_ref_type": "TEXT NOT NULL DEFAULT 'manual'",
+                    "source_ref_id": "TEXT",
+                    "conversation_id": "TEXT",
+                    "message_id": "TEXT",
+                    "ef": "REAL NOT NULL DEFAULT 2.5",
+                    "interval_days": "INTEGER NOT NULL DEFAULT 0",
+                    "repetitions": "INTEGER NOT NULL DEFAULT 0",
+                    "lapses": "INTEGER NOT NULL DEFAULT 0",
+                    "due_at": "DATETIME",
+                    "last_reviewed_at": "DATETIME",
+                    "model_type": "TEXT NOT NULL DEFAULT 'basic'",
+                    "reverse": "BOOLEAN NOT NULL DEFAULT 0",
+                    "queue_state": "TEXT NOT NULL DEFAULT 'new'",
+                    "step_index": "INTEGER",
+                    "suspended_reason": "TEXT",
+                    "scheduler_state_json": "TEXT NOT NULL DEFAULT '{}'",
                 }
-                scheduler_params.append((self._infer_queue_state_for_row(record), int(row["id"])))
-                if not row["due_at"]:
-                    due_params.append((str(row["created_at"] or now_iso), int(row["id"])))
-            if scheduler_params:
-                conn.executemany(
+                for column_name, column_type in legacy_flashcard_column_defs.items():
+                    if column_name not in flashcard_cols:
+                        conn.execute(f"ALTER TABLE flashcards ADD COLUMN {column_name} {column_type}")
+                flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
+
+                uuid_rows = conn.execute("SELECT id, uuid FROM flashcards").fetchall()
+                seen_uuids: set[str] = set()
+                uuid_backfill_params: list[tuple[str, int]] = []
+                for row in uuid_rows:
+                    current_uuid = str(row["uuid"] or "").strip()
+                    if current_uuid and current_uuid not in seen_uuids:
+                        seen_uuids.add(current_uuid)
+                        continue
+                    replacement_uuid = self._generate_uuid()
+                    while replacement_uuid in seen_uuids:
+                        replacement_uuid = self._generate_uuid()
+                    seen_uuids.add(replacement_uuid)
+                    uuid_backfill_params.append((replacement_uuid, int(row["id"])))
+                if uuid_backfill_params:
+                    conn.executemany("UPDATE flashcards SET uuid = ? WHERE id = ?", uuid_backfill_params)
+
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_uuid ON flashcards(uuid)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_deck_id ON flashcards(deck_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_due_at ON flashcards(due_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_deleted ON flashcards(deleted)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id)")
+
+                if "queue_state" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN queue_state TEXT NOT NULL DEFAULT 'new'")
+                if "step_index" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
+                if "suspended_reason" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
+                if "scheduler_state_json" not in flashcard_cols:
+                    conn.execute("ALTER TABLE flashcards ADD COLUMN scheduler_state_json TEXT NOT NULL DEFAULT '{}'")
+                conn.execute(
                     """
                     UPDATE flashcards
-                       SET queue_state = ?,
-                           suspended_reason = NULL
-                     WHERE id = ?
-                    """,
-                    scheduler_params,
+                       SET scheduler_state_json = '{}'
+                     WHERE scheduler_state_json IS NULL OR trim(scheduler_state_json) = ''
+                    """
                 )
-            if due_params:
-                conn.executemany("UPDATE flashcards SET due_at = ? WHERE id = ?", due_params)
+
+                rows = conn.execute(
+                    """
+                    SELECT id, queue_state, last_reviewed_at, repetitions, lapses, interval_days, due_at, created_at
+                      FROM flashcards
+                    """
+                ).fetchall()
+                scheduler_params: list[tuple[str, int]] = []
+                due_params: list[tuple[str, int]] = []
+                now_iso = self._get_current_utc_timestamp_iso()
+                for row in rows:
+                    record = {
+                        "queue_state": row["queue_state"],
+                        "last_reviewed_at": row["last_reviewed_at"],
+                        "repetitions": row["repetitions"],
+                        "lapses": row["lapses"],
+                        "interval_days": row["interval_days"],
+                        "due_at": row["due_at"],
+                    }
+                    scheduler_params.append((self._infer_queue_state_for_row(record), int(row["id"])))
+                    if not row["due_at"]:
+                        due_params.append((str(row["created_at"] or now_iso), int(row["id"])))
+                if scheduler_params:
+                    conn.executemany(
+                        """
+                        UPDATE flashcards
+                           SET queue_state = ?,
+                               suspended_reason = NULL
+                         WHERE id = ?
+                        """,
+                        scheduler_params,
+                    )
+                if due_params:
+                    conn.executemany("UPDATE flashcards SET due_at = ? WHERE id = ?", due_params)
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring flashcard scheduler columns: {exc}") from exc  # noqa: TRY003
 
         try:
-            review_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()}
-            if "scheduler_type" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
-            if "previous_queue_state" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
-            if "next_queue_state" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_queue_state TEXT")
-            if "previous_due_at" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
-            if "next_due_at" not in review_cols:
-                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
+            if flashcard_reviews_exists:
+                review_cols = {
+                    str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()
+                }
+                if "scheduler_type" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
+                if "previous_queue_state" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
+                if "next_queue_state" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_queue_state TEXT")
+                if "previous_due_at" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
+                if "next_due_at" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
+                if "review_session_id" not in review_cols:
+                    conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN review_session_id INTEGER")
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring flashcard review scheduler columns: {exc}") from exc  # noqa: TRY003
 
-        self._ensure_flashcard_scheduler_sync_triggers_sqlite(conn)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
+                  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                  deck_id          INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  review_mode      TEXT NOT NULL DEFAULT 'due',
+                  tag_filter       TEXT,
+                  scope_key        TEXT NOT NULL,
+                  status           TEXT NOT NULL DEFAULT 'active',
+                  started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  completed_at     DATETIME,
+                  client_id        TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_activity ON flashcard_review_sessions(last_activity_at)")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard review session schema: {exc}") from exc  # noqa: TRY003
+
+        self._ensure_flashcard_scheduler_sync_triggers_sqlite(
+            conn,
+            decks_exists=decks_exists,
+            flashcards_exists=flashcards_exists,
+            sync_log_exists=sync_log_exists,
+        )
 
     def _ensure_flashcard_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild flashcard FTS around sanitized search shadow columns."""
@@ -7124,6 +9662,43 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS next_due_at TIMESTAMPTZ",
                 connection=conn,
             )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS review_session_id INTEGER",
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
+                  id BIGSERIAL PRIMARY KEY,
+                  deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  review_mode TEXT NOT NULL DEFAULT 'due',
+                  tag_filter TEXT,
+                  scope_key TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'active',
+                  started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  completed_at TIMESTAMPTZ,
+                  client_id TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_activity ON flashcard_review_sessions(last_activity_at)",
+                connection=conn,
+            )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL flashcard scheduler schema: {exc}") from exc  # noqa: TRY003
 
@@ -7264,6 +9839,1933 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL study assistant schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_pack_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure SQLite sync-log triggers exist for study pack tables."""
+        try:
+            table_names = {
+                str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading SQLite table inventory for study pack triggers: {exc}") from exc  # noqa: TRY003
+
+        if "sync_log" not in table_names:
+            return
+
+        study_packs_script = ""
+        if "study_packs" in table_names:
+            study_packs_script = """
+                CREATE TRIGGER study_packs_sync_create
+                AFTER INSERT ON study_packs BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_packs_sync_update
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.workspace_id IS NOT NEW.workspace_id OR
+                     OLD.title IS NOT NEW.title OR
+                     OLD.deck_id IS NOT NEW.deck_id OR
+                     OLD.source_bundle_json IS NOT NEW.source_bundle_json OR
+                     OLD.generation_options_json IS NOT NEW.generation_options_json OR
+                     OLD.status IS NOT NEW.status OR
+                     OLD.superseded_by_pack_id IS NOT NEW.superseded_by_pack_id OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_packs_sync_delete
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER study_packs_sync_undelete
+                AFTER UPDATE ON study_packs
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_packs',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'title',NEW.title,'deck_id',NEW.deck_id,
+                                     'source_bundle_json',NEW.source_bundle_json,'generation_options_json',NEW.generation_options_json,
+                                     'status',NEW.status,'superseded_by_pack_id',NEW.superseded_by_pack_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        study_pack_cards_script = ""
+        if "study_pack_cards" in table_names:
+            study_pack_cards_script = """
+                CREATE TRIGGER study_pack_cards_sync_create
+                AFTER INSERT ON study_pack_cards BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_update
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.study_pack_id IS NOT NEW.study_pack_id OR
+                     OLD.flashcard_uuid IS NOT NEW.flashcard_uuid OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_delete
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER study_pack_cards_sync_undelete
+                AFTER UPDATE ON study_pack_cards
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('study_pack_cards',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'study_pack_id',NEW.study_pack_id,'flashcard_uuid',NEW.flashcard_uuid,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        flashcard_citations_script = ""
+        if "flashcard_citations" in table_names:
+            flashcard_citations_script = """
+                CREATE TRIGGER flashcard_citations_sync_create
+                AFTER INSERT ON flashcard_citations BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_update
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.flashcard_uuid IS NOT NEW.flashcard_uuid OR
+                     OLD.source_type IS NOT NEW.source_type OR
+                     OLD.source_id IS NOT NEW.source_id OR
+                     OLD.citation_text IS NOT NEW.citation_text OR
+                     OLD.locator IS NOT NEW.locator OR
+                     OLD.ordinal IS NOT NEW.ordinal OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_delete
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER flashcard_citations_sync_undelete
+                AFTER UPDATE ON flashcard_citations
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_citations',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'flashcard_uuid',NEW.flashcard_uuid,'source_type',NEW.source_type,'source_id',NEW.source_id,
+                                     'citation_text',NEW.citation_text,'locator',NEW.locator,'ordinal',NEW.ordinal,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        suggestion_snapshots_script = ""
+        if "suggestion_snapshots" in table_names:
+            suggestion_snapshots_script = """
+                CREATE TRIGGER suggestion_snapshots_sync_create
+                AFTER INSERT ON suggestion_snapshots BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'service',NEW.service,'activity_type',NEW.activity_type,
+                                     'anchor_type',NEW.anchor_type,'anchor_id',NEW.anchor_id,
+                                     'suggestion_type',NEW.suggestion_type,'status',NEW.status,
+                                     'payload_json',NEW.payload_json,'user_selection_json',NEW.user_selection_json,
+                                     'refreshed_from_snapshot_id',NEW.refreshed_from_snapshot_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_snapshots_sync_update
+                AFTER UPDATE ON suggestion_snapshots
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.service IS NOT NEW.service OR
+                     OLD.activity_type IS NOT NEW.activity_type OR
+                     OLD.anchor_type IS NOT NEW.anchor_type OR
+                     OLD.anchor_id IS NOT NEW.anchor_id OR
+                     OLD.suggestion_type IS NOT NEW.suggestion_type OR
+                     OLD.status IS NOT NEW.status OR
+                     OLD.payload_json IS NOT NEW.payload_json OR
+                     OLD.user_selection_json IS NOT NEW.user_selection_json OR
+                     OLD.refreshed_from_snapshot_id IS NOT NEW.refreshed_from_snapshot_id OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'service',NEW.service,'activity_type',NEW.activity_type,
+                                     'anchor_type',NEW.anchor_type,'anchor_id',NEW.anchor_id,
+                                     'suggestion_type',NEW.suggestion_type,'status',NEW.status,
+                                     'payload_json',NEW.payload_json,'user_selection_json',NEW.user_selection_json,
+                                     'refreshed_from_snapshot_id',NEW.refreshed_from_snapshot_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_snapshots_sync_delete
+                AFTER UPDATE ON suggestion_snapshots
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER suggestion_snapshots_sync_undelete
+                AFTER UPDATE ON suggestion_snapshots
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_snapshots',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'service',NEW.service,'activity_type',NEW.activity_type,
+                                     'anchor_type',NEW.anchor_type,'anchor_id',NEW.anchor_id,
+                                     'suggestion_type',NEW.suggestion_type,'status',NEW.status,
+                                     'payload_json',NEW.payload_json,'user_selection_json',NEW.user_selection_json,
+                                     'refreshed_from_snapshot_id',NEW.refreshed_from_snapshot_id,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        suggestion_generation_links_script = ""
+        if "suggestion_generation_links" in table_names:
+            suggestion_generation_links_script = """
+                CREATE TRIGGER suggestion_generation_links_sync_create
+                AFTER INSERT ON suggestion_generation_links BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'snapshot_id',NEW.snapshot_id,'target_service',NEW.target_service,
+                                     'target_type',NEW.target_type,'target_id',NEW.target_id,
+                                     'selection_fingerprint',NEW.selection_fingerprint,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_generation_links_sync_update
+                AFTER UPDATE ON suggestion_generation_links
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.snapshot_id IS NOT NEW.snapshot_id OR
+                     OLD.target_service IS NOT NEW.target_service OR
+                     OLD.target_type IS NOT NEW.target_type OR
+                     OLD.target_id IS NOT NEW.target_id OR
+                     OLD.selection_fingerprint IS NOT NEW.selection_fingerprint OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'snapshot_id',NEW.snapshot_id,'target_service',NEW.target_service,
+                                     'target_type',NEW.target_type,'target_id',NEW.target_id,
+                                     'selection_fingerprint',NEW.selection_fingerprint,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER suggestion_generation_links_sync_delete
+                AFTER UPDATE ON suggestion_generation_links
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER suggestion_generation_links_sync_undelete
+                AFTER UPDATE ON suggestion_generation_links
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('suggestion_generation_links',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'snapshot_id',NEW.snapshot_id,'target_service',NEW.target_service,
+                                     'target_type',NEW.target_type,'target_id',NEW.target_id,
+                                     'selection_fingerprint',NEW.selection_fingerprint,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
+        try:
+            conn.executescript(
+                f"""
+                DROP TRIGGER IF EXISTS study_packs_sync_create;
+                DROP TRIGGER IF EXISTS study_packs_sync_update;
+                DROP TRIGGER IF EXISTS study_packs_sync_delete;
+                DROP TRIGGER IF EXISTS study_packs_sync_undelete;
+                {study_packs_script}
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_create;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_update;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_delete;
+                DROP TRIGGER IF EXISTS study_pack_cards_sync_undelete;
+                {study_pack_cards_script}
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_create;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_update;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_delete;
+                DROP TRIGGER IF EXISTS flashcard_citations_sync_undelete;
+                {flashcard_citations_script}
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_create;
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_update;
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_delete;
+                DROP TRIGGER IF EXISTS suggestion_snapshots_sync_undelete;
+                {suggestion_snapshots_script}
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_create;
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_update;
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_delete;
+                DROP TRIGGER IF EXISTS suggestion_generation_links_sync_undelete;
+                {suggestion_generation_links_script}
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study pack sync triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_pack_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure study pack tables exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_packs(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+                  title TEXT NOT NULL,
+                  deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  source_bundle_json TEXT NOT NULL,
+                  generation_options_json TEXT,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+                  superseded_by_pack_id INTEGER REFERENCES study_packs(id) ON DELETE SET NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_pack_cards(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  study_pack_id INTEGER NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+                  flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_citations(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  source_type TEXT NOT NULL CHECK(source_type IN ('note', 'media', 'message')),
+                  source_id TEXT NOT NULL,
+                  citation_text TEXT,
+                  locator TEXT,
+                  ordinal INTEGER NOT NULL DEFAULT 0,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS suggestion_snapshots(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  service TEXT NOT NULL,
+                  activity_type TEXT NOT NULL,
+                  anchor_type TEXT NOT NULL,
+                  anchor_id INTEGER NOT NULL,
+                  suggestion_type TEXT NOT NULL,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+                  payload_json TEXT NOT NULL,
+                  user_selection_json TEXT,
+                  refreshed_from_snapshot_id INTEGER REFERENCES suggestion_snapshots(id) ON DELETE SET NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS suggestion_generation_links(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  snapshot_id INTEGER NOT NULL REFERENCES suggestion_snapshots(id) ON DELETE CASCADE,
+                  target_service TEXT NOT NULL,
+                  target_type TEXT NOT NULL,
+                  target_id TEXT NOT NULL,
+                  selection_fingerprint TEXT NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_packs_deleted ON study_packs(deleted)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_pack_id ON study_pack_cards(study_pack_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_flashcard_uuid ON study_pack_cards(flashcard_uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_study_pack_cards_deleted ON study_pack_cards(deleted)")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_pack_cards_unique_active
+                    ON study_pack_cards(study_pack_id, flashcard_uuid)
+                 WHERE deleted = 0
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_anchor ON suggestion_snapshots(anchor_type, anchor_id)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_status ON suggestion_snapshots(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_deleted ON suggestion_snapshots(deleted)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_snapshot_id ON suggestion_generation_links(snapshot_id)"
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
+                    ON suggestion_generation_links(
+                        snapshot_id,
+                        target_service,
+                        target_type,
+                        target_id,
+                        selection_fingerprint
+                    )
+                 WHERE deleted = 0
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_deleted ON suggestion_generation_links(deleted)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study pack schema: {exc}") from exc  # noqa: TRY003
+
+        self._ensure_study_pack_sync_triggers_sqlite(conn)
+
+    def _ensure_study_pack_schema_postgres(self, conn) -> None:
+        """Ensure study pack tables exist for PostgreSQL."""
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS study_packs(
+              id BIGSERIAL PRIMARY KEY,
+              workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+              title TEXT NOT NULL,
+              deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+              source_bundle_json TEXT NOT NULL,
+              generation_options_json TEXT,
+              status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+              superseded_by_pack_id BIGINT REFERENCES study_packs(id) ON DELETE SET NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS study_pack_cards(
+              id BIGSERIAL PRIMARY KEY,
+              study_pack_id BIGINT NOT NULL REFERENCES study_packs(id) ON DELETE CASCADE,
+              flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS flashcard_citations(
+              id BIGSERIAL PRIMARY KEY,
+              flashcard_uuid TEXT NOT NULL REFERENCES flashcards(uuid) ON DELETE CASCADE,
+              source_type TEXT NOT NULL CHECK(source_type IN ('note', 'media', 'message')),
+              source_id TEXT NOT NULL,
+              citation_text TEXT,
+              locator TEXT,
+              ordinal INTEGER NOT NULL DEFAULT 0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS suggestion_snapshots(
+              id BIGSERIAL PRIMARY KEY,
+              service TEXT NOT NULL,
+              activity_type TEXT NOT NULL,
+              anchor_type TEXT NOT NULL,
+              anchor_id BIGINT NOT NULL,
+              suggestion_type TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('active', 'superseded')) DEFAULT 'active',
+              payload_json TEXT NOT NULL,
+              user_selection_json TEXT,
+              refreshed_from_snapshot_id BIGINT REFERENCES suggestion_snapshots(id) ON DELETE SET NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS suggestion_generation_links(
+              id BIGSERIAL PRIMARY KEY,
+              snapshot_id BIGINT NOT NULL REFERENCES suggestion_snapshots(id) ON DELETE CASCADE,
+              target_service TEXT NOT NULL,
+              target_type TEXT NOT NULL,
+              target_id TEXT NOT NULL,
+              selection_fingerprint TEXT NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id TEXT NOT NULL DEFAULT 'unknown',
+              version INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_workspace_id ON study_packs(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_deck_id ON study_packs(deck_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_status ON study_packs(status)",
+            "CREATE INDEX IF NOT EXISTS idx_study_packs_deleted ON study_packs(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_pack_id ON study_pack_cards(study_pack_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_flashcard_uuid ON study_pack_cards(flashcard_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_study_pack_cards_deleted ON study_pack_cards(deleted)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_study_pack_cards_unique_active
+                ON study_pack_cards(study_pack_id, flashcard_uuid)
+             WHERE deleted = FALSE
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_flashcard_uuid ON flashcard_citations(flashcard_uuid)",
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_ordinal ON flashcard_citations(flashcard_uuid, ordinal)",
+            "CREATE INDEX IF NOT EXISTS idx_flashcard_citations_deleted ON flashcard_citations(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_anchor ON suggestion_snapshots(anchor_type, anchor_id)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_status ON suggestion_snapshots(status)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_deleted ON suggestion_snapshots(deleted)",
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_snapshot_id ON suggestion_generation_links(snapshot_id)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
+                ON suggestion_generation_links(snapshot_id, target_service, target_type, target_id, selection_fingerprint)
+             WHERE deleted = FALSE
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_deleted ON suggestion_generation_links(deleted)",
+        ]
+        try:
+            for statement in statements:
+                self.backend.execute(statement, connection=conn)
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study pack schema: {exc}") from exc  # noqa: TRY003
+
+        try:
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION study_packs_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'workspace_id', NEW.workspace_id,
+                        'title', NEW.title,
+                        'deck_id', NEW.deck_id,
+                        'source_bundle_json', NEW.source_bundle_json,
+                        'generation_options_json', NEW.generation_options_json,
+                        'status', NEW.status,
+                        'superseded_by_pack_id', NEW.superseded_by_pack_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.workspace_id IS DISTINCT FROM NEW.workspace_id OR
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.deck_id IS DISTINCT FROM NEW.deck_id OR
+                    OLD.source_bundle_json IS DISTINCT FROM NEW.source_bundle_json OR
+                    OLD.generation_options_json IS DISTINCT FROM NEW.generation_options_json OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.superseded_by_pack_id IS DISTINCT FROM NEW.superseded_by_pack_id OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_packs',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'workspace_id', NEW.workspace_id,
+                        'title', NEW.title,
+                        'deck_id', NEW.deck_id,
+                        'source_bundle_json', NEW.source_bundle_json,
+                        'generation_options_json', NEW.generation_options_json,
+                        'status', NEW.status,
+                        'superseded_by_pack_id', NEW.superseded_by_pack_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION study_pack_cards_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'study_pack_id', NEW.study_pack_id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.study_pack_id IS DISTINCT FROM NEW.study_pack_id OR
+                    OLD.flashcard_uuid IS DISTINCT FROM NEW.flashcard_uuid OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'study_pack_cards',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'study_pack_id', NEW.study_pack_id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION flashcard_citations_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'citation_text', NEW.citation_text,
+                        'locator', NEW.locator,
+                        'ordinal', NEW.ordinal,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.flashcard_uuid IS DISTINCT FROM NEW.flashcard_uuid OR
+                    OLD.source_type IS DISTINCT FROM NEW.source_type OR
+                    OLD.source_id IS DISTINCT FROM NEW.source_id OR
+                    OLD.citation_text IS DISTINCT FROM NEW.citation_text OR
+                    OLD.locator IS DISTINCT FROM NEW.locator OR
+                    OLD.ordinal IS DISTINCT FROM NEW.ordinal OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_citations',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'flashcard_uuid', NEW.flashcard_uuid,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'citation_text', NEW.citation_text,
+                        'locator', NEW.locator,
+                        'ordinal', NEW.ordinal,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION suggestion_snapshots_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_snapshots',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'service', NEW.service,
+                        'activity_type', NEW.activity_type,
+                        'anchor_type', NEW.anchor_type,
+                        'anchor_id', NEW.anchor_id,
+                        'suggestion_type', NEW.suggestion_type,
+                        'status', NEW.status,
+                        'payload_json', NEW.payload_json,
+                        'user_selection_json', NEW.user_selection_json,
+                        'refreshed_from_snapshot_id', NEW.refreshed_from_snapshot_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_snapshots',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.service IS DISTINCT FROM NEW.service OR
+                    OLD.activity_type IS DISTINCT FROM NEW.activity_type OR
+                    OLD.anchor_type IS DISTINCT FROM NEW.anchor_type OR
+                    OLD.anchor_id IS DISTINCT FROM NEW.anchor_id OR
+                    OLD.suggestion_type IS DISTINCT FROM NEW.suggestion_type OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.payload_json IS DISTINCT FROM NEW.payload_json OR
+                    OLD.user_selection_json IS DISTINCT FROM NEW.user_selection_json OR
+                    OLD.refreshed_from_snapshot_id IS DISTINCT FROM NEW.refreshed_from_snapshot_id OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_snapshots',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'service', NEW.service,
+                        'activity_type', NEW.activity_type,
+                        'anchor_type', NEW.anchor_type,
+                        'anchor_id', NEW.anchor_id,
+                        'suggestion_type', NEW.suggestion_type,
+                        'status', NEW.status,
+                        'payload_json', NEW.payload_json,
+                        'user_selection_json', NEW.user_selection_json,
+                        'refreshed_from_snapshot_id', NEW.refreshed_from_snapshot_id,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION suggestion_generation_links_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_generation_links',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'snapshot_id', NEW.snapshot_id,
+                        'target_service', NEW.target_service,
+                        'target_type', NEW.target_type,
+                        'target_id', NEW.target_id,
+                        'selection_fingerprint', NEW.selection_fingerprint,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_generation_links',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.snapshot_id IS DISTINCT FROM NEW.snapshot_id OR
+                    OLD.target_service IS DISTINCT FROM NEW.target_service OR
+                    OLD.target_type IS DISTINCT FROM NEW.target_type OR
+                    OLD.target_id IS DISTINCT FROM NEW.target_id OR
+                    OLD.selection_fingerprint IS DISTINCT FROM NEW.selection_fingerprint OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'suggestion_generation_links',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'snapshot_id', NEW.snapshot_id,
+                        'target_service', NEW.target_service,
+                        'target_type', NEW.target_type,
+                        'target_id', NEW.target_id,
+                        'selection_fingerprint', NEW.selection_fingerprint,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS study_packs_sync_log ON study_packs", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER study_packs_sync_log AFTER INSERT OR UPDATE ON study_packs "
+                "FOR EACH ROW EXECUTE FUNCTION study_packs_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS study_pack_cards_sync_log ON study_pack_cards", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER study_pack_cards_sync_log AFTER INSERT OR UPDATE ON study_pack_cards "
+                "FOR EACH ROW EXECUTE FUNCTION study_pack_cards_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS flashcard_citations_sync_log ON flashcard_citations", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER flashcard_citations_sync_log AFTER INSERT OR UPDATE ON flashcard_citations "
+                "FOR EACH ROW EXECUTE FUNCTION flashcard_citations_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute("DROP TRIGGER IF EXISTS suggestion_snapshots_sync_log ON suggestion_snapshots", connection=conn)
+            self.backend.execute(
+                "CREATE TRIGGER suggestion_snapshots_sync_log AFTER INSERT OR UPDATE ON suggestion_snapshots "
+                "FOR EACH ROW EXECUTE FUNCTION suggestion_snapshots_sync_log_fn()",
+                connection=conn,
+            )
+            self.backend.execute(
+                "DROP TRIGGER IF EXISTS suggestion_generation_links_sync_log ON suggestion_generation_links",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE TRIGGER suggestion_generation_links_sync_log AFTER INSERT OR UPDATE ON suggestion_generation_links "
+                "FOR EACH ROW EXECUTE FUNCTION suggestion_generation_links_sync_log_fn()",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study pack sync triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_manuscript_phase2_sync_triggers_postgres(self, conn) -> None:
+        """Ensure PostgreSQL sync-log triggers for V42 manuscript tables."""
+        try:
+            # ── manuscript_characters ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_characters_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'name', NEW.name,
+                        'role', NEW.role,
+                        'cast_group', NEW.cast_group,
+                        'full_name', NEW.full_name,
+                        'age', NEW.age,
+                        'gender', NEW.gender,
+                        'appearance', NEW.appearance,
+                        'personality', NEW.personality,
+                        'backstory', NEW.backstory,
+                        'motivation', NEW.motivation,
+                        'arc_summary', NEW.arc_summary,
+                        'notes', NEW.notes,
+                        'custom_fields_json', NEW.custom_fields_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'name', NEW.name,
+                        'role', NEW.role,
+                        'cast_group', NEW.cast_group,
+                        'full_name', NEW.full_name,
+                        'age', NEW.age,
+                        'gender', NEW.gender,
+                        'appearance', NEW.appearance,
+                        'personality', NEW.personality,
+                        'backstory', NEW.backstory,
+                        'motivation', NEW.motivation,
+                        'arc_summary', NEW.arc_summary,
+                        'notes', NEW.notes,
+                        'custom_fields_json', NEW.custom_fields_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.name IS DISTINCT FROM NEW.name OR
+                    OLD.role IS DISTINCT FROM NEW.role OR
+                    OLD.cast_group IS DISTINCT FROM NEW.cast_group OR
+                    OLD.full_name IS DISTINCT FROM NEW.full_name OR
+                    OLD.age IS DISTINCT FROM NEW.age OR
+                    OLD.gender IS DISTINCT FROM NEW.gender OR
+                    OLD.appearance IS DISTINCT FROM NEW.appearance OR
+                    OLD.personality IS DISTINCT FROM NEW.personality OR
+                    OLD.backstory IS DISTINCT FROM NEW.backstory OR
+                    OLD.motivation IS DISTINCT FROM NEW.motivation OR
+                    OLD.arc_summary IS DISTINCT FROM NEW.arc_summary OR
+                    OLD.notes IS DISTINCT FROM NEW.notes OR
+                    OLD.custom_fields_json IS DISTINCT FROM NEW.custom_fields_json OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_characters',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'name', NEW.name,
+                        'role', NEW.role,
+                        'cast_group', NEW.cast_group,
+                        'full_name', NEW.full_name,
+                        'age', NEW.age,
+                        'gender', NEW.gender,
+                        'appearance', NEW.appearance,
+                        'personality', NEW.personality,
+                        'backstory', NEW.backstory,
+                        'motivation', NEW.motivation,
+                        'arc_summary', NEW.arc_summary,
+                        'notes', NEW.notes,
+                        'custom_fields_json', NEW.custom_fields_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_character_relationships ─────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_character_relationships_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'from_character_id', NEW.from_character_id,
+                        'to_character_id', NEW.to_character_id,
+                        'relationship_type', NEW.relationship_type,
+                        'description', NEW.description,
+                        'bidirectional', NEW.bidirectional,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'from_character_id', NEW.from_character_id,
+                        'to_character_id', NEW.to_character_id,
+                        'relationship_type', NEW.relationship_type,
+                        'description', NEW.description,
+                        'bidirectional', NEW.bidirectional,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.relationship_type IS DISTINCT FROM NEW.relationship_type OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.bidirectional IS DISTINCT FROM NEW.bidirectional OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_character_relationships',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'from_character_id', NEW.from_character_id,
+                        'to_character_id', NEW.to_character_id,
+                        'relationship_type', NEW.relationship_type,
+                        'description', NEW.description,
+                        'bidirectional', NEW.bidirectional,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_world_info ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_world_info_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'kind', NEW.kind,
+                        'name', NEW.name,
+                        'description', NEW.description,
+                        'parent_id', NEW.parent_id,
+                        'properties_json', NEW.properties_json,
+                        'tags_json', NEW.tags_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'kind', NEW.kind,
+                        'name', NEW.name,
+                        'description', NEW.description,
+                        'parent_id', NEW.parent_id,
+                        'properties_json', NEW.properties_json,
+                        'tags_json', NEW.tags_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.kind IS DISTINCT FROM NEW.kind OR
+                    OLD.name IS DISTINCT FROM NEW.name OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.parent_id IS DISTINCT FROM NEW.parent_id OR
+                    OLD.properties_json IS DISTINCT FROM NEW.properties_json OR
+                    OLD.tags_json IS DISTINCT FROM NEW.tags_json OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_world_info',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'kind', NEW.kind,
+                        'name', NEW.name,
+                        'description', NEW.description,
+                        'parent_id', NEW.parent_id,
+                        'properties_json', NEW.properties_json,
+                        'tags_json', NEW.tags_json,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_plot_lines ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_plot_lines_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'status', NEW.status,
+                        'color', NEW.color,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'status', NEW.status,
+                        'color', NEW.color,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.color IS DISTINCT FROM NEW.color OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_lines',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'status', NEW.status,
+                        'color', NEW.color,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_plot_events ─────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_plot_events_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'event_type', NEW.event_type,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'event_type', NEW.event_type,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.event_type IS DISTINCT FROM NEW.event_type OR
+                    OLD.scene_id IS DISTINCT FROM NEW.scene_id OR
+                    OLD.chapter_id IS DISTINCT FROM NEW.chapter_id OR
+                    OLD.sort_order IS DISTINCT FROM NEW.sort_order OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_events',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'event_type', NEW.event_type,
+                        'sort_order', NEW.sort_order,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_plot_holes ──────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_plot_holes_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'severity', NEW.severity,
+                        'status', NEW.status,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'resolution', NEW.resolution,
+                        'detected_by', NEW.detected_by,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'severity', NEW.severity,
+                        'status', NEW.status,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'resolution', NEW.resolution,
+                        'detected_by', NEW.detected_by,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.title IS DISTINCT FROM NEW.title OR
+                    OLD.description IS DISTINCT FROM NEW.description OR
+                    OLD.severity IS DISTINCT FROM NEW.severity OR
+                    OLD.status IS DISTINCT FROM NEW.status OR
+                    OLD.resolution IS DISTINCT FROM NEW.resolution OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_plot_holes',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'title', NEW.title,
+                        'description', NEW.description,
+                        'severity', NEW.severity,
+                        'status', NEW.status,
+                        'scene_id', NEW.scene_id,
+                        'chapter_id', NEW.chapter_id,
+                        'plot_line_id', NEW.plot_line_id,
+                        'resolution', NEW.resolution,
+                        'detected_by', NEW.detected_by,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── manuscript_citations ───────────────────────────────────
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION manuscript_citations_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'scene_id', NEW.scene_id,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'source_title', NEW.source_title,
+                        'excerpt', NEW.excerpt,
+                        'query_used', NEW.query_used,
+                        'anchor_offset', NEW.anchor_offset,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF OLD.deleted = TRUE AND NEW.deleted = FALSE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'scene_id', NEW.scene_id,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'source_title', NEW.source_title,
+                        'excerpt', NEW.excerpt,
+                        'query_used', NEW.query_used,
+                        'anchor_offset', NEW.anchor_offset,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.source_type IS DISTINCT FROM NEW.source_type OR
+                    OLD.source_id IS DISTINCT FROM NEW.source_id OR
+                    OLD.source_title IS DISTINCT FROM NEW.source_title OR
+                    OLD.excerpt IS DISTINCT FROM NEW.excerpt OR
+                    OLD.query_used IS DISTINCT FROM NEW.query_used OR
+                    OLD.anchor_offset IS DISTINCT FROM NEW.anchor_offset OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'manuscript_citations',
+                      NEW.id,
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'project_id', NEW.project_id,
+                        'scene_id', NEW.scene_id,
+                        'source_type', NEW.source_type,
+                        'source_id', NEW.source_id,
+                        'source_title', NEW.source_title,
+                        'excerpt', NEW.excerpt,
+                        'query_used', NEW.query_used,
+                        'anchor_offset', NEW.anchor_offset,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+
+            # ── Create triggers (drop first to allow re-run) ──────────
+            for table in (
+                "manuscript_characters",
+                "manuscript_character_relationships",
+                "manuscript_world_info",
+                "manuscript_plot_lines",
+                "manuscript_plot_events",
+                "manuscript_plot_holes",
+                "manuscript_citations",
+            ):
+                self.backend.execute(
+                    f"DROP TRIGGER IF EXISTS {table}_sync_log ON {table}",
+                    connection=conn,
+                )
+                self.backend.execute(
+                    f"CREATE TRIGGER {table}_sync_log AFTER INSERT OR UPDATE ON {table} "
+                    f"FOR EACH ROW EXECUTE FUNCTION {table}_sync_log_fn()",
+                    connection=conn,
+                )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL manuscript phase-2 sync triggers: {exc}") from exc  # noqa: TRY003
 
     def _ensure_quiz_remediation_conversion_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure quiz remediation conversion storage exists for SQLite."""
@@ -7418,6 +11920,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             else:
                 current_version = self._get_schema_version_postgres(conn)
 
+            if current_version < 36:
+                self._ensure_postgres_workspaces_table_base(conn)
+
             if current_version < 5:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V4_TO_V5, conn, expected_version=5)
                 current_version = 5
@@ -7534,6 +12039,25 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_quiz_remediation_conversion_schema_postgres(conn)
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V37_TO_V38_POSTGRES, conn, expected_version=38)
                 current_version = 38
+            if current_version < 39:
+                self._ensure_workspace_study_material_schema_postgres(conn)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V38_TO_V39_POSTGRES, conn, expected_version=39)
+                current_version = 39
+            if current_version < 40:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V39_TO_V40_POSTGRES, conn, expected_version=40)
+                current_version = 40
+            if current_version < 41:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V40_TO_V41_POSTGRES, conn, expected_version=41)
+                current_version = 41
+            if current_version < 42:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V41_TO_V42_POSTGRES, conn, expected_version=42)
+                current_version = 42
+            if current_version < 43:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V42_TO_V43_POSTGRES, conn, expected_version=43)
+                current_version = 43
+            if current_version < 44:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V43_TO_V44_POSTGRES, conn, expected_version=44)
+                current_version = 44
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -7542,13 +12066,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             self._ensure_flashcard_asset_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
+            self._ensure_study_pack_schema_postgres(conn)
             self._ensure_study_assistant_schema_postgres(conn)
+            self._ensure_workspace_study_material_schema_postgres(conn)
             self._ensure_quiz_remediation_conversion_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
             self._ensure_recent_voice_command_schema_postgres(conn)
             self._ensure_note_folder_schema_postgres(conn)
+            self._ensure_note_studio_schema_postgres(conn)
+            self._ensure_web_clipper_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
+            self._ensure_manuscript_phase2_sync_triggers_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(
@@ -10020,6 +14549,38 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item["deleted"] = self._as_bool(item.get("deleted"))
         return item
 
+    def _persona_buddy_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona buddy DB `row: Any` to an API-safe dict."""
+        if not row:
+            return None
+        item = dict(row)
+        buddy_label = str(item.get("persona_id") or "unknown")
+        item["derived_core"] = self._decode_persona_json_object(
+            item.get("derived_core_json"),
+            field_name="derived_core_json",
+            context_label=f"persona buddy {buddy_label}",
+        )
+        item["overlay_preferences"] = self._decode_persona_json_object(
+            item.get("overlay_preferences_json"),
+            field_name="overlay_preferences_json",
+            context_label=f"persona buddy {buddy_label}",
+        )
+        try:
+            item["resolved_profile"] = resolve_persona_buddy_profile(
+                derived_core=item["derived_core"],
+                overlay_preferences=item["overlay_preferences"],
+            )
+        except (TypeError, KeyError, ValueError) as exc:
+            logger.warning(
+                "Unable to resolve persona buddy profile for persona_id={}: {}",
+                buddy_label,
+                exc,
+            )
+            raise CharactersRAGDBError(
+                f"Unable to resolve persona buddy profile for persona_id={buddy_label}."
+            ) from exc
+        return item
+
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a scope rule DB `row: Any` to an API-safe dict.
 
@@ -10267,27 +14828,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted_personas: bool = False,
     ) -> dict[str, Any] | None:
         """Fetch a persona exemplar owned by a user."""
-        clauses = [
-            "pe.id = ?",
-            "pe.persona_id = ?",
-            "pe.user_id = ?",
-            "pp.id = pe.persona_id",
-            "pp.user_id = pe.user_id",
-        ]
-        params: list[Any] = [exemplar_id, persona_id, user_id]
-        if not include_disabled:
-            clauses.append("pe.enabled = 1")
-        if not include_deleted:
-            clauses.append("pe.deleted = 0")
-        if not include_deleted_personas:
-            clauses.append("pp.deleted = 0")
-        query = (
-            "SELECT pe.* "
-            "FROM persona_exemplars pe "
-            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
-            "WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        query = """
+            SELECT pe.*
+              FROM persona_exemplars pe
+              JOIN persona_profiles pp
+                ON pp.id = pe.persona_id
+               AND pp.user_id = pe.user_id
+             WHERE pe.id = ?
+               AND pe.persona_id = ?
+               AND pe.user_id = ?
+               AND (? OR pe.enabled = 1)
+               AND (? OR pe.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
+             LIMIT 1
+        """
+        params = (
+            exemplar_id,
+            persona_id,
+            user_id,
+            bool(include_disabled),
+            bool(include_deleted),
+            bool(include_deleted_personas),
         )
-        cursor = self.execute_query(query, tuple(params))
+        cursor = self.execute_query(query, params)
         return self._persona_exemplar_row_to_dict(cursor.fetchone())
 
     def list_persona_exemplars(
@@ -10302,30 +14865,31 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List persona exemplars for a user, optionally filtered to a persona."""
-        clauses = [
-            "pe.user_id = ?",
-            "pp.id = pe.persona_id",
-            "pp.user_id = pe.user_id",
-        ]
-        params: list[Any] = [user_id]
-        if persona_id is not None:
-            clauses.append("pe.persona_id = ?")
-            params.append(persona_id)
-        if not include_disabled:
-            clauses.append("pe.enabled = 1")
-        if not include_deleted:
-            clauses.append("pe.deleted = 0")
-        if not include_deleted_personas:
-            clauses.append("pp.deleted = 0")
-        query = (
-            "SELECT pe.* "
-            "FROM persona_exemplars pe "
-            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
-            "WHERE " + " AND ".join(clauses) + " "
-            "ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC LIMIT ? OFFSET ?"
+        query = """
+            SELECT pe.*
+              FROM persona_exemplars pe
+              JOIN persona_profiles pp
+                ON pp.id = pe.persona_id
+               AND pp.user_id = pe.user_id
+             WHERE pe.user_id = ?
+               AND (? IS NULL OR pe.persona_id = ?)
+               AND (? OR pe.enabled = 1)
+               AND (? OR pe.deleted = 0)
+               AND (? OR pp.deleted = FALSE)
+             ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC
+             LIMIT ? OFFSET ?
+        """
+        params = (
+            user_id,
+            persona_id,
+            persona_id,
+            bool(include_disabled),
+            bool(include_deleted),
+            bool(include_deleted_personas),
+            max(1, int(limit)),
+            max(0, int(offset)),
         )
-        params.extend([max(1, int(limit)), max(0, int(offset))])
-        cursor = self.execute_query(query, tuple(params))
+        cursor = self.execute_query(query, params)
         return [self._persona_exemplar_row_to_dict(row) for row in cursor.fetchall() if row]
 
     def update_persona_exemplar(
@@ -10353,81 +14917,108 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "notes",
             "deleted",
         }
-        set_parts: list[str] = []
-        params: list[Any] = []
+        normalized_updates: dict[str, Any] = {}
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
 
         for key, value in update_data.items():
             if key not in allowed_fields:
                 continue
             if key == "kind":
-                params.append(
-                    self._normalize_exemplar_enum(
-                        value,
-                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
-                        field_name="kind",
-                        default="style",
-                    )
+                normalized_updates["kind"] = self._normalize_exemplar_enum(
+                    value,
+                    allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+                    field_name="kind",
+                    default="style",
                 )
-                set_parts.append("kind = ?")
             elif key == "content":
                 content = self._normalize_nullable_text(value)
                 if not content:
                     raise InputError("content cannot be empty.")  # noqa: TRY003
-                params.append(content)
-                set_parts.append("content = ?")
+                normalized_updates["content"] = content
             elif key == "tone":
-                params.append(self._normalize_persona_exemplar_tone(value))
-                set_parts.append("tone = ?")
+                normalized_updates["tone"] = self._normalize_persona_exemplar_tone(value)
             elif key == "scenario_tags":
-                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]")
-                set_parts.append("scenario_tags_json = ?")
+                normalized_updates["scenario_tags_json"] = (
+                    self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]"
+                )
             elif key == "capability_tags":
-                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]")
-                set_parts.append("capability_tags_json = ?")
+                normalized_updates["capability_tags_json"] = (
+                    self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]"
+                )
             elif key == "priority":
                 try:
-                    params.append(int(value))
+                    normalized_updates["priority"] = int(value)
                 except (TypeError, ValueError) as exc:
                     raise InputError("priority must be an integer.") from exc  # noqa: TRY003
-                set_parts.append("priority = ?")
             elif key == "enabled":
-                params.append(bool_cast(self._as_bool(value)))
-                set_parts.append("enabled = ?")
+                normalized_updates["enabled"] = bool_cast(self._as_bool(value))
             elif key == "source_type":
-                params.append(
-                    self._normalize_exemplar_enum(
-                        value,
-                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
-                        field_name="source_type",
-                        default="manual",
-                    )
+                normalized_updates["source_type"] = self._normalize_exemplar_enum(
+                    value,
+                    allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+                    field_name="source_type",
+                    default="manual",
                 )
-                set_parts.append("source_type = ?")
+            elif key == "source_ref":
+                normalized_updates["source_ref"] = self._normalize_nullable_text(value)
+            elif key == "notes":
+                normalized_updates["notes"] = self._normalize_nullable_text(value)
             elif key == "deleted":
-                params.append(bool_cast(self._normalize_deleted_input(value)))
-                set_parts.append("deleted = ?")
-            else:
-                params.append(self._normalize_nullable_text(value))
-                set_parts.append(f"{key} = ?")
+                normalized_updates["deleted"] = bool_cast(self._normalize_deleted_input(value))
 
-        if not set_parts:
+        if not normalized_updates:
             raise InputError("No valid exemplar fields provided for update.")  # noqa: TRY003
 
         now = self._get_current_utc_timestamp_iso()
-        set_parts.append("last_modified = ?")
-        params.append(now)
-        set_parts.append("version = version + 1")
+        query = """
+            UPDATE persona_exemplars
+               SET kind = CASE WHEN ? THEN ? ELSE kind END,
+                   content = CASE WHEN ? THEN ? ELSE content END,
+                   tone = CASE WHEN ? THEN ? ELSE tone END,
+                   scenario_tags_json = CASE WHEN ? THEN ? ELSE scenario_tags_json END,
+                   capability_tags_json = CASE WHEN ? THEN ? ELSE capability_tags_json END,
+                   priority = CASE WHEN ? THEN ? ELSE priority END,
+                   enabled = CASE WHEN ? THEN ? ELSE enabled END,
+                   source_type = CASE WHEN ? THEN ? ELSE source_type END,
+                   source_ref = CASE WHEN ? THEN ? ELSE source_ref END,
+                   notes = CASE WHEN ? THEN ? ELSE notes END,
+                   deleted = CASE WHEN ? THEN ? ELSE deleted END,
+                   last_modified = ?,
+                   version = version + 1
+             WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0
+        """
+        params = (
+            "kind" in normalized_updates,
+            normalized_updates.get("kind"),
+            "content" in normalized_updates,
+            normalized_updates.get("content"),
+            "tone" in normalized_updates,
+            normalized_updates.get("tone"),
+            "scenario_tags_json" in normalized_updates,
+            normalized_updates.get("scenario_tags_json"),
+            "capability_tags_json" in normalized_updates,
+            normalized_updates.get("capability_tags_json"),
+            "priority" in normalized_updates,
+            normalized_updates.get("priority"),
+            "enabled" in normalized_updates,
+            normalized_updates.get("enabled"),
+            "source_type" in normalized_updates,
+            normalized_updates.get("source_type"),
+            "source_ref" in normalized_updates,
+            normalized_updates.get("source_ref"),
+            "notes" in normalized_updates,
+            normalized_updates.get("notes"),
+            "deleted" in normalized_updates,
+            normalized_updates.get("deleted"),
+            now,
+            exemplar_id,
+            persona_id,
+            user_id,
+        )
 
         with self.transaction() as conn:
             self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
-            query = (
-                "UPDATE persona_exemplars "
-                f"SET {', '.join(set_parts)} "
-                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
-            )
-            params.extend([exemplar_id, persona_id, user_id])
-            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
             cursor = conn.execute(prepared_query, prepared_params or ())
             return cursor.rowcount > 0
 
@@ -10729,6 +15320,252 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             update_data=update_data,
             expected_version=expected_version,
         )
+
+    def restore_persona_profile(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        expected_version: int,
+    ) -> bool:
+        """Restore a soft-deleted persona profile using optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        expected_version_value = self._parse_version_input(expected_version)
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        deleted_true = True if self.backend_type == BackendType.POSTGRESQL else 1
+        is_active_true = True if self.backend_type == BackendType.POSTGRESQL else 1
+
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            if not row:
+                return False
+
+            if not self._as_bool(row["deleted"]):
+                return True
+
+            current_db_version = int(row["version"])
+            if current_db_version != expected_version_value:
+                raise ConflictError(  # noqa: TRY003
+                    (
+                        f"Restore for persona profile {persona_id} failed: "
+                        f"version mismatch (db has {current_db_version}, expected {expected_version_value})."
+                    ),
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                )
+
+            query = (
+                "UPDATE persona_profiles "
+                "SET deleted = ?, is_active = ?, last_modified = ?, version = version + 1 "
+                "WHERE id = ? AND user_id = ? AND version = ? AND deleted = ?"
+            )
+            params = (
+                deleted_false,
+                is_active_true,
+                now,
+                persona_id,
+                user_id,
+                expected_version_value,
+                deleted_true,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            if cursor.rowcount > 0:
+                return True
+
+            final_state = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            return bool(final_state and not self._as_bool(final_state["deleted"]))
+
+    def get_persona_buddy(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        include_deleted_personas: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch one persona buddy row for a user-owned persona profile."""
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        query = """
+            SELECT pb.*
+              FROM persona_buddies pb
+              JOIN persona_profiles pp
+                ON pp.id = pb.persona_id
+               AND pp.user_id = pb.user_id
+             WHERE pb.persona_id = ?
+               AND pb.user_id = ?
+               AND (? OR pp.deleted = ?)
+             LIMIT 1
+        """
+        params = (
+            persona_id,
+            user_id,
+            bool(include_deleted_personas),
+            deleted_false,
+        )
+        cursor = self.execute_query(query, params)
+        return self._persona_buddy_row_to_dict(cursor.fetchone())
+
+    def list_persona_buddies(
+        self,
+        *,
+        user_id: str,
+        persona_ids: list[str],
+        include_deleted_personas: bool = False,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Fetch buddy rows for a batch of user-owned persona profiles."""
+        normalized_persona_ids = list(
+            dict.fromkeys(
+                str(persona_id or "").strip()
+                for persona_id in persona_ids
+                if str(persona_id or "").strip()
+            )
+        )
+        if not normalized_persona_ids:
+            return {}
+
+        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
+        placeholders = ", ".join("?" for _ in normalized_persona_ids)
+        query = (
+            "SELECT pb.* "
+            "FROM persona_buddies pb "
+            "JOIN persona_profiles pp "
+            "  ON pp.id = pb.persona_id "
+            " AND pp.user_id = pb.user_id "
+            f"WHERE pb.user_id = ? AND pb.persona_id IN ({placeholders}) "  # nosec B608
+            "AND (? OR pp.deleted = ?)"
+        )
+        params: list[Any] = [
+            user_id,
+            *normalized_persona_ids,
+            bool(include_deleted_personas),
+            deleted_false,
+        ]
+        cursor = self.execute_query(query, tuple(params))
+        buddies: dict[str, dict[str, Any] | None] = {
+            persona_id: None for persona_id in normalized_persona_ids
+        }
+        for row in cursor.fetchall():
+            buddy = self._persona_buddy_row_to_dict(row)
+            if buddy is None:
+                continue
+            persona_id = str(buddy.get("persona_id") or "").strip()
+            if persona_id:
+                buddies[persona_id] = buddy
+        return buddies
+
+    def upsert_persona_buddy(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        derivation_version: int,
+        source_fingerprint: str,
+        derived_core: dict[str, Any] | None,
+        overlay_preferences: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Insert or update one persona buddy row keyed by persona_id."""
+        if not source_fingerprint:
+            raise InputError("source_fingerprint is required for persona buddy upsert.")  # noqa: TRY003
+        try:
+            derivation_version_value = int(derivation_version)
+        except (TypeError, ValueError) as exc:
+            raise InputError("derivation_version must be an integer >= 1.") from exc  # noqa: TRY003
+        if derivation_version_value < 1:
+            raise InputError("derivation_version must be an integer >= 1.")  # noqa: TRY003
+
+        derived_core_json = self._ensure_json_string(derived_core if isinstance(derived_core, dict) else {}) or "{}"
+        overlay_preferences_json = (
+            self._ensure_json_string(overlay_preferences if isinstance(overlay_preferences, dict) else {}) or "{}"
+        )
+        now = self._get_current_utc_timestamp_iso()
+        update_query = (
+            "UPDATE persona_buddies "
+            "SET user_id = ?, derivation_version = ?, source_fingerprint = ?, derived_core_json = ?, "
+            "overlay_preferences_json = ?, last_modified = ?, version = version + 1 "
+            "WHERE persona_id = ? AND ("
+            "user_id <> ? OR derivation_version <> ? OR source_fingerprint <> ? OR "
+            "derived_core_json <> ? OR overlay_preferences_json <> ?"
+            ")"
+        )
+        update_params = (
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+            now,
+            persona_id,
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+        )
+        insert_query = (
+            "INSERT INTO persona_buddies("
+            "persona_id, user_id, derivation_version, source_fingerprint, derived_core_json, "
+            "overlay_preferences_json, created_at, last_modified, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        insert_params = (
+            persona_id,
+            user_id,
+            derivation_version_value,
+            source_fingerprint,
+            derived_core_json,
+            overlay_preferences_json,
+            now,
+            now,
+            1,
+        )
+
+        def _load_persisted_item(connection: Any) -> dict[str, Any]:
+            row = connection.execute(
+                "SELECT * FROM persona_buddies WHERE persona_id = ? LIMIT 1",
+                (persona_id,),
+            ).fetchone()
+            item = self._persona_buddy_row_to_dict(row)
+            if not item:
+                raise CharactersRAGDBError("Failed to load persona buddy after upsert.")  # noqa: TRY003
+            return item
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            prepared_update, prepared_update_params = self._prepare_backend_statement(update_query, update_params)
+            update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+
+            if update_cursor.rowcount == 0:
+                existing_row = conn.execute(
+                    "SELECT 1 FROM persona_buddies WHERE persona_id = ? LIMIT 1",
+                    (persona_id,),
+                ).fetchone()
+                if existing_row:
+                    return _load_persisted_item(conn)
+
+                prepared_insert, prepared_insert_params = self._prepare_backend_statement(insert_query, insert_params)
+                try:
+                    conn.execute(prepared_insert, prepared_insert_params or ())
+                except sqlite3.IntegrityError as exc:
+                    msg = str(exc).lower()
+                    if "unique constraint failed" not in msg:
+                        raise
+                    update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+                    if update_cursor.rowcount == 0:
+                        return _load_persisted_item(conn)
+                except BackendDatabaseError as exc:
+                    if not self._is_unique_violation(exc):
+                        raise
+                    update_cursor = conn.execute(prepared_update, prepared_update_params or ())
+                    if update_cursor.rowcount == 0:
+                        return _load_persisted_item(conn)
+
+            return _load_persisted_item(conn)
 
     def list_persona_scope_rules(
         self,
@@ -11915,6 +16752,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self._set_schema_version_postgres(conn, 4)
         self._sync_postgres_sequences(conn)
 
+    def _ensure_postgres_workspaces_table_base(self, conn) -> None:
+        """Create the workspaces table early for legacy Postgres migrations that reference it."""
+        self.backend.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                description   TEXT,
+                metadata_json TEXT    NOT NULL DEFAULT '{}',
+                study_materials_policy TEXT NOT NULL DEFAULT 'general',
+                archived      BOOLEAN NOT NULL DEFAULT false,
+                created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted       BOOLEAN NOT NULL DEFAULT false,
+                client_id     TEXT    NOT NULL DEFAULT 'unknown',
+                version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            connection=conn,
+        )
+
     def _apply_postgres_migration_script(self, script: str, conn, *, expected_version: int) -> None:
         statements = self._convert_sqlite_schema_to_postgres_statements(script)
         for stmt in statements:
@@ -12421,6 +17279,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
+    _STUDY_PACK_JSON_FIELDS = ['source_bundle_json', 'generation_options_json']
+    _SUGGESTION_SNAPSHOT_JSON_FIELDS = ('payload_json', 'user_selection_json')
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
     _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
@@ -14358,6 +19218,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if normalized_kind is None:
             normalized_kind = "character" if character_id is not None else None
         if normalized_kind is None:
+            if (
+                character_id is None
+                and normalized_assistant_id is None
+                and normalized_memory_mode is None
+            ):
+                raise InputError("Required field 'character_id' is missing")  # noqa: TRY003
             raise InputError(
                 "Conversation requires either 'character_id' or assistant identity fields."
             )  # noqa: TRY003
@@ -16128,11 +20994,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         description: str | None = None,
         metadata_json: str | None = None,
+        study_materials_policy: str = "general",
     ) -> dict[str, Any]:
-        """Create a workspace or return the existing one (idempotent by id).
+        """Create a workspace or update the existing row in place.
 
-        If the workspace already exists (and is not deleted), its current row is
-        returned without modification, making the call idempotent.
+        If the workspace already exists (and is not deleted), the provided
+        mutable fields are applied to the existing row using optimistic locking.
 
         Returns:
             A dict representing the workspace row.
@@ -16144,21 +21011,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not workspace_id or not name:
             raise InputError("workspace_id and name are required.")  # noqa: TRY003
 
+        normalized_policy = study_materials_policy or "general"
         existing = self.get_workspace(workspace_id)
         if existing is not None:
-            return existing
+            updates: dict[str, Any] = {}
+            if existing.get("name") != name:
+                updates["name"] = name
+            if description is not None and existing.get("description") != description:
+                updates["description"] = description
+            if metadata_json is not None and existing.get("metadata_json") != metadata_json:
+                updates["metadata_json"] = metadata_json
+            if existing.get("study_materials_policy") != normalized_policy:
+                updates["study_materials_policy"] = normalized_policy
+            if not updates:
+                return existing
+            return self.update_workspace(workspace_id, updates, expected_version=int(existing["version"]))
 
         now = self._get_current_utc_timestamp_iso()
         client_id = self.client_id or "unknown"
         query = (
-            "INSERT INTO workspaces (id, name, description, metadata_json, created_at, last_modified, deleted, client_id, version) "
-            "VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)"
+            "INSERT INTO workspaces "
+            "(id, name, description, metadata_json, study_materials_policy, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 1)"
         )
         params = (
             workspace_id,
             name,
             description,
             metadata_json or "{}",
+            normalized_policy,
             now,
             now,
             client_id,
@@ -16220,7 +21101,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         params: list[Any] = [now, expected_version + 1]
 
         for col in (
-            "name", "description", "metadata_json", "archived", "tag",
+            "name", "description", "metadata_json", "study_materials_policy", "archived", "tag",
             "banner_title", "banner_subtitle", "banner_color",
             "audio_provider", "audio_model", "audio_voice", "audio_speed",
         ):
@@ -16302,6 +21183,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         now = self._get_current_utc_timestamp_iso()
         with self.transaction() as conn:
+            conn.execute(
+                "UPDATE quizzes "
+                "SET workspace_id = NULL, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE workspace_id = ? AND deleted = 0",
+                (now, self.client_id, workspace_id),
+            )
+            conn.execute(
+                "UPDATE decks "
+                "SET workspace_id = NULL, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE workspace_id = ? AND deleted = 0",
+                (now, self.client_id, workspace_id),
+            )
             cursor = conn.execute(
                 "UPDATE workspaces SET deleted = 1, last_modified = ?, version = ? WHERE id = ? AND version = ?",
                 (now, expected_version + 1, workspace_id, expected_version),
@@ -18482,6 +23375,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         note_id: str | None = None,
         conversation_id: str | None = None,
         message_id: str | None = None,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
     ) -> str | None:
         if not title or not title.strip():
             raise InputError("Note title cannot be empty.")  # noqa: TRY003
@@ -18510,10 +23404,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
 
         try:
-            with self.transaction() as conn:
-                conn.execute(query, params)
+            def _execute(transaction_conn: sqlite3.Connection | BackendConnectionWrapper) -> str:
+                transaction_conn.execute(query, params)
                 logger.info(f"Added note '{title.strip()}' with ID: {final_note_id}.")
                 return final_note_id
+
+            if conn is None:
+                with self.transaction() as transaction_conn:
+                    return _execute(transaction_conn)
+            return _execute(conn)
         except sqlite3.IntegrityError as e:
             msg = str(e).lower()
             if "foreign key constraint failed" in msg:
@@ -18532,7 +23431,208 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
 
-    def get_note_by_id(self, note_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
+    @staticmethod
+    def _serialize_note_studio_json_field(value: dict[str, Any] | None, field_name: str, *, required: bool) -> str | None:
+        if value is None:
+            if required:
+                raise InputError(f"{field_name} cannot be None.")  # noqa: TRY003
+            return None
+        if not isinstance(value, dict):
+            raise InputError(f"{field_name} must be a JSON object.")  # noqa: TRY003
+        try:
+            return json.dumps(value)
+        except TypeError as exc:
+            raise InputError(f"{field_name} must be JSON serializable.") from exc  # noqa: TRY003
+
+    @staticmethod
+    def _build_note_studio_summary(document: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "note_id": document["note_id"],
+            "template_type": document["template_type"],
+            "handwriting_mode": document["handwriting_mode"],
+            "source_note_id": document.get("source_note_id"),
+            "excerpt_hash": document.get("excerpt_hash"),
+            "companion_content_hash": document.get("companion_content_hash"),
+            "render_version": document.get("render_version", 1),
+        }
+
+    def _fetch_note_studio_document_row(
+        self,
+        note_id: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        query = "SELECT * FROM note_studio_documents WHERE note_id = ?"
+        if conn is None:
+            cursor = self.execute_query(query, (note_id,))
+        else:
+            cursor = conn.execute(query, (note_id,))
+        row = cursor.fetchone()
+        return self._deserialize_row_fields(row, ["payload_json", "diagram_manifest_json"]) if row else None
+
+    def get_note_studio_document(self, note_id: str) -> dict[str, Any] | None:
+        return self._fetch_note_studio_document_row(note_id)
+
+    def _write_note_studio_document(
+        self,
+        *,
+        note_id: str,
+        payload_json: dict[str, Any],
+        template_type: str,
+        handwriting_mode: str,
+        source_note_id: str | None,
+        excerpt_snapshot: str | None,
+        excerpt_hash: str | None,
+        diagram_manifest_json: dict[str, Any] | None,
+        companion_content_hash: str | None,
+        render_version: int,
+        conn: sqlite3.Connection | None,
+        upsert: bool,
+    ) -> dict[str, Any]:
+        normalized_note_id = str(note_id).strip()
+        if not normalized_note_id:
+            raise InputError("note_id cannot be empty.")  # noqa: TRY003
+        if template_type not in _SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES:
+            raise InputError(
+                f"template_type must be one of {sorted(_SUPPORTED_NOTE_STUDIO_TEMPLATE_TYPES)}."
+            )  # noqa: TRY003
+        if handwriting_mode not in _SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES:
+            raise InputError(
+                f"handwriting_mode must be one of {sorted(_SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES)}."
+            )  # noqa: TRY003
+        if not isinstance(render_version, int) or render_version < 1:
+            raise InputError("render_version must be an integer >= 1.")  # noqa: TRY003
+
+        payload_json_str = self._serialize_note_studio_json_field(payload_json, "payload_json", required=True)
+        diagram_manifest_json_str = self._serialize_note_studio_json_field(
+            diagram_manifest_json,
+            "diagram_manifest_json",
+            required=False,
+        )
+        now = self._get_current_utc_timestamp_iso()
+
+        if upsert:
+            query = (
+                "INSERT INTO note_studio_documents ("
+                "note_id, payload_json, template_type, handwriting_mode, source_note_id, "
+                "excerpt_snapshot, excerpt_hash, diagram_manifest_json, companion_content_hash, "
+                "render_version, created_at, last_modified"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(note_id) DO UPDATE SET "
+                "payload_json = excluded.payload_json, "
+                "template_type = excluded.template_type, "
+                "handwriting_mode = excluded.handwriting_mode, "
+                "source_note_id = excluded.source_note_id, "
+                "excerpt_snapshot = excluded.excerpt_snapshot, "
+                "excerpt_hash = excluded.excerpt_hash, "
+                "diagram_manifest_json = excluded.diagram_manifest_json, "
+                "companion_content_hash = excluded.companion_content_hash, "
+                "render_version = excluded.render_version, "
+                "last_modified = excluded.last_modified"
+            )
+        else:
+            query = (
+                "INSERT INTO note_studio_documents ("
+                "note_id, payload_json, template_type, handwriting_mode, source_note_id, "
+                "excerpt_snapshot, excerpt_hash, diagram_manifest_json, companion_content_hash, "
+                "render_version, created_at, last_modified"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+
+        params = (
+            normalized_note_id,
+            payload_json_str,
+            template_type,
+            handwriting_mode,
+            source_note_id,
+            excerpt_snapshot,
+            excerpt_hash,
+            diagram_manifest_json_str,
+            companion_content_hash,
+            render_version,
+            now,
+            now,
+        )
+
+        def _execute(inner_conn: sqlite3.Connection) -> dict[str, Any]:
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            inner_conn.execute(prepared_query, prepared_params or ())
+            document = self._fetch_note_studio_document_row(normalized_note_id, conn=inner_conn)
+            if not document:
+                raise CharactersRAGDBError(f"Failed to read note studio document for note ID '{normalized_note_id}'.")
+            return document
+
+        if conn is None:
+            with self.transaction() as transaction_conn:
+                return _execute(transaction_conn)
+        return _execute(conn)
+
+    def create_note_studio_document(
+        self,
+        *,
+        note_id: str,
+        payload_json: dict[str, Any],
+        template_type: str,
+        handwriting_mode: str,
+        source_note_id: str | None = None,
+        excerpt_snapshot: str | None = None,
+        excerpt_hash: str | None = None,
+        diagram_manifest_json: dict[str, Any] | None = None,
+        companion_content_hash: str | None = None,
+        render_version: int,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        return self._write_note_studio_document(
+            note_id=note_id,
+            payload_json=payload_json,
+            template_type=template_type,
+            handwriting_mode=handwriting_mode,
+            source_note_id=source_note_id,
+            excerpt_snapshot=excerpt_snapshot,
+            excerpt_hash=excerpt_hash,
+            diagram_manifest_json=diagram_manifest_json,
+            companion_content_hash=companion_content_hash,
+            render_version=render_version,
+            conn=conn,
+            upsert=False,
+        )
+
+    def upsert_note_studio_document(
+        self,
+        *,
+        note_id: str,
+        payload_json: dict[str, Any],
+        template_type: str,
+        handwriting_mode: str,
+        source_note_id: str | None = None,
+        excerpt_snapshot: str | None = None,
+        excerpt_hash: str | None = None,
+        diagram_manifest_json: dict[str, Any] | None = None,
+        companion_content_hash: str | None = None,
+        render_version: int,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        return self._write_note_studio_document(
+            note_id=note_id,
+            payload_json=payload_json,
+            template_type=template_type,
+            handwriting_mode=handwriting_mode,
+            source_note_id=source_note_id,
+            excerpt_snapshot=excerpt_snapshot,
+            excerpt_hash=excerpt_hash,
+            diagram_manifest_json=diagram_manifest_json,
+            companion_content_hash=companion_content_hash,
+            render_version=render_version,
+            conn=conn,
+            upsert=True,
+        )
+
+    def get_note_by_id(
+        self,
+        note_id: str,
+        include_deleted: bool = False,
+        include_studio_summary: bool = False,
+    ) -> dict[str, Any] | None:
         query = "SELECT * FROM notes WHERE id = ?"
         params: list[Any] = [note_id]
         if not include_deleted:
@@ -18540,7 +23640,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
         cursor = self.execute_query(query, tuple(params))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        note = dict(row) if row else None
+        if note and include_studio_summary:
+            studio_document = self.get_note_studio_document(note_id)
+            if studio_document:
+                note["studio"] = self._build_note_studio_summary(studio_document)
+        return note
 
     def list_notes(
         self,
@@ -18604,7 +23709,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Return count of soft-deleted notes."""
         return self.count_notes(only_deleted=True)
 
-    def update_note(self, note_id: str, update_data: dict[str, Any], expected_version: int) -> bool | None:
+    def update_note(
+        self,
+        note_id: str,
+        update_data: dict[str, Any],
+        expected_version: int,
+        conn: sqlite3.Connection | BackendConnectionWrapper | None = None,
+    ) -> bool | None:
         if not update_data:
             raise InputError("No data provided for note update.")  # noqa: TRY003
 
@@ -18644,8 +23755,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query = f"UPDATE notes SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
 
         try:
-            with self.transaction() as conn:
-                current_db_version = self._get_current_db_version(conn, "notes", "id", note_id)
+            def _execute(transaction_conn: sqlite3.Connection | BackendConnectionWrapper) -> bool:
+                current_db_version = self._get_current_db_version(transaction_conn, "notes", "id", note_id)
 
                 if current_db_version != expected_version:
                     raise ConflictError(  # noqa: TRY003, TRY301
@@ -18653,10 +23764,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         entity="notes", entity_id=note_id
                     )
 
-                cursor = conn.execute(query, final_params_for_execute)
+                cursor = transaction_conn.execute(query, final_params_for_execute)
 
                 if cursor.rowcount == 0:
-                    check_again_cursor = conn.execute("SELECT version, deleted FROM notes WHERE id = ?", (note_id,))
+                    check_again_cursor = transaction_conn.execute("SELECT version, deleted FROM notes WHERE id = ?", (note_id,))
                     final_state = check_again_cursor.fetchone()
                     if not final_state:
                         msg = f"Note ID {note_id} disappeared."
@@ -18670,6 +23781,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 logger.info(f"Updated note ID {note_id} from version {expected_version} to version {next_version_val}.")
                 return True
+
+            if conn is None:
+                with self.transaction() as transaction_conn:
+                    return _execute(transaction_conn)
+            return _execute(conn)
         # No specific UNIQUE constraint on notes.title or notes.content in the schema, so sqlite3.IntegrityError less likely for these fields.
         except ConflictError:
             raise
@@ -18729,6 +23845,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         msg = f"Soft delete for note ID {note_id} (expected v{expected_version}) affected 0 rows."
                     raise ConflictError(msg, entity="notes", entity_id=note_id)  # noqa: TRY301
 
+                self._invalidate_note_clipper_sidecars(note_id, conn=conn, deleted=True)
                 logger.info(
                     f"Soft-deleted note ID {note_id} (was v{expected_version}), new version {next_version_val}.")
                 return True
@@ -18750,6 +23867,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cur_ver = int(row["version"])
                 deleted = bool(row["deleted"])
                 if hard_delete:
+                    self._delete_note_clipper_sidecars(note_id, conn=conn)
+                    conn.execute("DELETE FROM note_studio_documents WHERE note_id = ?", (note_id,))
                     conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
                     return True
                 if deleted:
@@ -18762,6 +23881,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "WHERE id = ? AND deleted = 0",
                     (deleted_val, now, cur_ver + 1, self.client_id, note_id),
                 ).rowcount
+                if rc > 0:
+                    self._invalidate_note_clipper_sidecars(note_id, conn=conn, deleted=True)
                 return rc > 0
         except BackendDatabaseError as e:
             raise CharactersRAGDBError(f"Failed to delete note: {e}") from e  # noqa: TRY003
@@ -18842,6 +23963,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         msg = f"Restore for Note ID {note_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks."
                     raise ConflictError(msg, entity="notes", entity_id=note_id)  # noqa: TRY301
 
+                self._invalidate_note_clipper_sidecars(note_id, conn=conn, deleted=False)
                 logger.info(
                     f"Restored note ID {note_id} (was version {expected_version}), new version {next_version_val}.")
                 return True
@@ -20115,6 +25237,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         scheduler_settings: Mapping[str, Any] | str | None = None,
         *,
         scheduler_type: str = "sm2_plus",
+        workspace_id: str | None = None,
     ) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
@@ -20135,6 +25258,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         (
                             "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
                             "description = COALESCE(?, description), "
+                            "workspace_id = ?, "
                             "scheduler_type = COALESCE(?, scheduler_type), "
                             "scheduler_settings_json = COALESCE(?, scheduler_settings_json) "
                             "WHERE id = ? AND version = ?"
@@ -20145,6 +25269,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             next_version,
                             self.client_id,
                             description,
+                            workspace_id,
                             scheduler_type,
                             scheduler_settings_json,
                             deck_id,
@@ -20159,12 +25284,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                     return deck_id
                 insert_sql = (
-                    "INSERT INTO decks(name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted)"
-                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO decks("
+                    "name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    workspace_id,
                     scheduler_settings_json,
                     scheduler_type,
                     now,
@@ -20196,19 +25323,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e  # noqa: TRY003
 
-    def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
+    def list_decks(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
+    ) -> list[dict[str, Any]]:
+        select_sql = (
+            "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, "
+            "deleted, client_id, version FROM decks "
+        )
         if include_deleted:
-            query = (
-                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
-                "deleted, client_id, version FROM decks ORDER BY name LIMIT ? OFFSET ?"
-            )
+            if workspace_id is not None:
+                query = select_sql + "WHERE workspace_id = ? ORDER BY name LIMIT ? OFFSET ?"
+                params: tuple[Any, ...] = (workspace_id, limit, offset)
+            elif include_workspace_items:
+                query = select_sql + "ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
+            else:
+                query = select_sql + "WHERE workspace_id IS NULL ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
         else:
-            query = (
-                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
-                "deleted, client_id, version FROM decks WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
-            )
+            if workspace_id is not None:
+                query = select_sql + "WHERE deleted = 0 AND workspace_id = ? ORDER BY name LIMIT ? OFFSET ?"
+                params = (workspace_id, limit, offset)
+            elif include_workspace_items:
+                query = select_sql + "WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
+            else:
+                query = select_sql + "WHERE deleted = 0 AND workspace_id IS NULL ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
         try:
-            cursor = self.execute_query(query, (limit, offset))
+            cursor = self.execute_query(query, params)
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError:  # noqa: TRY203
             raise
@@ -20216,11 +25364,32 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
-            "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
+            "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
             "FROM decks WHERE id = ?"
         )
         try:
             cursor = self.execute_query(query, (deck_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def get_deck_by_name(self, name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        """Fetch one deck row by name using the repository-wide unique-name invariant."""
+        if include_deleted:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? "
+                "ORDER BY id LIMIT 1"
+            )
+        else:
+            query = (
+                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "last_modified, deleted, client_id, version FROM decks WHERE name = ? AND deleted = 0 "
+                "ORDER BY id LIMIT 1"
+            )
+        try:
+            cursor = self.execute_query(query, (name,))
             row = cursor.fetchone()
             return dict(row) if row else None
         except CharactersRAGDBError:  # noqa: TRY203
@@ -20234,6 +25403,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         description: str | None = None,
         scheduler_settings: Mapping[str, Any] | str | None = None,
         scheduler_type: str | None = None,
+        workspace_id: Any = ...,
         expected_version: int | None = None,
     ) -> bool:
         """Update mutable deck fields with optimistic locking."""
@@ -20251,6 +25421,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if scheduler_type is not None:
             set_parts.append("scheduler_type = ?")
             params.append(_coerce_scheduler_type(scheduler_type))
+        if workspace_id is not ...:
+            set_parts.append("workspace_id = ?")
+            params.append(workspace_id)
         if not set_parts:
             if expected_version is None:
                 return True
@@ -20525,8 +25698,28 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {exc}") from exc  # noqa: TRY003
 
+    def _flashcard_visibility_filter(
+        self,
+        *,
+        deck_id: int | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
+        deck_alias: str = "d",
+        deck_id_column: str = "f.deck_id",
+    ) -> tuple[str, tuple[Any, ...], bool]:
+        """Return the visibility predicate and whether a deck join is required."""
+        if deck_id is not None:
+            return f"{deck_id_column} = ?", (deck_id,), False
+        if workspace_id is not None:
+            return f"{deck_alias}.workspace_id = ?", (workspace_id,), True
+        if not include_workspace_items:
+            return f"{deck_alias}.workspace_id IS NULL", tuple(), True
+        return "", tuple(), False
+
     def list_flashcards(self,
                         deck_id: int | None = None,
+                        workspace_id: str | None = None,
+                        include_workspace_items: bool = False,
                         tag: str | None = None,
                         due_status: str = 'all',
                         q: str | None = None,
@@ -20543,9 +25736,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 where_clauses.append("f.deleted = FALSE")
             else:
                 where_clauses.append("f.deleted = 0")
-        if deck_id is not None:
-            where_clauses.append("f.deck_id = ?")
-            params.append(deck_id)
+        visibility_clause, visibility_params, _ = self._flashcard_visibility_filter(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        if visibility_clause:
+            where_clauses.append(visibility_clause)
+            params.extend(visibility_params)
         # due filter
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
@@ -20610,6 +25808,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def count_flashcards(self,
                          deck_id: int | None = None,
+                         workspace_id: str | None = None,
+                         include_workspace_items: bool = False,
                          tag: str | None = None,
                          due_status: str = 'all',
                          q: str | None = None,
@@ -20623,9 +25823,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 where_clauses.append("f.deleted = FALSE")
             else:
                 where_clauses.append("f.deleted = 0")
-        if deck_id is not None:
-            where_clauses.append("f.deck_id = ?")
-            params.append(deck_id)
+        visibility_clause, visibility_params, needs_deck_join = self._flashcard_visibility_filter(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        visibility_join = " LEFT JOIN decks d ON d.id = f.deck_id" if needs_deck_join else ""
+        if visibility_clause:
+            where_clauses.append(visibility_clause)
+            params.extend(visibility_params)
 
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
@@ -20663,7 +25869,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # DISTINCT avoids double-counting when tag join introduces duplicates
         query = """
             SELECT COUNT(DISTINCT f.id) AS cnt
-              FROM flashcards f
+              FROM flashcards f{visibility_join}
               {join_tag}
              WHERE {where_sql} {fts_filter}
         """.format_map(locals())  # nosec B608
@@ -20671,6 +25877,67 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def list_flashcard_tag_suggestions(
+        self,
+        q: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List global flashcard tag suggestions with per-tag usage counts."""
+        if limit <= 0:
+            return []
+
+        keyword_table = self._map_table_for_backend("keywords")
+        normalized_q = (q or "").strip()
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            where_clauses.extend(
+                [
+                    "f.deleted = FALSE",
+                    "kw.deleted = FALSE",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = FALSE))",
+                ]
+            )
+        else:
+            where_clauses.extend(
+                [
+                    "f.deleted = 0",
+                    "kw.deleted = 0",
+                    "(f.deck_id IS NULL OR (d.id IS NOT NULL AND d.deleted = 0))",
+                ]
+            )
+
+        if normalized_q:
+            where_clauses.append("LOWER(kw.keyword) LIKE ?")
+            params.append(f"%{normalized_q.lower()}%")
+
+        order_keyword = self._case_insensitive_order_expression("kw.keyword")
+        where_sql = " AND ".join(where_clauses)
+        query = """
+            SELECT
+                kw.keyword AS tag,
+                COUNT(DISTINCT f.id) AS usage_count
+            FROM flashcards f
+            JOIN flashcard_keywords fk ON fk.card_id = f.id
+            JOIN {keyword_table} kw ON kw.id = fk.keyword_id
+            LEFT JOIN decks d ON d.id = f.deck_id
+            WHERE {where_sql}
+            GROUP BY kw.keyword
+            ORDER BY usage_count DESC, {order_keyword}
+            LIMIT ?
+        """.format_map(locals())  # nosec B608
+        params.append(limit)
+
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [
+                {"tag": str(row["tag"]), "count": int(row["usage_count"] or 0)}
+                for row in cursor.fetchall()
+            ]
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
@@ -20754,40 +26021,49 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_next_review_card(
         self,
         deck_id: int | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
     ) -> tuple[dict[str, Any] | None, str]:
         """Return the next reviewable card using backend queue priority."""
         deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
         now_iso = self._get_current_utc_timestamp_iso()
+        visibility_clause, visibility_params, needs_deck_join = self._flashcard_visibility_filter(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        visibility_join = " LEFT JOIN decks d ON d.id = f.deck_id" if needs_deck_join else ""
+        visibility_suffix = f" AND {visibility_clause}" if visibility_clause else ""
         if deck_id is None:
             selections: tuple[tuple[str, str, tuple[Any, ...]], ...] = (
                 (
                     "learning_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
-                        "AND due_at IS NOT NULL AND due_at <= ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        f"SELECT uuid FROM flashcards f{visibility_join} "  # nosec B608
+                        "WHERE f.deleted = ? AND f.queue_state IN ('learning', 'relearning') "
+                        f"AND f.due_at IS NOT NULL AND f.due_at <= ?{visibility_suffix} "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
-                    (deleted_value, now_iso),
+                    (deleted_value, now_iso, *visibility_params),
                 ),
                 (
                     "review_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'review' "
-                        "AND due_at IS NOT NULL AND due_at <= ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        f"SELECT uuid FROM flashcards f{visibility_join} "  # nosec B608
+                        "WHERE f.deleted = ? AND f.queue_state = 'review' "
+                        f"AND f.due_at IS NOT NULL AND f.due_at <= ?{visibility_suffix} "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
-                    (deleted_value, now_iso),
+                    (deleted_value, now_iso, *visibility_params),
                 ),
                 (
                     "new",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'new' "
-                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                        f"SELECT uuid FROM flashcards f{visibility_join} "  # nosec B608
+                        f"WHERE f.deleted = ? AND f.queue_state = 'new'{visibility_suffix} "
+                        "ORDER BY f.created_at ASC, f.id ASC LIMIT 1"
                     ),
-                    (deleted_value,),
+                    (deleted_value, *visibility_params),
                 ),
             )
         else:
@@ -20795,29 +26071,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 (
                     "learning_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
-                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        "SELECT uuid FROM flashcards f "
+                        "WHERE f.deleted = ? AND f.queue_state IN ('learning', 'relearning') "
+                        "AND f.due_at IS NOT NULL AND f.due_at <= ? AND f.deck_id = ? "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
                     (deleted_value, now_iso, deck_id),
                 ),
                 (
                     "review_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'review' "
-                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        "SELECT uuid FROM flashcards f "
+                        "WHERE f.deleted = ? AND f.queue_state = 'review' "
+                        "AND f.due_at IS NOT NULL AND f.due_at <= ? AND f.deck_id = ? "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
                     (deleted_value, now_iso, deck_id),
                 ),
                 (
                     "new",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'new' AND deck_id = ? "
-                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                        "SELECT uuid FROM flashcards f "
+                        "WHERE f.deleted = ? AND f.queue_state = 'new' AND f.deck_id = ? "
+                        "ORDER BY f.created_at ASC, f.id ASC LIMIT 1"
                     ),
                     (deleted_value, deck_id),
                 ),
@@ -20866,7 +26142,249 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             'was_lapse': was_lapse,
         }
 
-    def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: int | None = None) -> dict[str, Any]:
+    def _normalize_flashcard_review_mode(self, review_mode: str) -> str:
+        normalized = str(review_mode or "").strip().lower()
+        if normalized not in _FLASHCARD_REVIEW_MODES:
+            raise InputError("review_mode must be one of: due, cram")  # noqa: TRY003
+        return normalized
+
+    def _normalize_flashcard_review_session_status(self, status: str) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized not in _FLASHCARD_REVIEW_SESSION_STATUSES:
+            raise InputError("status must be one of: active, completed, abandoned")  # noqa: TRY003
+        return normalized
+
+    def abandon_stale_flashcard_review_sessions(self, *, scope_key: str | None = None) -> int:
+        """Mark active review sessions as abandoned when inactive for over 30 minutes."""
+        cutoff = to_iso_z(datetime.now(timezone.utc) - _FLASHCARD_REVIEW_SESSION_TIMEOUT) or self._get_current_utc_timestamp_iso()
+        query = (
+            """
+            UPDATE flashcard_review_sessions
+               SET status = 'abandoned'
+             WHERE status = 'active'
+               AND last_activity_at < ?
+            """
+        )
+        params: list[Any] = [cutoff]
+        if scope_key:
+            query += " AND scope_key = ?"
+            params.append(scope_key)
+        cursor = self.execute_query(query, tuple(params), commit=True)
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+    def list_flashcard_review_sessions(
+        self,
+        *,
+        deck_id: int | None = None,
+        scope_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List persisted review sessions ordered from newest to oldest."""
+        self.abandon_stale_flashcard_review_sessions(scope_key=scope_key)
+        query_parts = [
+            """
+            SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                   started_at, last_activity_at, completed_at, client_id
+              FROM flashcard_review_sessions
+             WHERE 1 = 1
+            """
+        ]
+        params: list[Any] = []
+        if deck_id is not None:
+            query_parts.append("AND deck_id = ?")
+            params.append(int(deck_id))
+        if scope_key:
+            query_parts.append("AND scope_key = ?")
+            params.append(scope_key)
+        if status:
+            query_parts.append("AND status = ?")
+            params.append(self._normalize_flashcard_review_session_status(status))
+        query_parts.append("ORDER BY last_activity_at DESC, started_at DESC, id DESC LIMIT ?")
+        params.append(max(1, int(limit)))
+        cursor = self.execute_query(" ".join(query_parts), tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_or_create_flashcard_review_session(
+        self,
+        *,
+        deck_id: int | None,
+        review_mode: str,
+        tag_filter: str | None,
+        scope_key: str,
+    ) -> dict[str, Any]:
+        """Return the authoritative active session for a scope or create a new one."""
+        normalized_scope_key = str(scope_key or "").strip()
+        if not normalized_scope_key:
+            raise InputError("scope_key is required")  # noqa: TRY003
+        normalized_mode = self._normalize_flashcard_review_mode(review_mode)
+        normalized_tag_filter = self._normalize_nullable_text(tag_filter)
+        self.abandon_stale_flashcard_review_sessions(scope_key=normalized_scope_key)
+        now = self._get_current_utc_timestamp_iso()
+
+        try:
+            with self.transaction() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                           started_at, last_activity_at, completed_at, client_id
+                      FROM flashcard_review_sessions
+                     WHERE scope_key = ? AND status = 'active'
+                     ORDER BY last_activity_at DESC, started_at DESC, id DESC
+                    """,
+                    (normalized_scope_key,),
+                ).fetchall()
+                if rows:
+                    authoritative = dict(rows[0])
+                    if len(rows) > 1:
+                        duplicate_ids = [int(row["id"]) for row in rows[1:]]
+                        placeholders = ", ".join("?" for _ in duplicate_ids)
+                        conn.execute(
+                            f"UPDATE flashcard_review_sessions SET status = 'abandoned' WHERE id IN ({placeholders})",  # nosec B608
+                            tuple(duplicate_ids),
+                        )
+                    conn.execute(
+                        """
+                        UPDATE flashcard_review_sessions
+                           SET last_activity_at = ?
+                         WHERE id = ?
+                        """,
+                        (now, int(authoritative["id"])),
+                    )
+                    authoritative["last_activity_at"] = now
+                    return authoritative
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO flashcard_review_sessions(
+                            deck_id, review_mode, tag_filter, scope_key, status,
+                            started_at, last_activity_at, completed_at, client_id
+                        )
+                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, ?)
+                        RETURNING id
+                        """,
+                        (
+                            int(deck_id) if deck_id is not None else None,
+                            normalized_mode,
+                            normalized_tag_filter,
+                            normalized_scope_key,
+                            now,
+                            now,
+                            self.client_id,
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    session_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO flashcard_review_sessions(
+                            deck_id, review_mode, tag_filter, scope_key, status,
+                            started_at, last_activity_at, completed_at, client_id
+                        )
+                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, ?)
+                        """,
+                        (
+                            int(deck_id) if deck_id is not None else None,
+                            normalized_mode,
+                            normalized_tag_filter,
+                            normalized_scope_key,
+                            now,
+                            now,
+                            self.client_id,
+                        ),
+                    )
+                    session_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if session_id is None:
+                    raise CharactersRAGDBError("Failed to determine flashcard review session ID after insert")  # noqa: TRY003
+                row = conn.execute(
+                    """
+                    SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                           started_at, last_activity_at, completed_at, client_id
+                      FROM flashcard_review_sessions
+                     WHERE id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                return dict(row)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to get or create flashcard review session: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to get or create flashcard review session: {exc}") from exc  # noqa: TRY003
+
+    def get_flashcard_review_session(self, session_id: int) -> dict[str, Any] | None:
+        """Fetch a single flashcard review session by id, or None if not found."""
+        cursor = self.execute_query(
+            """
+            SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                   started_at, last_activity_at, completed_at, client_id
+              FROM flashcard_review_sessions
+             WHERE id = ?
+            """,
+            (int(session_id),),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def mark_flashcard_review_session_completed(self, session_id: int) -> dict[str, Any]:
+        """Mark a persisted review session as completed."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            cursor = self.execute_query(
+                """
+                UPDATE flashcard_review_sessions
+                   SET status = 'completed',
+                       last_activity_at = ?,
+                       completed_at = ?
+                 WHERE id = ?
+                """,
+                (now, now, int(session_id)),
+                commit=True,
+            )
+            if getattr(cursor, "rowcount", 0) == 0:
+                raise ConflictError("Flashcard review session not found", entity="flashcard_review_sessions", entity_id=session_id)  # noqa: TRY003
+            row = self.execute_query(
+                """
+                SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                       started_at, last_activity_at, completed_at, client_id
+                  FROM flashcard_review_sessions
+                 WHERE id = ?
+                """,
+                (int(session_id),),
+            ).fetchone()
+            return dict(row)
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise CharactersRAGDBError(f"Failed to mark flashcard review session completed: {exc}") from exc  # noqa: TRY003
+
+    def get_latest_flashcard_review(self, card_uuid: str) -> dict[str, Any] | None:
+        """Return the most recent review row for a flashcard, including nullable session linkage."""
+        cursor = self.execute_query(
+            """
+            SELECT fr.id, fr.card_id, fr.reviewed_at, fr.rating, fr.answer_time_ms,
+                   fr.scheduled_interval_days, fr.new_ef, fr.new_repetitions, fr.was_lapse,
+                   fr.client_id, fr.scheduler_type, fr.previous_queue_state, fr.next_queue_state,
+                   fr.previous_due_at, fr.next_due_at, fr.review_session_id
+              FROM flashcard_reviews fr
+              JOIN flashcards f ON f.id = fr.card_id
+             WHERE f.uuid = ?
+             ORDER BY fr.id DESC
+             LIMIT 1
+            """,
+            (card_uuid,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def review_flashcard(
+        self,
+        card_uuid: str,
+        rating: int,
+        answer_time_ms: int | None = None,
+        review_session_id: int | None = None,
+    ) -> dict[str, Any]:
         """Submit a review for a flashcard and update scheduling. Returns updated card fields."""
         now_dt = datetime.now(timezone.utc)
         now = to_iso_z(now_dt) or self._get_current_utc_timestamp_iso()
@@ -20888,6 +26406,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if not card:
                     raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)  # noqa: TRY003
                 card_id = int(card['id'])
+                card_deck_id = int(card["deck_id"]) if card["deck_id"] is not None else None
+                resolved_review_session_id = int(review_session_id) if review_session_id is not None else None
+                if resolved_review_session_id is None:
+                    auto_session = self.get_or_create_flashcard_review_session(
+                        deck_id=card_deck_id,
+                        review_mode="due",
+                        tag_filter=None,
+                        scope_key=f"due:deck:{card_deck_id}" if card_deck_id is not None else "due:global",
+                    )
+                    resolved_review_session_id = int(auto_session["id"])
+                if resolved_review_session_id is not None:
+                    session_row = conn.execute(
+                        """
+                        SELECT id, deck_id, status
+                          FROM flashcard_review_sessions
+                         WHERE id = ?
+                        """,
+                        (resolved_review_session_id,),
+                    ).fetchone()
+                    if not session_row:
+                        raise ConflictError(
+                            "Flashcard review session not found",
+                            entity="flashcard_review_sessions",
+                            identifier=resolved_review_session_id,
+                        )
+                    session_deck_id = int(session_row["deck_id"]) if session_row["deck_id"] is not None else None
+                    if session_deck_id != card_deck_id:
+                        raise InputError("review_session_id must match the flashcard deck scope")  # noqa: TRY003
+                    if str(session_row["status"] or "").strip().lower() != "active":
+                        raise ConflictError(
+                            "Flashcard review session is not active",
+                            entity="flashcard_review_sessions",
+                            identifier=resolved_review_session_id,
+                        )
                 previous_queue_state = coerce_queue_state(dict(card))
                 previous_due_at = self._normalize_nullable_text(card["due_at"])
                 scheduler_type = _coerce_scheduler_type(card["scheduler_type"])
@@ -20929,9 +26481,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     INSERT INTO flashcard_reviews(
                         card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days,
                         new_ef, new_repetitions, was_lapse, client_id, scheduler_type,
-                        previous_queue_state, next_queue_state, previous_due_at, next_due_at
+                        previous_queue_state, next_queue_state, previous_due_at, next_due_at, review_session_id
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -20948,8 +26500,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         upd["queue_state"],
                         previous_due_at,
                         upd["due_at"],
+                        resolved_review_session_id,
                     )
                 )
+                if resolved_review_session_id is not None:
+                    conn.execute(
+                        """
+                        UPDATE flashcard_review_sessions
+                           SET last_activity_at = ?
+                         WHERE id = ?
+                        """,
+                        (now, resolved_review_session_id),
+                    )
                 updated = conn.execute(
                     """
                     SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at,
@@ -20967,11 +26529,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     scheduler_settings_envelope=scheduler_settings,
                     now=now_dt,
                 )
+                updated_payload["review_session_id"] = resolved_review_session_id
                 return updated_payload
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
 
-    def get_flashcard_analytics_summary(self, deck_id: int | None = None) -> dict[str, Any]:
+    def get_flashcard_analytics_summary(
+        self,
+        deck_id: int | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
+    ) -> dict[str, Any]:
         """Return review analytics summary and per-deck progress counts."""
         now_dt = datetime.now(timezone.utc)
         today_start_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -20980,8 +26548,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         today_start_iso = today_start_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         tomorrow_start_iso = tomorrow_start_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         normalized_deck_id = int(deck_id) if deck_id is not None else None
-        deck_filter_clause = " AND f.deck_id = ?" if normalized_deck_id is not None else ""
-        deck_filter_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
+        visibility_clause, visibility_params, needs_deck_join = self._flashcard_visibility_filter(
+            deck_id=normalized_deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        visibility_join = " LEFT JOIN decks d ON d.id = f.deck_id" if needs_deck_join else ""
+        visibility_suffix = f" AND {visibility_clause}" if visibility_clause else ""
+        metrics_join = visibility_join or " LEFT JOIN decks d ON d.id = f.deck_id"
+        metrics_suffix = f"{visibility_suffix} AND (d.id IS NULL OR d.deleted = 0)"
+        deck_rows_clause, deck_rows_params, _ = self._flashcard_visibility_filter(
+            deck_id=normalized_deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            deck_alias="d",
+            deck_id_column="d.id",
+        )
+        deck_rows_suffix = f" AND {deck_rows_clause}" if deck_rows_clause else ""
 
         try:
             # Daily review metrics
@@ -20993,9 +26576,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     AVG(answer_time_ms) AS avg_answer_time_ms_today
                 FROM flashcard_reviews fr
                 JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
-                WHERE fr.reviewed_at >= ? AND fr.reviewed_at < ?{deck_filter_clause}
+                {metrics_join}
+                WHERE fr.reviewed_at >= ? AND fr.reviewed_at < ?{metrics_suffix}
                 """.format_map(locals()),  # nosec B608
-                (today_start_iso, tomorrow_start_iso, *deck_filter_params),
+                (today_start_iso, tomorrow_start_iso, *visibility_params),
             ).fetchone()
 
             reviewed_today = int((daily_row["reviewed_today"] if daily_row else 0) or 0)
@@ -21017,11 +26601,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 SELECT DISTINCT substr(fr.reviewed_at, 1, 10) AS review_day
                 FROM flashcard_reviews fr
                 JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
-                WHERE 1 = 1{deck_filter_clause}
+                {metrics_join}
+                WHERE 1 = 1{metrics_suffix}
                 ORDER BY review_day DESC
                 LIMIT 400
                 """.format_map(locals()),  # nosec B608
-                deck_filter_params,
+                visibility_params,
             ).fetchall()
             reviewed_days = {
                 str(row["review_day"])
@@ -21035,8 +26620,6 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor_day = cursor_day - timedelta(days=1)
 
             # Per-deck progress counts
-            deck_scope_clause = " AND d.id = ?" if normalized_deck_id is not None else ""
-            deck_scope_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
             deck_rows = self.execute_query(
                 """
                 SELECT
@@ -21051,11 +26634,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 LEFT JOIN flashcards f
                     ON f.deck_id = d.id
                    AND f.deleted = 0
-                WHERE d.deleted = 0{deck_scope_clause}
+                WHERE d.deleted = 0{deck_rows_suffix}
                 GROUP BY d.id, d.name
                 ORDER BY d.name ASC
                 """.format_map(locals()),  # nosec B608
-                (now_iso, MATURE_INTERVAL_DAYS, *deck_scope_params),
+                (now_iso, MATURE_INTERVAL_DAYS, *deck_rows_params),
             ).fetchall()
 
             decks = []
@@ -21088,6 +26671,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def export_flashcards_csv(self,
                               deck_id: int | None = None,
+                              workspace_id: str | None = None,
+                              include_workspace_items: bool = False,
                               tag: str | None = None,
                               q: str | None = None,
                               *,
@@ -21099,7 +26684,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             delimiter: field separator (default tab)
             include_header: include a header row
         """
-        rows = self.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
+        rows = self.list_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            q=q,
+            due_status='all',
+            include_deleted=False,
+            limit=100000,
+            offset=0,
+        )
         output_lines: list[str] = []
         if include_header:
             base_cols = ["Deck", "Front", "Back", "Tags", "Notes"]
@@ -21542,6 +27137,1038 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
 
     # ==========================
+    # Study Packs
+    # ==========================
+    def create_study_pack(
+        self,
+        *,
+        title: str,
+        workspace_id: str | None,
+        deck_id: int | None,
+        source_bundle_json: dict[str, Any] | str,
+        generation_options_json: dict[str, Any] | str | None,
+        status: str = "active",
+        superseded_by_pack_id: int | None = None,
+    ) -> int:
+        """Create a study pack row and return its integer id."""
+        if status not in ("active", "superseded"):
+            raise InputError("Invalid study pack status; must be 'active' or 'superseded'")  # noqa: TRY003
+
+        source_bundle_candidate: Any = source_bundle_json
+        if isinstance(source_bundle_json, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                source_bundle_candidate = json.loads(source_bundle_json)
+        if isinstance(source_bundle_candidate, dict):
+            source_items = source_bundle_candidate.get("items")
+            if isinstance(source_items, list):
+                for source_item in source_items:
+                    if not isinstance(source_item, dict):
+                        continue
+                    if self._normalize_nullable_text(source_item.get("source_id")) is None:
+                        raise InputError("Study pack source_id is required")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        source_bundle = self._ensure_json_string_from_mixed(source_bundle_json)
+        generation_options = self._ensure_json_string_from_mixed(generation_options_json)
+
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    "INSERT INTO study_packs("
+                    "workspace_id, title, deck_id, source_bundle_json, generation_options_json, "
+                    "status, superseded_by_pack_id, created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    workspace_id,
+                    title,
+                    deck_id,
+                    source_bundle,
+                    generation_options,
+                    status,
+                    superseded_by_pack_id,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    pack_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    pack_id = int(cursor.lastrowid)
+
+                if pack_id is None:
+                    raise CharactersRAGDBError("Failed to determine study pack ID after insert")  # noqa: TRY003
+                return pack_id
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create study pack: {exc}") from exc  # noqa: TRY003
+
+    _SAFE_SUGGESTION_PAYLOAD_EXACT_KEYS = frozenset(
+        {
+            "summary",
+            "topics",
+            "counts",
+            "flags",
+            "score",
+            "selected",
+            "display_label",
+            "label",
+            "source_id",
+            "source_type",
+            "source_ref",
+            "ref",
+            "refs",
+            "status",
+            "available",
+            "enabled",
+            "count",
+            "total",
+            "id",
+            "ids",
+            "type",
+            "types",
+            "service",
+            "services",
+        }
+    )
+    _SAFE_SUGGESTION_PAYLOAD_SUFFIXES = (
+        "_id",
+        "_ids",
+        "_type",
+        "_types",
+        "_label",
+        "_labels",
+        "_ref",
+        "_refs",
+        "_count",
+        "_counts",
+        "_flag",
+        "_flags",
+        "_score",
+        "_status",
+    )
+    _SAFE_SUGGESTION_PAYLOAD_MAX_TEXT_LENGTH = 256
+
+    @classmethod
+    def _is_safe_suggestion_payload_key(cls, key: str) -> bool:
+        normalized = str(key or "").strip().lower()
+        return normalized in cls._SAFE_SUGGESTION_PAYLOAD_EXACT_KEYS or normalized.endswith(
+            cls._SAFE_SUGGESTION_PAYLOAD_SUFFIXES
+        )
+
+    @classmethod
+    def _sanitize_suggestion_payload(cls, payload: Any, *, parent_key: str | None = None) -> Any:
+        """Persist only safe labels/refs/flags/counts by default."""
+        if isinstance(payload, dict):
+            sanitized: dict[str, Any] = {}
+            for raw_key, value in payload.items():
+                key_text = str(raw_key)
+                if not cls._is_safe_suggestion_payload_key(key_text):
+                    continue
+                cleaned_value = cls._sanitize_suggestion_payload(value, parent_key=key_text)
+                if cleaned_value in (None, {}, []):
+                    continue
+                sanitized[key_text] = cleaned_value
+            return sanitized
+
+        if isinstance(payload, list | tuple):
+            sanitized_items = [
+                cls._sanitize_suggestion_payload(item, parent_key=parent_key)
+                for item in payload
+            ]
+            return [item for item in sanitized_items if item not in (None, {}, [])]
+
+        if isinstance(payload, bool | int | float):
+            return payload
+
+        if isinstance(payload, str):
+            if not parent_key or not cls._is_safe_suggestion_payload_key(parent_key):
+                return None
+            text = payload.strip()
+            if not text or len(text) > cls._SAFE_SUGGESTION_PAYLOAD_MAX_TEXT_LENGTH:
+                return None
+            return text
+
+        return None
+
+    def create_suggestion_snapshot(
+        self,
+        *,
+        service: str,
+        activity_type: str,
+        anchor_type: str,
+        anchor_id: int,
+        suggestion_type: str,
+        payload_json: dict[str, Any] | list[Any] | str,
+        status: str = "active",
+        user_selection_json: dict[str, Any] | list[Any] | str | None = None,
+        refreshed_from_snapshot_id: int | None = None,
+    ) -> int:
+        """Create a suggestion snapshot row and return its integer id."""
+        if status not in ("active", "superseded"):
+            raise InputError("Invalid suggestion snapshot status; must be 'active' or 'superseded'")  # noqa: TRY003
+
+        sanitized_payload: Any = payload_json
+        if isinstance(payload_json, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                sanitized_payload = json.loads(payload_json)
+        sanitized_payload = self._sanitize_suggestion_payload(sanitized_payload)
+        payload_value = self._ensure_json_string_from_mixed(sanitized_payload)
+        if payload_value is None:
+            raise InputError("Suggestion snapshot payload_json is required")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+
+        try:
+            with self.transaction() as conn:
+                if isinstance(user_selection_json, str):
+                    try:
+                        parsed_user_selection = json.loads(user_selection_json)
+                    except json.JSONDecodeError as exc:
+                        raise InputError("Suggestion snapshot user_selection_json must be valid JSON") from exc  # noqa: TRY003
+                    user_selection_value = self._ensure_json_string_from_mixed(parsed_user_selection)
+                else:
+                    user_selection_value = self._ensure_json_string_from_mixed(user_selection_json)
+
+                if refreshed_from_snapshot_id is not None:
+                    parent_row = conn.execute(
+                        """
+                        SELECT service, activity_type, anchor_type, anchor_id, suggestion_type, user_selection_json
+                          FROM suggestion_snapshots
+                         WHERE id = ? AND deleted = 0
+                        """,
+                        (refreshed_from_snapshot_id,),
+                    ).fetchone()
+                    if not parent_row:
+                        raise ConflictError(
+                            "Suggestion snapshot refresh source not found",
+                            entity="suggestion_snapshots",
+                            identifier=refreshed_from_snapshot_id,
+                        )
+                    if (
+                        str(parent_row["service"]) != str(service)
+                        or str(parent_row["activity_type"]) != str(activity_type)
+                        or str(parent_row["anchor_type"]) != str(anchor_type)
+                        or int(parent_row["anchor_id"]) != int(anchor_id)
+                        or str(parent_row["suggestion_type"]) != str(suggestion_type)
+                    ):
+                        raise InputError("refreshed_from_snapshot_id must reference the same suggestion lineage")  # noqa: TRY003
+                    if user_selection_value is None:
+                        user_selection_value = parent_row["user_selection_json"]
+                insert_sql = (
+                    "INSERT INTO suggestion_snapshots("
+                    "service, activity_type, anchor_type, anchor_id, suggestion_type, status, "
+                    "payload_json, user_selection_json, refreshed_from_snapshot_id, "
+                    "created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    service,
+                    activity_type,
+                    anchor_type,
+                    int(anchor_id),
+                    suggestion_type,
+                    status,
+                    payload_value,
+                    user_selection_value,
+                    refreshed_from_snapshot_id,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    snapshot_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    snapshot_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if snapshot_id is None:
+                    raise CharactersRAGDBError("Failed to determine suggestion snapshot ID after insert")  # noqa: TRY003
+                return snapshot_id
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create suggestion snapshot: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create suggestion snapshot: {exc}") from exc  # noqa: TRY003
+
+    def get_suggestion_snapshot(self, snapshot_id: int) -> dict[str, Any] | None:
+        """Fetch a single active suggestion snapshot by id."""
+        query = """
+            SELECT id, service, activity_type, anchor_type, anchor_id, suggestion_type, status,
+                   payload_json, user_selection_json, refreshed_from_snapshot_id,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_snapshots
+             WHERE id = ? AND deleted = 0
+        """
+        cursor = self.execute_query(query, (snapshot_id,))
+        row = cursor.fetchone()
+        return self._deserialize_row_fields(row, self._SUGGESTION_SNAPSHOT_JSON_FIELDS)
+
+    def list_suggestion_snapshots_for_anchor(
+        self,
+        anchor_type: str,
+        anchor_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List snapshots for a concrete anchor in newest-first order."""
+        deleted_clause = "1=1" if include_deleted else "deleted = 0"
+        query = f"""
+            SELECT id, service, activity_type, anchor_type, anchor_id, suggestion_type, status,
+                   payload_json, user_selection_json, refreshed_from_snapshot_id,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_snapshots
+             WHERE anchor_type = ? AND anchor_id = ? AND {deleted_clause}
+             ORDER BY id DESC
+        """  # nosec B608
+        cursor = self.execute_query(query, (anchor_type, anchor_id))
+        return [
+            self._deserialize_row_fields(row, self._SUGGESTION_SNAPSHOT_JSON_FIELDS)
+            for row in cursor.fetchall()
+            if row
+        ]
+
+    def create_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        target_id: str,
+        selection_fingerprint: str,
+    ) -> int:
+        """Persist one durable link per concrete snapshot/action result."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    "INSERT INTO suggestion_generation_links("
+                    "snapshot_id, target_service, target_type, target_id, selection_fingerprint, "
+                    "created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    snapshot_id,
+                    target_service,
+                    target_type,
+                    target_id,
+                    selection_fingerprint,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    link_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    link_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if link_id is None:
+                    raise CharactersRAGDBError("Failed to determine suggestion generation link ID after insert")  # noqa: TRY003
+                return link_id
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Suggestion generation link already exists",
+                    entity="suggestion_generation_links",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{target_id}:{selection_fingerprint}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Suggestion generation link already exists",
+                    entity="suggestion_generation_links",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{target_id}:{selection_fingerprint}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
+
+    def find_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        target_id: str,
+        selection_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        """Find the durable link row for a concrete snapshot/action result."""
+        query = """
+            SELECT id, snapshot_id, target_service, target_type, target_id, selection_fingerprint,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_generation_links
+             WHERE snapshot_id = ?
+               AND target_service = ?
+               AND target_type = ?
+               AND target_id = ?
+               AND selection_fingerprint = ?
+               AND deleted = 0
+             ORDER BY id DESC
+             LIMIT 1
+        """
+        cursor = self.execute_query(
+            query,
+            (snapshot_id, target_service, target_type, target_id, selection_fingerprint),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def find_suggestion_generation_link_by_fingerprint(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        """Find an existing generation link by fingerprint without requiring the target id."""
+        query = """
+            SELECT id, snapshot_id, target_service, target_type, target_id, selection_fingerprint,
+                   created_at, last_modified, deleted, client_id, version
+              FROM suggestion_generation_links
+             WHERE snapshot_id = ?
+               AND target_service = ?
+               AND target_type = ?
+               AND selection_fingerprint = ?
+               AND deleted = 0
+             ORDER BY id DESC
+             LIMIT 1
+        """
+        cursor = self.execute_query(
+            query,
+            (int(snapshot_id), target_service, target_type, selection_fingerprint),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def finalize_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+        final_target_id: str,
+    ) -> int:
+        """Replace an in-progress reservation target id with the real durable target id.
+
+        Returns the number of rows updated (0 means the reservation was not found).
+        """
+        now = self._get_current_utc_timestamp_iso()
+        pending_target_id = f"pending:{selection_fingerprint}"
+        try:
+            with self.transaction() as conn:
+                updated = conn.execute(
+                    """
+                    UPDATE suggestion_generation_links
+                       SET target_id = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE snapshot_id = ?
+                       AND target_service = ?
+                       AND target_type = ?
+                       AND target_id = ?
+                       AND selection_fingerprint = ?
+                       AND deleted = 0
+                    """,
+                    (
+                        str(final_target_id),
+                        now,
+                        self.client_id,
+                        int(snapshot_id),
+                        target_service,
+                        target_type,
+                        pending_target_id,
+                        selection_fingerprint,
+                    ),
+                ).rowcount
+            return int(updated)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to finalize suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to finalize suggestion generation link: {exc}") from exc  # noqa: TRY003
+
+    def release_suggestion_generation_link_reservation(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+    ) -> None:
+        """Soft-delete an in-progress reservation after generation failure."""
+        now = self._get_current_utc_timestamp_iso()
+        pending_target_id = f"pending:{selection_fingerprint}"
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE suggestion_generation_links
+                       SET deleted = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE snapshot_id = ?
+                       AND target_service = ?
+                       AND target_type = ?
+                       AND target_id = ?
+                       AND selection_fingerprint = ?
+                       AND deleted = 0
+                    """,
+                    (
+                        True,
+                        now,
+                        self.client_id,
+                        int(snapshot_id),
+                        target_service,
+                        target_type,
+                        pending_target_id,
+                        selection_fingerprint,
+                    ),
+                )
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to release suggestion generation link reservation: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to release suggestion generation link reservation: {exc}") from exc  # noqa: TRY003
+
+    def soft_delete_deck_by_id(self, deck_id: int) -> None:
+        """Best-effort soft-delete of a deck by id."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE decks
+                       SET deleted = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        True,
+                        now,
+                        self.client_id,
+                        int(deck_id),
+                    ),
+                )
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to soft-delete deck: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to soft-delete deck: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack(self, pack_id: int) -> dict[str, Any] | None:
+        """Fetch a single active study pack by id."""
+        query = """
+            SELECT id, workspace_id, title, deck_id, source_bundle_json, generation_options_json,
+                   status, superseded_by_pack_id, created_at, last_modified, deleted, client_id, version
+              FROM study_packs
+             WHERE id = ? AND deleted = 0
+        """
+        try:
+            cursor = self.execute_query(query, (pack_id,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def add_study_pack_cards(self, study_pack_id: int, flashcard_uuids: list[str]) -> int:
+        """Attach flashcards to a study pack by UUID without relying on deck membership."""
+        if not flashcard_uuids:
+            return 0
+
+        now = self._get_current_utc_timestamp_iso()
+        if self.backend_type == BackendType.POSTGRESQL:
+            insert_sql = (
+                "INSERT INTO study_pack_cards("
+                "study_pack_id, flashcard_uuid, created_at, last_modified, deleted, client_id, version"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING"
+            )
+        else:
+            insert_sql = (
+                "INSERT OR IGNORE INTO study_pack_cards("
+                "study_pack_id, flashcard_uuid, created_at, last_modified, deleted, client_id, version"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?)"
+            )
+
+        params = [
+            (study_pack_id, card_uuid, now, now, False, self.client_id, 1)
+            for card_uuid in flashcard_uuids
+        ]
+        try:
+            with self.transaction() as conn:
+                before_row = conn.execute(
+                    "SELECT COUNT(*) FROM study_pack_cards WHERE study_pack_id = ? AND deleted = 0",
+                    (study_pack_id,),
+                ).fetchone()
+                before_count = int(before_row[0]) if before_row else 0
+                self.execute_many(insert_sql, params, commit=False)
+                after_row = conn.execute(
+                    "SELECT COUNT(*) FROM study_pack_cards WHERE study_pack_id = ? AND deleted = 0",
+                    (study_pack_id,),
+                ).fetchone()
+                after_count = int(after_row[0]) if after_row else before_count
+            return max(0, after_count - before_count)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add study pack cards: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add study pack cards: {exc}") from exc  # noqa: TRY003
+
+    def list_study_pack_cards(self, study_pack_id: int, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        """List study pack membership rows in insertion order."""
+        deleted_clause = "1=1" if include_deleted else "spc.deleted = 0"
+        query = f"""
+            SELECT spc.id, spc.study_pack_id, spc.flashcard_uuid, spc.created_at, spc.last_modified,
+                   spc.deleted, spc.client_id, spc.version, f.deck_id
+              FROM study_pack_cards spc
+              LEFT JOIN flashcards f ON f.uuid = spc.flashcard_uuid
+             WHERE spc.study_pack_id = ? AND {deleted_clause}
+             ORDER BY spc.id
+        """  # nosec B608
+        try:
+            cursor = self.execute_query(query, (study_pack_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def add_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Insert provenance citations for a flashcard."""
+        if not citations:
+            return 0
+
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as _:
+                self.execute_many(
+                    """
+                    INSERT INTO flashcard_citations(
+                        flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                        created_at, last_modified, deleted, client_id, version
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params,
+                    commit=False,
+                )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard citations: {exc}") from exc  # noqa: TRY003
+
+    def replace_flashcard_citations(self, flashcard_uuid: str, citations: list[dict[str, Any]]) -> int:
+        """Replace the active citation set for a flashcard with the provided rows."""
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to replace flashcard citations: {exc}") from exc  # noqa: TRY003
+
+    def replace_flashcard_citations_and_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        citations: list[dict[str, Any]],
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> int:
+        """Atomically replace citations and mirror the primary legacy source reference."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        params: list[tuple[Any, ...]] = []
+        for citation in citations:
+            source_type = str(citation.get("source_type") or "").strip().lower()
+            if source_type not in ("note", "media", "message"):
+                raise InputError("Invalid flashcard citation source_type")  # noqa: TRY003
+            normalized_citation_source_id = self._normalize_nullable_text(citation.get("source_id"))
+            if normalized_citation_source_id is None:
+                raise InputError("Flashcard citation source_id is required")  # noqa: TRY003
+            normalized_locator = self._ensure_json_string_from_mixed(citation.get("locator"))
+            if isinstance(normalized_locator, str):
+                normalized_locator = normalized_locator.strip() or None
+            try:
+                ordinal = int(citation.get("ordinal", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise InputError("Flashcard citation ordinal must be an integer >= 0") from exc  # noqa: TRY003
+            if ordinal < 0:
+                raise InputError("Flashcard citation ordinal must be >= 0")  # noqa: TRY003
+            params.append(
+                (
+                    flashcard_uuid,
+                    source_type,
+                    normalized_citation_source_id,
+                    self._normalize_nullable_text(citation.get("citation_text")),
+                    normalized_locator,
+                    ordinal,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+            )
+
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE flashcard_citations
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE flashcard_uuid = ? AND deleted = 0
+                    """,
+                    (now, self.client_id, flashcard_uuid),
+                )
+                if params:
+                    self.execute_many(
+                        """
+                        INSERT INTO flashcard_citations(
+                            flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                            created_at, last_modified, deleted, client_id, version
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                        commit=False,
+                    )
+            return len(params)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(
+                f"Failed to replace flashcard citations and source summary: {exc}"
+            ) from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(
+                f"Failed to replace flashcard citations and source summary: {exc}"
+            ) from exc  # noqa: TRY003
+
+    def list_flashcard_citations(self, flashcard_uuid: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        """List citations for a flashcard ordered by ordinal."""
+        deleted_clause = "1=1" if include_deleted else "deleted = 0"
+        query = f"""
+            SELECT id, flashcard_uuid, source_type, source_id, citation_text, locator, ordinal,
+                   created_at, last_modified, deleted, client_id, version
+              FROM flashcard_citations
+             WHERE flashcard_uuid = ? AND {deleted_clause}
+             ORDER BY ordinal, id
+        """  # nosec B608
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def set_flashcard_source_reference_summary(
+        self,
+        flashcard_uuid: str,
+        *,
+        source_ref_type: str | None,
+        source_ref_id: str | None,
+    ) -> bool:
+        """Persist the legacy flashcard source summary from the primary citation only."""
+        normalized_source_ref_id = self._normalize_nullable_text(source_ref_id)
+        normalized_source_ref_type = str(source_ref_type or "manual").strip().lower() or "manual"
+        if normalized_source_ref_type not in ("note", "media", "message", "manual"):
+            raise InputError("Invalid flashcard source_ref_type")  # noqa: TRY003
+        if normalized_source_ref_id is None:
+            normalized_source_ref_type = "manual"
+
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (flashcard_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=flashcard_uuid)  # noqa: TRY003
+                cursor = conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET source_ref_type = ?, source_ref_id = ?, last_modified = ?,
+                           version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (
+                        normalized_source_ref_type,
+                        normalized_source_ref_id,
+                        now,
+                        self.client_id,
+                        int(row["id"]),
+                    ),
+                )
+                return cursor.rowcount > 0
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard source summary: {exc}") from exc  # noqa: TRY003
+
+    def get_study_pack_for_flashcard(self, flashcard_uuid: str) -> dict[str, Any] | None:
+        """Return the first active study pack containing the flashcard."""
+        query = """
+            SELECT sp.id, sp.workspace_id, sp.title, sp.deck_id, sp.source_bundle_json, sp.generation_options_json,
+                   sp.status, sp.superseded_by_pack_id, sp.created_at, sp.last_modified, sp.deleted, sp.client_id, sp.version
+              FROM study_pack_cards spc
+              JOIN study_packs sp ON sp.id = spc.study_pack_id
+             WHERE spc.flashcard_uuid = ? AND spc.deleted = 0 AND sp.deleted = 0
+             ORDER BY spc.id ASC, sp.id ASC
+             LIMIT 1
+        """
+        try:
+            cursor = self.execute_query(query, (flashcard_uuid,))
+            row = cursor.fetchone()
+            return self._deserialize_row_fields(row, self._STUDY_PACK_JSON_FIELDS)
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def soft_delete_study_pack(self, pack_id: int, expected_version: int | None = None) -> bool:
+        """Soft delete a study pack with optional optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT version, deleted FROM study_packs WHERE id = ?", (pack_id,)).fetchone()
+                if not row:
+                    raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                current_version = int(row["version"])
+                deleted = bool(row["deleted"])
+                if deleted:
+                    return True
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch deleting study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                update_query = """
+                    UPDATE study_packs
+                       SET deleted = 1, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE id = ? AND deleted = 0
+                """
+                update_params: list[Any] = [now, self.client_id, pack_id]
+                if expected_version is not None:
+                    update_query += " AND version = ?"
+                    update_params.append(expected_version)
+                cursor = conn.execute(update_query, tuple(update_params))
+                if cursor.rowcount == 0:
+                    changed_row = conn.execute(
+                        "SELECT version, deleted FROM study_packs WHERE id = ?",
+                        (pack_id,),
+                    ).fetchone()
+                    if not changed_row:
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if bool(changed_row["deleted"]):
+                        return True
+                    if expected_version is not None and int(changed_row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch deleting study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    raise ConflictError(
+                        "Concurrent update deleting study pack",
+                        entity="study_packs",
+                        identifier=pack_id,
+                    )
+                return True
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed to delete study pack: {exc}") from exc  # noqa: TRY003
+
+    def supersede_study_pack(
+        self,
+        pack_id: int,
+        *,
+        superseded_by_pack_id: int,
+        expected_version: int | None = None,
+    ) -> bool:
+        """Mark a study pack superseded by another pack."""
+        if superseded_by_pack_id == pack_id:
+            raise InputError("Study pack cannot self-supersede")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    locked_rows: dict[int, Any] = {}
+                    for locked_pack_id in sorted((pack_id, superseded_by_pack_id)):
+                        locked_row = conn.execute(
+                            "SELECT id, version, deleted FROM study_packs WHERE id = ? FOR UPDATE",
+                            (locked_pack_id,),
+                        ).fetchone()
+                        if locked_row:
+                            locked_rows[int(locked_row["id"])] = locked_row
+                    row = locked_rows.get(pack_id)
+                    replacement_row = locked_rows.get(superseded_by_pack_id)
+                else:
+                    row = conn.execute("SELECT version, deleted FROM study_packs WHERE id = ?", (pack_id,)).fetchone()
+                    replacement_row = conn.execute(
+                        "SELECT id, deleted FROM study_packs WHERE id = ?",
+                        (superseded_by_pack_id,),
+                    ).fetchone()
+
+                if not row or bool(row["deleted"]):
+                    raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                current_version = int(row["version"])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                if not replacement_row:
+                    raise ConflictError(
+                        "Study pack replacement pack not found",
+                        entity="study_packs",
+                        identifier=superseded_by_pack_id,
+                    )
+                if bool(replacement_row["deleted"]):
+                    raise ConflictError(
+                        "Study pack replacement pack is deleted",
+                        entity="study_packs",
+                        identifier=superseded_by_pack_id,
+                    )
+                update_query = """
+                    UPDATE study_packs
+                       SET status = 'superseded',
+                           superseded_by_pack_id = ?,
+                           last_modified = ?,
+                           version = version + 1,
+                           client_id = ?
+                     WHERE id = ? AND deleted = 0
+                """
+                update_params: list[Any] = [superseded_by_pack_id, now, self.client_id, pack_id]
+                if expected_version is not None:
+                    update_query += " AND version = ?"
+                    update_params.append(expected_version)
+                cursor = conn.execute(update_query, tuple(update_params))
+                if cursor.rowcount == 0:
+                    changed_row = conn.execute(
+                        "SELECT version, deleted FROM study_packs WHERE id = ?",
+                        (pack_id,),
+                    ).fetchone()
+                    if not changed_row:
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if bool(changed_row["deleted"]):
+                        raise ConflictError("Study pack not found", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    if expected_version is not None and int(changed_row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch updating study pack", entity="study_packs", identifier=pack_id)  # noqa: TRY003
+                    raise ConflictError(
+                        "Concurrent update superseding study pack",
+                        entity="study_packs",
+                        identifier=pack_id,
+                    )
+                return True
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed to supersede study pack: {exc}") from exc  # noqa: TRY003
+
+    # ==========================
     # Quizzes (V12)
     # ==========================
     def _normalize_multi_select_indices(self, answer: Any) -> list[int]:
@@ -21738,6 +28365,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         name: str,
         description: str | None = None,
         workspace_tag: str | None = None,
+        workspace_id: str | None = None,
         media_id: int | None = None,
         source_bundle_json: list[dict[str, Any]] | None = None,
         time_limit_seconds: int | None = None,
@@ -21750,14 +28378,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 insert_sql = (
-                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, source_bundle_json, total_questions, "
+                    "INSERT INTO quizzes(name, description, workspace_tag, workspace_id, media_id, source_bundle_json, total_questions, "
                     "time_limit_seconds, passing_score, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
                     workspace_tag,
+                    workspace_id,
                     media_id,
                     source_bundle_payload,
                     0,
@@ -21788,7 +28417,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, source_bundle_json, total_questions, "  # nosec B608
+            "SELECT id, name, description, workspace_tag, workspace_id, media_id, source_bundle_json, total_questions, "  # nosec B608
             "time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
@@ -21804,7 +28433,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         q: str | None = None,
         media_id: int | None = None,
-        workspace_tag: str | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -21817,9 +28447,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if media_id is not None:
             where_clauses.append("media_id = ?")
             params.append(media_id)
-        if workspace_tag:
-            where_clauses.append("workspace_tag = ?")
-            params.append(workspace_tag)
+        if workspace_id is not None:
+            where_clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        elif not include_workspace_items:
+            where_clauses.append("workspace_id IS NULL")
         if q:
             where_clauses.append("(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)")
             q_like = f"%{q.lower()}%"
@@ -21827,7 +28459,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, source_bundle_json, total_questions, "  # nosec B608
+            "SELECT id, name, description, workspace_tag, workspace_id, media_id, source_bundle_json, total_questions, "  # nosec B608
             "time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
@@ -21850,6 +28482,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         allowed = {
             "name",
             "description",
+            "workspace_id",
             "workspace_tag",
             "media_id",
             "source_bundle_json",
