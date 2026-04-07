@@ -17,12 +17,15 @@ No findings recorded yet.
 
 ### Frozen Finding Template
 ```markdown
+## Findings
 1. Severity: concise issue statement with file references and impact
    - Confidence: High|Medium|Low
    - Why it matters: short impact explanation
    - File references: `path/to/file.py`
+
+## Open Questions
+- only include this section when there are unresolved assumptions or confidence-affecting uncertainties
 ```
-Add `## Open Questions` only when this stage has unresolved assumptions or confidence-affecting uncertainty.
 
 ### Per-Finding Metadata Rule
 - Every finding must include severity, confidence, why it matters, and exact file references.

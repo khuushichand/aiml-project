@@ -9,9 +9,9 @@ Create the review output directory, freeze the report structure, and record the 
 - `tldw_Server_API/tests/DB_Management`
 
 ### Source Inventory
-- The scoped source inventory was captured with:
+- The scoped source inventory was captured with this source-only command:
   - `source .venv/bin/activate`
-  - `rg --files tldw_Server_API/app/core/DB_Management tldw_Server_API/tests/DB_Management | sort`
+  - `rg --files tldw_Server_API/app/core/DB_Management | sort`
 - Representative source areas in scope:
   - core backends and routing: `content_backend.py`, `DB_Manager.py`, `async_db_wrapper.py`, `sqlite_policy.py`, `transaction_utils.py`
   - path and migration helpers: `db_path_utils.py`, `db_migration.py`, `migrate_db.py`, `migration_tools.py`, `migrations.py`, `content_migrate.py`
@@ -228,7 +228,9 @@ tldw_Server_API/app/core/DB_Management/watchlist_alert_rules_db.py
 
 ## Tests Reviewed
 ### Test Inventory
-- The scoped test inventory was captured with the same `rg --files ... | sort` command.
+- The scoped test inventory was captured with this test-only command:
+  - `source .venv/bin/activate`
+  - `rg --files tldw_Server_API/tests/DB_Management | sort`
 - Full test inventory:
 ```text
 tldw_Server_API/tests/DB_Management/_media_db_legacy_stub.py

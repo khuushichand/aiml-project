@@ -16,4 +16,14 @@ Rules for using these reports:
 - The final output structure is `## Findings`, with `## Open Questions` added only when needed.
 - Keep stage output evidence-backed and scoped to `tldw_Server_API/app/core/DB_Management` plus its direct tests.
 
+Canonical final output:
+- `## Findings`
+- Numbered entries only
+- Each finding must include:
+  - `Severity`
+  - `Confidence`
+  - `Why it matters`
+  - `File references`
+- `## Open Questions` only when unresolved assumptions or confidence-affecting uncertainty remain
+
 Use the stage files as the canonical record for the review. Stage 1 captures the review scaffold, scoped inventory, and the initial recent-history baseline so later stages can build on a fixed starting point.
