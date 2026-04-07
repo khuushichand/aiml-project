@@ -115,3 +115,38 @@ async def test_lockout_recovers_after_window(monkeypatch):
     assert result_after["is_locked"] is False
     assert result_after["attempt_count"] == 1
     assert result_after["remaining_attempts"] == settings.MAX_LOGIN_ATTEMPTS - 1
+
+
+@pytest.mark.asyncio
+async def test_reset_failed_attempts_only_clears_matching_attempt_type():
+    settings = SimpleNamespace(
+        MAX_LOGIN_ATTEMPTS=3,
+        LOCKOUT_DURATION_MINUTES=5,
+        PII_REDACT_LOGS=False,
+    )
+    tracker = LockoutTracker(settings=settings)
+    tracker.db_pool = object()
+    tracker._repo = _StubRepo()
+    tracker._initialized = True
+
+    limiter = RateLimiter(settings=settings)
+    limiter.db_pool = object()
+    limiter._initialized = True
+    limiter._lockout = tracker
+
+    identifier = "user:rate-reset"
+
+    for _ in range(settings.MAX_LOGIN_ATTEMPTS):
+        await limiter.record_failed_attempt(identifier, attempt_type="login")
+        await limiter.record_failed_attempt(identifier, attempt_type="password_reset")
+
+    await limiter.reset_failed_attempts(identifier, attempt_type="login")
+
+    login_locked, _ = await limiter.check_lockout(identifier, attempt_type="login")
+    reset_locked, _ = await limiter.check_lockout(
+        identifier,
+        attempt_type="password_reset",
+    )
+
+    assert login_locked is False
+    assert reset_locked is True

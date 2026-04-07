@@ -93,9 +93,42 @@ async def test_lockout_triggers_after_threshold():
 
 
 @pytest.mark.asyncio
-async def test_check_lockout_returns_true_when_locked():
+async def test_check_lockout_is_scoped_by_attempt_type():
+    tracker = _make_tracker()
+    identifier = "user:alice"
+
+    for _ in range(3):
+        await tracker.record_failed_attempt(identifier, attempt_type="login")
+
+    login_locked, _ = await tracker.check_lockout(identifier, attempt_type="login")
+    reset_locked, _ = await tracker.check_lockout(identifier, attempt_type="password_reset")
+
+    assert login_locked is True
+    assert reset_locked is False
+
+
+@pytest.mark.asyncio
+async def test_reset_failed_attempts_only_clears_matching_attempt_type():
     tracker = _make_tracker()
     identifier = "user:bob"
+
+    for _ in range(3):
+        await tracker.record_failed_attempt(identifier, attempt_type="login")
+        await tracker.record_failed_attempt(identifier, attempt_type="password_reset")
+
+    await tracker.reset_failed_attempts(identifier, attempt_type="login")
+
+    login_locked, _ = await tracker.check_lockout(identifier, attempt_type="login")
+    reset_locked, _ = await tracker.check_lockout(identifier, attempt_type="password_reset")
+
+    assert login_locked is False
+    assert reset_locked is True
+
+
+@pytest.mark.asyncio
+async def test_check_lockout_returns_true_when_locked():
+    tracker = _make_tracker()
+    identifier = "user:charlie"
 
     for _ in range(3):
         await tracker.record_failed_attempt(identifier)
@@ -108,7 +141,7 @@ async def test_check_lockout_returns_true_when_locked():
 @pytest.mark.asyncio
 async def test_reset_clears_lockout():
     tracker = _make_tracker()
-    identifier = "user:charlie"
+    identifier = "user:dave"
 
     for _ in range(3):
         await tracker.record_failed_attempt(identifier)
@@ -124,7 +157,7 @@ async def test_reset_clears_lockout():
 @pytest.mark.asyncio
 async def test_no_lockout_below_threshold():
     tracker = _make_tracker()
-    identifier = "user:dave"
+    identifier = "user:erin"
 
     result = await tracker.record_failed_attempt(identifier)
     assert result["is_locked"] is False
