@@ -87,6 +87,16 @@ The review will rely on:
 
 The review is primarily static and read-first. Runtime verification may be used selectively only if it materially strengthens or falsifies a specific claim.
 
+When a finding depends on backend semantics rather than only source reading, the review should perform targeted verification whenever feasible. This applies especially to:
+
+- transaction boundaries and implicit commit or rollback behavior
+- migration idempotency and partial-failure recovery
+- SQLite versus PostgreSQL behavioral divergence
+- locking, busy-timeout, WAL, or connection-lifecycle claims
+- FTS or dialect-specific query behavior
+
+If targeted verification cannot be run, the limitation should be stated explicitly and the observation should be downgraded to a probable risk unless the source evidence is still conclusive on its own.
+
 ## Findings Model
 
 The final report should include only substantive findings.
@@ -108,6 +118,10 @@ A concrete bug, security or isolation flaw, correctness issue, migration hazard,
 ### Probable risk
 
 Something that appears unsafe or brittle but depends on assumptions that are not fully proven within the scoped review.
+
+### Improvement
+
+A worthwhile hardening, maintainability, or architectural simplification opportunity that is not strong evidence of a current defect but would reduce future failure or regression risk.
 
 Minor style commentary and low-signal cleanup should be omitted.
 
@@ -135,6 +149,18 @@ The review order inside the module should bias toward:
 - representative per-feature databases with broad usage or unusual schema logic
 - gaps where tests fail to cover high-risk invariants
 
+## Representative Selection Rule
+
+When the review samples representative callers or `*_DB.py` modules, the selection should be deliberate rather than ad hoc. The sampled set should preferentially include modules that meet one or more of these criteria:
+
+- high fan-out or factory ownership
+- recent churn, migrations, or bug-fix history
+- custom transaction, migration, or schema-bootstrap logic
+- path, scope, tenancy, or policy-sensitive behavior
+- unusually large or SQL-heavy implementations
+
+At minimum, the audit should cover enough representatives to include shared foundations, `media_db`, and multiple non-`media_db` database helpers from different risk profiles so the final findings are not driven by a single subsystem.
+
 ## Execution Boundaries
 
 - The review remains inside the `DB_Management` subsystem and closely related tests and callers.
@@ -153,7 +179,7 @@ Each finding will include:
 - why the issue matters across correctness, isolation/security, or maintainability
 - file and line references
 
-If an area appears healthy, the review may say so briefly rather than inventing debt. If uncertainty remains, it should be labeled as an assumption or open question rather than overstated as a confirmed bug.
+The report may include confirmed findings, probable risks, and improvements. If an area appears healthy, the review may say so briefly rather than inventing debt. If uncertainty remains, it should be labeled as an assumption or open question rather than overstated as a confirmed bug.
 
 ## Success Criteria
 
@@ -161,7 +187,9 @@ The review is successful when:
 
 - the high-risk `DB_Management` surfaces are covered without pretending every helper received equal depth
 - findings are evidence-based and separated from softer risks
+- representative sampling is explained by explicit selection criteria
 - severity reflects a balanced view of correctness, isolation/security, and maintainability
+- backend-sensitive claims are verified or clearly labeled with the verification limitation
 - the final report is easy to use as a triage artifact
 - low-value cleanup does not crowd out real defects or regression risks
 
