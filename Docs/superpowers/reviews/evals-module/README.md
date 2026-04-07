@@ -53,6 +53,8 @@ Use this exact structure for every later finding entry:
    Verification note: ...
 ```
 
+Applicability values: `Baseline`, `Working-tree-specific`, `Needs verification`.
+
 ### Confidence Model
 - High: directly observed in the current file set or verified with targeted evidence.
 - Medium: supported by strong code-path evidence, but one or more assumptions still need confirmation.
