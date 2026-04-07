@@ -12,10 +12,13 @@ The deliverable is a broader audit, not just a code-review bug list. The final r
 
 ## Primary Scope
 
-The review is limited to the end-to-end ingest path for web scraping requests:
+The review is limited to the end-to-end ingest path for public web scraping ingest requests:
 
 - Endpoint entry and request forwarding:
+  - `tldw_Server_API/app/api/v1/endpoints/media/ingest_web_content.py`
   - `tldw_Server_API/app/api/v1/endpoints/media/process_web_scraping.py`
+- Request models and request-shaping logic used by those routes:
+  - `tldw_Server_API/app/api/v1/schemas/media_request_models.py`
 - Service orchestration, normalization, fallback, and mode handling:
   - `tldw_Server_API/app/services/web_scraping_service.py`
   - `tldw_Server_API/app/services/enhanced_web_scraping_service.py`
@@ -52,7 +55,7 @@ The audit should answer these concrete questions:
 1. Does the endpoint validate and forward request data consistently, including crawl flags, headers, cookies, and mode selection?
 2. Do the service layers normalize inputs correctly and preserve contract semantics across the enhanced path and legacy fallback path?
 3. Are `mode="ephemeral"` and `mode="persist"` both correct, observable, and consistent in how they shape results and handle failures?
-4. Are crawl metadata, persistence metadata, and observability fields preserved accurately after recent service and DB-lifecycle refactors?
+4. Are crawl metadata, persistence metadata, cookie/header data, and observability fields preserved accurately after recent service and DB-lifecycle refactors?
 5. Are error paths precise enough to preserve actionable HTTP behavior, or do broad catches turn contract problems into generic 500s?
 6. Do any reachable outbound fetch paths weaken SSRF/egress protections, cookie safety, or header propagation guarantees?
 7. Are there maintainability or performance problems in the reachable ingest-path code that materially increase future bug risk?
@@ -95,10 +98,14 @@ Run a focused validation set rather than the full test suite.
 
 Primary validation targets:
 
+- `tldw_Server_API/tests/Web_Scraping/test_friendly_ingest_crawl_flags.py`
+- `tldw_Server_API/tests/Web_Scraping/test_ingest_cookie_parsing.py`
 - `tldw_Server_API/tests/Web_Scraping/test_process_web_scraping_strategy_validation.py`
 - `tldw_Server_API/tests/Web_Scraping/test_crawl_config_precedence.py`
 - `tldw_Server_API/tests/Web_Scraping/test_legacy_fallback_behavior.py`
 - `tldw_Server_API/tests/Web_Scraping/test_persistence_crawl_metadata.py`
+- `tldw_Server_API/tests/Web_Scraping/test_http_client_fetch.py`
+- `tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py`
 - `tldw_Server_API/tests/WebScraping/test_webscraping_usage_events.py`
 - `tldw_Server_API/tests/WebScraping/test_custom_headers_support.py`
 
@@ -115,8 +122,10 @@ The validation matrix must explicitly cover:
 - `mode="persist"`
 - metadata persistence
 - error surfacing
+- negative-path error contracts
 - usage logging
 - header and cookie forwarding where applicable
+- request-safety enforcement where applicable
 
 ### Pass 4: Security And Request-Safety Audit
 
