@@ -83,6 +83,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_transcripts_media_idempotency_key
     ON Transcripts(media_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
+DROP TRIGGER IF EXISTS media_validate_sync_update;
+
 UPDATE Media
 SET latest_transcription_run_id = (
         SELECT t.transcription_run_id
@@ -97,6 +99,16 @@ SET latest_transcription_run_id = (
         FROM Transcripts AS t
         WHERE t.media_id = Media.id
     ), 1);
+
+CREATE TRIGGER media_validate_sync_update BEFORE UPDATE ON Media
+BEGIN
+    SELECT RAISE(ABORT, 'Sync Error (Media): Version must increment by exactly 1.')
+    WHERE NEW.version IS NOT OLD.version + 1;
+    SELECT RAISE(ABORT, 'Sync Error (Media): Client ID cannot be NULL or empty.')
+    WHERE NEW.client_id IS NULL OR NEW.client_id = '';
+    SELECT RAISE(ABORT, 'Sync Error (Media): UUID cannot be changed.')
+    WHERE NEW.uuid IS NOT OLD.uuid;
+END;
 
 CREATE INDEX IF NOT EXISTS idx_media_latest_transcription_run_id ON Media(latest_transcription_run_id);
 CREATE INDEX IF NOT EXISTS idx_media_next_transcription_run_id ON Media(next_transcription_run_id);
