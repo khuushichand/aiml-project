@@ -13,10 +13,15 @@ Template placeholder for the shared foundations, backend implementations, and fa
 - Not yet run.
 
 ## Findings
-1. Severity: Use only the frozen Stage 1 review structure.
-   - Confidence: High
-   - Why it matters: Later audit notes must be written as numbered severity entries, with per-finding metadata, rather than freeform placeholders.
-   - File references: `Docs/superpowers/reviews/db-management/2026-04-07-stage2-foundations-backends-factories.md`
+No findings recorded yet.
+
+### Frozen Finding Template
+```markdown
+1. Severity: concise issue statement with file references and impact
+   - Confidence: High|Medium|Low
+   - Why it matters: short impact explanation
+   - File references: `path/to/file.py`
+```
 
 ### Per-Finding Metadata Rule
 - Every finding must include severity, confidence, why it matters, and exact file references.

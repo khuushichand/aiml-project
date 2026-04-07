@@ -432,10 +432,7 @@ fd747f94d merge: incorporate latest dev into feat/writing-suite-phase2
 ```
 
 ## Findings
-1. Severity: None for scaffold stage.
-   - Confidence: High
-   - Why it matters: This stage is review-artifact setup only and does not assert defects.
-   - File references: `Docs/superpowers/reviews/db-management/2026-04-07-stage1-review-artifacts-and-inventory.md`
+No findings recorded yet.
 
 ### Per-Finding Metadata Rule
 - Every later-stage finding must include severity, confidence, why it matters, and exact file references.
