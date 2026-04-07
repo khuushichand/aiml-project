@@ -106,6 +106,7 @@ interface ThemeAdvancedEditorProps {
   onDelete?: (id: string) => void
   isDark: boolean
   editingTheme?: ThemeDefinition
+  activeTheme?: ThemeDefinition
 }
 
 export function ThemeAdvancedEditor({
@@ -115,6 +116,7 @@ export function ThemeAdvancedEditor({
   onDelete,
   isDark,
   editingTheme,
+  activeTheme,
 }: ThemeAdvancedEditorProps) {
   const isEditing = !!editingTheme
 
@@ -311,14 +313,15 @@ export function ThemeAdvancedEditor({
   // ---- Cancel (revert) ----
   const handleCancel = useCallback(() => {
     const original = originalThemeRef.current
-    if (original) {
-      const tokens = isDark ? original.palette.dark : original.palette.light
-      applyThemeTokens(tokens, original)
+    const restoreTarget = original ?? activeTheme
+    if (restoreTarget) {
+      const tokens = isDark ? restoreTarget.palette.dark : restoreTarget.palette.light
+      applyThemeTokens(tokens, restoreTarget)
     } else {
       clearThemeTokens()
     }
     onClose()
-  }, [isDark, onClose])
+  }, [isDark, activeTheme, onClose])
 
   // ---- Delete ----
   const handleDelete = useCallback(() => {

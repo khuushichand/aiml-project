@@ -220,8 +220,11 @@ export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
     return migrateV0ToV1(raw)
   }
 
-  // Already at current version — cast and return
-  return raw as unknown as ThemeDefinition
+  // Already at current version — validate before returning
+  if (!validateThemeDefinition(raw)) {
+    throw new Error("Theme claims current version but fails validation")
+  }
+  return raw
 }
 
 /**
@@ -1483,7 +1486,7 @@ export function deriveSurfacePalette(
 
   const offsets = isDark
     ? { bg: 0, surface: 0.03, surface2: 0.05, elevated: 0.07 }
-    : { bg: 0, surface: -0.02, surface2: 0.02, elevated: -0.04 }
+    : { bg: 0, surface: 0.03, surface2: 0.04, elevated: 0.05 }
 
   const toTriple = (lOffset: number): RGBTriple => {
     const [nr, ng, nb] = oklchToRgb(Math.max(0, Math.min(1, L + lOffset)), surfaceC, H)

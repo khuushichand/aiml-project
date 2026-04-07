@@ -29,6 +29,8 @@ interface ThemeQuickEditorProps {
   isDark: boolean
   /** Existing theme to edit (optional -- for re-entering quick mode) */
   editingTheme?: ThemeDefinition
+  /** The currently active theme — restored on cancel when creating a new theme */
+  activeTheme?: ThemeDefinition
 }
 
 /** The 10 lever values that drive quick mode derivation. */
@@ -289,6 +291,7 @@ export function ThemeQuickEditor({
   onSave,
   isDark,
   editingTheme,
+  activeTheme,
 }: ThemeQuickEditorProps) {
   // Store the original theme to revert on cancel
   const originalThemeRef = useRef<ThemeDefinition | undefined>(undefined)
@@ -441,16 +444,16 @@ export function ThemeQuickEditor({
 
   // --- Cancel (revert) ---
   const handleCancel = useCallback(() => {
-    // Revert to the original theme
     const original = originalThemeRef.current
-    if (original) {
-      const tokens = isDark ? original.palette.dark : original.palette.light
-      applyThemeTokens(tokens, original)
+    const restoreTarget = original ?? activeTheme
+    if (restoreTarget) {
+      const tokens = isDark ? restoreTarget.palette.dark : restoreTarget.palette.light
+      applyThemeTokens(tokens, restoreTarget)
     } else {
       clearThemeTokens()
     }
     onClose()
-  }, [isDark, onClose])
+  }, [isDark, activeTheme, onClose])
 
   // --- Advanced placeholder ---
   const handleAdvanced = useCallback(() => {

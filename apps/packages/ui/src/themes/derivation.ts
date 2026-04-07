@@ -119,7 +119,7 @@ export function deriveSurfacePalette(tintHex: string, isDark: boolean): SurfaceP
   // Lightness offsets per surface tier
   const offsets = isDark
     ? { bg: 0, surface: 0.03, surface2: 0.05, elevated: 0.07 }
-    : { bg: 0, surface: -0.02, surface2: 0.02, elevated: -0.04 }
+    : { bg: 0, surface: 0.03, surface2: 0.04, elevated: 0.05 }
 
   const make = (offset: number): RGBTriple => {
     const L = Math.min(1, Math.max(0, baseL + offset))

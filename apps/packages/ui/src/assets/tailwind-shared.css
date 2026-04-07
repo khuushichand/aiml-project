@@ -269,11 +269,11 @@ body {
 
   /* Density for custom inputs */
   [data-density="compact"] .panel-input {
-    padding: calc(var(--spacing-unit) * 1.5) calc(var(--spacing-unit) * 2.5);
+    padding: round(calc(var(--spacing-unit) * 1.5), 1px) round(calc(var(--spacing-unit) * 2.5), 1px);
     font-size: 13px;
   }
   [data-density="comfortable"] .panel-input {
-    padding: calc(var(--spacing-unit) * 2.5) calc(var(--spacing-unit) * 3.5);
+    padding: round(calc(var(--spacing-unit) * 2.5), 1px) round(calc(var(--spacing-unit) * 3.5), 1px);
   }
 
   /* Density for icon buttons */

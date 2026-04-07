@@ -8,10 +8,11 @@ import {
   defaultLightShadows,
   defaultDarkShadows,
 } from "./defaults"
+import { validateThemeDefinition } from "./validation"
 
 /**
  * Migrate a theme from any older version to the current schema.
- * Throws if the version is newer than supported.
+ * Throws if the version is newer than supported or if the theme is invalid.
  */
 export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
   const version = typeof raw.version === "number" ? raw.version : 0
@@ -26,7 +27,10 @@ export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
     return migrateV0ToV1(raw)
   }
 
-  return raw as unknown as ThemeDefinition
+  if (!validateThemeDefinition(raw)) {
+    throw new Error("Theme claims version 1 but fails validation")
+  }
+  return raw
 }
 
 function migrateV0ToV1(raw: Record<string, unknown>): ThemeDefinition {

@@ -145,6 +145,7 @@ export function ThemePicker() {
     setModePreference,
     themeId,
     setThemeId,
+    themeDefinition,
     presets,
     customThemes,
     saveCustomTheme,
@@ -332,6 +333,7 @@ export function ThemePicker() {
         onSave={handleSave}
         isDark={isDark}
         editingTheme={editingTheme}
+        activeTheme={themeDefinition}
       />
       <ThemeAdvancedEditor
         open={advancedEditorOpen}
@@ -340,6 +342,7 @@ export function ThemePicker() {
         onDelete={handleDelete}
         isDark={isDark}
         editingTheme={editingTheme}
+        activeTheme={themeDefinition}
       />
     </div>
   )

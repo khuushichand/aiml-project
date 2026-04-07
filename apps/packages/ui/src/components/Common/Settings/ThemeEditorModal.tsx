@@ -163,8 +163,8 @@ export function ThemeEditorModal({
             } else {
               try {
                 theme = migrateTheme(raw.theme as Record<string, unknown>)
-              } catch {
-                void message.error("Invalid theme in wrapper")
+              } catch (err) {
+                void message.error(err instanceof Error ? err.message : "Invalid theme in wrapper")
                 return
               }
             }
