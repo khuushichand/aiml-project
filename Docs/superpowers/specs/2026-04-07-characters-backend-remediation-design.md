@@ -78,10 +78,18 @@ This remediation is intended to address these reviewed findings:
 - Legacy snapshots that predate avatar capture remain readable but are treated
   as incomplete historical records. The system will not pretend they are
   lossless.
+- Reverting to a legacy snapshot that lacks avatar state preserves the current
+  avatar instead of clearing it or guessing at older bytes. Legacy revert is
+  therefore explicitly content-only for avatar state.
+- Internal version snapshots may be lossless without forcing the public
+  `/versions` and `/versions/diff` APIs to return raw avatar payloads by
+  default. Default version-history responses should stay compact and expose
+  avatar presence or diff semantics without bloating normal API responses.
 - Plain-text synthetic character import remains allowed only for explicitly
-  plain-text inputs such as `.txt` and `.md`. Card-like formats such as
-  `.json`, `.yaml`, `.yml`, and PNG-embedded metadata are rejected when parse
-  or validation fails.
+  plain-text inputs. Structured card inputs are determined by the import
+  classifier and parser path, not just filename extension examples. Structured
+  card candidates such as JSON, YAML, and PNG-embedded card metadata are
+  rejected when parse or validation fails.
 - Image-file imports and base64/image-field imports must converge on one avatar
   normalization contract before persistence.
 - PNG export must honor the same effective metadata-size contract as the PNG
@@ -93,6 +101,9 @@ This remediation is intended to address these reviewed findings:
     unavailable
 - Chat and message caps must be enforced through DB-backed atomic operations,
   including multi-message persistence paths.
+- Multi-message persistence that spans a slow model call must use a DB-backed
+  reservation with explicit acquire, consume, release, and expiry semantics
+  rather than holding a DB lock open across external network work.
 - Hybrid exemplar fallback must return semantically correct pagination metadata.
 - World-book delete and detach responses must match their declared schema.
 - Any persistence or migration changes must remain SQLite-safe and Postgres-safe
@@ -188,8 +199,20 @@ Revert and diff behavior:
 - revert logic will restore avatar state from `image_base64` through the same
   character storage path used by normal writes
 - legacy snapshots without `image_base64` remain valid history entries, but
-  avatar restoration from those older entries is explicitly incomplete and must
-  be surfaced as such in tests and code behavior
+  avatar restoration from those older entries is explicitly incomplete
+- when reverting to a legacy snapshot without avatar state, the current avatar
+  is preserved unchanged and only the text or metadata fields revert
+
+Public version API shaping:
+
+- internal sync snapshots remain complete
+- `/versions` and `/versions/diff` must not include raw `image_base64` by
+  default
+- default responses should expose compact avatar semantics such as presence or
+  changed-state markers, while revert continues to read the complete internal
+  snapshot
+- if full avatar snapshot inspection is needed later, that should be an
+  explicit opt-in behavior rather than the default history payload shape
 
 Migration strategy:
 
@@ -203,11 +226,12 @@ Migration strategy:
 
 #### 3.1 Card-like Parse Failures
 
-Character import behavior becomes format-explicit:
+Character import behavior becomes mode-explicit:
 
-- `.json`, `.yaml`, `.yml`, PNG card metadata, and other card-like structured
-  formats must parse and validate successfully or the import fails
-- `.txt` and `.md` remain eligible for synthetic plain-text import behavior
+- inputs classified as structured card candidates by the validated import type
+  and parser path must parse and validate successfully or the import fails
+- inputs classified as explicit plain-text imports remain eligible for
+  synthetic plain-text import behavior
 
 This preserves useful plain-text import without silently accepting malformed
 card files as something else.
@@ -274,6 +298,15 @@ Implementation shape:
   the relevant quota decision, for example by locking a stable guard row or an
   equivalent DB-backed synchronization target rather than relying on
   read-committed count queries alone
+- assistant-persisting flows that call an external model before writing must
+  not keep a transaction open across that model call
+- those flows therefore require a durable DB-backed reservation record with:
+  - a stable reservation key or request id
+  - reserved slot count
+  - conversation scope
+  - expiry or cleanup semantics
+  - an explicit consume step on successful persistence
+  - an explicit release step when the request fails or abandons persistence
 - the exact serialization primitive is an implementation detail, but the spec
   requirement is strict: two concurrent requests must not both consume the last
   remaining slot
@@ -281,10 +314,12 @@ Implementation shape:
 Multi-message contract:
 
 - if a request needs capacity for both a user message and an assistant reply,
-  it must reserve or validate capacity as one unit
+  it must reserve capacity as one unit before the slow model call
 - the request either persists the full allowed batch or fails cleanly
 - partially consuming the last slot and leaving the request in a half-persisted
   state is not acceptable
+- expired or abandoned reservations must stop counting against the cap without
+  requiring manual operator cleanup
 
 Existing endpoint pre-checks may remain as fast-fail hints if useful, but the
 DB helper is the only authority.
@@ -384,15 +419,20 @@ Required failing tests first:
 - avatar-only edits can be reverted from new-format snapshots
 - legacy snapshots without avatar state remain readable and behave as explicitly
   incomplete history
-- malformed YAML card import is rejected
-- plain-text `.txt` or `.md` import still works as the intended synthetic mode
+- reverting to a legacy snapshot preserves the current avatar unchanged
+- structured card parse failures are rejected
+- explicit plain-text import mode still works as the intended synthetic mode
 - image-file import and structured import produce equivalent normalized avatar
   storage
 - oversized PNG metadata export is rejected before returning a non-round-trip
   PNG
+- `/versions` and `/versions/diff` stay compact by default even when internal
+  snapshots now include avatar state
 - RG fail-closed behavior returns the expected `429` and `503` cases
 - concurrent chat create cannot exceed configured cap
 - concurrent message or multi-message persist cannot exceed configured cap
+- abandoned or failed multi-message reservations are released or expire
+  correctly
 - hybrid exemplar fallback returns correct `total`
 - world-book delete and detach responses carry the correct identifier field
 - mixed-suite `503` reproducer or narrowed harness verifies the availability
@@ -420,6 +460,7 @@ Mitigation:
   character images
 - treat legacy snapshots as incomplete instead of attempting expensive
   historical backfills
+- keep default version-history responses compact even if internal snapshots grow
 
 ### Risk: Quota Serialization Becomes Backend-Specific
 
@@ -429,6 +470,7 @@ Mitigation:
 
 - require explicit backend-safe serialization semantics in the DB abstraction
 - add parity checks for the chosen serialization approach
+- require reservation cleanup semantics so failed model calls do not leak quota
 
 ### Risk: Import Contract Change Breaks Implicit Workflows
 
@@ -438,7 +480,7 @@ character.
 Mitigation:
 
 - preserve plain-text synthetic import only for explicit plain-text inputs
-- make parse-failure rejection explicit for structured card formats
+- make parse-failure rejection explicit for structured card mode
 - cover the new contract with endpoint tests
 
 ### Risk: `503` Investigation Stays Nondeterministic
@@ -469,11 +511,14 @@ This remediation is successful if:
 - empty `{}` updates remain supported no-ops
 - avatar-only edits are represented in version history, diff output, and revert
   for new-format snapshots
+- reverting to a legacy snapshot preserves avatar state instead of clearing it
 - malformed structured card inputs fail clearly, while explicit plain-text
   imports still work intentionally
 - avatar normalization is transport-independent
 - PNG export either produces a re-importable artifact or fails clearly when the
   metadata ceiling would be exceeded
+- default version-history APIs remain compact even though internal snapshots are
+  lossless for avatar state
 - chat and message caps hold under concurrent access, including multi-message
   persistence flows
 - request throttling behaves fail-closed once enabled
