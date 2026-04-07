@@ -15,11 +15,11 @@ SHARE_UPDATED = "share.updated"
 SHARE_REVOKED = "share.revoked"
 SHARE_ACCESSED = "share.accessed"
 SHARE_CLONED = "share.cloned"
-TOKEN_CREATED = "token.created"
-TOKEN_USED = "token.used"
-TOKEN_REVOKED = "token.revoked"
-TOKEN_PASSWORD_VERIFIED = "token.password_verified"
-TOKEN_PASSWORD_FAILED = "token.password_failed"
+TOKEN_CREATED = "token.created"  # nosec B105
+TOKEN_USED = "token.used"  # nosec B105
+TOKEN_REVOKED = "token.revoked"  # nosec B105
+TOKEN_PASSWORD_VERIFIED = "token.password_verified"  # nosec B105
+TOKEN_PASSWORD_FAILED = "token.password_failed"  # nosec B105
 
 
 class ShareAuditService:

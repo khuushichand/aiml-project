@@ -158,7 +158,7 @@ class UnifiedShareAuditWriter:
     async def _current_sequence_value_db(self, db: aiosqlite.Connection) -> int:
         await self._ensure_compatibility_state_db(db)
         async with db.execute(
-            f"SELECT int_value FROM {_SHARE_AUDIT_STATE_TABLE} WHERE key = ?",
+            f"SELECT int_value FROM {_SHARE_AUDIT_STATE_TABLE} WHERE key = ?",  # nosec B608
             (_SHARE_AUDIT_SEQUENCE_KEY,),
         ) as cur:
             row = await cur.fetchone()
@@ -174,7 +174,7 @@ class UnifiedShareAuditWriter:
 
     async def _load_identity_state_db(self, db: aiosqlite.Connection) -> SharingIdentityState:
         async with db.execute(
-            f"SELECT metadata FROM audit_events WHERE {_SHARE_EVENT_FILTER_SQL}"
+            f"SELECT metadata FROM audit_events WHERE {_SHARE_EVENT_FILTER_SQL}"  # nosec B608
         ) as cur:
             rows = await cur.fetchall()
 
@@ -222,7 +222,7 @@ class UnifiedShareAuditWriter:
             current = await self._current_sequence_value_db(db)
             if floor > current:
                 await db.execute(
-                    f"UPDATE {_SHARE_AUDIT_STATE_TABLE} SET int_value = ? WHERE key = ?",
+                    f"UPDATE {_SHARE_AUDIT_STATE_TABLE} SET int_value = ? WHERE key = ?",  # nosec B608
                     (floor, _SHARE_AUDIT_SEQUENCE_KEY),
                 )
             await db.commit()
@@ -232,11 +232,11 @@ class UnifiedShareAuditWriter:
     async def _allocate_compatibility_id_db(self, db: aiosqlite.Connection) -> int:
         await self._ensure_compatibility_state_db(db)
         await db.execute(
-            f"UPDATE {_SHARE_AUDIT_STATE_TABLE} SET int_value = int_value + 1 WHERE key = ?",
+            f"UPDATE {_SHARE_AUDIT_STATE_TABLE} SET int_value = int_value + 1 WHERE key = ?",  # nosec B608
             (_SHARE_AUDIT_SEQUENCE_KEY,),
         )
         async with db.execute(
-            f"SELECT int_value FROM {_SHARE_AUDIT_STATE_TABLE} WHERE key = ?",
+            f"SELECT int_value FROM {_SHARE_AUDIT_STATE_TABLE} WHERE key = ?",  # nosec B608
             (_SHARE_AUDIT_SEQUENCE_KEY,),
         ) as cur:
             row = await cur.fetchone()
@@ -248,7 +248,7 @@ class UnifiedShareAuditWriter:
         current = await self._current_sequence_value_db(db)
         if floor > current:
             await db.execute(
-                f"UPDATE {_SHARE_AUDIT_STATE_TABLE} SET int_value = ? WHERE key = ?",
+                f"UPDATE {_SHARE_AUDIT_STATE_TABLE} SET int_value = ? WHERE key = ?",  # nosec B608
                 (floor, _SHARE_AUDIT_SEQUENCE_KEY),
             )
 
@@ -485,20 +485,8 @@ class UnifiedShareAuditWriter:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         await self.initialize()
-        conditions = [_SHARE_EVENT_FILTER_SQL]
-        params: list[Any] = []
-        if owner_user_id is not None:
-            conditions.append("tenant_user_id = ?")
-            params.append(str(owner_user_id))
-        if resource_type is not None:
-            conditions.append("resource_type = ?")
-            params.append(resource_type)
-        if resource_id is not None:
-            conditions.append("resource_id = ?")
-            params.append(resource_id)
-        params.extend([limit, offset])
-
-        query = f"""
+        tenant_user_id = str(owner_user_id) if owner_user_id is not None else None
+        query = """
             SELECT
                 timestamp,
                 event_type,
@@ -510,14 +498,29 @@ class UnifiedShareAuditWriter:
                 resource_id,
                 metadata
             FROM audit_events
-            WHERE {' AND '.join(conditions)}
+            WHERE (event_type LIKE 'share.%' OR event_type LIKE 'token.%')
+              AND (? IS NULL OR tenant_user_id = ?)
+              AND (? IS NULL OR resource_type = ?)
+              AND (? IS NULL OR resource_id = ?)
             ORDER BY timestamp DESC, event_id DESC
             LIMIT ? OFFSET ?
         """
 
         db = await self._open_db()
         try:
-            async with db.execute(query, tuple(params)) as cur:
+            async with db.execute(
+                query,
+                (
+                    tenant_user_id,
+                    tenant_user_id,
+                    resource_type,
+                    resource_type,
+                    resource_id,
+                    resource_id,
+                    limit,
+                    offset,
+                ),
+            ) as cur:
                 rows = await cur.fetchall()
         finally:
             await db.close()
