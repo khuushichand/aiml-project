@@ -28,7 +28,7 @@ V1 should also treat trial management, anonymous identity, lightweight upgrade f
 ## Non-Goals
 
 - Rebuilding the existing `tldw` backend around a new product-specific media model.
-- Shipping a fully separate standalone SaaS frontend in V1.
+- Shipping a greenfield standalone SaaS frontend unrelated to the existing app surfaces in V1.
 - Reproducing the full `tldw` workspace, notebook, or library feature set inside the lightweight mode.
 - Building a rich extension-side history manager.
 - Exposing all ingestion, RAG, or model configuration knobs in the lightweight experience.
@@ -248,6 +248,12 @@ V1 should compose existing capabilities rather than invent a separate open-sourc
 - derive and persist a canonical normalized-source identity for reuse across extension and hosted lightweight mode
 - make repeated submit requests for the same normalized source idempotent
 
+The launcher-facing source response must include identity-aware access state, not just normalized source identity. It must tell the extension enough to distinguish:
+
+- new session allowed
+- reopen already unlocked source
+- upgrade required
+
 ## Workspace Contract And Summary Lifecycle
 
 The backend should grow from a source-state contract into a small workspace contract.
@@ -255,6 +261,7 @@ The backend should grow from a source-state contract into a small workspace cont
 The recommended contract shape is:
 
 - keep `POST /api/v1/media/video-lite/source` for normalization, entitlement checks, and ingest kickoff
+- require that `POST /api/v1/media/video-lite/source` returns identity-aware launcher access data such as entitlement plus reopen-vs-upgrade state
 - add a backend-backed workspace/status response that includes:
   - `source_key`
   - `source_url`
@@ -282,6 +289,8 @@ Because V1 now prefers eager summary generation, summary lifecycle belongs to th
 The hosted page should open once transcript-ready, even if `summary_state` is still `processing`. `Transcript` should render transcript or transcript-processing state, `Summary` should render summary or summary-processing state, and `Chat` should remain grounded on transcript-ready content.
 
 V1 should not expose a client-triggered summary creation, regeneration, or retry control in the lightweight product. The hosted page should render backend workspace state only. Any summary retry behavior remains a backend concern.
+
+Summary generation should not happen inline on workspace reads. Transcript readiness should enqueue at most one background summary job per normalized source or transcript hash, protected by a dedupe key or equivalent lock. `GET /video-lite/workspace/...` should stay read-only and report `summary_state` without spawning duplicate summarization work during polling.
 
 ## User Flow
 
@@ -546,8 +555,10 @@ These do not block the design, but they must be answered in planning:
 - What should the new private overlay project be named and where should it live as a sibling to `tldw_server`?
 - Which frontend paths should be synced from the existing app versus replaced by private-only implementations?
 - Will the overlay use a fork, vendored sync, or scripted copy-plus-patch workflow?
+- What exact anonymous retention window should V1 use?
 - Should anonymous trial data be claimable into a newly created account, or should it expire without migration?
 - What anti-abuse strategy is acceptable for anonymous YouTube-only trials in the hosted SaaS environment?
+- Does "limited follow-up conversation" rely on existing backend chat limits, or does V1 need an explicit per-session chat cap?
 - Should the private hosted frontend use an existing checkout surface with branding changes, or a narrower dedicated upgrade wrapper over current billing primitives?
 
 ## Decision

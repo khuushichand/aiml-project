@@ -10,6 +10,13 @@
 
 ---
 
+## Execution Status
+
+- Tasks `1` through `9` reflect baseline work that was already completed in earlier implementation passes and are retained as historical context.
+- Do not re-run the "expected fail because files do not exist yet" steps from Tasks `1` through `9` against the current repo state.
+- Active remaining work starts at Task `10` below.
+- Use the actual case-sensitive backend test path `tldw_Server_API/tests/Media/test_video_lite_endpoint.py` in commands and commits.
+
 ## File Structure
 
 **Private repo assumption:** unless renamed later, use `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private` as the sibling private project root.
@@ -22,7 +29,7 @@
   - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce trial semantics, shape lightweight workspace payloads, and generate or reuse eager summaries.
 - Create: `tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py`
   - Persistence for anonymous trial identity, normalized-source consumption, and retention timestamps.
-- Create: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
+- Create: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
   - Endpoint coverage for idempotency, launcher states, entitlement states, and unsupported-source behavior.
 - Create: `tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py`
   - Repo-level tests for one-time quota debit per normalized source.
@@ -82,10 +89,12 @@
 
 ## Task 1: Add The Backend `video-lite` Contract In `tldw_server`
 
+Historical baseline only. This task is already completed in the current worktree and is preserved for implementation history.
+
 **Files:**
 - Create: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
 - Create: `tldw_Server_API/app/services/video_lite_service.py`
-- Create: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
+- Create: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
 - Modify: `tldw_Server_API/app/api/v1/endpoints/media/__init__.py`
 
 - [ ] **Step 1: Write the failing endpoint tests**
@@ -105,7 +114,7 @@ def test_video_lite_returns_canonical_source_state(client, authed_headers):
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 Expected: FAIL because the schemas, service, and route do not exist yet.
 
 - [ ] **Step 3: Write the minimal route and service**
@@ -118,7 +127,7 @@ async def resolve_video_lite_source(...):
 
 - [ ] **Step 4: Run the targeted tests to verify they pass**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 Expected: PASS for normalized-source and launcher-state responses.
 
 - [ ] **Step 5: Commit**
@@ -127,11 +136,13 @@ Expected: PASS for normalized-source and launcher-state responses.
 git add tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
         tldw_Server_API/app/services/video_lite_service.py \
         tldw_Server_API/app/api/v1/endpoints/media/__init__.py \
-        tldw_Server_API/tests/media/test_video_lite_endpoint.py
+        tldw_Server_API/tests/Media/test_video_lite_endpoint.py
 git commit -m "feat: add video-lite source-state contract"
 ```
 
 ## Task 2: Add Trial Persistence And Idempotent Quota Debit
+
+Historical baseline only. This task is already completed in the current worktree and is preserved for implementation history.
 
 **Files:**
 - Create: `tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py`
@@ -151,7 +162,7 @@ def test_same_normalized_source_only_consumes_trial_once(repo):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 Expected: FAIL because the repo and migration do not exist yet.
 
 - [ ] **Step 3: Implement the repo, migration, and service wiring**
@@ -164,7 +175,7 @@ class VideoTrialRepo:
 
 - [ ] **Step 4: Run the tests to verify idempotent debit behavior**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 Expected: PASS, including retry and reopen paths not double-debiting quota.
 
 - [ ] **Step 5: Commit**
@@ -174,11 +185,13 @@ git add tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py \
         tldw_Server_API/app/core/AuthNZ/migrations.py \
         tldw_Server_API/app/services/video_lite_service.py \
         tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py \
-        tldw_Server_API/tests/media/test_video_lite_endpoint.py
+        tldw_Server_API/tests/Media/test_video_lite_endpoint.py
 git commit -m "feat: add video-lite trial ledger"
 ```
 
 ## Task 3: Bootstrap The Private Overlay Repo As A Runnable Workspace
+
+Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/README.md`
@@ -237,6 +250,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "ch
 
 ## Task 4: Create The Sync Workflow And Upstream Manifest
 
+Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
+
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/upstream-sync.md`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/upstream/manifest.json`
@@ -285,6 +300,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "ch
 ```
 
 ## Task 5: Sync Selected Existing App Surfaces Into The Private Repo
+
+Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
 **Files:**
 - Create or refresh via sync script:
@@ -338,6 +355,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "ch
 
 ## Task 6: Add Private Overlay Client And Intent Helpers
 
+Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
+
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-intent.ts`
@@ -378,6 +397,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "fe
 ```
 
 ## Task 7: Build The Private Hosted Lightweight Workspace And Signed-In Intake
+
+Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
 
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
@@ -438,6 +459,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "fe
 
 ## Task 8: Build The Private Extension Launcher Overlay
 
+Historical baseline only. This task is already completed in the current private repo and is preserved for implementation history.
+
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/src/routes/sidepanel-video.tsx`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/src/background/video-lite.ts`
@@ -484,6 +507,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "fe
 
 ## Task 9: Verification, Security Checks, And Sync Discipline
 
+Historical baseline only. This task is already completed for the already-landed baseline work and is preserved for implementation history.
+
 **Files:**
 - Modify: `Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md`
   - Only if implementation choices resolve open questions.
@@ -505,7 +530,7 @@ Run:
 
 ```bash
 source .venv/bin/activate && python -m pytest \
-  tldw_Server_API/tests/media/test_video_lite_endpoint.py \
+  tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
   tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py -v
 ```
 
@@ -549,13 +574,37 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add docs/veri
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "docs: add overlay verification guide"
 ```
 
-## Task 10: Extend The Backend `video-lite` Contract To Return Workspace State
+## Task 10: Lock Trial Policy Decisions Before More Backend Persistence Changes
+
+**Files:**
+- Modify: `Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md`
+- Modify: `Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md`
+
+- [ ] **Step 1: Record the remaining trial-policy decisions**
+
+Document and lock:
+
+- anonymous retention window
+- whether anonymous trial data is claimable into an account
+- whether "limited follow-up conversation" relies on existing backend limits or needs an explicit V1 per-session cap
+
+- [ ] **Step 2: Commit the policy decision record**
+
+```bash
+git add Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md \
+        Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md
+git commit -m "docs: lock video-lite trial policy decisions"
+```
+
+## Task 11: Extend The Backend `video-lite` Contracts For Launcher Entitlements And Workspace State
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
 - Modify: `tldw_Server_API/app/services/video_lite_service.py`
 - Modify: `tldw_Server_API/app/api/v1/endpoints/media/video_lite.py`
-- Modify: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
+- Modify: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
+- Modify: `tldw_Server_API/Config_Files/resource_governor_policies.yaml`
+- Modify: `tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py`
 
 - [ ] **Step 1: Write the failing workspace contract tests**
 
@@ -567,15 +616,18 @@ def test_video_lite_workspace_returns_summary_lifecycle(client, authed_headers):
     )
     assert response.status_code == 200
     payload = response.json()
+    assert payload["entitlement"] in {"anonymous_trial_available", "trial_exhausted", "signed_in_unsubscribed", "signed_in_subscribed"}
     assert payload["summary_state"] in {"not_requested", "processing", "ready", "failed"}
 ```
 
+Also cover `POST /api/v1/media/video-lite/source` returning enough identity-aware launcher access state to distinguish `reopen_allowed` from `upgrade_required`.
+
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 Expected: FAIL because the workspace response does not exist yet.
 
-- [ ] **Step 3: Implement the workspace response contract**
+- [ ] **Step 3: Implement the source and workspace contract updates**
 
 ```python
 @router.get("/video-lite/workspace/{source_key}", response_model=VideoLiteWorkspaceResponse)
@@ -583,26 +635,38 @@ async def get_video_lite_workspace(...):
     return await service.get_workspace(...)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+`POST /video-lite/source` should also return identity-aware launcher access data so the extension can distinguish:
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
-Expected: PASS for workspace payload, entitlement shape, and summary lifecycle fields.
+- new session allowed
+- reopen already unlocked source
+- upgrade required
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Wire resource-governor mapping and coverage for the new workspace route**
+
+Add the route-map entry and extend the existing RG coverage test so `/api/v1/media/video-lite/workspace/{source_key}` resolves to the intended anonymous-compatible policy.
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v`
+Expected: PASS for launcher entitlement shape, workspace payload, summary lifecycle fields, and RG route coverage.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
         tldw_Server_API/app/services/video_lite_service.py \
         tldw_Server_API/app/api/v1/endpoints/media/video_lite.py \
-        tldw_Server_API/tests/media/test_video_lite_endpoint.py
-git commit -m "feat: add video-lite workspace contract"
+        tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
+        tldw_Server_API/Config_Files/resource_governor_policies.yaml \
+        tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py
+git commit -m "feat: extend video-lite launcher and workspace contracts"
 ```
 
-## Task 11: Add Eager Summary Generation And Reuse
+## Task 12: Add Eager Summary Generation And Reuse
 
 **Files:**
 - Modify: `tldw_Server_API/app/services/video_lite_service.py`
-- Modify: `tldw_Server_API/tests/media/test_video_lite_endpoint.py`
+- Modify: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/video/[sourceKey].tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
@@ -624,7 +688,7 @@ it("renders summary processing and summary ready states from backend workspace d
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
 Run backend:
-`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 
 Run frontend:
 `cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
@@ -638,6 +702,8 @@ async def ensure_workspace_summary(...):
     ...
 ```
 
+Use one background-trigger path only. Transcript readiness should enqueue at most one summary job per normalized source or transcript hash using a dedupe key or equivalent lock. `GET /video-lite/workspace/...` must remain read-only and should not spawn duplicate LLM work during polling.
+
 - [ ] **Step 4: Update the hosted page to fetch backend workspace state**
 
 ```tsx
@@ -650,7 +716,7 @@ export default function LiteVideoPage() {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run backend:
-`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/media/test_video_lite_endpoint.py -v`
+`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
 
 Run frontend:
 `cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
@@ -661,7 +727,7 @@ Expected: PASS for one-time summary generation, summary reuse on reopen, and hos
 
 ```bash
 git add tldw_Server_API/app/services/video_lite_service.py \
-        tldw_Server_API/tests/media/test_video_lite_endpoint.py \
+        tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
         Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md \
         Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md
 git commit -m "feat: add eager video-lite summaries"
@@ -671,6 +737,61 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add \
   web/components/VideoWorkspacePage.tsx \
   tests/web/VideoWorkspacePage.test.tsx
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: render eager video-lite summaries"
+```
+
+## Task 13: Verify The Remaining Delta Work
+
+**Files:**
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/verification.md`
+  - Add the remaining contract and eager-summary verification steps.
+
+- [ ] **Step 1: Run backend verification for the active delta**
+
+Run:
+
+```bash
+source .venv/bin/activate && python -m pytest \
+  tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
+  tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py \
+  tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v
+```
+
+Expected: PASS for source-state, launcher-entitlement, workspace-state, trial, eager-summary, and RG coverage.
+
+- [ ] **Step 2: Run Bandit on the touched backend paths**
+
+Run:
+
+```bash
+source .venv/bin/activate && python -m bandit -r \
+  tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
+  tldw_Server_API/app/services/video_lite_service.py \
+  tldw_Server_API/app/api/v1/endpoints/media/video_lite.py \
+  tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py \
+  tldw_Server_API/app/core/AuthNZ/migrations.py \
+  -f json -o /tmp/bandit_video_lite_delta.json
+```
+
+Expected: JSON report written to `/tmp/bandit_video_lite_delta.json` with no new high-signal findings in touched code.
+
+- [ ] **Step 3: Run private repo verification for the active delta**
+
+Run:
+
+```bash
+cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test \
+  tests/shared/video-lite-intent.test.ts \
+  tests/web/VideoWorkspacePage.test.tsx \
+  tests/extension/sidepanel-video.test.tsx -v
+```
+
+Expected: PASS for updated hosted workspace and launcher behavior.
+
+- [ ] **Step 4: Commit verification docs updates**
+
+```bash
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add docs/verification.md
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "docs: update video-lite delta verification guide"
 ```
 
 ## Notes For The Implementer
@@ -683,6 +804,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "fe
 - Do not debit trial quota on submission; debit only when a normalized source reaches transcript-ready.
 - Treat the extension as launcher-only in V1; transcript reading and durable chat stay in the hosted workspace.
 - Allow exhausted anonymous users to reopen already unlocked sources, but block creation of new transcript-backed sessions.
+- Make launcher routing depend on identity-aware access state from the backend contract, not on source normalization alone.
 - Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
+- Keep workspace reads read-only; do not let polling create duplicate summarization work.
 - Do not add a client-triggered summary create, regenerate, or retry control in V1.
 - Preserve source key and target-tab intent through login and upgrade flows.
