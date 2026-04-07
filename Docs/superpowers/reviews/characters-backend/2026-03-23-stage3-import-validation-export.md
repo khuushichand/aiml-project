@@ -78,6 +78,11 @@ python -m pytest \
   - The PNG export path reuses the same V2 payload shape at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:3127-3147`.
   - Import parsers treat that field as real payload data and persist it on re-import at `tldw_Server_API/app/core/Character_Chat/ccv3_parser.py:40-59` and `tldw_Server_API/app/core/Character_Chat/modules/character_validation.py:172-189`.
   - Impact: a round-trip can mutate absent version metadata into an explicit `"1.0"` value, so exports are re-importable but not fully identity-preserving.
+- Low | performance | Import and export image paths duplicate large payloads in memory instead of streaming or reusing buffers.
+  - `POST /api/v1/characters/import` reads the entire upload into memory before type validation completes at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:794-812`.
+  - When image data is normalized for storage, `_prepare_character_data_for_db_storage()` decodes the full base64 payload, verifies it with Pillow, opens it again for resize/WEBP conversion, and materializes a second in-memory output buffer at `tldw_Server_API/app/core/Character_Chat/modules/character_db.py:80-124`.
+  - PNG export base64-encodes the full card JSON into a `chara` text chunk at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:2936-2944`, and JSON/V2 export base64-encodes the full character image again at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:3115-3121`.
+  - Impact: the size cap limits worst-case memory growth, but large allowed images still incur multiple full-buffer copies and repeated transcode work per request.
 
 ## Coverage Gaps
 - No direct test covers import size rejection at the endpoint boundary, including the `413 Request Entity Too Large` branch in `POST /import`.
@@ -90,6 +95,7 @@ python -m pytest \
 - Add one malformed-image import test for each supported image class to confirm the endpoint rejects invalid payloads before database insertion.
 - Unskip or replace the round-trip property test with a deterministic export/import invariant test that exercises both V2 and PNG exports.
 - If plain-text fallback is intentional, document it as a supported behavior so callers know malformed YAML is treated as a synthetic import rather than an error.
+- If large-card export/import performance becomes user-visible, consider reducing duplicate full-buffer work in the image pipeline or documenting the memory tradeoff alongside the import size ceiling.
 
 ## Exit Note
 - Stage 3 review completed against the requested import, validation, image-handling, and export surfaces.
