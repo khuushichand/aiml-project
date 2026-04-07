@@ -104,6 +104,10 @@ python -m pytest tldw_Server_API/tests/Character_Chat/test_world_book_negatives_
   - `detach_world_book_from_character()` constructs `DeletionResponse(message=..., character_id=world_book_id)` instead of returning the character id at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:2530-2551`.
   - The same field reuse appears in the world-book delete path at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:2147-2149`.
   - This does not break persistence, but it is a response-shape mismatch that can mislead client code and makes the contract harder to reason about.
+- Low | performance | Hybrid exemplar search expands and rescoring candidate pools aggressively for paginated requests.
+  - `_search_character_exemplars_hybrid_best_effort()` scales `candidate_pool_size` with `limit + offset`, then runs an FTS search and may backfill additional rows from `list_character_exemplars()` before embedding scoring the full merged pool at `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:654-709`.
+  - That work is bounded by `_EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP`, but large offsets still increase the amount of DB and embedding work required to serve a single page.
+  - Impact: exemplar search latency can degrade disproportionately for deeper pagination or repeated fallback scenarios, and the current API does not surface whether the response was served from the more expensive hybrid path.
 
 ## Coverage Gaps
 
@@ -117,6 +121,7 @@ python -m pytest tldw_Server_API/tests/Character_Chat/test_world_book_negatives_
 - Add a regression test for hybrid exemplar search when embedding scoring is disabled or fails, and assert the returned `total` semantics explicitly.
 - Add a contract test for world-book detach/delete responses so `character_id` cannot silently drift to `world_book_id`.
 - Consider surfacing embedding-ranking degradation more explicitly if callers need to distinguish lexical fallback from ranked search.
+- If exemplar search pagination becomes latency-sensitive, consider a cheaper fallback path or explicit pagination caps so deeper pages do not require repeated hybrid rescoring of oversized candidate pools.
 - If telemetry is intended to be user-facing, wire it into an endpoint or document that it remains an internal diagnostic helper.
 
 ## Exit Note
