@@ -1,19 +1,27 @@
 import React, { useState, useCallback, useRef } from "react"
 import { Modal, Input, Select, Button, message } from "antd"
 import { Download, Upload } from "lucide-react"
-import type { ThemeColorTokens, ThemeDefinition, ThemePalette } from "@/themes/types"
+import type { ThemeColorTokens, ThemeDefinition } from "@/themes/types"
 import { getBuiltinPresets } from "@/themes/presets"
-import { generateThemeId } from "@/themes/validation"
-import { validateThemeDefinition } from "@/themes/validation"
+import { generateThemeId, validateThemeDefinition, validateLegacyThemeDefinition } from "@/themes/validation"
+import { migrateTheme } from "@/themes/migration"
+import { defaultTypography, defaultShape, defaultLayout, defaultComponents } from "@/themes/defaults"
 import { ColorTokenRow } from "./ColorTokenRow"
 import { ThemePreview } from "./ThemePreview"
 
+/** The 17 RGB color token keys rendered via ColorPicker rows. */
 const TOKEN_KEYS: (keyof ThemeColorTokens)[] = [
   "bg", "surface", "surface2", "elevated",
   "primary", "primaryStrong", "accent",
   "success", "warn", "danger", "muted",
   "border", "borderStrong",
   "text", "textMuted", "textSubtle", "focus",
+]
+
+/** Shadow tokens are CSS box-shadow strings, edited as plain text. */
+const SHADOW_KEYS: { key: "shadowSm" | "shadowMd"; label: string }[] = [
+  { key: "shadowSm", label: "Shadow Small" },
+  { key: "shadowMd", label: "Shadow Medium" },
 ]
 
 interface ThemeEditorModalProps {
@@ -81,8 +89,14 @@ export function ThemeEditorModal({
       id: editingTheme?.id ?? generateThemeId(name),
       name: name.trim(),
       description: description.trim() || undefined,
+      version: 1,
       builtin: false,
       palette: { light: { ...lightTokens }, dark: { ...darkTokens } },
+      typography: editingTheme?.typography ?? defaultTypography(),
+      shape: editingTheme?.shape ?? defaultShape(),
+      layout: editingTheme?.layout ?? defaultLayout(),
+      components: editingTheme?.components ?? defaultComponents(),
+      basePresetId: editingTheme?.basePresetId,
     }
     onSave(theme)
     onClose()
@@ -108,10 +122,22 @@ export function ThemeEditorModal({
       id: editingTheme?.id ?? generateThemeId(name),
       name: name.trim() || "Exported Theme",
       description: description.trim() || undefined,
+      version: 1,
       builtin: false,
       palette: { light: { ...lightTokens }, dark: { ...darkTokens } },
+      typography: editingTheme?.typography ?? defaultTypography(),
+      shape: editingTheme?.shape ?? defaultShape(),
+      layout: editingTheme?.layout ?? defaultLayout(),
+      components: editingTheme?.components ?? defaultComponents(),
+      basePresetId: editingTheme?.basePresetId,
     }
-    const blob = new Blob([JSON.stringify(theme, null, 2)], { type: "application/json" })
+    const exportData = {
+      tldw_theme: true,
+      version: 1,
+      exported_at: new Date().toISOString(),
+      theme,
+    }
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
@@ -127,16 +153,44 @@ export function ThemeEditorModal({
       const reader = new FileReader()
       reader.onload = (e) => {
         try {
-          const parsed = JSON.parse(e.target?.result as string)
-          if (!validateThemeDefinition(parsed)) {
+          const raw = JSON.parse(e.target?.result as string)
+          let theme: ThemeDefinition
+
+          // New wrapper format
+          if (raw.tldw_theme === true && raw.theme) {
+            if (validateThemeDefinition(raw.theme)) {
+              theme = raw.theme
+            } else {
+              try {
+                theme = migrateTheme(raw.theme as Record<string, unknown>)
+              } catch {
+                void message.error("Invalid theme in wrapper")
+                return
+              }
+            }
+          }
+          // Legacy raw format (v0)
+          else if (validateLegacyThemeDefinition(raw)) {
+            try {
+              theme = migrateTheme(raw as Record<string, unknown>)
+            } catch {
+              void message.error("Invalid legacy theme")
+              return
+            }
+          }
+          // v1 raw format (unwrapped)
+          else if (validateThemeDefinition(raw)) {
+            theme = raw
+          } else {
             void message.error("Invalid theme file format")
             return
           }
-          setName(parsed.name)
-          setDescription(parsed.description ?? "")
-          setLightTokens({ ...parsed.palette.light })
-          setDarkTokens({ ...parsed.palette.dark })
-          void message.success("Theme imported")
+
+          setName(theme.name)
+          setDescription(theme.description ?? "")
+          setLightTokens({ ...theme.palette.light })
+          setDarkTokens({ ...theme.palette.dark })
+          void message.success(`Theme "${theme.name}" imported`)
         } catch {
           void message.error("Failed to parse theme file")
         }
@@ -245,6 +299,20 @@ export function ThemeEditorModal({
                 />
               ))}
             </div>
+            <h4 className="text-xs font-medium text-text-muted mb-2 mt-3">Shadows</h4>
+            <div className="space-y-1.5">
+              {SHADOW_KEYS.map(({ key, label }) => (
+                <div key={key} className="flex items-center gap-2">
+                  <span className="text-xs text-text-muted flex-1 min-w-0 truncate">{label}</span>
+                  <Input
+                    size="small"
+                    value={lightTokens[key]}
+                    onChange={(e) => handleLightChange(key, e.target.value)}
+                    className="w-48 font-mono text-[10px]"
+                  />
+                </div>
+              ))}
+            </div>
           </div>
           <div>
             <h4 className="text-xs font-medium text-text-muted mb-2">Dark Palette</h4>
@@ -256,6 +324,20 @@ export function ThemeEditorModal({
                   value={darkTokens[key]}
                   onChange={handleDarkChange}
                 />
+              ))}
+            </div>
+            <h4 className="text-xs font-medium text-text-muted mb-2 mt-3">Shadows</h4>
+            <div className="space-y-1.5">
+              {SHADOW_KEYS.map(({ key, label }) => (
+                <div key={key} className="flex items-center gap-2">
+                  <span className="text-xs text-text-muted flex-1 min-w-0 truncate">{label}</span>
+                  <Input
+                    size="small"
+                    value={darkTokens[key]}
+                    onChange={(e) => handleDarkChange(key, e.target.value)}
+                    className="w-48 font-mono text-[10px]"
+                  />
+                </div>
               ))}
             </div>
           </div>

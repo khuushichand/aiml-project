@@ -43,7 +43,7 @@ export function useTheme() {
       // This ensures backward compatibility.
       clearThemeTokens()
     } else {
-      applyThemeTokens(tokens)
+      applyThemeTokens(tokens, themeDefinition)
     }
   }, [tokens, themeDefinition.id])
 
@@ -56,8 +56,8 @@ export function useTheme() {
 
   // Build Ant Design theme config
   const antdTheme: ThemeConfig = useMemo(
-    () => buildAntdThemeConfig(tokens, isDark),
-    [tokens, isDark]
+    () => buildAntdThemeConfig(tokens, isDark, themeDefinition.typography, themeDefinition.shape, themeDefinition.layout),
+    [tokens, isDark, themeDefinition.typography, themeDefinition.shape, themeDefinition.layout]
   )
 
   const setThemePresetId = useCallback(

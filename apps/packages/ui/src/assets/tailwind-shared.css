@@ -66,6 +66,25 @@
   --color-text-muted: 91 100 114;
   --color-text-subtle: 110 120 135;
   --color-focus: 13 134 119;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.12);
+  --shadow-md: 0 6px 18px rgba(0,0,0,0.08);
+  --font-family: "Inter", system-ui, sans-serif;
+  --font-family-mono: "Courier New", monospace;
+  --font-size-body: 14px;
+  --font-size-message: 15px;
+  --font-size-caption: 12px;
+  --font-size-label: 11px;
+  --radius-sm: 2px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --surface-blur: 0px;
+  --sidebar-width: 260px;
+  --sidebar-collapsed-width: 64px;
+  --header-height: 56px;
+  --content-max-width: 960px;
+  --spacing-unit: 4px;
+  --duration-base: 150ms;
   --moderation-hero-start: #fdf7ec;
   --moderation-hero-end: #f6efdf;
   --moderation-hero-border: #e8dcc8;
@@ -94,6 +113,8 @@
   --color-text-muted: 179 186 198;
   --color-text-subtle: 144 152 166;
   --color-focus: 79 209 176;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.25);
   --moderation-hero-start: #141a22;
   --moderation-hero-end: #0f141a;
   --moderation-hero-border: #2a3442;
@@ -216,7 +237,8 @@ body {
   }
 
   .panel-card {
-    @apply rounded-xl border border-border bg-surface text-text shadow-card transition-shadow duration-150 ease-out motion-reduce:transition-none;
+    @apply rounded-xl border border-border bg-surface text-text shadow-card transition-shadow ease-out motion-reduce:transition-none;
+    transition-duration: var(--duration-base);
   }
 
   .panel-elevated {
@@ -224,11 +246,13 @@ body {
   }
 
   .panel-input {
-    @apply w-full rounded-md border border-border bg-surface px-3 py-2 text-body text-text placeholder:text-text-muted outline-none transition-colors duration-150 ease-out motion-reduce:transition-none focus:ring-2 focus:ring-focus;
+    @apply w-full rounded-md border border-border bg-surface px-3 py-2 text-body text-text placeholder:text-text-muted outline-none transition-colors ease-out motion-reduce:transition-none focus:ring-2 focus:ring-focus;
+    transition-duration: var(--duration-base);
   }
 
   .panel-icon-button {
-    @apply inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface text-text-muted transition-colors duration-150 ease-out motion-reduce:transition-none hover:bg-surface2 hover:text-text;
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface text-text-muted transition-colors ease-out motion-reduce:transition-none hover:bg-surface2 hover:text-text;
+    transition-duration: var(--duration-base);
   }
 
   .panel-section-label {
@@ -237,6 +261,56 @@ body {
 
   .panel-divider {
     @apply h-px w-full bg-border;
+  }
+
+  /* ===== Density ===== */
+  [data-density="compact"]     { --spacing-unit: 3px; }
+  [data-density="comfortable"] { --spacing-unit: 5px; }
+
+  /* Density for custom inputs */
+  [data-density="compact"] .panel-input {
+    padding: calc(var(--spacing-unit) * 1.5) calc(var(--spacing-unit) * 2.5);
+    font-size: 13px;
+  }
+  [data-density="comfortable"] .panel-input {
+    padding: calc(var(--spacing-unit) * 2.5) calc(var(--spacing-unit) * 3.5);
+  }
+
+  /* Density for icon buttons */
+  [data-density="compact"] .panel-icon-button {
+    height: 1.5rem;
+    width: 1.5rem;
+  }
+  [data-density="comfortable"] .panel-icon-button {
+    height: 2rem;
+    width: 2rem;
+  }
+
+  /* ===== Animation speed ===== */
+  [data-animation="none"]   { --duration-base: 0ms; }
+  [data-animation="subtle"] { --duration-base: 75ms; }
+
+  /* ===== Button variants (custom components only) ===== */
+  [data-button-style="square"]  .tldw-btn { border-radius: var(--radius-sm); }
+  [data-button-style="rounded"] .tldw-btn { border-radius: var(--radius-md); }
+  [data-button-style="pill"]    .tldw-btn { border-radius: 9999px; }
+
+  /* ===== Input variants (custom components only) ===== */
+  [data-input-style="underlined"] .panel-input {
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid rgb(var(--color-border));
+  }
+  [data-input-style="filled"] .panel-input {
+    border: none;
+    background: rgb(var(--color-surface-2));
+  }
+
+  /* ===== Card variants ===== */
+  [data-card-style="flat"]     .panel-card { box-shadow: none; border: none; }
+  [data-card-style="outlined"] .panel-card {
+    box-shadow: none;
+    border: 1px solid rgb(var(--color-border));
   }
 }
 

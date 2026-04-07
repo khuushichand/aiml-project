@@ -366,8 +366,8 @@ export function HeaderShortcuts({
 
       {/* Modal */}
       <div
-        className="fixed left-1/2 top-[15vh] z-50 flex w-[calc(100%-2rem)] max-w-[960px] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-modal"
-        style={{ maxHeight: "80vh" }}
+        className="fixed left-1/2 top-[15vh] z-50 flex w-[calc(100%-2rem)] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-modal"
+        style={{ maxWidth: "var(--content-max-width)", maxHeight: "80vh" }}
         role="dialog"
         aria-modal="true"
         aria-label={t("option:header.showShortcuts", "Shortcuts")}
