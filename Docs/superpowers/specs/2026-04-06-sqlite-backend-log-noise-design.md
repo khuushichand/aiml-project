@@ -35,7 +35,7 @@ This creates two concrete problems:
 - Change request, owner, or process lifetime semantics for existing SQLite backends.
 - Hide real initialization failures, path issues, or cleanup errors.
 - Refactor unrelated database behavior or add new backend caching mechanisms.
-- Redesign PostgreSQL backend ownership beyond keeping factory logging consistent.
+- Redesign PostgreSQL backend ownership or remove PostgreSQL-specific observability without an explicit follow-up decision.
 
 ## Requirements Confirmed With User
 
@@ -44,6 +44,7 @@ This creates two concrete problems:
 - Do not introduce process-wide shared SQLite backend instances keyed by path or config.
 - Do not standardize on a new owner-scoped reuse invariant in this change.
 - Keep current creation patterns intact and fix the log noise by improving the logging surface.
+- Keep the scope centered on SQLite success logging; do not create accidental PostgreSQL observability regressions while changing the shared factory.
 
 ## Current State
 
@@ -146,13 +147,14 @@ Under this rule:
 
 ### 2. Make the backend factory diagnostic-only for successful creation
 
-Update the common backend factory so that successful creation of a backend instance no longer emits a generic `INFO` line.
+Update the common backend factory so that successful SQLite backend creation no longer emits a generic `INFO` line.
 
 Expected factory behavior:
 
 - Keep unsupported backend type errors and import/configuration failures at their current error severity.
-- Log successful backend creation only at `DEBUG`, with safe context when available.
+- Log successful SQLite backend creation only at `DEBUG`, with safe context when available.
 - Avoid generic success messages that do not identify the owning subsystem object.
+- Leave non-SQLite success logging unchanged in this change unless the owner path already provides equivalent or better `INFO` visibility and the adjustment is explicitly justified.
 
 Example acceptable `DEBUG` context:
 
@@ -164,7 +166,7 @@ This is diagnostic detail, not an operator-facing lifecycle event.
 
 ### 3. Move meaningful `INFO` logs to owner initialization paths
 
-Owner components that create SQLite backends should emit or retain one meaningful `INFO` lifecycle log where initialization is operationally relevant.
+Public owner initialization boundaries that create or resolve SQLite backends should emit or retain one meaningful `INFO` lifecycle log where initialization is operationally relevant.
 
 Representative targets include:
 
@@ -173,16 +175,18 @@ Representative targets include:
 - collections DB initialization
 - watchlists DB initialization
 - workflow and scheduler-adjacent SQLite DB wrappers in `DB_Management`
-- any helper that currently creates an owner object and relies on the factory log for visibility
+- any public constructor or factory boundary that currently relies on the factory log for visibility
 
 Each owner-level `INFO` log should identify:
 
 - the subsystem object being initialized
 - the backend type
-- the effective SQLite target when safe to log
+- concise target context at `INFO`, with the effective SQLite path only when it is already accepted operational context and materially helps distinguish the instance
 - user or scope context when already part of existing operational logging
 
 This replaces “a backend was created” with “this database-facing component initialized for this target.”
+
+Internal helper methods such as backend resolvers should not gain new `INFO` logs unless they are the only meaningful public lifecycle boundary. The goal is to move logging to the right abstraction layer, not to relocate the same noise into `_resolve_backend(...)` style helpers.
 
 ### 4. Standardize success log phrasing
 
@@ -195,6 +199,8 @@ Use a small, grep-friendly phrase set for owner lifecycle logs:
 This avoids every module inventing its own wording and makes DB lifecycle logs easier to scan.
 
 The design does not require every owner to emit both start and completion logs. One concise `INFO` line per meaningful initialization path is enough unless the component already has a useful two-phase pattern.
+
+Do not add a new owner-level `INFO` log if the component already emits an equally useful contextual initialization log. Prefer refining the existing log over adding a second line and recreating duplicate noise.
 
 ### 5. Preserve existing lifetime semantics
 
@@ -233,6 +239,7 @@ Only successful generic factory creation moves out of `INFO`.
 
 - Add or update targeted tests for representative owners so they emit one meaningful `INFO` initialization log with subsystem context.
 - Cover at least one content/media path and one non-media wrapper such as `UserDatabase`.
+- Cover at least one owner that already has partial lifecycle logging so the implementation does not accidentally add duplicate `INFO` lines on a single successful initialization path.
 
 ### Regression coverage
 
@@ -244,6 +251,7 @@ Only successful generic factory creation moves out of `INFO`.
 - Start with the shared backend factory and the most visible owner paths.
 - Sweep remaining direct SQLite owner constructors in `DB_Management` for consistency.
 - Keep the rollout narrow: this is a logging contract cleanup, not a DB lifecycle redesign.
+- Audit existing owner logs before adding new ones so modules like workflow/scheduler wrappers do not end up with two contextual `INFO` lines for the same initialization.
 
 ## Open Questions
 
