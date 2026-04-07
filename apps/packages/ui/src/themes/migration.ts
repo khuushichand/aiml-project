@@ -1,5 +1,4 @@
 import type { ThemeDefinition } from "./types"
-import { validateThemeDefinition } from "./validation"
 import {
   CURRENT_THEME_VERSION,
   defaultTypography,
@@ -9,10 +8,11 @@ import {
   defaultLightShadows,
   defaultDarkShadows,
 } from "./defaults"
+import { validateThemeDefinition } from "./validation"
 
 /**
  * Migrate a theme from any older version to the current schema.
- * Throws if the version is newer than supported or if the result is invalid.
+ * Throws if the version is newer than supported or if the theme is invalid.
  */
 export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
   const version = typeof raw.version === "number" ? raw.version : 0

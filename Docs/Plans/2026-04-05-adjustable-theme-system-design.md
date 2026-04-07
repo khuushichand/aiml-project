@@ -552,7 +552,7 @@ function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
     // Set version to 1
   }
 
-  return result as ThemeDefinition;
+  return raw as ThemeDefinition;
 }
 ```
 

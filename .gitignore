@@ -403,5 +403,3 @@ Dockerfiles/Monitoring/secrets/
 /.playwright-cli
 /output
 
-# Git worktrees
-.worktrees/

@@ -4,6 +4,7 @@ import { Button, Input, Empty, Spin } from "antd"
 import { Send, Square, Bot, User, Wrench, AlertCircle, Copy, Check } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import rehypeHighlight from "rehype-highlight"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import type { ACPUpdate, ACPSessionState, ParsedUpdateMessage } from "@/services/acp/types"
 import type { ReconnectInfo } from "@/hooks/useACPSession"
@@ -13,7 +14,9 @@ const { TextArea } = Input
 // ---------------------------------------------------------------------------
 // CopyButton - hover-visible clipboard copy for messages
 // ---------------------------------------------------------------------------
-const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, className }) => {
+// TODO: CopyButton default label should be localized via useTranslation once
+// this component is promoted to a shared location.
+const CopyButton: React.FC<{ text: string; className?: string; label?: string }> = ({ text, className, label = "Copy" }) => {
   const [copied, setCopied] = React.useState(false)
 
   const handleCopy = async (e: React.MouseEvent) => {
@@ -32,11 +35,23 @@ const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, clas
       type="button"
       onClick={handleCopy}
       className={`rounded p-1 text-text-muted transition-colors hover:bg-surface2 hover:text-text ${className || ""}`}
-      title="Copy"
+      title={label}
     >
       {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
     </button>
   )
+}
+
+// ---------------------------------------------------------------------------
+// extractTextFromChildren - extract plain text from React children tree
+// ---------------------------------------------------------------------------
+const extractTextFromChildren = (children: React.ReactNode): string => {
+  if (typeof children === "string") return children
+  if (Array.isArray(children)) return children.map(extractTextFromChildren).join("")
+  if (React.isValidElement(children) && children.props?.children) {
+    return extractTextFromChildren(children.props.children)
+  }
+  return String(children ?? "")
 }
 
 // ---------------------------------------------------------------------------
@@ -91,33 +106,33 @@ export function parseUpdateMessage(
     case "assistant_text":
       return {
         role: "assistant",
-        content: String(data.text || data.content || ""),
+        content: String(data.text ?? data.content ?? ""),
       }
 
     case "user_text":
       return {
         role: "user",
-        content: String(data.text || data.content || ""),
+        content: String(data.text ?? data.content ?? ""),
       }
 
     case "tool_call":
       return {
         role: "tool",
-        toolName: String(data.name || data.tool || "unknown"),
-        toolArgs: (data.arguments || data.input || {}) as Record<string, unknown>,
+        toolName: String(data.name ?? data.tool ?? "unknown"),
+        toolArgs: (data.arguments ?? data.input ?? {}) as Record<string, unknown>,
       }
 
     case "tool_result":
       return {
         role: "tool_result",
-        toolName: String(data.name || data.tool || ""),
-        result: data.result || data.output || "",
+        toolName: String(data.name ?? data.tool ?? ""),
+        result: data.result ?? data.output ?? "",
       }
 
     case "error":
       return {
         role: "error",
-        content: String(data.message || data.error || "Unknown error"),
+        content: String(data.message ?? data.error ?? "Unknown error"),
       }
 
     case "cancelled":
@@ -340,8 +355,8 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
-            <div className="text-xs font-medium text-text-muted">You</div>
-            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
+            <div className="text-xs font-medium text-text-muted">{t("playground:acp.role.you", "You")}</div>
+            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" label={t("playground:acp.copy", "Copy")} />
           </div>
           <div className="mt-1 whitespace-pre-wrap text-text">
             {message.content}
@@ -360,11 +375,27 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
-            <div className="text-xs font-medium text-text-muted">Agent</div>
-            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
+            <div className="text-xs font-medium text-text-muted">{t("playground:acp.role.agent", "Agent")}</div>
+            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" label={t("playground:acp.copy", "Copy")} />
           </div>
-          <div className="mt-1 text-text prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-surface2 [&_pre]:p-3 [&_pre]:rounded-lg [&_code]:bg-surface2 [&_code]:px-1 [&_code]:rounded">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <div className="mt-1 text-text prose prose-sm dark:prose-invert max-w-none [&_code]:bg-surface2 [&_code]:px-1 [&_code]:rounded">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                pre: ({ children, ...props }) => (
+                  <div className="relative group/code">
+                    <pre className="overflow-x-auto rounded-lg bg-surface2 p-3 text-sm" {...props}>
+                      {children}
+                    </pre>
+                    <CopyButton
+                      text={extractTextFromChildren(children)}
+                      className="absolute right-2 top-2 opacity-0 group-hover/code:opacity-100"
+                    />
+                  </div>
+                ),
+              }}
+            >
               {message.content}
             </ReactMarkdown>
           </div>
@@ -384,9 +415,9 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
             <div className="text-xs font-medium text-text-muted">
-              Tool: {message.toolName}
+              {t("playground:acp.role.tool", "Tool")}: {message.toolName}
             </div>
-            <CopyButton text={argsText} className="opacity-0 group-hover:opacity-100" />
+            <CopyButton text={argsText} className="opacity-0 group-hover:opacity-100" label={t("playground:acp.copy", "Copy")} />
           </div>
           <div className="mt-1">
             <ToolArgumentsDisplay args={message.toolArgs} />
@@ -410,9 +441,9 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
             <div className="text-xs font-medium text-text-muted">
-              Result: {message.toolName}
+              {t("playground:acp.role.result", "Result")}: {message.toolName}
             </div>
-            <CopyButton text={resultText} className="opacity-0 group-hover:opacity-100" />
+            <CopyButton text={resultText} className="opacity-0 group-hover:opacity-100" label={t("playground:acp.copy", "Copy")} />
           </div>
           <div className="mt-1 rounded-lg bg-surface2 p-2">
             <pre className="overflow-x-auto text-xs text-text-muted">
@@ -433,8 +464,8 @@ const UpdateMessage: React.FC<UpdateMessageProps> = ({ update }) => {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
-            <div className="text-xs font-medium text-error">Error</div>
-            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
+            <div className="text-xs font-medium text-error">{t("playground:acp.role.error", "Error")}</div>
+            <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" label={t("playground:acp.copy", "Copy")} />
           </div>
           <div className="mt-1 whitespace-pre-wrap text-error">
             {message.content}

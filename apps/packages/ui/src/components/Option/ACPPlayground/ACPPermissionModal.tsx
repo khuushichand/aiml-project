@@ -77,8 +77,9 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
 
   const timeElapsed = now - currentPermission.requestedAt.getTime()
   const totalMs = currentPermission.timeout_seconds * 1000
-  const timeRemaining = Math.max(0, totalMs - timeElapsed)
-  const progressPercent = (timeRemaining / totalMs) * 100
+  // Guard against zero/negative timeouts to avoid Infinity/NaN in progress bar
+  const timeRemaining = totalMs <= 0 ? 0 : Math.max(0, totalMs - timeElapsed)
+  const progressPercent = totalMs <= 0 ? 0 : (timeRemaining / totalMs) * 100
   const hasPolicyMetadata = Boolean(
     currentPermission.approval_requirement
     || currentPermission.governance_reason
@@ -88,7 +89,12 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
   )
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-[420px] max-h-[80vh] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl p-5">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("playground:acp.permissionRequired", "Permission Required")}
+      className="absolute bottom-4 right-4 z-50 w-[420px] max-w-[calc(100vw-2rem)] max-h-[80vh] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl p-5"
+    >
       <div className="space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">

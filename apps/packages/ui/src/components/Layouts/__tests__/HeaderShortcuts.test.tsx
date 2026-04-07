@@ -318,8 +318,7 @@ describe("HeaderShortcuts launcher modal", () => {
     )
 
     const dialog = screen.getByRole("dialog")
-    expect(dialog.className).toContain("max-w-[960px]")
-    expect(dialog).toHaveStyle({ maxHeight: "80vh" })
+    expect(dialog).toHaveStyle({ maxWidth: "var(--content-max-width)", maxHeight: "80vh" })
   })
 
   it("uses a wider left category column", () => {

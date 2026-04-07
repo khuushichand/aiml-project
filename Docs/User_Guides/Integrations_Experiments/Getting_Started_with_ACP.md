@@ -392,7 +392,7 @@ Work through these steps in order. Stop at the first failure and apply the fix.
 
 **2. Are ACP routes enabled?**
 
-- Test: `curl -s http://127.0.0.1:8000/api/v1/acp/health -H "X-API-KEY: your-key"`
+- Test: `curl -s http://127.0.0.1:8000/api/v1/acp/health -H "X-API-KEY: <YOUR_API_KEY>"`
 - If no (404): Set `stable_only = false` in `[API-Routes]` in `config.txt` and restart the server.
 
 **3. Is the runner configured?**
@@ -415,7 +415,7 @@ Work through these steps in order. Stop at the first failure and apply the fix.
 - Test:
   ```bash
   curl -X POST http://127.0.0.1:8000/api/v1/acp/sessions/new \
-    -H "X-API-KEY: your-key" \
+    -H "X-API-KEY: <YOUR_API_KEY>" \
     -H "Content-Type: application/json" \
     -d '{"agent_type": "claude_code", "cwd": "/tmp"}'
   ```
