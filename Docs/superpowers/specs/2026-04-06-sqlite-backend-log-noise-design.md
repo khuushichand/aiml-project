@@ -45,6 +45,7 @@ This creates two concrete problems:
 - Do not standardize on a new owner-scoped reuse invariant in this change.
 - Keep current creation patterns intact and fix the log noise by improving the logging surface.
 - Keep the scope centered on SQLite success logging; do not create accidental PostgreSQL observability regressions while changing the shared factory.
+- Do not replace factory noise with a new layer of per-request owner `INFO` noise.
 
 ## Current State
 
@@ -168,6 +169,15 @@ This is diagnostic detail, not an operator-facing lifecycle event.
 
 Public owner initialization boundaries that create or resolve SQLite backends should emit or retain one meaningful `INFO` lifecycle log where initialization is operationally relevant.
 
+In practice, that means `INFO` should be reserved for:
+
+- cache misses that create shared or reused owner objects
+- service startup or worker startup initialization
+- long-lived process-owned DB wrappers
+- explicit administrative or configuration transitions
+
+Short-lived or frequently repeated wrapper construction should not gain a new success `INFO` log merely because it is an owner boundary. For those paths, either keep success logging at `DEBUG` or rely on existing surrounding context and failure logs.
+
 Representative targets include:
 
 - media/content DB factory creation and cache miss paths
@@ -188,6 +198,8 @@ This replaces “a backend was created” with “this database-facing component
 
 Internal helper methods such as backend resolvers should not gain new `INFO` logs unless they are the only meaningful public lifecycle boundary. The goal is to move logging to the right abstraction layer, not to relocate the same noise into `_resolve_backend(...)` style helpers.
 
+Likewise, constructors or helpers that are called from hot request dependencies, such as per-request `for_user(...)` accessors, should default to no new success `INFO` log unless the event is rate-limited by an existing cache miss or otherwise represents an infrequent transition.
+
 ### 4. Standardize success log phrasing
 
 Use a small, grep-friendly phrase set for owner lifecycle logs:
@@ -201,6 +213,11 @@ This avoids every module inventing its own wording and makes DB lifecycle logs e
 The design does not require every owner to emit both start and completion logs. One concise `INFO` line per meaningful initialization path is enough unless the component already has a useful two-phase pattern.
 
 Do not add a new owner-level `INFO` log if the component already emits an equally useful contextual initialization log. Prefer refining the existing log over adding a second line and recreating duplicate noise.
+
+Severity guidance:
+
+- `INFO`: cache miss, process startup, worker startup, long-lived shared object initialization, explicit reconfiguration
+- `DEBUG`: repeated constructor calls, per-request wrappers, internal backend resolution detail
 
 ### 5. Preserve existing lifetime semantics
 
@@ -245,6 +262,7 @@ Only successful generic factory creation moves out of `INFO`.
 
 - Add a focused regression test around repeated media DB access so the higher-level cached path still works and the noisy factory pattern does not reappear in the `INFO` stream.
 - Optionally add a grep-style assertion that the exact generic `Creating sqlite backend` `INFO` line is absent from normal successful SQLite creation logs.
+- Add at least one hot-path regression around repeated `for_user(...)` construction or request dependency resolution so the implementation does not shift the spam from the factory into collections/watchlists owner logs.
 
 ## Rollout Notes
 
@@ -252,6 +270,7 @@ Only successful generic factory creation moves out of `INFO`.
 - Sweep remaining direct SQLite owner constructors in `DB_Management` for consistency.
 - Keep the rollout narrow: this is a logging contract cleanup, not a DB lifecycle redesign.
 - Audit existing owner logs before adding new ones so modules like workflow/scheduler wrappers do not end up with two contextual `INFO` lines for the same initialization.
+- Treat high-frequency constructors such as collections and watchlists `for_user(...)` accessors as likely `DEBUG`-or-silent paths unless an existing cache miss or service startup boundary makes the event infrequent.
 
 ## Open Questions
 
