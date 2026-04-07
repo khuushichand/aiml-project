@@ -85,6 +85,8 @@ The review will rely on:
 - targeted caller inspection where `DB_Management` behavior depends on external assumptions
 - recent git history when it helps explain likely weak points or regression-prone areas
 
+The default git-history baseline should start with the last 20 commits touching `tldw_Server_API/app/core/DB_Management`. The review should expand beyond that window only when a hotspot needs older context, such as a migration chain, a repeated regression pattern, or a long-running backend abstraction change.
+
 The review is primarily static and read-first. Runtime verification may be used selectively only if it materially strengthens or falsifies a specific claim.
 
 When a finding depends on backend semantics rather than only source reading, the review should perform targeted verification whenever feasible. This applies especially to:
