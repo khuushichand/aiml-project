@@ -402,3 +402,6 @@ Dockerfiles/Monitoring/secrets/
 /admin-ui/.next
 /.playwright-cli
 /output
+
+# Git worktrees
+.worktrees/

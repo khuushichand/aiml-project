@@ -93,7 +93,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, selected, onSelect }) => {
             <Tooltip
               title={t("acp.create.requiresApiKey", {
                 key: agent.requires_api_key,
-                defaultValue: `Requires ${agent.requires_api_key}`,
+                defaultValue: `Requires {{key}}. Set it in your shell (export {{key}}=...) or in the [ACP] runner_env in config.txt.`,
               })}
             >
               <AlertCircle className="h-4 w-4 text-warning" />
@@ -317,10 +317,24 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
       onSuccess?.(result.serverSessionId)
       onClose()
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { data?: { code?: string; message?: string; suggestions?: Array<{action: string; description?: string}> } }) => {
       setCreationStep("error")
 
-      // Parse error for structured response
+      // Prefer structured error from backend if available
+      if (error.data?.code && error.data?.message) {
+        setCreationError({
+          code: error.data.code,
+          message: error.data.message,
+          suggestions: error.data.suggestions || [],
+        })
+        notification.error({
+          message: t("common:error", "Error"),
+          description: error.data.message,
+        })
+        return
+      }
+
+      // Fall back to client-side string matching
       const structuredError: ACPStructuredError = {
         code: "creation_failed",
         message: error.message || t("acp.create.error", "Failed to create session"),
@@ -430,7 +444,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
           ]}
           extra={t(
             "acp.create.cwdHelp",
-            "The root directory the agent will work within."
+            "Absolute path on the tldw_server machine where the agent will read and write files."
           )}
         >
           <Input
