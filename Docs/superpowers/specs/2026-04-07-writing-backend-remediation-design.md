@@ -132,7 +132,7 @@ The manuscript helper layer will enforce same-project and active-parent rules fo
 - `reorder_items(... entity_type="chapter" ...)` will validate `part_id` reparent targets against the provided `project_id`
 - `update_world_info` will validate any `parent_id` against the world-info row's project, matching the existing create-time behavior
 
-Child-listing queries for parts, chapters, and world-info will require the project row to remain active. This closes the deleted-project enumeration leak while preserving current list-route behavior: callers still get list responses, but deleted projects no longer expose descendants.
+Project-keyed child-listing queries for parts, chapters, and world-info will require the project row to remain active. This closes the confirmed deleted-project enumeration leak while preserving current list-route behavior: callers still get list responses, but deleted projects no longer expose descendants through those project-scoped child list endpoints. Broader descendant-by-ID fetch behavior is not expanded in this batch unless it is already covered by an existing route-level project existence check, such as the current structure endpoint.
 
 ### 3. Delete Cascades and Analysis Invalidation
 
@@ -153,7 +153,9 @@ The design does not attempt to add wider invalidation for unrelated manuscript e
 The target behavior is:
 
 - omitted field: leave unchanged
-- present with `null`: clear nullable field
+- present with `null` on genuinely nullable scalar or link fields: clear the field
+- present with `null` on required or non-nullable identifier fields such as titles or names: reject with `400`
+- present with `null` on collection-backed fields that currently round-trip as objects or arrays, such as `settings`, `custom_fields`, `properties`, or `tags`: normalize to the empty container shape rather than storing JSON `null`
 - present with a value: update normally
 - present but trimmed to empty for required text identifiers like titles or names: reject with `400`
 - empty effective PATCH payload after field processing: reject with `400`
@@ -242,6 +244,7 @@ The remediation will add or update targeted tests for:
 - project-analysis runtime `429` and override validation parity
 - chapter and project analysis staleness after scene create, update, and delete
 - explicit `null` clearing for nullable manuscript PATCH fields
+- explicit `null` normalization for collection-backed PATCH fields that should remain object or array shaped in responses
 - blank trimmed-name rejection on relevant create, update, and import paths
 - empty PATCH payload rejection
 - missing `expected-version` header failures where the route contract requires it
