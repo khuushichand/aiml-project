@@ -29,6 +29,7 @@ This review is centered on the core Metrics package and its direct edges:
 - `tldw_Server_API/app/core/Metrics/decorators.py`
 - `tldw_Server_API/app/core/Metrics/traces.py`
 - `tldw_Server_API/app/core/Metrics/http_middleware.py`
+- `tldw_Server_API/app/core/Metrics/logger_config.py`
 - `tldw_Server_API/app/core/Metrics/metrics_logger.py`
 - `tldw_Server_API/app/core/Metrics/stt_metrics.py`
 - `tldw_Server_API/app/api/v1/endpoints/metrics.py`
@@ -139,6 +140,7 @@ Inspect:
 - decorators for async/sync symmetry, registration side effects, and exception handling
 - tracing helpers for context propagation and no-op behavior when telemetry is unavailable
 - HTTP middleware for correctness of request counting and status attribution
+- logging integration in `logger_config.py` where it affects telemetry safety, import-time side effects, or operator expectations for metrics/log output
 
 Primary questions:
 
