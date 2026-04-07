@@ -42,8 +42,9 @@ V1 should also treat trial management, anonymous identity, lightweight upgrade f
 - The store-facing product should live in a new project folder outside `tldw_server` so it is not directly associated with the open-source repo.
 - The extension UI should stay limited to:
   - quick ingest
-  - simplified chat
-  - a reduced transcript-focused media view
+  - launcher actions for transcript and chat
+  - shallow status and handoff behavior
+- V1 should not render full transcript reading or persistent chat directly inside the extension.
 - The hosted experience should be the main product surface.
 - The extension should detect the current YouTube page and show:
   - `Ingest`
@@ -217,6 +218,7 @@ Its responsibilities are:
 - hand off to the hosted lightweight workspace
 
 It should not own full transcript reading, durable chat history, or broad media-library functionality.
+`Open transcript` and `Quick chat` are entry actions that preserve user intent and deep-link into the hosted workspace; they are not separate in-extension transcript or chat surfaces in V1.
 
 ### Hosted Lightweight Web Surface
 
@@ -276,7 +278,9 @@ Because V1 now prefers eager summary generation, summary lifecycle belongs to th
 - `ready`
 - `failed`
 
-The hosted page should render from that workspace payload rather than triggering summary generation itself. `Transcript` should render transcript or transcript-processing state, `Summary` should render summary or summary-processing state, and `Chat` should remain grounded on transcript-ready content.
+The hosted page should open once transcript-ready, even if `summary_state` is still `processing`. `Transcript` should render transcript or transcript-processing state, `Summary` should render summary or summary-processing state, and `Chat` should remain grounded on transcript-ready content.
+
+V1 should not expose a client-triggered summary creation, regeneration, or retry control in the lightweight product. The hosted page should render backend workspace state only. Any summary retry behavior remains a backend concern.
 
 ## User Flow
 
@@ -327,7 +331,7 @@ The extension should use the following deterministic behavior.
 - `Transcript failed`
   - show plain-language failure and retry path
 - `Trial exhausted`
-  - route to upgrade
+  - route to upgrade unless this exact normalized source was already unlocked for the current identity
 - `Signed in, unsubscribed`
   - route directly to upgrade and preserve transcript destination intent
 
@@ -342,7 +346,7 @@ The extension should use the following deterministic behavior.
 - `Transcript failed`
   - show transcript-preparation failure, not a generic chat error
 - `Trial exhausted`
-  - route to upgrade
+  - route to upgrade unless this exact normalized source was already unlocked for the current identity
 - `Signed in, unsubscribed`
   - route directly to upgrade and preserve chat destination intent
 
@@ -405,12 +409,14 @@ The following should not consume additional quota:
 
 - retrying a failed ingest for the same normalized source
 - reopening the same ready transcript
-- generating another summary for that same source
+- reopening the existing eager summary for that same source
 - asking additional follow-up questions within that same transcript-backed session
 
 If ingest never reaches transcript-ready, the session should not be permanently consumed.
 
 The normalization logic used for quota debit must be the same logic used by the orchestration contract for source reuse and idempotency.
+
+If anonymous trial quota is exhausted, the user may still reopen an already unlocked normalized source for transcript, summary, and follow-up chat. Exhaustion only blocks creation of new transcript-backed sessions.
 
 ### State Model
 

@@ -473,6 +473,7 @@ return routeLauncherAction(state, requestedAction)
 
 Run: `cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/extension/sidepanel-video.test.tsx -v`
 Expected: PASS for `Ingest`, `Open transcript`, `Quick chat`, processing, failure, and upgrade cases.
+Include coverage for exhausted-trial users reopening an already unlocked source without starting a new session.
 
 - [ ] **Step 5: Commit in the private repo**
 
@@ -680,5 +681,8 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "fe
 - Prefer wrapper files and private routes over invasive edits to vendored upstream files when possible.
 - Keep anonymous trial YouTube-only in both backend validation and frontend affordances.
 - Do not debit trial quota on submission; debit only when a normalized source reaches transcript-ready.
+- Treat the extension as launcher-only in V1; transcript reading and durable chat stay in the hosted workspace.
+- Allow exhausted anonymous users to reopen already unlocked sources, but block creation of new transcript-backed sessions.
 - Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
+- Do not add a client-triggered summary create, regenerate, or retry control in V1.
 - Preserve source key and target-tab intent through login and upgrade flows.
