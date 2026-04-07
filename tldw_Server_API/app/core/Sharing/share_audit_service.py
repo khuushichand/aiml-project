@@ -63,21 +63,38 @@ class ShareAuditService:
                 )
                 return
 
-            if self._repo is None:
-                raise RuntimeError("ShareAuditService requires a repo or unified writer")
+            if self._repo is not None:
+                await self._repo.log_audit_event(
+                    event_type=event_type,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    owner_user_id=owner_user_id,
+                    actor_user_id=actor_user_id,
+                    share_id=share_id,
+                    token_id=token_id,
+                    metadata=metadata,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                return
 
-            await self._repo.log_audit_event(
-                event_type=event_type,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                owner_user_id=owner_user_id,
-                actor_user_id=actor_user_id,
-                share_id=share_id,
-                token_id=token_id,
-                metadata=metadata,
-                ip_address=ip_address,
-                user_agent=user_agent,
-            )
+            writer = UnifiedShareAuditWriter()
+            try:
+                await writer.log_event(
+                    event_type=event_type,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    owner_user_id=owner_user_id,
+                    actor_user_id=actor_user_id,
+                    share_id=share_id,
+                    token_id=token_id,
+                    metadata=metadata,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+            finally:
+                await writer.stop()
+            return
         except Exception as exc:
             logger.error(f"ShareAuditService.log failed for {event_type}: {exc}")
             raise AuditLogError(f"Failed to log share audit event: {event_type}") from exc
@@ -100,13 +117,23 @@ class ShareAuditService:
                 offset=offset,
             )
 
-        if self._repo is None:
-            raise AuditLogError("ShareAuditService requires a repo or unified writer")
+        if self._repo is not None:
+            return await self._repo.list_audit_events(
+                owner_user_id=owner_user_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                limit=limit,
+                offset=offset,
+            )
 
-        return await self._repo.list_audit_events(
-            owner_user_id=owner_user_id,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            limit=limit,
-            offset=offset,
-        )
+        writer = UnifiedShareAuditWriter()
+        try:
+            return await writer.query_events(
+                owner_user_id=owner_user_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                limit=limit,
+                offset=offset,
+            )
+        finally:
+            await writer.stop()
