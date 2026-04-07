@@ -352,6 +352,84 @@ def test_writing_snapshot_import_merge_preserves_existing(client_with_writing_db
     assert "Merged Theme" in theme_names
 
 
+def test_writing_snapshot_import_replace_rolls_back_on_restore_failure(
+    client_with_writing_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = client_with_writing_db
+
+    keep_session_resp = client.post(
+        "/api/v1/writing/sessions",
+        json={"name": "Keep Session", "payload": {"text": "keep"}},
+    )
+    assert keep_session_resp.status_code == 201, keep_session_resp.text
+    keep_session_id = keep_session_resp.json()["id"]
+    assert client.post(
+        "/api/v1/writing/templates",
+        json={"name": "Keep Template", "payload": {"inst_pre": "[K]"}},
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/writing/themes",
+        json={"name": "Keep Theme", "class_name": "keep-theme", "css": ".keep-theme{}", "order": 1},
+    ).status_code == 201
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    original_restore = writing_endpoints._restore_soft_deleted_writing_session
+
+    def fail_restore(*args, **kwargs):
+        original_restore(*args, **kwargs)
+        raise RuntimeError("restore failed after mutation")
+
+    monkeypatch.setattr(writing_endpoints, "_restore_soft_deleted_writing_session", fail_restore)
+
+    resp = client.post(
+        "/api/v1/writing/snapshot/import",
+        json={
+            "mode": "replace",
+            "snapshot": {
+                "sessions": [
+                    {
+                        "id": keep_session_id,
+                        "name": "Restored Session",
+                        "payload": {"text": "new"},
+                        "schema_version": 1,
+                    }
+                ],
+                "templates": [],
+                "themes": [],
+            },
+        },
+    )
+
+    assert resp.status_code == 500, resp.text
+    sessions = client.get("/api/v1/writing/sessions").json()["sessions"]
+    templates = client.get("/api/v1/writing/templates").json()["templates"]
+    themes = client.get("/api/v1/writing/themes").json()["themes"]
+    assert {item["name"] for item in sessions} == {"Keep Session"}
+    assert {item["name"] for item in templates} == {"Keep Template"}
+    assert {item["name"] for item in themes} == {"Keep Theme"}
+
+
+def test_writing_snapshot_import_rejects_blank_session_name(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    resp = client.post(
+        "/api/v1/writing/snapshot/import",
+        json={
+            "mode": "merge",
+            "snapshot": {
+                "sessions": [{"name": "   ", "payload": {"text": "ignored"}, "schema_version": 1}],
+                "templates": [],
+                "themes": [],
+            },
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "session name" in resp.json()["detail"].lower()
+
+
 def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     client = client_with_writing_db
 
@@ -437,6 +515,33 @@ def test_writing_wordclouds_empty_result(client_with_writing_db: TestClient):
     assert data["status"] in ("ready", "queued", "running", "failed")
     if data["status"] == "ready":
         assert data["result"]["words"] == []
+
+
+def test_get_wordcloud_returns_404_for_unknown_id(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    resp = client.get("/api/v1/writing/wordclouds/does-not-exist")
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_wordcloud_returns_failed_result(client_with_writing_db: TestClient, monkeypatch: pytest.MonkeyPatch):
+    client = client_with_writing_db
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("wordcloud failed")
+
+    monkeypatch.setattr(writing_endpoints, "_compute_wordcloud", boom)
+
+    create_resp = client.post("/api/v1/writing/wordclouds", json={"text": "alpha beta"})
+    assert create_resp.status_code == 200, create_resp.text
+    payload = create_resp.json()
+    assert payload["status"] == "failed"
+
+    get_resp = client.get(f"/api/v1/writing/wordclouds/{payload['id']}")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["status"] == "failed"
 
 
 def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestClient, monkeypatch):
