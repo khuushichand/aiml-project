@@ -43,7 +43,7 @@
   - That leaves export/import preservation under-tested at the property level.
 - `tldw_Server_API/tests/Characters/test_characters_endpoint.py`
   - Covers PNG import, YAML import, unsupported extension rejection, malformed YAML fallback to plain text, and V2 export.
-  - Does not cover oversized uploads, invalid image payloads, or explicit CCv3 import via the endpoint.
+  - Does not cover oversized uploads, invalid image payloads on the `POST /api/v1/characters/import` path, or explicit CCv3 import via the endpoint.
 
 ## Validation Commands
 - Targeted import/export test run:
