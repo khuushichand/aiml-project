@@ -33,7 +33,7 @@ This review is centered on the core Metrics package and its direct edges:
 - `tldw_Server_API/app/core/Metrics/stt_metrics.py`
 - `tldw_Server_API/app/api/v1/endpoints/metrics.py`
 - `tldw_Server_API/app/main.py` for metrics-related route and middleware wiring only
-- direct scrape-time dependencies invoked by the metrics endpoint, especially `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`
+- direct scrape-time dependency code paths invoked by the metrics endpoint, especially the import and gauge-refresh behavior in `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`, not the broader embeddings feature set
 - `Docs/Design/Metrics.md` and other directly referenced Metrics docs where they materially affect operator or contributor understanding
 
 Direct integrations and validation targets are included where they materially exercise or depend on the module contract:
@@ -248,7 +248,8 @@ For the highest-priority items, the plan should also call out:
 - The review is intentionally practical rather than exhaustive across the whole repository.
 - Existing docs may be stale; code and tests take precedence, but doc drift that can mislead contributors or operators is still in scope as a finding.
 - Large files are not automatically findings; size matters only where it contributes to drift, hidden behavior, or fragile contracts.
-- The next planning step should produce an audit execution plan for performing this review. Any code-fix implementation plan should be created only after review findings are confirmed and prioritized.
+- The next planning step should produce a uniquely named staged audit execution plan for performing this review, following the repo's normal 3-5 stage planning structure and the existing `Docs/superpowers/plans/*-review-execution-plan.md` convention where practical.
+- Any code-fix implementation plan should be created only after review findings are confirmed and prioritized.
 
 ## Success Criteria
 
