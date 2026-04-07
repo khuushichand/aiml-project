@@ -4,7 +4,7 @@
 
 **Goal:** Build a private overlay product repo for a YouTube-first extension launcher and lightweight hosted transcript workspace, backed by a new idempotent `video-lite` orchestration contract in `tldw_server`, with eager summary generation owned by the backend workspace lifecycle.
 
-**Architecture:** Keep backend and trial/orchestration logic in `tldw_server`, but deliver the store-facing extension and hosted app from a separate private sibling repo. That private repo should reuse selected frontend surfaces from the existing app through an explicit upstream sync plus patch-overlay workflow, with private-only patches for branding, lightweight routes, launcher behavior, upgrade flow, and a hosted workspace that reads one backend-owned transcript-plus-summary contract.
+**Architecture:** Keep backend auth/subscription/orchestration logic in `tldw_server`, but deliver the store-facing extension and hosted app from a separate private sibling repo. That private repo should reuse selected frontend surfaces from the existing app through an explicit upstream sync plus patch-overlay workflow, with private-only patches for branding, lightweight routes, launcher behavior, upgrade flow, and a hosted workspace that reads one backend-owned transcript-plus-summary contract.
 
 **Tech Stack:** FastAPI, Pydantic, existing Jobs/media ingestion stack, AuthNZ repos/migrations, private Next.js app, private browser extension package, React, Zustand, Bun/Vitest, pytest, optional sync scripts for vendored frontend updates
 
@@ -15,6 +15,7 @@
 - Tasks `1` through `9` reflect baseline work that was already completed in earlier implementation passes and are retained as historical context.
 - Do not re-run the "expected fail because files do not exist yet" steps from Tasks `1` through `9` against the current repo state.
 - Tasks `1` through `9` are marked `[Completed Historical Baseline]` below; any remaining unchecked archival step text in those sections is not active todo state.
+- Tasks `1` through `9` may still mention superseded anonymous or trial-era behavior; treat that wording as archival history, not active product direction.
 - Active remaining work starts at Task `10` below.
 - Use the actual case-sensitive backend test path `tldw_Server_API/tests/Media/test_video_lite_endpoint.py` in commands and commits.
 
@@ -25,19 +26,16 @@
 ### Backend In `tldw_server`
 
 - Create: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
-  - Request/response models for normalized source lookup, source-state responses, workspace payloads, summary lifecycle, trial state, and upgrade intent metadata.
+  - Request/response models for normalized source lookup, access-gated source-state responses, workspace payloads, summary lifecycle, and upgrade intent metadata.
 - Create: `tldw_Server_API/app/services/video_lite_service.py`
-  - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce trial semantics, shape lightweight workspace payloads, and generate or reuse eager summaries.
-- Create: `tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py`
-  - Persistence for anonymous trial identity, normalized-source consumption, and retention timestamps.
+  - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce auth/subscription gating, shape lightweight workspace payloads, and generate or reuse eager summaries.
 - Create: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
   - Endpoint coverage for idempotency, launcher states, entitlement states, and unsupported-source behavior.
-- Create: `tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py`
-  - Repo-level tests for one-time quota debit per normalized source.
 - Modify: `tldw_Server_API/app/api/v1/endpoints/media/__init__.py`
   - Register the new `video-lite` route surface.
-- Modify: `tldw_Server_API/app/core/AuthNZ/migrations.py`
-  - Add anonymous trial tables and indexes.
+
+Historical baseline note:
+- earlier completed implementation passes introduced trial-ledger files, but that path is superseded and is not part of the active paid-only target state
 
 ### Private Overlay Repo
 
@@ -575,68 +573,40 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add docs/veri
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "docs: add overlay verification guide"
 ```
 
-## Task 10: Lock Trial Policy Decisions Before More Backend Persistence Changes
-
-**Files:**
-- Modify: `Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md`
-- Modify: `Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md`
-
-- [ ] **Step 1: Record the remaining trial-policy decisions**
-
-Document and lock:
-
-- anonymous retention window
-- whether anonymous trial data is claimable into an account
-- whether "limited follow-up conversation" relies on existing backend limits or needs an explicit V1 per-session cap
-- exact `launcher_access` enum values:
-  - `new_session_allowed`
-  - `reopen_allowed`
-  - `upgrade_required`
-
-- [ ] **Step 2: Commit the policy decision record**
-
-```bash
-git add Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md \
-        Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md
-git commit -m "docs: lock video-lite trial policy decisions"
-```
-
-## Task 11: Extend The Backend `video-lite` Contracts For Launcher Entitlements And Workspace State
+## Task 10: Refactor `video-lite` To Paid-Only Access Gating
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
 - Modify: `tldw_Server_API/app/services/video_lite_service.py`
 - Modify: `tldw_Server_API/app/api/v1/endpoints/media/video_lite.py`
 - Modify: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
-- Modify: `tldw_Server_API/Config_Files/resource_governor_policies.yaml`
-- Modify: `tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py`
 
-- [ ] **Step 1: Write the failing workspace contract tests**
+- [ ] **Step 1: Write the failing access-gating tests**
 
 ```python
-def test_video_lite_workspace_returns_summary_lifecycle(client, authed_headers):
-    response = client.get(
-        "/api/v1/media/video-lite/workspace/youtube:abc123",
-        headers=authed_headers,
+def test_video_lite_source_requires_login_when_signed_out(client):
+    response = client.post(
+        "/api/v1/media/video-lite/source",
+        json={"source_url": "https://www.youtube.com/watch?v=abc123", "target_tab": "transcript"},
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["entitlement"] in {"anonymous_trial_available", "trial_exhausted", "signed_in_unsubscribed", "signed_in_subscribed"}
-    assert payload["summary_state"] in {"not_requested", "processing", "ready", "failed"}
+    assert payload["launcher_access"] == "login_required"
+    assert payload["entitlement"] == "signed_out"
 ```
 
-Also cover `POST /api/v1/media/video-lite/source` returning:
+Also cover:
 
-- `launcher_access` in `{"new_session_allowed", "reopen_allowed", "upgrade_required"}`
-- `entitlement`
-- normalized source identity fields
+- signed-in unsubscribed requests returning `launcher_access == "subscription_required"`
+- signed-in subscribed requests returning `launcher_access == "allowed"`
+- workspace responses using paid-only entitlement values such as `signed_out`, `signed_in_unsubscribed`, and `signed_in_subscribed`
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
 Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
-Expected: FAIL because the workspace response does not exist yet.
+Expected: FAIL because the current baseline still carries trial-aware assumptions.
 
-- [ ] **Step 3: Implement the source and workspace contract updates**
+- [ ] **Step 3: Implement the paid-only source and workspace contract updates**
 
 ```python
 @router.get("/video-lite/workspace/{source_key}", response_model=VideoLiteWorkspaceResponse)
@@ -644,36 +614,89 @@ async def get_video_lite_workspace(...):
     return await service.get_workspace(...)
 ```
 
-`POST /video-lite/source` should also return identity-aware launcher access data so the extension can distinguish:
+`POST /video-lite/source` should return:
 
-- new session allowed
-- reopen already unlocked source
-- upgrade required
+- `launcher_access` in `{"login_required", "subscription_required", "allowed"}`
+- `entitlement` in `{"signed_out", "signed_in_unsubscribed", "signed_in_subscribed"}`
+- normalized source identity fields
 
-When `launcher_access == "reopen_allowed"`, `Ingest` must still route to upgrade or render disabled; only `Open transcript` and `Quick chat` may reopen the already unlocked source.
+The active implementation must remove trial-aware routing from the live contract path. Signed-out requests may resolve source identity for routing, but they must not start ingest.
 
-- [ ] **Step 4: Wire resource-governor mapping and coverage for the new workspace route**
+- [ ] **Step 4: Run the tests to verify they pass**
 
-Add the route-map entry and extend the existing RG coverage test so `/api/v1/media/video-lite/workspace/{source_key}` resolves to the intended anonymous-compatible policy.
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py -v`
+Expected: PASS for paid-only launcher access and workspace entitlement behavior.
 
-- [ ] **Step 5: Run the tests to verify they pass**
-
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Media/test_video_lite_endpoint.py tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v`
-Expected: PASS for launcher entitlement shape, workspace payload, summary lifecycle fields, and RG route coverage.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
         tldw_Server_API/app/services/video_lite_service.py \
         tldw_Server_API/app/api/v1/endpoints/media/video_lite.py \
-        tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
-        tldw_Server_API/Config_Files/resource_governor_policies.yaml \
-        tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py
-git commit -m "feat: extend video-lite launcher and workspace contracts"
+        tldw_Server_API/tests/Media/test_video_lite_endpoint.py
+git commit -m "feat: gate video-lite behind login and subscription"
 ```
 
-## Task 12: Add Eager Summary Generation And Reuse
+## Task 11: Wire Resource-Governor Coverage And Paid Launcher Routing
+
+**Files:**
+- Modify: `tldw_Server_API/Config_Files/resource_governor_policies.yaml`
+- Modify: `tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/src/background/video-lite.ts`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/extension/sidepanel-video.test.tsx`
+
+- [ ] **Step 1: Write the failing RG and launcher-routing tests**
+
+Cover:
+
+- `/api/v1/media/video-lite/workspace/{source_key}` resolving to the intended policy
+- extension launcher routing `login_required` into login
+- extension launcher routing `subscription_required` into upgrade
+- `Ingest` remaining unavailable until `launcher_access == "allowed"`
+
+- [ ] **Step 2: Run the targeted tests to verify they fail**
+
+Run backend:
+`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v`
+
+Run frontend:
+`cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/extension/sidepanel-video.test.tsx -v`
+
+Expected: FAIL because the workspace RG mapping and paid-only launcher routing are not fully implemented yet.
+
+- [ ] **Step 3: Implement RG mapping and launcher-routing updates**
+
+Add the route-map entry and make the extension treat:
+
+- `login_required` as login routing
+- `subscription_required` as upgrade routing
+- `allowed` as the only state that may continue into ingest or workspace launch
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run backend:
+`source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v`
+
+Run frontend:
+`cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/extension/sidepanel-video.test.tsx -v`
+
+Expected: PASS for RG route coverage and launcher routing behavior.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tldw_Server_API/Config_Files/resource_governor_policies.yaml \
+        tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py
+git commit -m "feat: add video-lite workspace RG policy"
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add \
+  web/lib/video-lite-client.ts \
+  extension/src/background/video-lite.ts \
+  tests/extension/sidepanel-video.test.tsx
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: update paid-only launcher routing"
+```
+
+## Task 12: Add Eager Summary Generation And Workspace Rendering
 
 **Files:**
 - Modify: `tldw_Server_API/app/services/video_lite_service.py`
@@ -763,11 +786,10 @@ Run:
 ```bash
 source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
-  tldw_Server_API/tests/AuthNZ/repos/test_video_trial_repo.py \
   tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v
 ```
 
-Expected: PASS for source-state, launcher-entitlement, workspace-state, trial, eager-summary, and RG coverage.
+Expected: PASS for source-state, launcher-entitlement, workspace-state, eager-summary, and RG coverage.
 
 - [ ] **Step 2: Run Bandit on the touched backend paths**
 
@@ -778,8 +800,6 @@ source .venv/bin/activate && python -m bandit -r \
   tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py \
   tldw_Server_API/app/services/video_lite_service.py \
   tldw_Server_API/app/api/v1/endpoints/media/video_lite.py \
-  tldw_Server_API/app/core/AuthNZ/repos/video_trial_repo.py \
-  tldw_Server_API/app/core/AuthNZ/migrations.py \
   -f json -o /tmp/bandit_video_lite_delta.json
 ```
 
@@ -811,10 +831,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "do
 - Treat `tldw_server2/apps` as upstream input, not the delivery repo.
 - Keep the private patch layer intentionally small and well-bounded.
 - Prefer wrapper files and private routes over invasive edits to vendored upstream files when possible.
-- Keep anonymous trial YouTube-only in both backend validation and frontend affordances.
-- Do not debit trial quota on submission; debit only when a normalized source reaches transcript-ready.
 - Treat the extension as launcher-only in V1; transcript reading and durable chat stay in the hosted workspace.
-- Allow exhausted anonymous users to reopen already unlocked sources, but block creation of new transcript-backed sessions.
 - Make launcher routing depend on identity-aware access state from the backend contract, not on source normalization alone.
 - Use the exact `launcher_access` enum values locked in Task `10`; do not invent parallel frontend-only variants.
 - Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
