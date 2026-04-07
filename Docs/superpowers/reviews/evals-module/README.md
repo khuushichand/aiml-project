@@ -35,7 +35,7 @@
 
 ## Review Method
 - findings before improvements
-- uncertain items labeled `needs verification`
+- uncertain items labeled `needs verification` in `Confidence` and/or `Verification note`
 - working-tree-specific findings labeled explicitly
 
 ### Finding Schema
@@ -53,12 +53,13 @@ Use this exact structure for every later finding entry:
    Verification note: ...
 ```
 
-Applicability values: `Baseline`, `Working-tree-specific`, `Needs verification`.
+Applicability values: `Baseline`, `Working-tree-specific`, `Mixed`.
+Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicability`.
 
 ### Confidence Model
 - High: directly observed in the current file set or verified with targeted evidence.
 - Medium: supported by strong code-path evidence, but one or more assumptions still need confirmation.
-- Low: tentative or inferred from surrounding context and should be treated as `needs verification`.
+- Low: tentative or inferred from surrounding context and should be treated as `needs verification` in the confidence or verification fields.
 
 ## Severity and Priority Model
 - Critical / High / Medium / Low
