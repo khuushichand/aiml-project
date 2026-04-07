@@ -22,6 +22,7 @@ No findings recorded yet.
    - Why it matters: short impact explanation
    - File references: `path/to/file.py`
 ```
+Add `## Open Questions` only when this stage has unresolved assumptions or confidence-affecting uncertainty.
 
 ### Per-Finding Metadata Rule
 - Every finding must include severity, confidence, why it matters, and exact file references.

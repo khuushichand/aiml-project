@@ -13,6 +13,7 @@ Rules for using these reports:
 - Write findings before remediation ideas.
 - Label uncertain items as assumptions or probable risks instead of overstating them as confirmed defects.
 - Backend-sensitive claims require targeted verification, or the report must explicitly downgrade confidence.
+- The final output structure is `## Findings`, with `## Open Questions` added only when needed.
 - Keep stage output evidence-backed and scoped to `tldw_Server_API/app/core/DB_Management` plus its direct tests.
 
 Use the stage files as the canonical record for the review. Stage 1 captures the review scaffold, scoped inventory, and the initial recent-history baseline so later stages can build on a fixed starting point.

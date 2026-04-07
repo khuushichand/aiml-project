@@ -438,6 +438,18 @@ No findings recorded yet.
 - Every later-stage finding must include severity, confidence, why it matters, and exact file references.
 - Add `## Open Questions` only when a later stage has unresolved assumptions that need to be surfaced explicitly.
 
+### Frozen Output Template
+```markdown
+## Findings
+1. Severity: concise issue statement with file references and impact
+   - Confidence: High|Medium|Low
+   - Why it matters: short impact explanation
+   - File references: `path/to/file.py`
+
+## Open Questions
+- only include this section when there are unresolved assumptions or confidence-affecting uncertainties
+```
+
 ## Coverage Gaps
 - No defect assessment yet.
 - No backend-sensitive claims were evaluated at this stage.
