@@ -437,11 +437,9 @@ fd747f94d merge: incorporate latest dev into feat/writing-suite-phase2
    - Why it matters: This stage is review-artifact setup only and does not assert defects.
    - File references: `Docs/superpowers/reviews/db-management/2026-04-07-stage1-review-artifacts-and-inventory.md`
 
-## Open Questions
-- None at this stage.
-
 ### Per-Finding Metadata Rule
 - Every later-stage finding must include severity, confidence, why it matters, and exact file references.
+- Add `## Open Questions` only when a later stage has unresolved assumptions that need to be surfaced explicitly.
 
 ## Coverage Gaps
 - No defect assessment yet.
