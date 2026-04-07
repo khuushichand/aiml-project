@@ -419,6 +419,14 @@ class DatabaseMigrator:
 
         with self._get_connection() as conn:
             try:
+                # Clean up any prior failed attempt for this version so retries work
+                if direction == "up":
+                    conn.execute(
+                        "DELETE FROM schema_migrations WHERE version = ? AND success = 0",
+                        (migration.version,),
+                    )
+                    conn.commit()
+
                 # Execute migration SQL
                 if direction == "up" and migration.idempotent:
                     statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
@@ -495,7 +503,7 @@ class DatabaseMigrator:
                 if direction == "up":
                     try:
                         conn.execute("""
-                            INSERT INTO schema_migrations
+                            INSERT OR REPLACE INTO schema_migrations
                             (version, name, checksum, applied_at, execution_time,
                              success, error_message)
                             VALUES (?, ?, ?, ?, ?, 0, ?)

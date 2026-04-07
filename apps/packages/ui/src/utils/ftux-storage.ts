@@ -44,6 +44,14 @@ export const persistFirstIngestDismissed = (): void => {
   persistBooleanFlag(FIRST_INGEST_DISMISS_KEY)
 }
 
+export const clearFirstIngestDismissed = (): void => {
+  try {
+    localStorage.removeItem(FIRST_INGEST_DISMISS_KEY)
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export const readMcpHubExplainerDismissed = (): boolean =>
   readBooleanFlagWithMigration(
     MCP_HUB_EXPLAINER_DISMISSED_KEY,

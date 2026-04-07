@@ -13,7 +13,11 @@ export function useAntdVariants() {
     /** Pass to <Button shape={buttonShape}> */
     buttonShape: buttonStyle === "pill" ? ("round" as const) : ("default" as const),
 
-    /** Pass to <Input variant={inputVariant}> or <Select variant={inputVariant}> */
+    /**
+     * Pass to <Input variant={inputVariant}> or <Select variant={inputVariant}>.
+     * Note: "underlined" maps to "borderless" (not the antd "underlined" variant,
+     * which requires antd >= 5.24.0). Current project uses antd ^6.2.0.
+     */
     inputVariant: (
       inputStyle === "underlined" ? "borderless"
       : inputStyle === "filled" ? "filled"

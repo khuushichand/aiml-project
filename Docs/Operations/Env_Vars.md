@@ -575,6 +575,29 @@ Quick start (local dev):
 ## Notes
 - Many subsystems also support file-based configuration under `Config_Files/` and module-specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
 
+## STT vNext Controls
+
+These settings back the canonical `get_stt_config()` loader and apply to REST `/api/v1/audio/transcriptions`, WS `/api/v1/audio/stream/transcribe`, and STT persistence paths.
+
+- `STT_WS_CONTROL_V2_ENABLED`: Enable explicit WS control v2 negotiation (`true|false`, default `false`). Config key: `[STT-Settings] ws_control_v2_enabled`.
+- `STT_PAUSED_AUDIO_QUEUE_CAP_SECONDS`: Paused-audio queue cap in seconds for WS control v2 (default `2.0`). Config key: `[STT-Settings] paused_audio_queue_cap_seconds`.
+- `STT_OVERFLOW_WARNING_INTERVAL_SECONDS`: Minimum interval between paused-queue overflow warnings (default `5.0`). Config key: `[STT-Settings] overflow_warning_interval_seconds`.
+- `STT_TRANSCRIPT_DIAGNOSTICS_ENABLED`: Emit deterministic final/full transcript diagnostics (`true|false`, default `false`). Config key: `[STT-Settings] transcript_diagnostics_enabled`.
+- `STT_DELETE_AUDIO_AFTER_SUCCESS`: Delete raw audio after successful transcription (`true|false`, default `true`). Legacy alias: `STT_DELETE_AUDIO_AFTER`. Config keys: `[STT-Settings] delete_audio_after_success` or `delete_audio_after`.
+- `STT_AUDIO_RETENTION_HOURS`: Default retained-audio TTL in hours (default `0.0`). Config key: `[STT-Settings] audio_retention_hours`.
+- `STT_REDACT_PII`: Enable transcript redaction (`true|false`, default `false`). Config key: `[STT-Settings] redact_pii`.
+- `STT_ALLOW_UNREDACTED_PARTIALS`: Allow unredacted partial WS frames when policy permits it (`true|false`, default `false`). Config key: `[STT-Settings] allow_unredacted_partials`.
+- `STT_REDACT_CATEGORIES`: Comma-separated or JSON list of redact categories. Config key: `[STT-Settings] redact_categories`.
+
+Policy precedence:
+- Multi-user mode: org STT settings override global defaults.
+- Single-user mode: global defaults only.
+- Request-level overrides may only be stricter than the effective policy.
+
+Operator notes:
+- Retention TTL is only meaningful when retained artifacts are indexed; otherwise `delete_audio_after_success=true` remains the safe default.
+- Org admins manage per-org policy with `GET/PATCH /api/v1/admin/orgs/{org_id}/stt/settings`.
+
 ## TTS Placeholder Handling (2026-03-02)
 - Legacy placeholder literals in `[TTS-Settings]` are now treated as unset during config load: empty string, `FIXME`, `TODO`, `TBD`, `CHANGE_ME`, `PLACEHOLDER`, `NONE`, `NULL`, `N/A`, `NA`.
 - When placeholders are encountered, safe defaults are applied:
@@ -602,6 +625,7 @@ Quick start (local dev):
   - `ENABLE_OTEL_LOGGING`: Enable OTEL logging integration (`true|false`, default `false`).
   - `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER`: Add the console metrics exporter (`true|false`, default `false`).
   - `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value for an unbounded buffer.
+  - `METRICS_CUMULATIVE_SERIES_MAX_PER_METRIC`: Hard cap for in-memory cumulative label sets per metric (default `10000`). New STT metric families rely on bounded-label mapping and this cap together.
   - `OTEL_METRICS_EXPORTER`: Comma list of metrics exporters (`prometheus` by default).
   - `OTEL_TRACES_EXPORTER`: Comma list of traces exporters (`console` by default).
 
@@ -632,6 +656,7 @@ Notes
 | `ENABLE_OTEL_LOGGING`           | `false`             | Enable OTEL logging integration |
 | `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER` | `false`      | Add console metrics exporter |
 | `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED` | `10000`    | Rolling metrics sample window size |
+| `METRICS_CUMULATIVE_SERIES_MAX_PER_METRIC` | `10000`   | Hard cap for cumulative label sets per metric |
 | `OTEL_METRICS_EXPORTER`         | `prometheus`        | Comma-separated exporters |
 | `OTEL_TRACES_EXPORTER`          | `console`           | Comma-separated exporters |
 | `PROMETHEUS_HOST`               | `0.0.0.0`           | Bind host for Prometheus exporter |

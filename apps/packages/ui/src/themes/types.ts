@@ -26,6 +26,9 @@ export interface ThemeColorTokens {
   shadowMd: string
 }
 
+/** Keys within ThemeColorTokens that hold RGB triple strings (excludes shadow tokens). */
+export type ThemeRgbTokenKey = Exclude<keyof ThemeColorTokens, "shadowSm" | "shadowMd">
+
 export interface ThemePalette {
   light: ThemeColorTokens
   dark: ThemeColorTokens

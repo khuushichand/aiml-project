@@ -14,8 +14,6 @@ export type KnowledgeStatus =
   | "offline"
   | "empty"
 
-export type UserPersona = "family" | "researcher" | "explorer" | null
-
 export type ConnectionState = {
   phase: ConnectionPhase
   serverUrl: string | null

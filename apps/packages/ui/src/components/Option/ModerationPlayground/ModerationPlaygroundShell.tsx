@@ -81,14 +81,14 @@ export const ModerationPlaygroundShell: React.FC = () => {
   }
 
   React.useEffect(() => {
-    markMilestone("content_rules_reviewed")
-  }, [markMilestone])
+    if (!hasPermissionError) markMilestone("content_rules_reviewed")
+  }, [markMilestone, hasPermissionError])
 
   React.useEffect(() => {
-    if (activeTab === "test") {
+    if (activeTab === "test" && !hasPermissionError) {
       markMilestone("content_rules_tested")
     }
-  }, [activeTab, markMilestone])
+  }, [activeTab, markMilestone, hasPermissionError])
 
   // Ctrl+S save shortcut
   React.useEffect(() => {

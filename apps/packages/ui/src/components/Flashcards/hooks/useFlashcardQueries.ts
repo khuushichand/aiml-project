@@ -3,6 +3,8 @@ import {
   listDecks,
   listFlashcards,
   listFlashcardTagSuggestions,
+  listRecentFlashcardReviewSessions,
+  endFlashcardReviewSession,
   createFlashcard,
   createFlashcardsBulk,
   updateFlashcardsBulk,
@@ -59,6 +61,12 @@ export interface UseFlashcardDeckRecentCardsQueryOptions extends UseFlashcardQue
 export interface UseGlobalFlashcardTagSuggestionsQueryOptions {
   enabled?: boolean
   limit?: number
+}
+
+export interface UseRecentFlashcardReviewSessionsQueryOptions extends UseFlashcardQueriesOptions {
+  limit?: number
+  scopeKey?: string | null
+  status?: string | null
 }
 
 const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
@@ -257,6 +265,50 @@ export function useFlashcardDeckSearchQuery(
       return response.items || []
     },
     enabled: (options?.enabled ?? flashcardsEnabled) && !!params.deckId && trimmedQuery.length > 0
+  })
+}
+
+export function useRecentFlashcardReviewSessionsQuery(
+  params: {
+    deckId?: number | null
+    scopeKey?: string | null
+    status?: string | null
+    limit?: number
+  } = {},
+  options?: UseRecentFlashcardReviewSessionsQueryOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const effectiveLimit = params.limit ?? options?.limit ?? 20
+
+  return useQuery({
+    queryKey: [
+      "flashcards:review-sessions:recent",
+      params.deckId ?? null,
+      params.scopeKey ?? null,
+      params.status ?? null,
+      effectiveLimit
+    ],
+    queryFn: () =>
+      listRecentFlashcardReviewSessions({
+        deck_id: params.deckId ?? undefined,
+        scope_key: params.scopeKey ?? undefined,
+        status: params.status ?? undefined,
+        limit: effectiveLimit
+      }),
+    enabled: options?.enabled ?? flashcardsEnabled,
+    refetchOnWindowFocus: false
+  })
+}
+
+export function useEndFlashcardReviewSessionMutation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:review-sessions:end"],
+    mutationFn: (reviewSessionId: number) => endFlashcardReviewSession(reviewSessionId),
+    onSuccess: async () => {
+      await invalidateFlashcardsQueries(queryClient)
+    }
   })
 }
 

@@ -1,16 +1,16 @@
 import React, { useState, useCallback, useRef } from "react"
 import { Modal, Input, Select, Button, message } from "antd"
 import { Download, Upload } from "lucide-react"
-import type { ThemeColorTokens, ThemeDefinition, ThemeTypography, ThemeShape, ThemeLayout, ThemeComponents } from "@/themes/types"
+import type { ThemeColorTokens, ThemeRgbTokenKey, ThemeDefinition, ThemeTypography, ThemeShape, ThemeLayout, ThemeComponents } from "@/themes/types"
 import { getBuiltinPresets } from "@/themes/presets"
-import { generateThemeId, validateThemeDefinition, validateLegacyThemeDefinition } from "@/themes/validation"
-import { migrateTheme } from "@/themes/migration"
+import { generateThemeId } from "@/themes/validation"
 import { defaultTypography, defaultShape, defaultLayout, defaultComponents } from "@/themes/defaults"
+import { parseImportedTheme } from "@/themes/import-export"
 import { ColorTokenRow } from "./ColorTokenRow"
 import { ThemePreview } from "./ThemePreview"
 
 /** The 17 RGB color token keys rendered via ColorPicker rows. */
-const TOKEN_KEYS: (keyof ThemeColorTokens)[] = [
+const TOKEN_KEYS: ThemeRgbTokenKey[] = [
   "bg", "surface", "surface2", "elevated",
   "primary", "primaryStrong", "accent",
   "success", "warn", "danger", "muted",
@@ -167,61 +167,29 @@ export function ThemeEditorModal({
       if (!file) return
       const reader = new FileReader()
       reader.onload = (e) => {
-        try {
-          const raw = JSON.parse(e.target?.result as string)
-          let theme: ThemeDefinition
+        const jsonString = e.target?.result as string
+        const result = parseImportedTheme(jsonString)
 
-          // New wrapper format
-          if (raw.tldw_theme === true && raw.theme) {
-            if (validateThemeDefinition(raw.theme)) {
-              theme = raw.theme
-            } else {
-              try {
-                const migrated = migrateTheme(raw.theme as Record<string, unknown>)
-                if (!validateThemeDefinition(migrated)) {
-                  throw new Error("Migrated theme still fails validation")
-                }
-                theme = migrated
-              } catch (err) {
-                void message.error(err instanceof Error ? err.message : "Invalid theme in wrapper")
-                return
-              }
-            }
-          }
-          // Legacy raw format (v0)
-          else if (validateLegacyThemeDefinition(raw)) {
-            try {
-              const migrated = migrateTheme(raw as Record<string, unknown>)
-              if (!validateThemeDefinition(migrated)) {
-                throw new Error("Migrated legacy theme still fails validation")
-              }
-              theme = migrated
-            } catch (err) {
-              void message.error(err instanceof Error ? err.message : "Invalid legacy theme")
-              return
-            }
-          }
-          // v1 raw format (unwrapped)
-          else if (validateThemeDefinition(raw)) {
-            theme = raw
-          } else {
-            void message.error("Invalid theme file format")
-            return
-          }
-
-          setName(theme.name)
-          setDescription(theme.description ?? "")
-          setLightTokens({ ...theme.palette.light })
-          setDarkTokens({ ...theme.palette.dark })
-          setTypography(theme.typography ? { ...theme.typography } : defaultTypography())
-          setShape(theme.shape ? { ...theme.shape } : defaultShape())
-          setLayout(theme.layout ? { ...theme.layout } : defaultLayout())
-          setComponents(theme.components ? { ...theme.components } : defaultComponents())
-          setBasePresetId(theme.basePresetId)
-          void message.success(`Theme "${theme.name}" imported`)
-        } catch {
-          void message.error("Failed to parse theme file")
+        if (result.valid === false) {
+          void message.error(result.error)
+          return
         }
+
+        const { theme, warnings } = result
+        setName(theme.name)
+        setDescription(theme.description ?? "")
+        setLightTokens({ ...theme.palette.light })
+        setDarkTokens({ ...theme.palette.dark })
+        setTypography(theme.typography ? { ...theme.typography } : defaultTypography())
+        setShape(theme.shape ? { ...theme.shape } : defaultShape())
+        setLayout(theme.layout ? { ...theme.layout } : defaultLayout())
+        setComponents(theme.components ? { ...theme.components } : defaultComponents())
+        setBasePresetId(theme.basePresetId)
+
+        if (warnings.length > 0) {
+          void message.warning(warnings.join(" "))
+        }
+        void message.success(`Theme "${theme.name}" imported`)
       }
       reader.readAsText(file)
       // Reset so the same file can be re-imported

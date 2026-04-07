@@ -286,6 +286,7 @@ body {
     width: 2rem;
   }
 
+
   /* ===== Animation speed ===== */
   [data-animation="none"]   { --duration-base: 0ms; }
   [data-animation="subtle"] { --duration-base: 75ms; }

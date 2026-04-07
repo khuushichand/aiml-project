@@ -638,7 +638,7 @@ export function HeaderShortcuts({
                 type="button"
                 onClick={() => {
                   void setUserPersona("explorer")
-                  void setShortcutSelection([...HEADER_SHORTCUT_IDS])
+                  void setShortcutSelection([...HEADER_SHORTCUT_IDS]).catch(() => {})
                 }}
                 className="text-xs text-primary hover:text-primaryStrong"
               >

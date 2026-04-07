@@ -23,14 +23,13 @@ export function migrateTheme(raw: Record<string, unknown>): ThemeDefinition {
     )
   }
 
-  if (version < 1) {
-    return migrateV0ToV1(raw)
+  const result = version < 1 ? migrateV0ToV1(raw) : raw
+
+  if (!validateThemeDefinition(result)) {
+    throw new Error("Theme failed validation after migration.")
   }
 
-  if (!validateThemeDefinition(raw)) {
-    throw new Error("Theme claims version 1 but fails validation")
-  }
-  return raw
+  return result
 }
 
 function migrateV0ToV1(raw: Record<string, unknown>): ThemeDefinition {

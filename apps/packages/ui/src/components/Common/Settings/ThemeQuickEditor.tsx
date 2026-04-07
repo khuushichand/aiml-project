@@ -31,6 +31,8 @@ interface ThemeQuickEditorProps {
   editingTheme?: ThemeDefinition
   /** The currently active theme — restored on cancel when creating a new theme */
   activeTheme?: ThemeDefinition
+  /** Called when the user clicks "Advanced..." to hand off the current preview state */
+  onOpenAdvanced?: (previewTheme: ThemeDefinition) => void
 }
 
 /** The 10 lever values that drive quick mode derivation. */
@@ -292,6 +294,7 @@ export function ThemeQuickEditor({
   isDark,
   editingTheme,
   activeTheme,
+  onOpenAdvanced,
 }: ThemeQuickEditorProps) {
   // Store the original theme to revert on cancel
   const originalThemeRef = useRef<ThemeDefinition | undefined>(undefined)
@@ -455,20 +458,25 @@ export function ThemeQuickEditor({
     onClose()
   }, [isDark, activeTheme, onClose])
 
-  // --- Advanced placeholder ---
+  // --- Advanced handoff ---
   const handleAdvanced = useCallback(() => {
-    // Restore original theme tokens before closing (undo live preview)
-    const original = originalThemeRef.current
-    const restoreTarget = original ?? activeTheme
-    if (restoreTarget) {
-      const tokens = isDark ? restoreTarget.palette.dark : restoreTarget.palette.light
-      applyThemeTokens(tokens, restoreTarget)
+    if (onOpenAdvanced) {
+      // Hand off the current preview state to the advanced editor
+      onOpenAdvanced(derivedTheme)
+      onClose()
     } else {
-      clearThemeTokens()
+      // No advanced editor callback — revert preview and close
+      const original = originalThemeRef.current
+      const restoreTarget = original ?? activeTheme
+      if (restoreTarget) {
+        const tokens = isDark ? restoreTarget.palette.dark : restoreTarget.palette.light
+        applyThemeTokens(tokens, restoreTarget)
+      } else {
+        clearThemeTokens()
+      }
+      onClose()
     }
-    void message.info("Advanced editor coming soon (Task 18)")
-    onClose()
-  }, [isDark, activeTheme, onClose])
+  }, [onOpenAdvanced, derivedTheme, isDark, activeTheme, onClose])
 
   const presetOptions = useMemo(
     () => getBuiltinPresets().map((p) => ({ value: p.id, label: p.name })),

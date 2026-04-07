@@ -1118,9 +1118,19 @@ export async function listManuscriptCitations(
   })
 }
 
+export type ManuscriptCitationCreatePayload = {
+  source_type: string
+  source_id?: string | null
+  source_title?: string | null
+  excerpt?: string | null
+  query_used?: string | null
+  anchor_offset?: number | null
+  id?: string | null
+}
+
 export async function createManuscriptCitation(
   sceneId: string,
-  data: Record<string, unknown>,
+  data: ManuscriptCitationCreatePayload,
 ): Promise<ManuscriptCitationResponse> {
   return bgRequest<ManuscriptCitationResponse>({
     path: `/api/v1/writing/manuscripts/scenes/${encodeURIComponent(sceneId)}/citations` as AllowedPath,

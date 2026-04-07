@@ -212,6 +212,20 @@ class FlashcardReviewResponse(BaseModel):
     step_index: Optional[int] = None
     suspended_reason: Optional[Literal["manual", "leech"]] = None
     next_intervals: FlashcardReviewIntervalPreviews
+    review_session_id: int | None = None
+
+
+class FlashcardReviewSessionSummary(BaseModel):
+    id: int
+    deck_id: Optional[int] = None
+    review_mode: str
+    tag_filter: Optional[str] = None
+    scope_key: str
+    status: str
+    started_at: Optional[str] = None
+    last_activity_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    client_id: str
 
 
 class FlashcardNextReviewResponse(BaseModel):

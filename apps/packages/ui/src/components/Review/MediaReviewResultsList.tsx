@@ -6,7 +6,8 @@ import { includesId } from "@/components/Review/media-review-types"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import {
   persistFirstIngestDismissed,
-  readFirstIngestDismissed
+  readFirstIngestDismissed,
+  clearFirstIngestDismissed
 } from "@/utils/ftux-storage"
 
 interface MediaReviewResultsListProps {
@@ -39,11 +40,7 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
 
   const handleShowTutorialAgain = React.useCallback(() => {
     setTutorialDismissed(false)
-    try {
-      localStorage.removeItem(FIRST_INGEST_DISMISSED_KEY)
-    } catch {
-      // ignore storage errors
-    }
+    clearFirstIngestDismissed()
   }, [])
 
   // Show first-ingest tutorial when library is empty (no query, no results, not fetching)

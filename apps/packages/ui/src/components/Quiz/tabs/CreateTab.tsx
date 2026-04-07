@@ -29,7 +29,7 @@ import type { QuestionType, QuestionCreate } from "@/services/quizzes"
 import type { TakeTabNavigationIntent } from "../navigation"
 import { normalizeMatchingAnswerMap } from "../utils/matchingAnswer"
 import { checkStorageBeforeWrite, notifyStorageWrite } from "@/utils/storage-guard"
-import { estimateUtf8ByteLength } from "@/utils/storage-budget"
+import { estimateStorageCost } from "@/utils/storage-budget"
 
 const CREATE_ORIENTATION_DISMISSED_KEY = "tldw_quiz_create_orientation_dismissed"
 
@@ -113,7 +113,7 @@ const writeCreateDraft = (draft: QuizCreateDraft): boolean | { saved: boolean; r
   if (typeof window === "undefined") return false
   try {
     const serialized = JSON.stringify(draft)
-    const guard = checkStorageBeforeWrite(estimateUtf8ByteLength(serialized), CREATE_TAB_DRAFT_KEY)
+    const guard = checkStorageBeforeWrite(estimateStorageCost(serialized), CREATE_TAB_DRAFT_KEY)
     // Advisory only — always attempt the write
     window.localStorage.setItem(CREATE_TAB_DRAFT_KEY, serialized)
     notifyStorageWrite()
@@ -232,13 +232,16 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       if (!result) {
         setDraftStorageUnavailable(true)
         lastRecommendationRef.current = null
-      } else if (typeof result === "object" && result.recommendation) {
-        if (lastRecommendationRef.current !== result.recommendation) {
-          lastRecommendationRef.current = result.recommendation
-          messageApi.warning(result.recommendation)
-        }
       } else {
-        lastRecommendationRef.current = null
+        setDraftStorageUnavailable(false)
+        if (typeof result === "object" && result.recommendation) {
+          if (lastRecommendationRef.current !== result.recommendation) {
+            lastRecommendationRef.current = result.recommendation
+            messageApi.warning(result.recommendation)
+          }
+        } else {
+          lastRecommendationRef.current = null
+        }
       }
     }, 300)
 

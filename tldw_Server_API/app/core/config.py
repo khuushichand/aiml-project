@@ -4369,6 +4369,11 @@ def load_and_log_configs():
                 logger.debug("Failed to read config section '{}': {}", section_name, exc)
             return {}
 
+        from tldw_Server_API.app.core.config_sections.stt import load_stt_config
+
+        stt_vnext_config = load_stt_config(config_parser_object)
+        stt_vnext_items = dict(vars(stt_vnext_config))
+
         return_dict = {
             'anthropic_api': {
                 'api_key': anthropic_api_key,
@@ -4827,6 +4832,7 @@ def load_and_log_configs():
                 'custom_vocab_postprocess_enable': stt_custom_vocab_postprocess_enable,
                 'custom_vocab_prompt_template': stt_custom_vocab_prompt_template,
                 'custom_vocab_case_sensitive': stt_custom_vocab_case_sensitive,
+                **stt_vnext_items,
             },
             # Also provide with hyphen for backward compatibility
             'STT-Settings': {
@@ -4879,6 +4885,7 @@ def load_and_log_configs():
                 'custom_vocab_postprocess_enable': stt_custom_vocab_postprocess_enable,
                 'custom_vocab_prompt_template': stt_custom_vocab_prompt_template,
                 'custom_vocab_case_sensitive': stt_custom_vocab_case_sensitive,
+                **stt_vnext_items,
             },
             'diarization': diarization_config,
             'tts_settings': {
@@ -5249,7 +5256,7 @@ def legacy_get(key: str, default: Any = None) -> Any:
 
 def get_stt_config() -> dict[str, Any]:
     """
-    Return the `[STT-Settings]` section as a plain dict.
+    Return the canonical STT configuration export as a plain dict.
 
     This helper centralizes resolution of STT-related settings so callers do
     not need to worry about whether `loaded_config_data` is a lazy wrapper,
@@ -5270,7 +5277,9 @@ def get_stt_config() -> dict[str, Any]:
     if not isinstance(cfg, MutableMapping):
         return {}
 
-    stt_section = cfg.get("STT-Settings", {})
+    stt_section = cfg.get("STT_Settings")
+    if not isinstance(stt_section, MutableMapping):
+        stt_section = cfg.get("STT-Settings")
     return dict(stt_section) if isinstance(stt_section, MutableMapping) else {}
 
 _LOGGER_READY = True

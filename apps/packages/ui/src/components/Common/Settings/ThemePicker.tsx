@@ -240,6 +240,13 @@ export function ThemePicker() {
     setAdvancedEditorOpen(true)
   }, [])
 
+  /** Transition from quick editor → advanced editor, carrying over the preview theme */
+  const handleQuickToAdvanced = useCallback((previewTheme: ThemeDefinition) => {
+    setQuickEditorOpen(false)
+    setEditingTheme(previewTheme)
+    setAdvancedEditorOpen(true)
+  }, [])
+
   // Split presets into builtin and custom for separate rendering
   const builtinPresets = presets.filter((p) => p.builtin)
   const customPresets = presets.filter((p) => !p.builtin)
@@ -334,6 +341,7 @@ export function ThemePicker() {
         isDark={isDark}
         editingTheme={editingTheme}
         activeTheme={themeDefinition}
+        onOpenAdvanced={handleQuickToAdvanced}
       />
       <ThemeAdvancedEditor
         open={advancedEditorOpen}

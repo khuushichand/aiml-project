@@ -15,6 +15,7 @@ import {
 import {
   useDecksQuery
 } from "@/components/Flashcards/hooks/useFlashcardQueries"
+import { useStudySuggestions } from "@/components/StudySuggestions/hooks/useStudySuggestions"
 
 const mocks = vi.hoisted(() => ({
   convertRemediationQuestions: vi.fn(),
@@ -51,9 +52,13 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
-vi.mock("react-router-dom", () => ({
-  useNavigate: () => mocks.navigate
-}))
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>()
+  return {
+    ...actual,
+    useNavigate: () => mocks.navigate
+  }
+})
 
 vi.mock("../../hooks", () => ({
   useAllAttemptsQuery: vi.fn(),
@@ -68,6 +73,10 @@ vi.mock("../../hooks", () => ({
 
 vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
   useDecksQuery: vi.fn()
+}))
+
+vi.mock("@/components/StudySuggestions/hooks/useStudySuggestions", () => ({
+  useStudySuggestions: vi.fn()
 }))
 
 vi.mock("@/hooks/useTTS", () => ({
@@ -108,6 +117,16 @@ describe("ResultsTab remediation panel", () => {
     onRetakeQuiz.mockReset()
     assistantQueryState = null
     assistantRefetchMock.mockReset()
+    vi.mocked(useStudySuggestions).mockReturnValue({
+      status: "none",
+      statusQuery: {} as any,
+      snapshot: null,
+      activeSnapshotId: null,
+      isLoading: false,
+      isRefreshing: false,
+      refresh: vi.fn(),
+      performAction: vi.fn()
+    } as any)
 
     mocks.convertRemediationQuestions.mockResolvedValue({
       attempt_id: 101,
