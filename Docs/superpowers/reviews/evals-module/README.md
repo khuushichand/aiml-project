@@ -54,6 +54,7 @@ Use this exact structure for every later finding entry:
 ```
 
 Applicability values: `Baseline`, `Working-tree-specific`, `Mixed`.
+`Mixed` means the finding spans both baseline and working-tree-specific scope.
 Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicability`.
 
 ### Confidence Model
@@ -72,6 +73,7 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 ### Findings
 ### Open Questions
 ### Verification Run
+Record the commands run, the slice scope covered, and the result, or state that no additional runtime verification was needed.
 ### Slice Status
 
 ## Slice 2: Core Orchestration and Execution

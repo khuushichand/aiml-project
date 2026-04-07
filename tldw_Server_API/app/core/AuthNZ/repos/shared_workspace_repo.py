@@ -466,6 +466,31 @@ class SharedWorkspaceRepo:
             result.append(d)
         return result
 
+    async def list_legacy_audit_events_for_migration(
+        self,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, event_type, actor_user_id, resource_type, resource_id,
+                   owner_user_id, share_id, token_id, metadata_json,
+                   ip_address, user_agent, created_at
+            FROM share_audit_log
+            WHERE id > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (int(after_id), int(limit)),
+        )
+        result = []
+        for row in rows:
+            data = self._row_to_dict(row)
+            data["metadata"] = _load_json_dict(data.get("metadata_json"))
+            result.append(data)
+        return result
+
     # ── sharing_config ──
 
     async def get_config(
